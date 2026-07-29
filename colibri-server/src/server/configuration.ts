@@ -7,17 +7,39 @@ dotenv.config();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+// `Number(process.env.X)` silently yields NaN for anything malformed, which then
+// propagates into `net.Server.listen`/`dgram.Socket.bind` and fails in confusing ways far
+// from the actual misconfiguration. Fail fast at startup instead, with a message that
+// names the offending variable.
+const parsePort = function (name: string, raw: string | undefined, fallback: number): number {
+    if (raw === undefined) return fallback;
+    const value = Number(raw);
+    if (!Number.isInteger(value) || value < 1 || value > 65535) {
+        throw new Error(`Invalid ${name}: "${raw}" is not a valid port (expected an integer between 1 and 65535)`);
+    }
+    return value;
+};
+
+const parsePositiveInt = function (name: string, raw: string | undefined, fallback: number): number {
+    if (raw === undefined) return fallback;
+    const value = Number(raw);
+    if (!Number.isInteger(value) || value <= 0) {
+        throw new Error(`Invalid ${name}: "${raw}" is not a positive integer`);
+    }
+    return value;
+};
+
 export const Config = {
     TCP_HOST: process.env.TCP_HOST || '0.0.0.0',
-    TCP_PORT: Number(process.env.TCP_PORT || 9012),
+    TCP_PORT: parsePort('TCP_PORT', process.env.TCP_PORT, 9012),
 
     VOICE_HOST: process.env.VOICE_HOST || '0.0.0.0',
-    VOICE_PORT: Number(process.env.VOICE_PORT || 9013),
-    VOICE_SAMPLING_RATE: Number(process.env.VOICE_SAMPLING_RATE || 48000),
+    VOICE_PORT: parsePort('VOICE_PORT', process.env.VOICE_PORT, 9013),
+    VOICE_SAMPLING_RATE: parsePositiveInt('VOICE_SAMPLING_RATE', process.env.VOICE_SAMPLING_RATE, 48000),
     VOICE_RECORDING: process.env.VOICE_RECORDING?.toLowerCase() === 'true',
 
     WEBSERVER_HOST: process.env.WEBSERVER_HOST || '0.0.0.0',
-    WEBSERVER_PORT: Number(process.env.WEBSERVER_PORT || 9011),
+    WEBSERVER_PORT: parsePort('WEBSERVER_PORT', process.env.WEBSERVER_PORT, 9011),
     WEBSERVER_ROOT: path.join(
         __dirname,
         process.env.WEBSERVER_ROOT || '../ui/'
