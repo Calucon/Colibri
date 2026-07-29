@@ -76,8 +76,9 @@ export class TCPServerProxy
         this.clientStream.next(this.currentClients);
     }
 
-    public stop(): void {
+    public async stop(): Promise<void> {
         this.postMessage('m:stop');
+        await this.terminateWorker();
     }
 
     public broadcast(

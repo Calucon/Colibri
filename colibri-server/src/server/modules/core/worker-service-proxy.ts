@@ -69,6 +69,15 @@ export abstract class WorkerServiceProxy extends Service {
         });
     }
 
+    // Docker's `stop` sends SIGTERM and, after a grace period, SIGKILL - if the worker
+    // thread is never explicitly terminated, the process can outlive its own shutdown
+    // handler (a worker_threads.Worker keeps the event loop alive on its own).
+    protected async terminateWorker(): Promise<void> {
+        if (this.threadWorker) {
+            await this.threadWorker.terminate();
+        }
+    }
+
     protected postMessage(channel: string, content?: { [key: string]: unknown }) {
         const msg: WorkerMessage = {
             channel: channel,

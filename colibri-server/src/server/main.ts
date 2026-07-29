@@ -59,4 +59,48 @@ const startup = async () => {
     voiceServer.start(Config.VOICE_PORT, Config.VOICE_HOST);
 };
 
-startup();
+startup().catch((err) => {
+    console.error('Startup failed:', err);
+    process.exit(1);
+});
+
+/**
+ *    Shutdown
+ */
+
+// `docker stop` sends SIGTERM (then SIGKILL after a grace period) with no handler
+// installed for either, so the TCP worker thread was never terminated and an in-flight
+// store.json write could be lost. Guarded against running twice since SIGTERM and SIGINT
+// could both arrive (e.g. an operator hits Ctrl+C right after `docker stop`).
+let shuttingDown = false;
+const shutdown = async (signal: NodeJS.Signals) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+
+    console.log(`Received ${signal}, shutting down...`);
+    try {
+        webServer.stop();
+        socketioServer.stop();
+        voiceServer.stop();
+        await tcpServer.stop();
+        await restApi.flush();
+    } catch (err) {
+        console.error('Error during shutdown:', err);
+        process.exit(1);
+    }
+
+    process.exit(0);
+};
+
+process.on('SIGTERM', (signal) => void shutdown(signal));
+process.on('SIGINT', (signal) => void shutdown(signal));
+
+process.on('unhandledRejection', (reason) => {
+    console.error('Unhandled rejection:', reason);
+    process.exit(1);
+});
+
+process.on('uncaughtException', (err) => {
+    console.error('Uncaught exception:', err);
+    process.exit(1);
+});
