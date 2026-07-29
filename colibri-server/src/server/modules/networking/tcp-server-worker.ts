@@ -106,6 +106,16 @@ export class TCPServerWorker extends WorkerService {
                     this.broadcast(msg.content.msg as WireNetworkMessage, clients);
                     break;
                 }
+
+                case 'm:broadcastToApp': {
+                    const app = msg.content.app as string;
+                    const exclude = msg.content.exclude as string | undefined;
+                    const clients = Array.from(this.clientsByApp.get(app) ?? [])
+                        .filter((c) => c.id !== exclude);
+
+                    this.broadcast(msg.content.msg as WireNetworkMessage, clients);
+                    break;
+                }
             }
         });
     }

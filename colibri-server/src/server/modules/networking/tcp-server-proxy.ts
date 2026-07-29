@@ -85,13 +85,28 @@ export class TCPServerProxy
         clients: ReadonlyArray<NetworkClient> = this.currentClients
     ): void {
         this.postMessage('m:broadcast', {
-            msg: {
-                channel: msg.channel,
-                command: msg.command,
-                payload: msg.payload?.asString() ?? '',
-            },
+            msg: this.toWireMessage(msg),
             clients: clients.map((c) => c.id),
         });
+    }
+
+    // Fast path for "broadcast to every client of one app": rather than shipping a
+    // per-client id array across the worker boundary (structured-clone cost scales with
+    // client count), the worker resolves recipients from its own per-app index.
+    public broadcastToApp(msg: NetworkMessage, app: string, exceptClientId?: string): void {
+        this.postMessage('m:broadcastToApp', {
+            msg: this.toWireMessage(msg),
+            app,
+            exclude: exceptClientId,
+        });
+    }
+
+    private toWireMessage(msg: NetworkMessage): { channel: string; command: string; payload: string } {
+        return {
+            channel: msg.channel,
+            command: msg.command,
+            payload: msg.payload?.asString() ?? '',
+        };
     }
 
     private onClientConnected(client: NetworkClient): void {
