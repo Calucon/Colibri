@@ -1,7 +1,6 @@
 import * as http from 'http';
 import * as path from 'path';
 import express from 'express';
-import bodyparser from 'body-parser';
 import cors from 'cors';
 
 import { Service } from '../core/index.js';
@@ -32,8 +31,8 @@ export class WebServer extends Service {
         this.app.set('port', this.webPort);
 
         // handle POST data
-        this.app.use(bodyparser.urlencoded({ extended: false }));
-        this.app.use(bodyparser.json());
+        this.app.use(express.urlencoded({ extended: false }));
+        this.app.use(express.json());
 
         // enable CORS
         this.app.use(cors());

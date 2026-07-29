@@ -1,7 +1,7 @@
 import { LogMessage, Metadata, Service } from '../core/index.js';
 import { SocketIOServer } from '../networking/socket-io-server.js';
 import { filter, merge } from 'rxjs';
-import { v4 as uuid } from 'uuid';
+import { randomUUID } from 'crypto';
 
 const LOGGING_APP = 'colibri';
 const MAX_LOG_SIZE = 1000000;
@@ -84,7 +84,7 @@ export class WebLog extends Service {
         // if no similar message was found, add a new one
         if (!webMsg) {
             webMsg = {
-                id: uuid(),
+                id: randomUUID(),
                 origin: log.origin,
                 level: log.level,
                 group: log.group,

@@ -1,4 +1,3 @@
-import * as _ from 'lodash';
 import { Service } from '../core/service.js';
 
 export interface SyncModel {
@@ -47,8 +46,9 @@ export class DataStore extends Service {
 
     public removeModel(group: string, channel: string, id: string): void {
         const key = group + channel;
-        if (this.store[key]) {
-            _.remove(this.store[key], m => m.id === id);
+        const models = this.store[key];
+        if (models) {
+            this.store[key] = models.filter(m => m.id !== id);
         }
     }
 
@@ -66,10 +66,7 @@ export class DataStore extends Service {
 
     public getModel(group: string, channel: string, id: string): SyncModel | undefined {
         const key = group + channel;
-        if (this.store[key]) {
-            return _.find(this.store[key], m => m.id === id);
-        }
-        return undefined;
+        return this.store[key]?.find(m => m.id === id);
     }
 
     public getAll(group: string, channel: string): SyncModel[] {

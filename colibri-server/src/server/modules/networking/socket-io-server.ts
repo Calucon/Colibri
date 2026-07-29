@@ -1,5 +1,4 @@
 import { Server as SocketIoServer, Socket as SocketIoSocket, Event as SocketIoEvent } from 'socket.io';
-import * as _ from 'lodash';
 import { Server as HttpServer } from 'http';
 import { Observable, Subject } from 'rxjs';
 
@@ -129,7 +128,12 @@ export class SocketIOServer extends Service implements NetworkServer {
     }
 
     private handleSocketDisconnect(socket: SocketIoSocket): void {
-        const removedClients = _.remove(this.clients, client => client.socket === socket);
+        const removedClients: SocketIoClient[] = [];
+        for (let i = this.clients.length - 1; i >= 0; i--) {
+            if (this.clients[i]?.socket === socket) {
+                removedClients.push(...this.clients.splice(i, 1));
+            }
+        }
         this.clientStream.next(this.clients);
 
         for (const rc of removedClients) {

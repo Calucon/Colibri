@@ -1,15 +1,21 @@
 import * as net from 'net';
-import * as _ from 'lodash';
 import { WorkerService } from '../core/index.js';
 import * as threads from 'worker_threads';
 import * as flatbuffers from 'flatbuffers';
 import { fileURLToPath } from 'url';
+import { randomUUID } from 'crypto';
 import { Message } from './message.js';
 import { NetworkMessage } from '../command-hooks/index.js';
-import { v4 as uuidv4 } from 'uuid';
 
 export const TCP_SERVER_WORKER = fileURLToPath(import.meta.url);
 const maxBufferSize = 1024 * 1024 * 5;
+
+const pull = function <T>(arr: T[], item: T): void {
+    const index = arr.indexOf(item);
+    if (index !== -1) {
+        arr.splice(index, 1);
+    }
+};
 
 interface TcpClient {
     id: string;
@@ -125,7 +131,7 @@ export class TCPServerWorker extends WorkerService {
     }
 
     private handleConnection(socket: net.Socket): void {
-        const id = uuidv4();
+        const id = randomUUID();
         this.logDebug(
             `New client (${id}) connected from ${socket.remoteAddress}, waiting for app name`
         );
@@ -316,7 +322,7 @@ export class TCPServerWorker extends WorkerService {
                 clientId: client.id,
             }
         );
-        _.pull(this.waitingClients, client);
+        pull(this.waitingClients, client);
         this.clients.push(client);
         this.postMessage('clientConnected$', { id: client.id, app, name, version });
     }
@@ -336,8 +342,8 @@ export class TCPServerWorker extends WorkerService {
             clientName: client.name,
             clientId: client.id,
         });
-        _.pull(this.clients, client);
-        _.pull(this.waitingClients, client);
+        pull(this.clients, client);
+        pull(this.waitingClients, client);
         this.postMessage('clientDisconnected$', { id: client.id });
     }
 

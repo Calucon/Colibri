@@ -1,4 +1,3 @@
-import * as _ from 'lodash';
 import { TCP_SERVER_WORKER } from './tcp-server-worker.js';
 import { WorkerServiceProxy } from '../core/index.js';
 import { Observable, Subject } from 'rxjs';
@@ -96,7 +95,8 @@ export class TCPServerProxy
     }
 
     private onClientDisconnected(id: string): void {
-        const removedClients = _.remove(this.clients, (c) => c.id === id);
+        const removedClients = this.clients.filter((c) => c.id === id);
+        this.clients = this.clients.filter((c) => c.id !== id);
         for (const client of removedClients) {
             this.clientRemovedStream.next(client);
         }
