@@ -12,14 +12,17 @@ export class MeasureLatency extends Service {
     public constructor(pool: ConnectionPool, frontendConnection: SocketIOServer) {
         super();
 
-        // Send out latency message
+        // Send out latency message. TCP clients get their ping merged into the worker's
+        // own 100ms heartbeat frame instead (see TCPServerWorker.handleHeartbeat /
+        // handlePong) - pinging them here too would double idle packet rate for no
+        // reason, so this only targets Socket.IO (web) clients directly.
         setInterval(() => {
             const now = hrtime.bigint();
-            pool.broadcast({
+            frontendConnection.broadcast({
                 channel: 'colibri',
                 command: 'latency',
                 payload: Payload.fromString(now.toString()),
-            });
+            }, frontendConnection.currentClients);
         }, 100);
 
 

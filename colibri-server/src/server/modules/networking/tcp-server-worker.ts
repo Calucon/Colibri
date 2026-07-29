@@ -213,9 +213,7 @@ export class TCPServerWorker extends WorkerService {
                     break;
 
                 case FrameType.Heartbeat:
-                    // Reserved for Phase 2 item 22 (merging the latency ping into the
-                    // heartbeat frame) - not yet wired up, so a client's heartbeat reply
-                    // is a no-op for now and MeasureLatency's own ping/pong still runs.
+                    this.handlePong(client, frame.pingTimestamp);
                     break;
 
                 case FrameType.Message:
@@ -259,6 +257,30 @@ export class TCPServerWorker extends WorkerService {
         this.clients.set(client.id, client);
         this.addToAppIndex(client);
         this.postMessage('clientConnected$', { id: client.id, app, name, version });
+    }
+
+    // A client echoes a server-sent heartbeat frame's timestamp back verbatim; relay it
+    // into the normal clientMessage$ pipeline as a 'colibri'/'latency' message so
+    // MeasureLatency's existing round-trip math (unchanged) handles it exactly as it
+    // would a message-level ping reply. hrtime is a system-wide monotonic clock, so a
+    // timestamp this worker generated remains valid to diff against once it reaches the
+    // main thread. The difference from before is purely in what it cost to get here: one
+    // fixed 13-byte frame each way instead of a full channel/command/payload message.
+    private handlePong(client: TcpClient, pingTimestamp: bigint): void {
+        if (!client.app) return;
+
+        this.postMessage('clientMessage$', {
+            channel: 'colibri',
+            command: 'latency',
+            payload: Buffer.from(pingTimestamp.toString(), 'utf8'),
+            origin: {
+                id: client.id,
+                app: client.app,
+                name: client.name,
+                version: client.version,
+                metadata: {},
+            },
+        });
     }
 
     private handleSocketError(client: TcpClient, error: Error): void {
