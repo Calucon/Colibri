@@ -1,9 +1,10 @@
 import { bench, describe } from 'vitest';
 import { DataStore } from '../src/server/modules/command-hooks/data-store.js';
 
-// Baseline for the array + Array.find/Array.filter storage in DataStore
-// (Phase 1 replaces this with nested Maps). Sized to resemble a busy app
-// with a few hundred synced objects on one channel.
+// DataStore now nests app -> channel -> model id as Maps (Phase 1 item 13), replacing
+// the array + Array.find/Array.filter storage the numbers in bench/baseline.md were
+// measured against. Sized to resemble a busy app with a few hundred synced objects on
+// one channel.
 const MODEL_COUNT = 500;
 
 const seeded = function (): DataStore {
@@ -14,7 +15,7 @@ const seeded = function (): DataStore {
     return store;
 };
 
-describe('DataStore (v1: array storage)', () => {
+describe('DataStore (v2: nested Map storage)', () => {
     bench('updateModel - update existing (worst case: last element)', () => {
         const store = seeded();
         store.updateModel('app', 'channel', { id: `model-${MODEL_COUNT - 1}`, x: 1, y: 2 });

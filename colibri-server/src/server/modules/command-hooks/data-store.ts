@@ -9,33 +9,29 @@ export class DataStore extends Service {
     public serviceName = 'DataStore';
     public groupName = 'core';
 
-    private store: { [key: string]: SyncModel[] } = {};
+    // Nested by app -> channel -> model id, instead of a flat `group + channel` string key.
+    // That flat key was ambiguous (app 'ab' + channel 'c' collided with app 'a' + channel
+    // 'bc') and made clearApp() match with a prefix scan (`key.startsWith(group)`), which
+    // wiped app 'test2' when the last client of app 'test' disconnected. Both bugs are
+    // structural here: clearApp() just deletes the one Map entry for that app.
+    private readonly store = new Map<string, Map<string, Map<string, SyncModel>>>();
 
     public constructor() {
         super();
     }
 
     public addModel(group: string, channel: string, id: string): void {
-        const key = group + channel;
-        if (!this.store[key]) {
-            this.store[key] = [];
-        }
-
-        if (!this.getModel(group, channel, id)) {
-            this.store[key].push({ id });
+        const models = this.getOrCreateChannel(group, channel);
+        if (!models.has(id)) {
+            models.set(id, { id });
         }
     }
 
-
     public updateModel(group: string, channel: string, model: SyncModel): void {
-        const key = group + channel;
-        if (!this.store[key]) {
-            this.store[key] = [];
-        }
-
-        const existingModel = this.getModel(group, channel, model.id);
+        const models = this.getOrCreateChannel(group, channel);
+        const existingModel = models.get(model.id);
         if (!existingModel) {
-            this.store[key].push(model);
+            models.set(model.id, model);
         } else {
             for (const k of Object.keys(model)) {
                 existingModel[k] = model[k];
@@ -43,34 +39,39 @@ export class DataStore extends Service {
         }
     }
 
-
     public removeModel(group: string, channel: string, id: string): void {
-        const key = group + channel;
-        const models = this.store[key];
-        if (models) {
-            this.store[key] = models.filter(m => m.id !== id);
-        }
+        this.store.get(group)?.get(channel)?.delete(id);
     }
 
     public clear(group: string, channel: string): void {
-        delete this.store[group + channel];
+        this.store.get(group)?.delete(channel);
     }
 
     public clearApp(group: string): void {
-        for (const key of Object.keys(this.store)) {
-            if (key.startsWith(group)) {
-                delete this.store[key];
-            }
-        }
+        this.store.delete(group);
     }
 
     public getModel(group: string, channel: string, id: string): SyncModel | undefined {
-        const key = group + channel;
-        return this.store[key]?.find(m => m.id === id);
+        return this.store.get(group)?.get(channel)?.get(id);
     }
 
     public getAll(group: string, channel: string): SyncModel[] {
-        const key = group + channel;
-        return this.store[key] || [];
+        const models = this.store.get(group)?.get(channel);
+        return models ? Array.from(models.values()) : [];
+    }
+
+    private getOrCreateChannel(group: string, channel: string): Map<string, SyncModel> {
+        let byChannel = this.store.get(group);
+        if (!byChannel) {
+            byChannel = new Map();
+            this.store.set(group, byChannel);
+        }
+
+        let models = byChannel.get(channel);
+        if (!models) {
+            models = new Map();
+            byChannel.set(channel, models);
+        }
+        return models;
     }
 }
