@@ -64,22 +64,37 @@ export class SocketIOServer extends Service implements NetworkServer {
 
 
     public broadcast(msg: NetworkMessage, clients: ReadonlyArray<SocketIoClient>): void {
-        // Cross-transport (TCP-origin) payloads are only guaranteed to be a wire string;
-        // fall back to the raw string if it doesn't happen to be valid JSON. Web-origin
-        // payloads already have a resolved value here, so this costs nothing for the
-        // common web-to-web relay case.
-        let payload: unknown;
-        try {
-            payload = msg.payload?.asValue();
-        } catch {
-            payload = msg.payload?.asString();
-        }
+        const payload = this.resolvePayload(msg);
 
         for (const client of clients) {
             client.socket.emit(msg.channel, {
                 command: msg.command,
                 payload
             });
+        }
+    }
+
+    // Every client of an app shares a Socket.IO room named after that app, so this
+    // encodes the packet once for the whole room instead of once per recipient.
+    public broadcastToApp(msg: NetworkMessage, app: string, exceptClientId?: string): void {
+        const payload = this.resolvePayload(msg);
+        const room = exceptClientId ? this.ioServer.to(app).except(exceptClientId) : this.ioServer.to(app);
+
+        room.emit(msg.channel, {
+            command: msg.command,
+            payload
+        });
+    }
+
+    private resolvePayload(msg: NetworkMessage): unknown {
+        // Cross-transport (TCP-origin) payloads are only guaranteed to be a wire string;
+        // fall back to the raw string if it doesn't happen to be valid JSON. Web-origin
+        // payloads already have a resolved value here, so this costs nothing for the
+        // common web-to-web relay case.
+        try {
+            return msg.payload?.asValue();
+        } catch {
+            return msg.payload?.asString();
         }
     }
 
@@ -107,6 +122,7 @@ export class SocketIOServer extends Service implements NetworkServer {
         }
 
         this.clients.push(client);
+        void socket.join(client.app);
         this.clientConnectedStream.next(client);
         this.clientStream.next(this.clients);
 

@@ -22,6 +22,12 @@ export abstract class NetworkServer {
     public abstract get clientConnected$(): Observable<NetworkClient>;
     public abstract get clientDisconnected$(): Observable<NetworkClient>;
     public abstract broadcast(message: NetworkMessage, clients: ReadonlyArray<NetworkClient>): void;
+
+    // Optional fast path for "broadcast to every client of one app": transports that can
+    // group clients server-side (Socket.IO rooms) encode the packet once for the whole
+    // group instead of once per recipient. Transports without such a grouping simply don't
+    // implement this, and ConnectionPool falls back to the per-client broadcast() above.
+    public broadcastToApp?(message: NetworkMessage, app: string, exceptClientId?: string): void;
 }
 
 export class ConnectionPool extends Service {
@@ -54,6 +60,11 @@ export class ConnectionPool extends Service {
 
     public broadcast(message: NetworkMessage, app = message.origin?.app): void {
         for (const connection of this.servers) {
+            if (app && connection.broadcastToApp) {
+                connection.broadcastToApp(message, app, message.origin?.id);
+                continue;
+            }
+
             let clients = connection.currentClients;
             if (app) {
                 clients = clients.filter(client => client.app === app && client.id !== message.origin?.id);
