@@ -51,4 +51,9 @@ export const Config = {
         __dirname,
         process.env.DATA_ROOT || '../../data/'
     ),
+
+    // Default of 30 (was Error.stackTraceLimit = Infinity) caps the cost of every stack
+    // capture - each logError call with printStacktrace on walks this many frames - while
+    // still being enough to see past RxJS's internal call chain into application code.
+    STACK_TRACE_LIMIT: parsePositiveInt('STACK_TRACE_LIMIT', process.env.STACK_TRACE_LIMIT, 30),
 };

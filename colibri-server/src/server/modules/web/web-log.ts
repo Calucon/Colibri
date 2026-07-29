@@ -57,7 +57,7 @@ export class WebLog extends Service {
                         }))
                         .forEach(msg => this.socketio.broadcast(msg, [ socketClient ]));
                 } else {
-                    this.logError('Unkown origin requested log messages');
+                    this.logError('Unkown origin requested log messages', false);
                 }
             });
 

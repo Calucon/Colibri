@@ -74,7 +74,7 @@ export class WebServer extends Service {
         requestHandler: express.RequestHandler | express.Router
     ): void {
         if (this.isRunning) {
-            this.logError(`Could not add route ${url}: Server already running`);
+            this.logError(`Could not add route ${url}: Server already running`, false);
         } else {
             this.app.use(url, requestHandler);
         }

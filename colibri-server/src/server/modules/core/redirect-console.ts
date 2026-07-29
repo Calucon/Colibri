@@ -27,7 +27,10 @@ export class RedirectConsole extends Service {
 
         const oldError = console.error;
         console.error = (msg) => {
-            this.logError(msg);
+            // A synthetic stack captured here would only show this override chain, not
+            // where the original console.error() call came from - console.error's own
+            // formatting of an Error argument already includes the trace that matters.
+            this.logError(msg, false);
             oldError(msg);
         };
     }

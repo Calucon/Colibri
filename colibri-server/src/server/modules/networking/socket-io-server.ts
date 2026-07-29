@@ -109,7 +109,7 @@ export class SocketIOServer extends Service implements NetworkServer {
         };
 
         if (!client.app) {
-            this.logError('Websocket connection has no app specified; aborting connection');
+            this.logError('Websocket connection has no app specified; aborting connection', false);
             socket.disconnect();
             return;
         } else if (client.app !== 'colibri') { // ignore colibri web interface clients
@@ -138,7 +138,7 @@ export class SocketIOServer extends Service implements NetworkServer {
         });
 
         socket.on('error', error => {
-            this.logError(JSON.stringify(error));
+            this.logError(JSON.stringify(error), false);
         });
 
         socket.on('disconnect', () => {

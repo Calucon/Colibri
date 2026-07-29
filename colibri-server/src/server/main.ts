@@ -7,8 +7,8 @@ import { Config } from './configuration.js';
  * Debugging
  */
 
-// Unlimited stacktrace depth (due to RxJS)
-Error.stackTraceLimit = Infinity;
+// See Config.STACK_TRACE_LIMIT for why this isn't Infinity.
+Error.stackTraceLimit = Config.STACK_TRACE_LIMIT;
 
 // Print console errors in GUI
 // const redirectConsole = new colibri.RedirectConsole();

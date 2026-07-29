@@ -25,7 +25,7 @@ export class ModelSynchronization extends Service {
 
     public sendInitialState(msg: NetworkMessage): void {
         if (!msg.origin) {
-            this.logError('Cannot send initial state to unknown client');
+            this.logError('Cannot send initial state to unknown client', false);
             return;
         }
 
@@ -50,20 +50,20 @@ export class ModelSynchronization extends Service {
                 }
             }
         } catch (error) {
-            this.logError(`Failed to send initial state to client ${msg.origin.id}: ${error}`);
+            this.logError(`Failed to send initial state to client ${msg.origin.id}: ${error}`, false);
         }
     }
 
     public onModelUpdate(msg: NetworkMessage): void {
         if (!msg.origin) {
-            this.logError('Cannot send initial state to unknown client');
+            this.logError('Cannot send initial state to unknown client', false);
             return;
         }
 
         try {
             const payload = (msg.payload?.asValue<{ id?: string }>()) || {};
             if (typeof(payload?.id) !== 'string') {
-                this.logError('Cannot update model without "id" attribute');
+                this.logError('Cannot update model without "id" attribute', false);
                 return;
             }
 
@@ -76,7 +76,7 @@ export class ModelSynchronization extends Service {
 
     public onModelDelete(msg: NetworkMessage): void {
         if (!msg.origin) {
-            this.logError('Cannot send initial state to unknown client');
+            this.logError('Cannot send initial state to unknown client', false);
             return;
         }
 
