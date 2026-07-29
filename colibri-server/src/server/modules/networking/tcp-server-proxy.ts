@@ -62,7 +62,7 @@ export class TCPServerProxy
                     this.onClientMessage({
                         channel: wireMessage.channel,
                         command: wireMessage.command,
-                        payload: Payload.fromString(toBuffer(wireMessage.payload).toString('utf8')),
+                        payload: Payload.fromBytes(toBuffer(wireMessage.payload)),
                         origin: wireMessage.origin ? this.clients.get(wireMessage.origin.id) : undefined,
                     });
                     break;
@@ -105,7 +105,7 @@ export class TCPServerProxy
         return {
             channel: msg.channel,
             command: msg.command,
-            payload: Buffer.from(msg.payload?.asString() ?? '', 'utf8'),
+            payload: msg.payload?.asBytes() ?? Buffer.alloc(0),
         };
     }
 

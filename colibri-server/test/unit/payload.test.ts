@@ -31,4 +31,35 @@ describe('Payload', () => {
         expect(spy).toHaveBeenCalledTimes(1);
         spy.mockRestore();
     });
+
+    it('fromBytes: asBytes() returns the raw bytes without transcoding', () => {
+        const bytes = Buffer.from('{"x":1}', 'utf8');
+        const payload = Payload.fromBytes(bytes);
+        expect(payload.asBytes()).toBe(bytes);
+    });
+
+    it('fromBytes: asString() decodes utf8 lazily and memoizes the result', () => {
+        const bytes = Buffer.from('{"x":1}', 'utf8');
+        const payload = Payload.fromBytes(bytes);
+        expect(payload.asString()).toBe('{"x":1}');
+    });
+
+    it('fromBytes: asValue() decodes and parses lazily', () => {
+        const bytes = Buffer.from('{"x":1}', 'utf8');
+        const payload = Payload.fromBytes(bytes);
+        expect(payload.asValue()).toEqual({ x: 1 });
+    });
+
+    it('fromString: asBytes() utf8-encodes lazily and memoizes the result', () => {
+        const payload = Payload.fromString('{"x":1}');
+        const first = payload.asBytes();
+        const second = payload.asBytes();
+        expect(first).toEqual(Buffer.from('{"x":1}', 'utf8'));
+        expect(first).toBe(second);
+    });
+
+    it('fromValue: asBytes() stringifies then encodes lazily', () => {
+        const payload = Payload.fromValue({ x: 1 });
+        expect(payload.asBytes()).toEqual(Buffer.from('{"x":1}', 'utf8'));
+    });
 });
