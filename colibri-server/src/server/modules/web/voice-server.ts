@@ -3,7 +3,36 @@ import * as dgram from 'dgram';
 import { AddressInfo } from 'net';
 import wavefile from 'wavefile';
 const { WaveFile } = wavefile;
-import { writeFileSync, existsSync, mkdirSync } from 'fs';
+import { mkdir, writeFile } from 'fs/promises';
+
+// Recordings can run for minutes at 48kHz, so a plain number[] would mean millions of
+// boxed-double pushes. This keeps samples in a flat Int16Array, growing (doubling) only
+// when the current capacity is exhausted, same trade-off as FrameReader's growable buffer.
+class GrowableInt16Buffer {
+    private data: Int16Array;
+    private len = 0;
+
+    public constructor(initialCapacity = 48000) {
+        this.data = new Int16Array(initialCapacity);
+    }
+
+    public get length(): number {
+        return this.len;
+    }
+
+    public push(value: number): void {
+        if (this.len >= this.data.length) {
+            const grown = new Int16Array(this.data.length * 2);
+            grown.set(this.data);
+            this.data = grown;
+        }
+        this.data[this.len++] = value;
+    }
+
+    public toTypedArray(): Int16Array {
+        return this.data.subarray(0, this.len);
+    }
+}
 
 interface VoiceClient {
     ip: string;
@@ -15,7 +44,7 @@ interface VoiceClient {
     frameSizeMillis: number;
     codec: Codec;
     recordingStartDate: Date;
-    recordingData: number[];
+    recordingData: GrowableInt16Buffer;
 }
 
 enum Codec {
@@ -31,6 +60,11 @@ export class VoiceServer extends Service {
     private udpSocket!: dgram.Socket;
     private clients: Map<string, VoiceClient> = new Map<string, VoiceClient>();
     private disconnectTimeoutMillis = 2000;
+    private disconnectCheckInterval!: NodeJS.Timeout;
+
+    // Rebuilt only when a client joins or times out, instead of re-scanning/re-deriving
+    // `this.clients` on every incoming voice packet (received at up to ~50 packets/s/client).
+    private clientsCache: VoiceClient[] | undefined;
 
     public constructor(private samplingRate: number, private voiceRecordingPath: string, private recordingVoiceData: boolean = false) {
         super();
@@ -52,6 +86,7 @@ export class VoiceServer extends Service {
             }
             const now = new Date();
             const nowMillis = now.getTime();
+            const clientKey = `${remote.address}:${remote.port}`;
 
             // Voice message with 7 bytes header: |userId(2)|sequence(2)|frameSize(2)|codec(1)|data|
             const userId = message.readInt16LE(0); // .net (Unity) decodes default in little-endian order
@@ -60,10 +95,10 @@ export class VoiceServer extends Service {
             const codec: Codec = message.readInt8(6);
 
             // Current voice client
-            let voiceClient: VoiceClient | undefined;
+            let voiceClient = this.clients.get(clientKey);
 
             // Add to clients if new client
-            if (!this.clients.has(`${remote.address}:${remote.port}`)) {
+            if (!voiceClient) {
                 voiceClient = {
                     ip: remote.address,
                     port: remote.port,
@@ -74,21 +109,15 @@ export class VoiceServer extends Service {
                     frameSizeMillis: frameSize / this.samplingRate * 1000,
                     codec,
                     recordingStartDate: now,
-                    recordingData: [],
+                    recordingData: new GrowableInt16Buffer(),
                 };
-                this.clients.set(`${remote.address}:${remote.port}`, voiceClient);
+                this.clients.set(clientKey, voiceClient);
+                this.clientsCache = undefined;
                 this.logDebug(`New voice client connected from ${remote.address}:${remote.port} ID: ${userId} Codec: ${codec === Codec.OPUS ? 'Opus' : 'PCM'}`);
                 if (this.recordingVoiceData) {
                     this.logWarning('Warning: Voice recording is enabled');
                     if (codec !== Codec.PCM) this.logWarning('Voice recording is only supported for PCM data');
                 }
-            } else {
-                voiceClient = this.clients.get(`${remote.address}:${remote.port}`);
-            }
-
-            if (!voiceClient) {
-                this.logError('Unknown voice client!');
-                return;
             }
 
             // Update last heartbeat
@@ -96,15 +125,15 @@ export class VoiceServer extends Service {
             voiceClient.lastHeartbeat = nowMillis;
 
             // Send message to all other clients
-            this.clients.forEach((value, key) => {
-                if (key !== `${remote.address}:${remote.port}`) {
-                    this.udpSocket.send(message, 0, message.length, value.port, value.ip, (err) => {
-                        if (err) {
-                            throw err;
-                        }
-                    });
-                }
-            });
+            for (const peer of this.getClientsCache()) {
+                if (peer === voiceClient) continue;
+
+                this.udpSocket.send(message, 0, message.length, peer.port, peer.ip, (err) => {
+                    if (err) {
+                        this.logError(`Failed to relay voice packet to ${peer.ip}:${peer.port}: ${err.message}`, false);
+                    }
+                });
+            }
 
             if (codec === Codec.PCM && this.recordingVoiceData) {
                 for (let i = 7; i <= message.length - 2; i += 2) {
@@ -118,33 +147,54 @@ export class VoiceServer extends Service {
         this.udpSocket.bind(voicePort, hostname);
 
         // Check if clients disconnected every second
-        setInterval(this.checkClientsDisconnected, 1000, this);
+        this.disconnectCheckInterval = setInterval(() => this.checkClientsDisconnected(), 1000);
     }
 
-    private checkClientsDisconnected(context: VoiceServer) {
+    public stop(): void {
+        clearInterval(this.disconnectCheckInterval);
+        this.udpSocket.close();
+    }
+
+    private getClientsCache(): VoiceClient[] {
+        if (!this.clientsCache) {
+            this.clientsCache = Array.from(this.clients.values());
+        }
+        return this.clientsCache;
+    }
+
+    private async checkClientsDisconnected(): Promise<void> {
         const now = Date.now();
-        context.clients.forEach((value, key) => {
+        for (const [key, value] of this.clients) {
             // Remove inactive clients
-            if (now - value.lastHeartbeat > context.disconnectTimeoutMillis) {
+            if (now - value.lastHeartbeat > this.disconnectTimeoutMillis) {
 
                 // Check if recording data is available
                 if (value.recordingData.length > 0) {
-
-                    // Create wave file from recording data
-                    const wav = new WaveFile();
-                    wav.fromScratch(1, context.samplingRate, '16', value.recordingData);
-
-                    // Save wave file
-                    const dateString = value.recordingStartDate.toISOString().replace(/:/g, '_');
-                    if (!existsSync(context.voiceRecordingPath)) mkdirSync(context.voiceRecordingPath);
-                    writeFileSync(`${context.voiceRecordingPath}/rec_${dateString}_ID_${value.userId}.wav`, wav.toBuffer());
-                    context.logDebug(`Voice recording saved to rec_${dateString}_ID_${value.userId}.wav`);
+                    await this.saveRecording(value);
                 }
 
                 // Delete client
-                context.clients.delete(key);
-                context.logDebug(`Voice client ${value.ip}:${value.port} disconnected ID: ${value.userId}`);
+                this.clients.delete(key);
+                this.clientsCache = undefined;
+                this.logDebug(`Voice client ${value.ip}:${value.port} disconnected ID: ${value.userId}`);
             }
-        });
+        }
+    }
+
+    private async saveRecording(client: VoiceClient): Promise<void> {
+        try {
+            // Create wave file from recording data
+            const wav = new WaveFile();
+            wav.fromScratch(1, this.samplingRate, '16', client.recordingData.toTypedArray());
+
+            // Save wave file
+            const dateString = client.recordingStartDate.toISOString().replace(/:/g, '_');
+            await mkdir(this.voiceRecordingPath, { recursive: true });
+            const filename = `rec_${dateString}_ID_${client.userId}.wav`;
+            await writeFile(`${this.voiceRecordingPath}/${filename}`, wav.toBuffer());
+            this.logDebug(`Voice recording saved to ${filename}`);
+        } catch (err) {
+            this.logError(`Failed to save voice recording: ${err instanceof Error ? err.message : String(err)}`, false);
+        }
     }
 }
