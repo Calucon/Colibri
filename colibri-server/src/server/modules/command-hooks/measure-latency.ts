@@ -45,7 +45,7 @@ export class MeasureLatency extends Service {
                         if (batchedLatencies[m.origin.id] === undefined) {
                             batchedLatencies[m.origin.id] = [];
                         }
-                        batchedLatencies[m.origin.id].push(l);
+                        batchedLatencies[m.origin.id]?.push(l);
 
                         while (latencies.length > 1000) {
                             latencies.shift();

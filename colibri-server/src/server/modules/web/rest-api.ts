@@ -53,16 +53,17 @@ export class RestAPI extends Service {
             .put('/:app/:value', (req, res) => {
                 let statusCode = 200;
                 // If app name not exist create app name
-                if (!this.data[req.params.app]) {
-                    this.data[req.params.app] = {};
+                let app = this.data[req.params.app];
+                if (!app) {
+                    app = this.data[req.params.app] = {};
                     statusCode = 201;
-                } else if (!this.data[req.params.app][req.params.value]) {
+                } else if (!app[req.params.value]) {
                     statusCode = 201;
                 }
                 // Set data to the corresponding value
-                this.data[req.params.app][req.params.value] = req.body;
+                app[req.params.value] = req.body;
                 // Return successful result with the sended data
-                res.status(statusCode).json({ result: 'Value with name ' + req.params.value + ' saved successfully', data: this.data[req.params.app][req.params.value] });
+                res.status(statusCode).json({ result: 'Value with name ' + req.params.value + ' saved successfully', data: app[req.params.value] });
                 // Save data in data store file
                 this.saveData();
             })
@@ -92,7 +93,7 @@ export class RestAPI extends Service {
                         res.status(404).json({ error: 'Value with name ' + req.params.value + ' not found' });
                     } else {
                         // Delete the value
-                        delete this.data[req.params.app][req.params.value];
+                        delete app[req.params.value];
                         // Return successful result
                         res.status(200).json({ result: 'Value with name ' + req.params.value + ' deleted successfully' });
                         // Save data in data store file

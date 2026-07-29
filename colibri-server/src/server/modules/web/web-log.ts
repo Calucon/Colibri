@@ -74,8 +74,8 @@ export class WebLog extends Service {
         for (let i = this.logMessages.length - 1; i >= 0 && i > this.logMessages.length - LOOKUP_COUNT && !webMsg; i--) {
             const tmpMsg = this.logMessages[i];
 
-            if (tmpMsg.message === log.message && tmpMsg.group === log.group && tmpMsg.level === log.level) {
-                webMsg = this.logMessages[i];
+            if (tmpMsg && tmpMsg.message === log.message && tmpMsg.group === log.group && tmpMsg.level === log.level) {
+                webMsg = tmpMsg;
                 webMsg.count += 1;
                 webMsg.created = log.created.getTime();
             }

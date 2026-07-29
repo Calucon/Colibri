@@ -213,6 +213,9 @@ export class TCPServerWorker extends WorkerService {
                     .replace(/\0/g, '');
                 try {
                     const [version, app, name] = packet.split('::');
+                    if (version === undefined || app === undefined || name === undefined) {
+                        throw new Error(`Malformed handshake packet: "${packet}"`);
+                    }
                     this.assignApp(client, app, name, version);
                 } catch (err) {
                     this.logError(
