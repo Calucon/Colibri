@@ -1,0 +1,32 @@
+name: Lint colibri-server
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - "colibri-server/**"
+      - ".github/workflows/lint-server.yml"
+  pull_request:
+    paths:
+      - "colibri-server/**"
+      - ".github/workflows/lint-server.yml"
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: colibri-server
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: colibri-server/package-lock.json
+
+      - run: npm ci
+      - run: npm run build
+      - run: npm run lint
+      - run: npm test
