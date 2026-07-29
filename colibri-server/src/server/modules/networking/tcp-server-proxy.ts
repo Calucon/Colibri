@@ -1,7 +1,12 @@
-import { TCP_SERVER_WORKER } from './tcp-server-worker.js';
+import { TCP_SERVER_WORKER, WireNetworkMessage } from './tcp-server-worker.js';
 import { Payload, WorkerServiceProxy } from '../core/index.js';
 import { Observable, Subject } from 'rxjs';
 import { NetworkClient, NetworkMessage, NetworkServer } from '../command-hooks/index.js';
+
+const toBuffer = function (value: Buffer | Uint8Array): Buffer {
+    if (Buffer.isBuffer(value)) return value;
+    return Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+};
 
 export class TCPServerProxy
     extends WorkerServiceProxy
@@ -53,16 +58,11 @@ export class TCPServerProxy
                     break;
 
                 case 'clientMessage$': {
-                    const wireMessage = msg.content as unknown as {
-                        origin?: { id: string };
-                        channel: string;
-                        command: string;
-                        payload: string;
-                    };
+                    const wireMessage = msg.content as unknown as WireNetworkMessage;
                     this.onClientMessage({
                         channel: wireMessage.channel,
                         command: wireMessage.command,
-                        payload: Payload.fromString(wireMessage.payload),
+                        payload: Payload.fromString(toBuffer(wireMessage.payload).toString('utf8')),
                         origin: wireMessage.origin ? this.clients.get(wireMessage.origin.id) : undefined,
                     });
                     break;
@@ -101,11 +101,11 @@ export class TCPServerProxy
         });
     }
 
-    private toWireMessage(msg: NetworkMessage): { channel: string; command: string; payload: string } {
+    private toWireMessage(msg: NetworkMessage): { channel: string; command: string; payload: Buffer } {
         return {
             channel: msg.channel,
             command: msg.command,
-            payload: msg.payload?.asString() ?? '',
+            payload: Buffer.from(msg.payload?.asString() ?? '', 'utf8'),
         };
     }
 

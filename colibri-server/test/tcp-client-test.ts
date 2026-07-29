@@ -1,18 +1,17 @@
 import * as net from 'net';
 import { Config } from '../src/server/configuration.js';
+import { encodeHandshakeFrame } from '../src/server/modules/networking/protocol.js';
 
 const address = '127.0.0.1';
 const port = Config.TCP_PORT;
 const app = 'TEST';
-const version = 1;
+const version = '1';
 const hostname = Math.random().toString();
-
-const encoder = new TextEncoder();
 
 const onError = (err: Error | undefined) => {
     if (err) {
         console.error(err);
-    } else { 
+    } else {
         console.log('No error');
     }
 };
@@ -21,7 +20,7 @@ const onError = (err: Error | undefined) => {
 const client = new net.Socket();
 client.connect(port, address, () => {
     console.log('Connected, sending handshake');
-    const handshake = encoder.encode(`\0\0\0h\0${version}::${app}::${hostname}\0`);
+    const handshake = encodeHandshakeFrame(version, app, hostname);
     client.write(handshake, onError);
 
 

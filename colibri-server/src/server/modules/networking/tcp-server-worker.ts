@@ -1,17 +1,19 @@
 import * as net from 'net';
 import { WorkerService } from '../core/index.js';
 import * as threads from 'worker_threads';
-import * as flatbuffers from 'flatbuffers';
 import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
-import { Message } from './message.js';
+import { FrameError, FrameReader, FrameType, encodeHeartbeatFrame, encodeMessageFrame } from './protocol.js';
 
 export const TCP_SERVER_WORKER = fileURLToPath(import.meta.url);
 const maxBufferSize = 1024 * 1024 * 5;
 
-// The worker thread only ever deals in wire-string payloads (from the flatbuffer, or
-// destined for one) - the Payload memoization abstraction lives at the ConnectionPool
-// layer on the main thread, on the other side of the postMessage boundary.
+// The worker thread only ever deals in raw payload bytes (straight off the wire, or
+// destined for it) - the Payload memoization abstraction lives at the ConnectionPool
+// layer on the main thread, on the other side of the postMessage boundary. Keeping the
+// payload as a Buffer here means a byte-verbatim TCP->TCP relay never pays a utf8
+// transcode; only a hook that actually inspects the payload (on the main thread) pays
+// for decoding it.
 export interface WireNetworkMessage {
     origin?: {
         id: string;
@@ -22,46 +24,18 @@ export interface WireNetworkMessage {
     };
     channel: string;
     command: string;
-    payload: string;
+    payload: Buffer;
 }
 
-// v1 wire format: \0\0\0(ascii packet length)\0(flatbuffer-encoded Message)
-// Extracted from TCPServerWorker.broadcast so it can be exercised by bench/framing.bench.ts
-// without a real socket/worker; behavior is unchanged.
-export const encodeV1Packet = function (msg: WireNetworkMessage): Uint8Array {
-    const builder = new flatbuffers.Builder(1024);
-    const channel = builder.createString(msg.channel);
-    const command = builder.createString(msg.command);
-    // TODO: replace this with dictionary to avoid JSON serialization
-    //       see: https://flatbuffers.dev/flatbuffers_guide_use_c-sharp.html#autotoc_md93
-    const payload = builder.createString(msg.payload);
-
-    Message.startMessage(builder);
-    Message.addChannel(builder, channel);
-    Message.addCommand(builder, command);
-    Message.addPayload(builder, payload);
-    const message = Message.endMessage(builder);
-    builder.finish(message);
-
-    const msgBytes = builder.asUint8Array();
-    // FIXME: we don't want to deal with big/little endian, so we just use utf8 encoding for packet length
-    const packetHeader = new TextEncoder().encode(
-        `\0\0\0${msgBytes.length.toString()}\0`
-    );
-
-    // TODO:  could probably be more efficient!
-    const mergedPacket = new Uint8Array(
-        packetHeader.length + msgBytes.length
-    );
-    mergedPacket.set(packetHeader);
-    mergedPacket.set(msgBytes, packetHeader.length);
-    return mergedPacket;
+const toBuffer = function (value: Buffer | Uint8Array): Buffer {
+    if (Buffer.isBuffer(value)) return value;
+    return Buffer.from(value.buffer, value.byteOffset, value.byteLength);
 };
 
 interface TcpClient {
     id: string;
     socket: net.Socket;
-    leftOverBuffer: Buffer;
+    reader: FrameReader;
     address: string;
     app: string;
     version: string;
@@ -143,13 +117,14 @@ export class TCPServerWorker extends WorkerService {
             return;
         }
 
-        const mergedPacket = encodeV1Packet(msg);
+        const packet = encodeMessageFrame({
+            channel: msg.channel,
+            command: msg.command,
+            payload: toBuffer(msg.payload),
+        });
 
         for (const client of clients) {
-            // message format:
-            // \0\0\0(PacketHeader)\0(ActualMessage)
-            const tcpClient = client;
-            tcpClient.socket.write(mergedPacket, (err) => {
+            client.socket.write(packet, (err) => {
                 if (err) {
                     this.logWarning(
                         `Failed to send message to client ${client.id}: ${err.message} `
@@ -169,7 +144,7 @@ export class TCPServerWorker extends WorkerService {
         const tcpClient: TcpClient = {
             id,
             socket,
-            leftOverBuffer: Buffer.alloc(0),
+            reader: new FrameReader(maxBufferSize),
             address: socket.remoteAddress || 'UNDEFINED',
             app: '',
             name: '',
@@ -191,150 +166,62 @@ export class TCPServerWorker extends WorkerService {
     }
 
     private handleSocketData(client: TcpClient, data: Buffer): void {
-        let buffer = Buffer.concat([client.leftOverBuffer, data]);
-        const msgs: WireNetworkMessage[] = [];
-
-        const PACKET_HEADER_START = '\0\0\0';
-
-        while (buffer.length > 0) {
-            if (buffer.length <= PACKET_HEADER_START.length) {
-                // incomplete packet, store leftovers
-                client.leftOverBuffer = buffer;
-                break;
-            }
-
-            if (buffer.subarray(0, 3).toString() !== PACKET_HEADER_START) {
-                // invalid packet?!
-                this.logError(
-                    `Invalid packet received from client ${client.id}, discarding buffer`,
-                    false
-                );
-                client.leftOverBuffer = Buffer.alloc(0);
-                break;
-            }
-
-            const headerStart = 0;
-            const headerEnd = buffer.indexOf('\0', headerStart + 4);
-
-            if (headerEnd < 0) {
-                // incomplete packet, store leftovers
-                client.leftOverBuffer = buffer;
-                break;
-            }
-
-            const packetLengthBuffer = buffer.subarray(
-                headerStart + 3,
-                headerEnd
+        let frames;
+        try {
+            frames = Array.from(client.reader.append(data));
+        } catch (err) {
+            const reason = err instanceof FrameError ? err.message : String(err);
+            this.logError(
+                `Invalid frame from client ${client.id}, discarding buffer and terminating connection: ${reason}`,
+                false
             );
-            // FIXME: we don't want to deal with big/little endian, so we just use utf8 encoding for packet length
-            //        also the header might contain more than just the packet length, so we need to parse it
-            const header = packetLengthBuffer.toString('utf8');
-            let packetLength: number;
-
-            if (header === 'h') {
-                // handshake
-                const packetEnd = buffer.indexOf('\0', headerEnd + 1);
-
-                if (packetEnd < 0) {
-                    // incomplete packet, store leftovers
-                    client.leftOverBuffer = buffer;
-                    break;
-                }
-
-                packetLength = packetEnd - headerEnd;
-                const packet = buffer
-                    .subarray(headerEnd, packetEnd)
-                    .toString()
-                    .replace(/\0/g, '');
-                try {
-                    const [version, app, name] = packet.split('::');
-                    if (version === undefined || app === undefined || name === undefined) {
-                        throw new Error(`Malformed handshake packet: "${packet}"`);
-                    }
-                    this.assignApp(client, app, name, version);
-                } catch (err) {
-                    this.logError(
-                        `Invalid handshake packet received from client ${client.id}`,
-                        false
-                    );
-                    if (err instanceof Error)
-                        this.logError(err.stack || '', false);
-                    else console.error(err);
-                }
-            } else {
-                // Packet with payload (normal message)
-                packetLength = Number(header);
-                if (!Number.isFinite(packetLength)) {
-                    this.logError(
-                        `Invalid header received from client ${client.id}, discarding buffer`,
-                        false
-                    );
-                    this.logDebug(`Header: ${header}`);
-                    client.leftOverBuffer = Buffer.alloc(0);
-                    break;
-                }
-
-                const packetEnd = headerEnd + 1 + packetLength;
-
-                if (packetEnd > buffer.length) {
-                    // incomplete packet, store leftovers
-                    client.leftOverBuffer = buffer;
-                    break;
-                }
-
-                const packet = buffer.subarray(headerEnd + 1, packetEnd);
-                const packetBuffer = new flatbuffers.ByteBuffer(packet);
-                const message = Message.getRootAsMessage(packetBuffer);
-
-                try {
-                    msgs.push({
-                        channel: message.channel() || '',
-                        command: message.command() || '',
-                        payload: message.payload() || '',
-                        origin: {
-                            id: client.id,
-                            app: client.app,
-                            name: client.name,
-                            version: client.version,
-                            metadata: {},
-                        },
-                    });
-                } catch (err) {
-                    if (err instanceof Error)
-                        this.logError(err.stack || '', false);
-                    else console.error(err);
-                }
-            }
-
-            // if there are multiple packets in the buffer, begin anew
-            buffer = buffer.subarray(headerEnd + 1 + packetLength);
-        }
-
-        // clear leftover buffers once we're finished
-        if (buffer.length === 0) {
-            client.leftOverBuffer = Buffer.alloc(0);
-        }
-
-        // try to somewhat mitigate spamming clients
-        if (client.leftOverBuffer.length > maxBufferSize) {
-            this.logWarning(
-                `Client ${client.id} exceeds max buffer size (${maxBufferSize} bytes), discarding buffer and terminating connection`
-            );
+            client.reader.reset();
             client.socket.end();
+            return;
         }
 
-        // pass on actual messages
-        for (const msg of msgs) {
-            if (client.app) {
-                this.postMessage(
-                    'clientMessage$',
-                    msg as unknown as { [key: string]: unknown }
-                );
-            } else {
-                this.logError(
-                    `Ignoring message (${msg.channel} / ${msg.command}) from client ${client.id} without app`,
-                    false
-                );
+        for (const frame of frames) {
+            switch (frame.type) {
+                case FrameType.Handshake:
+                    try {
+                        this.assignApp(client, frame.app, frame.name, frame.version);
+                    } catch (err) {
+                        this.logError(
+                            `Invalid handshake packet received from client ${client.id}`,
+                            false
+                        );
+                        if (err instanceof Error) this.logError(err.stack || '', false);
+                        else console.error(err);
+                    }
+                    break;
+
+                case FrameType.Heartbeat:
+                    // Reserved for Phase 2 item 22 (merging the latency ping into the
+                    // heartbeat frame) - not yet wired up, so a client's heartbeat reply
+                    // is a no-op for now and MeasureLatency's own ping/pong still runs.
+                    break;
+
+                case FrameType.Message:
+                    if (client.app) {
+                        this.postMessage('clientMessage$', {
+                            channel: frame.channel,
+                            command: frame.command,
+                            payload: frame.payload,
+                            origin: {
+                                id: client.id,
+                                app: client.app,
+                                name: client.name,
+                                version: client.version,
+                                metadata: {},
+                            },
+                        });
+                    } else {
+                        this.logError(
+                            `Ignoring message (${frame.channel} / ${frame.command}) from client ${client.id} without app`,
+                            false
+                        );
+                    }
+                    break;
             }
         }
     }
@@ -398,10 +285,10 @@ export class TCPServerWorker extends WorkerService {
     }
 
     private handleHeartbeat() {
+        const packet = encodeHeartbeatFrame(process.hrtime.bigint());
         for (const client of [...this.clients.values(), ...this.waitingClients.values()]) {
-            client.socket.write('\0\0\0h\0');
+            client.socket.write(packet);
         }
-
     }
 }
 
