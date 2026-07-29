@@ -56,8 +56,22 @@ DATA_ROOT='../../data'
 
 A web interface is available on `http://<your-server-ip>:9011` to view the log output of connected clients.
 
+## Protocol
+
+Web clients talk to the server over Socket.IO. Unity clients talk to the server over TCP using a
+custom binary protocol - see [docs/protocol.md](docs/protocol.md) for the wire format. **v2.0.0
+introduces a v3 framing format that is a breaking change** for any TCP client older than this
+version (older clients must be updated to the new framing, see `docs/protocol.md`); the Socket.IO
+envelope is unaffected.
+
 ## Development
 
 * `npm run watch`: Run development server with auto-compile and reload on file changes
 * `npm run build`: Compilation
 * `npm start`: Start server -- make sure to compile first.
+* `npm run lint`: Lint the server and admin UI sources.
+* `npm test`: Run the vitest unit suite.
+* `npm run bench`: Run the vitest benchmark harness (see [bench/baseline.md](bench/baseline.md)
+  for recorded before/after numbers across the v2 modernization).
+* `npm run test:tcpclient`: Manual smoke test - connects with the v3 TCP framing and sends a
+  handshake.
