@@ -2,6 +2,7 @@ export * from './error-handler.js';
 export * from './log-message.js';
 export * from './payload.js';
 export * from './redirect-console.js';
+export * from './ring-buffer.js';
 export * from './serializable.js';
 export * from './service.js';
 export * from './worker-message.js';

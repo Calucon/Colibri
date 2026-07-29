@@ -1,10 +1,10 @@
-import { LogMessage, Metadata, Payload, Service } from '../core/index.js';
+import { LogMessage, Metadata, Payload, RingBuffer, Service } from '../core/index.js';
 import { SocketIOServer } from '../networking/socket-io-server.js';
 import { filter, merge } from 'rxjs';
 import { randomUUID } from 'crypto';
 
 const LOGGING_APP = 'colibri';
-const MAX_LOG_SIZE = 1000000;
+const MAX_LOG_SIZE = 20000;
 const LOOKUP_COUNT = 5; // how far back log messages are searched for identical messages
 
 interface WebMessage {
@@ -22,7 +22,7 @@ export class WebLog extends Service {
     public serviceName = 'WebLog';
     public groupName = 'web';
 
-    private logMessages: WebMessage[] = [];
+    private readonly logMessages = new RingBuffer<WebMessage>(MAX_LOG_SIZE);
 
     public constructor(private socketio: SocketIOServer) {
         super();
@@ -47,6 +47,7 @@ export class WebLog extends Service {
                     const clientLimit = 10000;
 
                     this.logMessages
+                        .toArray()
                         .filter(msg => !filter || msg.metadata.clientApp === filter)
                         .slice(-clientLimit)
                         .map(msg => ({
@@ -64,15 +65,10 @@ export class WebLog extends Service {
     }
 
     private redirectLogMessage(log: LogMessage): void {
-        // remove old messages
-        while (this.logMessages.length > MAX_LOG_SIZE) {
-            this.logMessages.shift();
-        }
-        
         // search last few messages for identical messages, group them together
         let webMsg: WebMessage | undefined = undefined;
         for (let i = this.logMessages.length - 1; i >= 0 && i > this.logMessages.length - LOOKUP_COUNT && !webMsg; i--) {
-            const tmpMsg = this.logMessages[i];
+            const tmpMsg = this.logMessages.at(i);
 
             if (tmpMsg && tmpMsg.message === log.message && tmpMsg.group === log.group && tmpMsg.level === log.level) {
                 webMsg = tmpMsg;

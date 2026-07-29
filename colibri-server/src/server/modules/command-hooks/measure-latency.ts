@@ -1,7 +1,9 @@
-import { Payload, Service } from '../core/index.js';
+import { Payload, RingBuffer, Service } from '../core/index.js';
 import { ConnectionPool } from './connection-pool.js';
 import { hrtime } from 'process';
 import { SocketIOServer } from '../networking/index.js';
+
+const MAX_LATENCY_SAMPLES = 1000;
 
 export class MeasureLatency extends Service {
     public get serviceName(): string { return 'MeasureLatency'; }
@@ -34,10 +36,10 @@ export class MeasureLatency extends Service {
 
                 if (m.origin) {
                     if (m.origin.metadata['latency'] === undefined) {
-                        m.origin.metadata['latency'] = [];
+                        m.origin.metadata['latency'] = new RingBuffer<[number, number]>(MAX_LATENCY_SAMPLES);
                     }
 
-                    const latencies = m.origin.metadata['latency'] as [number, number][];
+                    const latencies = m.origin.metadata['latency'] as RingBuffer<[number, number]>;
                     const l: [number, number] = [Date.now(), Number(latency)];
                     latencies.push(l);
 
@@ -45,10 +47,6 @@ export class MeasureLatency extends Service {
                         batchedLatencies[m.origin.id] = [];
                     }
                     batchedLatencies[m.origin.id]?.push(l);
-
-                    while (latencies.length > 1000) {
-                        latencies.shift();
-                    }
                 }
             } catch (e) {
                 this.logError('Error parsing latency message: ' + e);
