@@ -17,6 +17,39 @@ const pull = function <T>(arr: T[], item: T): void {
     }
 };
 
+// v1 wire format: \0\0\0(ascii packet length)\0(flatbuffer-encoded Message)
+// Extracted from TCPServerWorker.broadcast so it can be exercised by bench/framing.bench.ts
+// without a real socket/worker; behavior is unchanged.
+export const encodeV1Packet = function (msg: NetworkMessage): Uint8Array {
+    const builder = new flatbuffers.Builder(1024);
+    const channel = builder.createString(msg.channel);
+    const command = builder.createString(msg.command);
+    // TODO: replace this with dictionary to avoid JSON serialization
+    //       see: https://flatbuffers.dev/flatbuffers_guide_use_c-sharp.html#autotoc_md93
+    const payload = builder.createString(msg.payload);
+
+    Message.startMessage(builder);
+    Message.addChannel(builder, channel);
+    Message.addCommand(builder, command);
+    Message.addPayload(builder, payload);
+    const message = Message.endMessage(builder);
+    builder.finish(message);
+
+    const msgBytes = builder.asUint8Array();
+    // FIXME: we don't want to deal with big/little endian, so we just use utf8 encoding for packet length
+    const packetHeader = new TextEncoder().encode(
+        `\0\0\0${msgBytes.length.toString()}\0`
+    );
+
+    // TODO:  could probably be more efficient!
+    const mergedPacket = new Uint8Array(
+        packetHeader.length + msgBytes.length
+    );
+    mergedPacket.set(packetHeader);
+    mergedPacket.set(msgBytes, packetHeader.length);
+    return mergedPacket;
+};
+
 interface TcpClient {
     id: string;
     socket: net.Socket;
@@ -89,32 +122,7 @@ export class TCPServerWorker extends WorkerService {
             return;
         }
 
-        const builder = new flatbuffers.Builder(1024);
-        const channel = builder.createString(msg.channel);
-        const command = builder.createString(msg.command);
-        // TODO: replace this with dictionary to avoid JSON serialization
-        //       see: https://flatbuffers.dev/flatbuffers_guide_use_c-sharp.html#autotoc_md93
-        const payload = builder.createString(msg.payload);
-
-        Message.startMessage(builder);
-        Message.addChannel(builder, channel);
-        Message.addCommand(builder, command);
-        Message.addPayload(builder, payload);
-        const message = Message.endMessage(builder);
-        builder.finish(message);
-
-        const msgBytes = builder.asUint8Array();
-        // FIXME: we don't want to deal with big/little endian, so we just use utf8 encoding for packet length
-        const packetHeader = new TextEncoder().encode(
-            `\0\0\0${msgBytes.length.toString()}\0`
-        );
-
-        // TODO:  could probably be more efficient!
-        const mergedPacket = new Uint8Array(
-            packetHeader.length + msgBytes.length
-        );
-        mergedPacket.set(packetHeader);
-        mergedPacket.set(msgBytes, packetHeader.length);
+        const mergedPacket = encodeV1Packet(msg);
 
         for (const client of clients) {
             // message format:
