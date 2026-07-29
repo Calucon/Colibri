@@ -46,6 +46,10 @@ interface TcpClient {
     app: string;
     version: string;
     name: string;
+    // Guards handleSocketDisconnect against running twice for the same client - a socket
+    // error is always followed by its own 'close' event, so without this both paths would
+    // post a duplicate clientDisconnected$.
+    disconnected: boolean;
 }
 
 export class TCPServerWorker extends WorkerService {
@@ -166,6 +170,7 @@ export class TCPServerWorker extends WorkerService {
             app: '',
             name: '',
             version: '0',
+            disconnected: false,
         };
         this.waitingClients.set(tcpClient.id, tcpClient);
 
@@ -177,7 +182,11 @@ export class TCPServerWorker extends WorkerService {
             this.handleSocketError(tcpClient, error);
         });
 
-        socket.on('end', () => {
+        // 'close' always fires exactly once, whether the socket ended gracefully, errored,
+        // or was destroyed outright - unlike 'end', which never fires on an abrupt
+        // disconnect (e.g. a client that vanishes without sending FIN), which used to leak
+        // that client in `clients`/`clientsByApp` forever.
+        socket.on('close', () => {
             this.handleSocketDisconnect(tcpClient);
         });
     }
@@ -289,10 +298,14 @@ export class TCPServerWorker extends WorkerService {
             this.logError(error.message, false);
         }
 
-        this.handleSocketDisconnect(client);
+        // No need to call handleSocketDisconnect here - a socket's 'close' event always
+        // fires directly after 'error', and that already handles cleanup.
     }
 
     private handleSocketDisconnect(client: TcpClient): void {
+        if (client.disconnected) return;
+        client.disconnected = true;
+
         this.logDebug(`Colibri client ${client.address} disconnected`, {
             clientApp: client.app,
             clientName: client.name,
