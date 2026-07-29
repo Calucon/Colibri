@@ -1,4 +1,3 @@
-import { filter } from 'rxjs';
 import { Payload, Service } from '../core/index.js';
 import { ConnectionPool, NetworkClient, NetworkMessage } from './connection-pool.js';
 
@@ -18,9 +17,9 @@ export class ClientBroadcast extends Service {
         pool.clientDisconnected$
             .subscribe(c => this.broadcastClient(c, 'client::disconnected'));
 
-        pool.messages$
-            .pipe(filter(msg => msg.channel === 'colibri::clients' && msg.command === 'client::request'))
-            .subscribe(this.sendInitialState.bind(this));
+        pool.onCommand('client::request', msg => {
+            if (msg.channel === 'colibri::clients') this.sendInitialState(msg);
+        });
     }
 
     private broadcastClient(client: NetworkClient, event: string): void {

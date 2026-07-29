@@ -1,4 +1,3 @@
-import { filter } from 'rxjs';
 import { Service } from '../core/index.js';
 import { ConnectionPool, NetworkMessage } from './connection-pool.js';
 
@@ -9,9 +8,7 @@ export class Broadcaster extends Service {
     public constructor(private connectionPool: ConnectionPool) {
         super();
 
-        connectionPool.messages$
-            .pipe(filter(msg => msg.command.startsWith('broadcast::')))
-            .subscribe(this.broadcast.bind(this));
+        connectionPool.onMessage(msg => msg.command.startsWith('broadcast::'), this.broadcast.bind(this));
     }
 
     private broadcast(msg: NetworkMessage): void {

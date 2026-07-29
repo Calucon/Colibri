@@ -1,4 +1,3 @@
-import { filter } from 'rxjs/operators';
 import { Payload, Service } from '../core/index.js';
 import { ConnectionPool } from './connection-pool.js';
 import { hrtime } from 'process';
@@ -26,35 +25,35 @@ export class MeasureLatency extends Service {
         let batchedLatencies: { [id: string]: [number, number][] } = {};
 
         // receive latency
-        pool.messages$
-            .pipe(filter(m => m.channel === 'colibri' && m.command === 'latency'))
-            .subscribe(m => {
-                try {
-                    const now = hrtime.bigint();
-                    const latency = Number(now - BigInt(m.payload?.asValue<number>() ?? 0)) / 1000000;
+        pool.onCommand('latency', m => {
+            if (m.channel !== 'colibri') return;
 
-                    if (m.origin) {
-                        if (m.origin.metadata['latency'] === undefined) {
-                            m.origin.metadata['latency'] = [];
-                        }
+            try {
+                const now = hrtime.bigint();
+                const latency = Number(now - BigInt(m.payload?.asValue<number>() ?? 0)) / 1000000;
 
-                        const latencies = m.origin.metadata['latency'] as [number, number][];
-                        const l: [number, number] = [Date.now(), Number(latency)];
-                        latencies.push(l);
-
-                        if (batchedLatencies[m.origin.id] === undefined) {
-                            batchedLatencies[m.origin.id] = [];
-                        }
-                        batchedLatencies[m.origin.id]?.push(l);
-
-                        while (latencies.length > 1000) {
-                            latencies.shift();
-                        }
+                if (m.origin) {
+                    if (m.origin.metadata['latency'] === undefined) {
+                        m.origin.metadata['latency'] = [];
                     }
-                } catch (e) {
-                    this.logError('Error parsing latency message: ' + e);
+
+                    const latencies = m.origin.metadata['latency'] as [number, number][];
+                    const l: [number, number] = [Date.now(), Number(latency)];
+                    latencies.push(l);
+
+                    if (batchedLatencies[m.origin.id] === undefined) {
+                        batchedLatencies[m.origin.id] = [];
+                    }
+                    batchedLatencies[m.origin.id]?.push(l);
+
+                    while (latencies.length > 1000) {
+                        latencies.shift();
+                    }
                 }
-            });
+            } catch (e) {
+                this.logError('Error parsing latency message: ' + e);
+            }
+        });
 
         // send out data to server frontend
         setInterval(() => {

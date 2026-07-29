@@ -1,4 +1,3 @@
-import { filter } from 'rxjs';
 import { Payload, Service } from '../core/index.js';
 import { ConnectionPool, NetworkMessage } from './connection-pool.js';
 import { DataStore, SyncModel } from './data-store.js';
@@ -10,19 +9,11 @@ export class ModelSynchronization extends Service {
     public constructor(private connectionPool: ConnectionPool, private store: DataStore) {
         super();
 
-        connectionPool.messages$
-            .pipe(filter(msg => msg.command === 'model::request'))
-            .subscribe(this.sendInitialState.bind(this));
+        connectionPool.onCommand('model::request', this.sendInitialState.bind(this));
+        connectionPool.onCommand('model::update', this.onModelUpdate.bind(this));
+        connectionPool.onCommand('model::delete', this.onModelDelete.bind(this));
 
-        connectionPool.messages$
-            .pipe(filter(msg => msg.command === 'model::update'))
-            .subscribe(this.onModelUpdate.bind(this));
 
-        connectionPool.messages$
-            .pipe(filter(msg => msg.command === 'model::delete'))
-            .subscribe(this.onModelDelete.bind(this));
-
-        
         // clear datastore when all clients from the same app disconnect
         connectionPool.clientDisconnected$.subscribe(client => {
             const hasClients = this.connectionPool.currentClients.some(c => c.app === client.app);

@@ -30,6 +30,8 @@ export abstract class NetworkServer {
     public broadcastToApp?(message: NetworkMessage, app: string, exceptClientId?: string): void;
 }
 
+export type MessageHandler = (message: NetworkMessage) => void;
+
 export class ConnectionPool extends Service {
     public serviceName = 'ConnectionPool';
     public groupName = 'colibri';
@@ -39,9 +41,14 @@ export class ConnectionPool extends Service {
     // owning server in O(1) instead of an O(servers * clients) scan-and-find.
     private readonly serverByClientId = new Map<string, NetworkServer>();
 
-    public get messages$(): Observable<NetworkMessage> {
-        return merge(...this.servers.map(c => c.messages$));
-    }
+    // Every command-hook used to subscribe to the `messages$` getter below independently,
+    // each rebuilding its own merge() of every transport's messages$ - N subscribers meant
+    // N independent merge/filter chains evaluated per message. Now there is exactly one
+    // merge() subscription (in the constructor), dispatching into these handler lists:
+    // handlersByCommand gives hooks that only care about an exact command O(1) routing,
+    // and wildcardHandlers covers the few that need a channel filter or command prefix.
+    private readonly handlersByCommand = new Map<string, MessageHandler[]>();
+    private readonly wildcardHandlers: MessageHandler[] = [];
 
     public get clientConnected$(): Observable<NetworkClient> {
         return merge(...this.servers.map(c => c.clientConnected$));
@@ -63,6 +70,36 @@ export class ConnectionPool extends Service {
             connection.clientConnected$.subscribe(client => this.serverByClientId.set(client.id, connection));
             connection.clientDisconnected$.subscribe(client => this.serverByClientId.delete(client.id));
         }
+
+        merge(...servers.map(c => c.messages$)).subscribe(message => this.dispatch(message));
+    }
+
+    // Exact-command dispatch, e.g. ModelSynchronization's 'model::update' handler - the
+    // busiest message in an object-sync server.
+    public onCommand(command: string, handler: MessageHandler): void {
+        let handlers = this.handlersByCommand.get(command);
+        if (!handlers) {
+            handlers = [];
+            this.handlersByCommand.set(command, handlers);
+        }
+        handlers.push(handler);
+    }
+
+    // For subscribers whose filter isn't a single exact command (a channel check, or a
+    // command prefix like 'broadcast::*') - still one shared dispatch loop, just without
+    // the further command-indexed lookup.
+    public onMessage(predicate: (message: NetworkMessage) => boolean, handler: MessageHandler): void {
+        this.wildcardHandlers.push(message => {
+            if (predicate(message)) handler(message);
+        });
+    }
+
+    private dispatch(message: NetworkMessage): void {
+        const handlers = this.handlersByCommand.get(message.command);
+        if (handlers) {
+            for (const handler of handlers) handler(message);
+        }
+        for (const handler of this.wildcardHandlers) handler(message);
     }
 
 

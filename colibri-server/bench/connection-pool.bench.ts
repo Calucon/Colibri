@@ -25,30 +25,37 @@ class FakeNetworkServer extends NetworkServer {
     }
 }
 
-// Baseline for ConnectionPool.messages$ being a getter that rebuilds
-// merge(...) on every access (Phase 1 makes this a stream built once).
-// Mirrors main.ts: 7 command-hook classes each subscribe to pool.messages$
-// once at startup, so this measures 7 independent merge() chains receiving
-// the same message stream.
+// Mirrors main.ts: 7 command-hook classes each register interest in messages once at
+// startup. The Phase 0 baseline (bench/baseline.md) measured the old `messages$` getter,
+// where each of the 7 subscribers independently rebuilt merge(...of every transport's
+// messages$) - 7 independent merge/filter chains evaluated per message. Phase 1 item 14
+// replaces that with a single merge() subscription in the constructor dispatching through
+// onCommand's Map<command, handlers[]>.
+//
+// Setup (constructing the pool and registering handlers) happens once, outside the timed
+// bench() callback, so this isolates steady-state dispatch cost from one-time constructor
+// work - that construction cost isn't part of the hot path this item targets, and folding
+// it into the timed loop would conflate the two. This differs from how the Phase 0 number
+// for this file was measured (it built a fresh pool per timed iteration), so the two
+// numbers aren't directly comparable - see bench/baseline.md's Phase 1 item 14 section.
 const HOOK_COUNT = 7;
 const MESSAGE_COUNT = 1000;
 
-describe('ConnectionPool.messages$ (v1: getter rebuilds merge() per access)', () => {
-    bench(`subscribe ${HOOK_COUNT} hooks, emit ${MESSAGE_COUNT} messages`, () => {
-        const serverA = new FakeNetworkServer();
-        const serverB = new FakeNetworkServer();
-        const pool = new ConnectionPool(serverA, serverB);
+const serverA = new FakeNetworkServer();
+const serverB = new FakeNetworkServer();
+const pool = new ConnectionPool(serverA, serverB);
 
-        let received = 0;
-        const subs = Array.from({ length: HOOK_COUNT }, () =>
-            pool.messages$.subscribe(() => { received++; })
-        );
+let received = 0;
+for (let i = 0; i < HOOK_COUNT; i++) {
+    pool.onCommand('model::update', () => { received++; });
+}
 
+describe('ConnectionPool message dispatch (v2: single merge + handler map)', () => {
+    bench(`emit ${MESSAGE_COUNT} messages to ${HOOK_COUNT} handlers`, () => {
         for (let i = 0; i < MESSAGE_COUNT; i++) {
             serverA.emit({ channel: 'colibri', command: 'model::update', payload: Payload.fromValue({}) });
         }
 
-        subs.forEach(s => s.unsubscribe());
         if (received === 0) throw new Error('benchmark did not observe any messages');
     });
 });
