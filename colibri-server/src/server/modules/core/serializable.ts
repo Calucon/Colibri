@@ -1,6 +1,11 @@
 import { Subject, merge } from 'rxjs';
 import { buffer, auditTime, share, map, filter } from 'rxjs/operators';
 
+/**
+ * @deprecated Not used by any current command-hook; retained for compatibility with older
+ * client integrations that may still model entities this way. Prefer `DataStore`'s plain
+ * `SyncModel` records for new synchronized state.
+ */
 export abstract class Serializable<T> {
     public id: string;
 

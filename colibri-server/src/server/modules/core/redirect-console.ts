@@ -1,5 +1,11 @@
 import { Service } from './service.js';
 
+/**
+ * @deprecated Not instantiated anywhere in `main.ts` (see the commented-out line there) -
+ * console output currently reaches the log stream only via services that call
+ * `Service.logInfo`/`logWarning`/`logError` directly. Kept for the case where redirecting
+ * raw `console.*` calls from third-party code is needed again.
+ */
 export class RedirectConsole extends Service {
     public serviceName = 'NodeJS';
     public groupName = 'core';

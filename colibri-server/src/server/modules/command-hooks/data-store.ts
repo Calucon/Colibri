@@ -20,6 +20,7 @@ export class DataStore extends Service {
         super();
     }
 
+    /** @deprecated No current caller - `updateModel` already creates a model on first write. */
     public addModel(group: string, channel: string, id: string): void {
         const models = this.getOrCreateChannel(group, channel);
         if (!models.has(id)) {
@@ -43,6 +44,7 @@ export class DataStore extends Service {
         this.store.get(group)?.get(channel)?.delete(id);
     }
 
+    /** @deprecated No current caller - `clearApp` is what actually runs on disconnect. */
     public clear(group: string, channel: string): void {
         this.store.get(group)?.delete(channel);
     }
