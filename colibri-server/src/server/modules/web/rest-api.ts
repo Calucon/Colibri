@@ -1,21 +1,28 @@
 import { Service } from '../core/index.js';
 import { WebServer } from './web-server.js';
 import { Router } from 'express';
-import * as fs from 'fs';
+import { mkdir, readFile, rename, writeFile } from 'fs/promises';
+import * as path from 'path';
 
 const STORE_FILENAME = 'store.json';
+const SAVE_DEBOUNCE_MILLIS = 250;
 
 export class RestAPI extends Service {
     public serviceName = 'RestAPI';
     public groupName = 'web';
 
     private data: { [key: string]: { [key: string]: unknown } } = {};
-    private storeFilePath: string;
+    private readonly storeFilePath: string;
+    private readonly storeTempFilePath: string;
+
+    private saveTimeout: NodeJS.Timeout | undefined;
+    private savePromise: Promise<void> = Promise.resolve();
 
     public constructor(dataPath: string, webserver: WebServer) {
         super();
 
-        this.storeFilePath = dataPath + STORE_FILENAME;
+        this.storeFilePath = path.join(dataPath, STORE_FILENAME);
+        this.storeTempFilePath = `${this.storeFilePath}.tmp`;
 
         webserver.addApi('/store', Router()
             .get('/', (req, res) => {
@@ -65,7 +72,7 @@ export class RestAPI extends Service {
                 // Return successful result with the sended data
                 res.status(statusCode).json({ result: 'Value with name ' + req.params.value + ' saved successfully', data: app[req.params.value] });
                 // Save data in data store file
-                this.saveData();
+                this.scheduleSave();
             })
             .delete('/:app', (req, res) => {
                 const app = this.data[req.params.app];
@@ -78,7 +85,7 @@ export class RestAPI extends Service {
                     // Return successful result
                     res.status(200).json({ result: 'App with name ' + req.params.app + ' deleted successfully' });
                     // Save data in data store file
-                    this.saveData();
+                    this.scheduleSave();
                 }
             })
             .delete('/:app/:value', (req, res) => {
@@ -97,43 +104,56 @@ export class RestAPI extends Service {
                         // Return successful result
                         res.status(200).json({ result: 'Value with name ' + req.params.value + ' deleted successfully' });
                         // Save data in data store file
-                        this.saveData();
+                        this.scheduleSave();
                     }
                 }
             }));
-
-        // Read data in data store file
-        this.readData();
     }
 
-    private async readData() {
-        fs.stat(this.storeFilePath, (err) => {
-            const fileExists = !err;
-
-            if (fileExists) {
-                fs.readFile(this.storeFilePath, 'utf8', (readErr, data) => {
-                    if (readErr) {
-                        this.logError(readErr.message, false);
-                    } else {
-                        const obj = JSON.parse(data);
-                        this.data = obj;
-                    }
-                });
+    // Runs before the web server starts serving requests, so a request can never observe
+    // the empty default `data` instead of what was actually persisted.
+    public override async init(): Promise<void> {
+        try {
+            const raw = await readFile(this.storeFilePath, 'utf8');
+            this.data = JSON.parse(raw);
+        } catch (err) {
+            if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+                this.logError(err instanceof Error ? err.message : String(err), false);
             }
-
-        });
-
+        }
     }
 
-    private saveData() {
-        const fileContent = JSON.stringify(this.data);
-        const options: fs.WriteFileOptions = {
-            encoding: 'utf8'
-        };
-        fs.writeFile(this.storeFilePath, fileContent, options, (err) => {
-            if (err) {
-                this.logError(err.message, false);
-            }
-        });
+    // Cancels any pending debounce and writes the current data immediately - used at
+    // shutdown so the last update before the process exits isn't lost to an unflushed timer.
+    public async flush(): Promise<void> {
+        if (this.saveTimeout) {
+            clearTimeout(this.saveTimeout);
+            this.saveTimeout = undefined;
+        }
+        await this.savePromise;
+        this.savePromise = this.writeStoreFile();
+        await this.savePromise;
+    }
+
+    // A burst of PUT/DELETE calls (e.g. many models saved in a loop) coalesces into a
+    // single write instead of one fs write per request.
+    private scheduleSave(): void {
+        if (this.saveTimeout) return;
+        this.saveTimeout = setTimeout(() => {
+            this.saveTimeout = undefined;
+            this.savePromise = this.writeStoreFile();
+        }, SAVE_DEBOUNCE_MILLIS);
+    }
+
+    // Write to a temp file, then rename over the real one - a crash mid-write can never
+    // truncate store.json, since the rename only ever swaps in a fully-written file.
+    private async writeStoreFile(): Promise<void> {
+        try {
+            await mkdir(path.dirname(this.storeFilePath), { recursive: true });
+            await writeFile(this.storeTempFilePath, JSON.stringify(this.data), 'utf8');
+            await rename(this.storeTempFilePath, this.storeFilePath);
+        } catch (err) {
+            this.logError(err instanceof Error ? err.message : String(err), false);
+        }
     }
 }
