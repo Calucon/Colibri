@@ -1,5 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
-
 import * as colibri from './modules/index.js';
 import { Config } from './configuration.js';
 
@@ -36,13 +34,17 @@ const restApi = new colibri.RestAPI(Config.DATA_ROOT, webServer);
 
 /**
  *    Plumbing
+ *
+ *    Constructed for their side effects only (each subscribes to the connection pool /
+ *    registers itself as a Service in its constructor) - never referenced again, so none
+ *    of these are assigned to a variable.
  */
-const clientLogger = new colibri.ClientLogger(connectionPool);
-const webLog = new colibri.WebLog(socketioServer);
-const modelsync = new colibri.ModelSynchronization(connectionPool, dataStore);
-const broadcaster = new colibri.Broadcaster(connectionPool);
-const clientBroadcast = new colibri.ClientBroadcast(connectionPool);
-const latency = new colibri.MeasureLatency(connectionPool, socketioServer);
+new colibri.ClientLogger(connectionPool);
+new colibri.WebLog(socketioServer);
+new colibri.ModelSynchronization(connectionPool, dataStore);
+new colibri.Broadcaster(connectionPool);
+new colibri.ClientBroadcast(connectionPool);
+new colibri.MeasureLatency(connectionPool, socketioServer);
 
 /**
  *    Startup
