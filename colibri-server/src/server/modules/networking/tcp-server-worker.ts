@@ -8,6 +8,12 @@ import { FrameError, FrameReader, FrameType, encodeHeartbeatFrame, encodeMessage
 export const TCP_SERVER_WORKER = fileURLToPath(import.meta.url);
 const maxBufferSize = 1024 * 1024 * 5;
 
+// For a last-write-wins synchronization server, a client whose socket write buffer is
+// already this full is not keeping up - queuing yet another update behind it only grows
+// process memory without bound (the old `socket.write()`'s return value was ignored
+// entirely). Dropping a stale update for a slow client is the correct behaviour here.
+const highWaterMark = 1024 * 1024;
+
 // The worker thread only ever deals in raw payload bytes (straight off the wire, or
 // destined for it) - the Payload memoization abstraction lives at the ConnectionPool
 // layer on the main thread, on the other side of the postMessage boundary. Keeping the
@@ -124,14 +130,25 @@ export class TCPServerWorker extends WorkerService {
         });
 
         for (const client of clients) {
-            client.socket.write(packet, (err) => {
-                if (err) {
-                    this.logWarning(
-                        `Failed to send message to client ${client.id}: ${err.message} `
-                    );
-                }
-            });
+            this.writeToClient(client, packet);
         }
+    }
+
+    private writeToClient(client: TcpClient, packet: Buffer): void {
+        if (client.socket.writableLength > highWaterMark) {
+            this.logWarning(
+                `Dropping message to client ${client.id}: writable buffer exceeds high-water mark (${client.socket.writableLength} bytes)`
+            );
+            return;
+        }
+
+        client.socket.write(packet, (err) => {
+            if (err) {
+                this.logWarning(
+                    `Failed to send message to client ${client.id}: ${err.message} `
+                );
+            }
+        });
     }
 
     private handleConnection(socket: net.Socket): void {
@@ -287,7 +304,7 @@ export class TCPServerWorker extends WorkerService {
     private handleHeartbeat() {
         const packet = encodeHeartbeatFrame(process.hrtime.bigint());
         for (const client of [...this.clients.values(), ...this.waitingClients.values()]) {
-            client.socket.write(packet);
+            this.writeToClient(client, packet);
         }
     }
 }
