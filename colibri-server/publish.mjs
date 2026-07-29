@@ -1,6 +1,7 @@
-/* eslint-disable @typescript-eslint/no-var-requires */
-const p = require('./package.json');
-const { exec } = require('child_process');
+import { exec } from 'child_process';
+import { readFileSync } from 'fs';
+
+const p = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'));
 
 const run = (cmd) => {
     return new Promise((resolve, reject) => {

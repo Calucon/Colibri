@@ -1,13 +1,14 @@
 import * as net from 'net';
 import * as _ from 'lodash';
-import { WorkerService } from '../core';
+import { WorkerService } from '../core/index.js';
 import * as threads from 'worker_threads';
 import * as flatbuffers from 'flatbuffers';
-import { Message } from './message';
-import { NetworkMessage } from '../command-hooks';
+import { fileURLToPath } from 'url';
+import { Message } from './message.js';
+import { NetworkMessage } from '../command-hooks/index.js';
 import { v4 as uuidv4 } from 'uuid';
 
-export const TCP_SERVER_WORKER = __filename;
+export const TCP_SERVER_WORKER = fileURLToPath(import.meta.url);
 const maxBufferSize = 1024 * 1024 * 5;
 
 interface TcpClient {

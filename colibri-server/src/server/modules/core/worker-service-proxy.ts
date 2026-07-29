@@ -1,10 +1,10 @@
-import { WorkerMessage } from './worker-message';
-import { Service } from './service';
+import { WorkerMessage } from './worker-message.js';
+import { Service } from './service.js';
 import * as threads from 'worker_threads';
 import { Subject } from 'rxjs';
-import { LogLevel } from './log-message';
+import { LogLevel } from './log-message.js';
 import cluster, { Worker } from 'cluster';
-import { WorkerLogMessage } from './worker-service';
+import { WorkerLogMessage } from './worker-service.js';
 
 export abstract class WorkerServiceProxy extends Service {
     private threadWorker!: threads.Worker;

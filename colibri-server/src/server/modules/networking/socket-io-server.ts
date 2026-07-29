@@ -1,13 +1,13 @@
-import io from 'socket.io';
+import { Server as SocketIoServer, Socket as SocketIoSocket, Event as SocketIoEvent } from 'socket.io';
 import * as _ from 'lodash';
 import { Server as HttpServer } from 'http';
 import { Observable, Subject } from 'rxjs';
 
-import { Service } from '../core';
-import { NetworkClient, NetworkMessage, NetworkServer } from '../command-hooks';
+import { Service } from '../core/index.js';
+import { NetworkClient, NetworkMessage, NetworkServer } from '../command-hooks/index.js';
 
 interface SocketIoClient extends NetworkClient {
-    socket: io.Socket;
+    socket: SocketIoSocket;
     version: string;
 }
 
@@ -15,7 +15,7 @@ export class SocketIOServer extends Service implements NetworkServer {
     public readonly serviceName = 'SocketIO';
     public readonly groupName = 'networking';
 
-    private ioServer!: io.Server;
+    private ioServer!: SocketIoServer;
 
     private readonly clients: SocketIoClient[] = [];
     private readonly clientStream = new Subject<SocketIoClient[]>();
@@ -24,7 +24,7 @@ export class SocketIOServer extends Service implements NetworkServer {
     private readonly messageStream = new Subject<NetworkMessage>();
 
     public start(server: HttpServer): void {
-        this.ioServer = new io.Server(server, {
+        this.ioServer = new SocketIoServer(server, {
             cors: {
                 origin: '*'
             }
@@ -80,7 +80,7 @@ export class SocketIOServer extends Service implements NetworkServer {
         }
     }
 
-    private handleNewClient(socket: io.Socket): void {
+    private handleNewClient(socket: SocketIoSocket): void {
         const client: SocketIoClient = {
             id: socket.id,
             app: socket.handshake.query.app as string,
@@ -107,7 +107,7 @@ export class SocketIOServer extends Service implements NetworkServer {
         this.clientConnectedStream.next(client);
         this.clientStream.next(this.clients);
 
-        socket.use(([channel, content]: io.Event, next) => {
+        socket.use(([channel, content]: SocketIoEvent, next) => {
             const msg: NetworkMessage = {
                 origin: client,
                 channel: channel,
@@ -128,7 +128,7 @@ export class SocketIOServer extends Service implements NetworkServer {
         });
     }
 
-    private handleSocketDisconnect(socket: io.Socket): void {
+    private handleSocketDisconnect(socket: SocketIoSocket): void {
         const removedClients = _.remove(this.clients, client => client.socket === socket);
         this.clientStream.next(this.clients);
 

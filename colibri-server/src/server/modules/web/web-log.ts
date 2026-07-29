@@ -1,5 +1,5 @@
-import { LogMessage, Metadata, Service } from '../core';
-import { SocketIOServer } from '../networking/socket-io-server';
+import { LogMessage, Metadata, Service } from '../core/index.js';
+import { SocketIOServer } from '../networking/socket-io-server.js';
 import { filter, merge } from 'rxjs';
 import { v4 as uuid } from 'uuid';
 

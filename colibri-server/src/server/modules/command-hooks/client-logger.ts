@@ -1,6 +1,6 @@
 import { filter } from 'rxjs/operators';
-import { Service } from '../core';
-import { ConnectionPool } from './connection-pool';
+import { Service } from '../core/index.js';
+import { ConnectionPool } from './connection-pool.js';
 
 export class ClientLogger extends Service {
     public get serviceName(): string { return 'ClientLogger'; }

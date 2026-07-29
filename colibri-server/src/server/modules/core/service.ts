@@ -1,5 +1,5 @@
 import { Observable, Subject } from 'rxjs';
-import { LogMessage, LogLevel, Metadata } from './log-message';
+import { LogMessage, LogLevel, Metadata } from './log-message.js';
 
 export abstract class Service {
     public static readonly Current: Service[] = [];

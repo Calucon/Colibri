@@ -1,8 +1,8 @@
 import * as _ from 'lodash';
-import { TCP_SERVER_WORKER } from './tcp-server-worker';
-import { WorkerServiceProxy } from '../core';
+import { TCP_SERVER_WORKER } from './tcp-server-worker.js';
+import { WorkerServiceProxy } from '../core/index.js';
 import { Observable, Subject } from 'rxjs';
-import { NetworkClient, NetworkMessage, NetworkServer } from '../command-hooks';
+import { NetworkClient, NetworkMessage, NetworkServer } from '../command-hooks/index.js';
 
 export class TCPServerProxy
     extends WorkerServiceProxy

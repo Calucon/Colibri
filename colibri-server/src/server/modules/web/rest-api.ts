@@ -1,5 +1,5 @@
-import { Service } from '../core';
-import { WebServer } from './web-server';
+import { Service } from '../core/index.js';
+import { WebServer } from './web-server.js';
 import { Router } from 'express';
 import * as fs from 'fs';
 

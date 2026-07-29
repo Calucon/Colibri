@@ -1,6 +1,6 @@
 import { filter } from 'rxjs';
-import { Service } from '../core';
-import { ConnectionPool, NetworkMessage } from './connection-pool';
+import { Service } from '../core/index.js';
+import { ConnectionPool, NetworkMessage } from './connection-pool.js';
 
 export class Broadcaster extends Service {
     public serviceName = 'Broadcaster';

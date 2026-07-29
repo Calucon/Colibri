@@ -1,7 +1,7 @@
 import { filter } from 'rxjs';
-import { Service } from '../core';
-import { ConnectionPool, NetworkMessage } from './connection-pool';
-import { DataStore, SyncModel } from './data-store';
+import { Service } from '../core/index.js';
+import { ConnectionPool, NetworkMessage } from './connection-pool.js';
+import { DataStore, SyncModel } from './data-store.js';
 
 export class ModelSynchronization extends Service {
     public serviceName = 'ModelSync';

@@ -1,6 +1,6 @@
 import { filter } from 'rxjs';
-import { Service } from '../core';
-import { ConnectionPool, NetworkClient, NetworkMessage } from './connection-pool';
+import { Service } from '../core/index.js';
+import { ConnectionPool, NetworkClient, NetworkMessage } from './connection-pool.js';
 
 /**
  *  Broadcasts infos about current clients (i.e., client dis-/connected)

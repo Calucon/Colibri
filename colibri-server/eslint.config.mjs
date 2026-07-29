@@ -15,7 +15,7 @@ export default tseslint.config(
             'src/public/**',
             'src/types/**',
             'src/server/modules/networking/message.ts',
-            'publish.js',
+            'publish.mjs',
         ],
     },
     js.configs.recommended,

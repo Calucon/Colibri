@@ -1,8 +1,11 @@
 import path from 'path';
+import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 
 // automatically load .env file
 dotenv.config();
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export const Config = {
     TCP_HOST: process.env.TCP_HOST || '0.0.0.0',

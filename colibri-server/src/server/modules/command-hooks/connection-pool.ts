@@ -1,5 +1,5 @@
 import { Observable, merge } from 'rxjs';
-import { Service } from '../core';
+import { Service } from '../core/index.js';
 
 export interface NetworkMessage {
     origin?: NetworkClient;

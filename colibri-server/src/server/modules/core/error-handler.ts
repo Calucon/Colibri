@@ -1,4 +1,4 @@
-import { Service } from './service';
+import { Service } from './service.js';
 
 export class ErrorHandler extends Service {
     private static _instance: ErrorHandler;

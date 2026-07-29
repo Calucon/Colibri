@@ -4,7 +4,7 @@ import express from 'express';
 import bodyparser from 'body-parser';
 import cors from 'cors';
 
-import { Service } from '../core';
+import { Service } from '../core/index.js';
 
 export class WebServer extends Service {
     public get serviceName(): string {

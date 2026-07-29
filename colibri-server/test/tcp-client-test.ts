@@ -1,5 +1,5 @@
 import * as net from 'net';
-import { Config } from '../src/server/configuration';
+import { Config } from '../src/server/configuration.js';
 
 const address = '127.0.0.1';
 const port = Config.TCP_PORT;

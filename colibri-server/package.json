@@ -1,17 +1,21 @@
 {
   "name": "colibri-server",
   "version": "1.3.1",
+  "type": "module",
   "main": "dist/server/main.js",
   "author": "HCI Group, University of Konstanz",
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "lint": "eslint \"**/*.{js,ts}\"",
     "build": "npm run gui:build && npm run server:build",
     "start": "npm run server:start",
     "watch": "concurrently -k -p \"[{name}]\" -n \"Angular,Server-Compile,Server-Node\" -c \"green.bold,blue.bold,yellow.bold\" \"npm run gui:watch\" \"npm run server:watch:ts\" \"npm run server:watch:node\"",
-    "publish": "node publish.js",
+    "publish": "node publish.mjs",
     "gui:build": "ng build --configuration production",
     "gui:watch": "ng serve",
-    "server:start": "node dist/server/main.js",
+    "server:start": "node --enable-source-maps dist/server/main.js",
     "server:build": "tsc --p src/server",
     "server:watch:ts": "tsc --p src/server -w",
     "server:watch:node": "nodemon --watch dist/server/* --exec \"npm run server:start\"",

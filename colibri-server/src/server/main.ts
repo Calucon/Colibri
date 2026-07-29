@@ -1,11 +1,8 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
 
 import * as _ from 'lodash';
-import * as colibri from './modules';
-import { Config } from './configuration';
-
-// Better TypeScript error messages
-import 'source-map-support/register';
+import * as colibri from './modules/index.js';
+import { Config } from './configuration.js';
 
 /**
  * Debugging

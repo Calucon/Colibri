@@ -1,7 +1,8 @@
-import { Service } from '../core';
+import { Service } from '../core/index.js';
 import * as dgram from 'dgram';
 import { AddressInfo } from 'net';
-import { WaveFile } from 'wavefile';
+import wavefile from 'wavefile';
+const { WaveFile } = wavefile;
 import { writeFileSync, existsSync, mkdirSync } from 'fs';
 
 interface VoiceClient {

@@ -1,5 +1,5 @@
 import * as _ from 'lodash';
-import { Service } from '../core/service';
+import { Service } from '../core/service.js';
 
 export interface SyncModel {
     id: string;
