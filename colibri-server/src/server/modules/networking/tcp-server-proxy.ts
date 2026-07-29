@@ -1,5 +1,5 @@
 import { TCP_SERVER_WORKER } from './tcp-server-worker.js';
-import { WorkerServiceProxy } from '../core/index.js';
+import { Payload, WorkerServiceProxy } from '../core/index.js';
 import { Observable, Subject } from 'rxjs';
 import { NetworkClient, NetworkMessage, NetworkServer } from '../command-hooks/index.js';
 
@@ -53,10 +53,17 @@ export class TCPServerProxy
                     break;
 
                 case 'clientMessage$': {
-                    const networkMessage = msg.content as unknown as NetworkMessage;
+                    const wireMessage = msg.content as unknown as {
+                        origin?: { id: string };
+                        channel: string;
+                        command: string;
+                        payload: string;
+                    };
                     this.onClientMessage({
-                        ...networkMessage,
-                        origin: this.clients.find((c) => c.id === networkMessage.origin?.id),
+                        channel: wireMessage.channel,
+                        command: wireMessage.command,
+                        payload: Payload.fromString(wireMessage.payload),
+                        origin: this.clients.find((c) => c.id === wireMessage.origin?.id),
                     });
                     break;
                 }
@@ -81,7 +88,7 @@ export class TCPServerProxy
             msg: {
                 channel: msg.channel,
                 command: msg.command,
-                payload: msg.payload,
+                payload: msg.payload?.asString() ?? '',
             },
             clients: clients.map((c) => c.id),
         });

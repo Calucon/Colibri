@@ -1,4 +1,4 @@
-import { LogMessage, Metadata, Service } from '../core/index.js';
+import { LogMessage, Metadata, Payload, Service } from '../core/index.js';
 import { SocketIOServer } from '../networking/socket-io-server.js';
 import { filter, merge } from 'rxjs';
 import { randomUUID } from 'crypto';
@@ -37,7 +37,7 @@ export class WebLog extends Service {
                 const socketClient = this.socketio.currentClients.find(c => c === networkMsg.origin);
 
                 if (networkMsg.origin) {
-                    networkMsg.origin.metadata['log::filter'] = JSON.parse(networkMsg.payload || '{}')?.filter || '';
+                    networkMsg.origin.metadata['log::filter'] = networkMsg.payload?.asValue<{ filter?: string }>()?.filter || '';
                 }
 
                 if (socketClient) {
@@ -52,7 +52,7 @@ export class WebLog extends Service {
                         .map(msg => ({
                             channel: 'colibri::log',
                             command: 'message',
-                            payload: JSON.stringify(msg)
+                            payload: Payload.fromValue(msg)
                         }))
                         .forEach(msg => this.socketio.broadcast(msg, [ socketClient ]));
                 } else {
@@ -102,7 +102,7 @@ export class WebLog extends Service {
         this.socketio.broadcast({
             channel: 'colibri::log',
             command: 'message',
-            payload: JSON.stringify(webMsg)
+            payload: Payload.fromValue(webMsg)
         }, clients);
     }
 }

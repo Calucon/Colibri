@@ -1,5 +1,5 @@
 import { filter } from 'rxjs';
-import { Service } from '../core/index.js';
+import { Payload, Service } from '../core/index.js';
 import { ConnectionPool, NetworkClient, NetworkMessage } from './connection-pool.js';
 
 /**
@@ -27,7 +27,7 @@ export class ClientBroadcast extends Service {
         const msg = {
             channel: 'colibri::clients',
             command: event,
-            payload: JSON.stringify({
+            payload: Payload.fromValue({
                 id: client.id,
                 name: client.name,
                 app: client.app
@@ -69,7 +69,7 @@ export class ClientBroadcast extends Service {
             this.pool.emit({
                 channel: 'colibri::clients',
                 command: 'client::connected',
-                payload: JSON.stringify(client),
+                payload: Payload.fromValue(client),
             }, msg.origin);
         }
     }

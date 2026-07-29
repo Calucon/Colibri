@@ -1,5 +1,5 @@
 import { filter } from 'rxjs';
-import { Service } from '../core/index.js';
+import { Payload, Service } from '../core/index.js';
 import { ConnectionPool, NetworkMessage } from './connection-pool.js';
 import { DataStore, SyncModel } from './data-store.js';
 
@@ -40,21 +40,21 @@ export class ModelSynchronization extends Service {
 
         const app = msg.origin.app;
         try {
-            const payload = JSON.parse(msg.payload || '{}') as { id?: string };
+            const payload = (msg.payload?.asValue<{ id?: string }>()) || {};
 
             if (typeof(payload?.id) === 'string') {
                 const model = this.store.getModel(app, msg.channel, payload.id) || { id: payload.id };
                 this.connectionPool.emit({
                     channel: msg.channel,
                     command: 'model::update',
-                    payload: JSON.stringify(model)
+                    payload: Payload.fromValue(model)
                 }, msg.origin);
             } else {
                 for (const model of this.store.getAll(app, msg.channel)) {
                     this.connectionPool.emit({
                         channel: msg.channel,
                         command: 'model::update',
-                        payload: JSON.stringify(model)
+                        payload: Payload.fromValue(model)
                     }, msg.origin);
                 }
             }
@@ -70,7 +70,7 @@ export class ModelSynchronization extends Service {
         }
 
         try {
-            const payload = JSON.parse(msg.payload || '{}') as { id?: string };
+            const payload = (msg.payload?.asValue<{ id?: string }>()) || {};
             if (typeof(payload?.id) !== 'string') {
                 this.logError('Cannot update model without "id" attribute');
                 return;
@@ -90,9 +90,9 @@ export class ModelSynchronization extends Service {
         }
 
         try {
-            const payload = JSON.parse(msg.payload || '{}');
+            const payload = msg.payload?.asValue<{ id?: string }>();
 
-            if (payload) {
+            if (payload?.id) {
                 this.store.removeModel(msg.origin.app, msg.channel, payload.id);
                 this.connectionPool.broadcast(msg);
             } else {

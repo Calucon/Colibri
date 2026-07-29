@@ -2,7 +2,7 @@ import { Server as SocketIoServer, Socket as SocketIoSocket, Event as SocketIoEv
 import { Server as HttpServer } from 'http';
 import { Observable, Subject } from 'rxjs';
 
-import { Service } from '../core/index.js';
+import { Payload, Service } from '../core/index.js';
 import { NetworkClient, NetworkMessage, NetworkServer } from '../command-hooks/index.js';
 
 interface SocketIoClient extends NetworkClient {
@@ -64,12 +64,16 @@ export class SocketIOServer extends Service implements NetworkServer {
 
 
     public broadcast(msg: NetworkMessage, clients: ReadonlyArray<SocketIoClient>): void {
-        // FIXME: terrible workaround because other clients send payload as string
-        let payload = msg.payload;
+        // Cross-transport (TCP-origin) payloads are only guaranteed to be a wire string;
+        // fall back to the raw string if it doesn't happen to be valid JSON. Web-origin
+        // payloads already have a resolved value here, so this costs nothing for the
+        // common web-to-web relay case.
+        let payload: unknown;
         try {
-            if (msg.payload)
-                payload = JSON.parse(msg.payload);
-        } catch { /* ignore */ }
+            payload = msg.payload?.asValue();
+        } catch {
+            payload = msg.payload?.asString();
+        }
 
         for (const client of clients) {
             client.socket.emit(msg.channel, {
@@ -111,8 +115,7 @@ export class SocketIOServer extends Service implements NetworkServer {
                 origin: client,
                 channel: channel,
                 command: content.command,
-                // FIXME: terrible workaround because other clients (unity/tcp) send payload as string
-                payload: JSON.stringify(content.payload)
+                payload: Payload.fromValue(content.payload)
             };
             this.messageStream.next(msg);
             next();

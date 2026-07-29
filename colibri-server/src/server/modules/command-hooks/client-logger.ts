@@ -21,21 +21,21 @@ export class ClientLogger extends Service {
 
                 switch (m.command) {
                     case 'info':
-                        this.logInfo(`[${name}] ${m.payload}`, metadata);
+                        this.logInfo(`[${name}] ${m.payload?.asString()}`, metadata);
                         break;
 
                     case 'warn':
                     case 'warning':
-                        this.logWarning(`[${name}] ${m.payload}`, metadata);
+                        this.logWarning(`[${name}] ${m.payload?.asString()}`, metadata);
                         break;
 
                     case 'error':
-                        this.logError(`[${name}] ${m.payload}`, false, metadata);
+                        this.logError(`[${name}] ${m.payload?.asString()}`, false, metadata);
                         break;
 
                     case 'debug':
                     default:
-                        this.logDebug(`[${name}] ${m.payload}`, metadata);
+                        this.logDebug(`[${name}] ${m.payload?.asString()}`, metadata);
                         break;
                 }
             });

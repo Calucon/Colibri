@@ -1,5 +1,6 @@
 import { bench, describe } from 'vitest';
 import { Subject, Observable } from 'rxjs';
+import { Payload } from '../src/server/modules/core/payload.js';
 import {
     ConnectionPool,
     NetworkClient,
@@ -44,7 +45,7 @@ describe('ConnectionPool.messages$ (v1: getter rebuilds merge() per access)', ()
         );
 
         for (let i = 0; i < MESSAGE_COUNT; i++) {
-            serverA.emit({ channel: 'colibri', command: 'model::update', payload: '{}' });
+            serverA.emit({ channel: 'colibri', command: 'model::update', payload: Payload.fromValue({}) });
         }
 
         subs.forEach(s => s.unsubscribe());

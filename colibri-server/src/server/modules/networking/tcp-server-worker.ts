@@ -5,7 +5,6 @@ import * as flatbuffers from 'flatbuffers';
 import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
 import { Message } from './message.js';
-import { NetworkMessage } from '../command-hooks/index.js';
 
 export const TCP_SERVER_WORKER = fileURLToPath(import.meta.url);
 const maxBufferSize = 1024 * 1024 * 5;
@@ -17,10 +16,26 @@ const pull = function <T>(arr: T[], item: T): void {
     }
 };
 
+// The worker thread only ever deals in wire-string payloads (from the flatbuffer, or
+// destined for one) - the Payload memoization abstraction lives at the ConnectionPool
+// layer on the main thread, on the other side of the postMessage boundary.
+export interface WireNetworkMessage {
+    origin?: {
+        id: string;
+        app: string;
+        name: string;
+        version: string;
+        metadata: Record<string, unknown>;
+    };
+    channel: string;
+    command: string;
+    payload: string;
+}
+
 // v1 wire format: \0\0\0(ascii packet length)\0(flatbuffer-encoded Message)
 // Extracted from TCPServerWorker.broadcast so it can be exercised by bench/framing.bench.ts
 // without a real socket/worker; behavior is unchanged.
-export const encodeV1Packet = function (msg: NetworkMessage): Uint8Array {
+export const encodeV1Packet = function (msg: WireNetworkMessage): Uint8Array {
     const builder = new flatbuffers.Builder(1024);
     const channel = builder.createString(msg.channel);
     const command = builder.createString(msg.command);
@@ -92,7 +107,7 @@ export class TCPServerWorker extends WorkerService {
                         .map((id) => this.clients.find((c) => c.id === id))
                         .filter((c): c is TcpClient => !!c);
 
-                    this.broadcast(msg.content.msg as NetworkMessage, clients);
+                    this.broadcast(msg.content.msg as WireNetworkMessage, clients);
                     break;
                 }
             }
@@ -115,7 +130,7 @@ export class TCPServerWorker extends WorkerService {
     }
 
     public broadcast(
-        msg: NetworkMessage,
+        msg: WireNetworkMessage,
         clients: ReadonlyArray<TcpClient>
     ): void {
         if (clients.length === 0) {
@@ -171,7 +186,7 @@ export class TCPServerWorker extends WorkerService {
 
     private handleSocketData(client: TcpClient, data: Buffer): void {
         let buffer = Buffer.concat([client.leftOverBuffer, data]);
-        const msgs: NetworkMessage[] = [];
+        const msgs: WireNetworkMessage[] = [];
 
         const PACKET_HEADER_START = '\0\0\0';
 

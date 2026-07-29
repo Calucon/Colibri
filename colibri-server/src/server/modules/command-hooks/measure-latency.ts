@@ -1,5 +1,5 @@
 import { filter } from 'rxjs/operators';
-import { Service } from '../core/index.js';
+import { Payload, Service } from '../core/index.js';
 import { ConnectionPool } from './connection-pool.js';
 import { hrtime } from 'process';
 import { SocketIOServer } from '../networking/index.js';
@@ -17,7 +17,7 @@ export class MeasureLatency extends Service {
             pool.broadcast({
                 channel: 'colibri',
                 command: 'latency',
-                payload: now.toString(),
+                payload: Payload.fromString(now.toString()),
             });
         }, 100);
 
@@ -31,7 +31,7 @@ export class MeasureLatency extends Service {
             .subscribe(m => {
                 try {
                     const now = hrtime.bigint();
-                    const latency = Number(now - BigInt(JSON.parse(m.payload as string))) / 1000000;
+                    const latency = Number(now - BigInt(m.payload?.asValue<number>() ?? 0)) / 1000000;
 
                     if (m.origin) {
                         if (m.origin.metadata['latency'] === undefined) {
@@ -61,7 +61,7 @@ export class MeasureLatency extends Service {
             frontendConnection.broadcast({
                 channel: 'colibri::latency',
                 command: 'update',
-                payload: JSON.stringify(batchedLatencies),
+                payload: Payload.fromValue(batchedLatencies),
             }, frontendConnection.currentClients);
             batchedLatencies = {};
         }, 1000);

@@ -1,11 +1,11 @@
 import { Observable, merge } from 'rxjs';
-import { Service } from '../core/index.js';
+import { Payload, Service } from '../core/index.js';
 
 export interface NetworkMessage {
     origin?: NetworkClient;
     channel: string;
     command: string;
-    payload?: string;
+    payload?: Payload;
 }
 
 export interface NetworkClient {
