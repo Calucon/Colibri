@@ -9,18 +9,18 @@ export class TCPServerProxy
     public serviceName = 'UnityServer';
     public groupName = 'unity';
 
-    private clients: NetworkClient[] = [];
-    private clientStream = new Subject<NetworkClient[]>();
+    private readonly clients = new Map<string, NetworkClient>();
+    private clientStream = new Subject<ReadonlyArray<NetworkClient>>();
     private clientAddedStream = new Subject<NetworkClient>();
     private clientRemovedStream = new Subject<NetworkClient>();
 
     private messageStream = new Subject<NetworkMessage>();
 
-    public get clients$(): Observable<NetworkClient[]> {
+    public get clients$(): Observable<ReadonlyArray<NetworkClient>> {
         return this.clientStream.asObservable();
     }
     public get currentClients(): ReadonlyArray<NetworkClient> {
-        return this.clients;
+        return Array.from(this.clients.values());
     }
     public get clientConnected$(): Observable<NetworkClient> {
         return this.clientAddedStream.asObservable();
@@ -63,7 +63,7 @@ export class TCPServerProxy
                         channel: wireMessage.channel,
                         command: wireMessage.command,
                         payload: Payload.fromString(wireMessage.payload),
-                        origin: this.clients.find((c) => c.id === wireMessage.origin?.id),
+                        origin: wireMessage.origin ? this.clients.get(wireMessage.origin.id) : undefined,
                     });
                     break;
                 }
@@ -73,7 +73,7 @@ export class TCPServerProxy
 
     public start(port: number, host: string): void {
         this.postMessage('m:start', { port: port, host: host });
-        this.clientStream.next(this.clients);
+        this.clientStream.next(this.currentClients);
     }
 
     public stop(): void {
@@ -82,7 +82,7 @@ export class TCPServerProxy
 
     public broadcast(
         msg: NetworkMessage,
-        clients: ReadonlyArray<NetworkClient> = this.clients
+        clients: ReadonlyArray<NetworkClient> = this.currentClients
     ): void {
         this.postMessage('m:broadcast', {
             msg: {
@@ -95,19 +95,20 @@ export class TCPServerProxy
     }
 
     private onClientConnected(client: NetworkClient): void {
-        this.clients.push(client);
+        this.clients.set(client.id, client);
 
         this.clientAddedStream.next(client);
-        this.clientStream.next(this.clients);
+        this.clientStream.next(this.currentClients);
     }
 
     private onClientDisconnected(id: string): void {
-        const removedClients = this.clients.filter((c) => c.id === id);
-        this.clients = this.clients.filter((c) => c.id !== id);
-        for (const client of removedClients) {
+        const client = this.clients.get(id);
+        this.clients.delete(id);
+
+        if (client) {
             this.clientRemovedStream.next(client);
         }
-        this.clientStream.next(this.clients);
+        this.clientStream.next(this.currentClients);
     }
 
     private onClientMessage(msg: NetworkMessage): void {

@@ -9,13 +9,6 @@ import { Message } from './message.js';
 export const TCP_SERVER_WORKER = fileURLToPath(import.meta.url);
 const maxBufferSize = 1024 * 1024 * 5;
 
-const pull = function <T>(arr: T[], item: T): void {
-    const index = arr.indexOf(item);
-    if (index !== -1) {
-        arr.splice(index, 1);
-    }
-};
-
 // The worker thread only ever deals in wire-string payloads (from the flatbuffer, or
 // destined for one) - the Payload memoization abstraction lives at the ConnectionPool
 // layer on the main thread, on the other side of the postMessage boundary.
@@ -79,9 +72,12 @@ export class TCPServerWorker extends WorkerService {
     private server!: net.Server;
 
     // waiting for client to specify app name
-    private readonly waitingClients: TcpClient[] = [];
+    private readonly waitingClients = new Map<string, TcpClient>();
     // properly connected clients
-    private readonly clients: TcpClient[] = [];
+    private readonly clients = new Map<string, TcpClient>();
+    // clients grouped by app, so broadcast() can resolve recipients without scanning
+    // every connected client
+    private readonly clientsByApp = new Map<string, Set<TcpClient>>();
 
     private heartbeatInterval!: NodeJS.Timeout;
 
@@ -104,7 +100,7 @@ export class TCPServerWorker extends WorkerService {
                 case 'm:broadcast': {
                     const ids = msg.content.clients as string[];
                     const clients = ids
-                        .map((id) => this.clients.find((c) => c.id === id))
+                        .map((id) => this.clients.get(id))
                         .filter((c): c is TcpClient => !!c);
 
                     this.broadcast(msg.content.msg as WireNetworkMessage, clients);
@@ -169,7 +165,7 @@ export class TCPServerWorker extends WorkerService {
             name: '',
             version: '0',
         };
-        this.waitingClients.push(tcpClient);
+        this.waitingClients.set(tcpClient.id, tcpClient);
 
         socket.on('data', (data) => {
             this.handleSocketData(tcpClient, data);
@@ -345,8 +341,9 @@ export class TCPServerWorker extends WorkerService {
                 clientId: client.id,
             }
         );
-        pull(this.waitingClients, client);
-        this.clients.push(client);
+        this.waitingClients.delete(client.id);
+        this.clients.set(client.id, client);
+        this.addToAppIndex(client);
         this.postMessage('clientConnected$', { id: client.id, app, name, version });
     }
 
@@ -365,13 +362,33 @@ export class TCPServerWorker extends WorkerService {
             clientName: client.name,
             clientId: client.id,
         });
-        pull(this.clients, client);
-        pull(this.waitingClients, client);
+        this.clients.delete(client.id);
+        this.waitingClients.delete(client.id);
+        this.removeFromAppIndex(client);
         this.postMessage('clientDisconnected$', { id: client.id });
     }
 
+    private addToAppIndex(client: TcpClient): void {
+        let clients = this.clientsByApp.get(client.app);
+        if (!clients) {
+            clients = new Set();
+            this.clientsByApp.set(client.app, clients);
+        }
+        clients.add(client);
+    }
+
+    private removeFromAppIndex(client: TcpClient): void {
+        const clients = this.clientsByApp.get(client.app);
+        if (!clients) return;
+
+        clients.delete(client);
+        if (clients.size === 0) {
+            this.clientsByApp.delete(client.app);
+        }
+    }
+
     private handleHeartbeat() {
-        for (const client of [...this.clients, ...this.waitingClients]) {
+        for (const client of [...this.clients.values(), ...this.waitingClients.values()]) {
             client.socket.write('\0\0\0h\0');
         }
 

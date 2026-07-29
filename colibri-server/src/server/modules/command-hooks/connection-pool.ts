@@ -35,6 +35,9 @@ export class ConnectionPool extends Service {
     public groupName = 'colibri';
 
     private readonly servers: NetworkServer[];
+    // Maintained from clientConnected$/clientDisconnected$ so emit() can find a client's
+    // owning server in O(1) instead of an O(servers * clients) scan-and-find.
+    private readonly serverByClientId = new Map<string, NetworkServer>();
 
     public get messages$(): Observable<NetworkMessage> {
         return merge(...this.servers.map(c => c.messages$));
@@ -55,6 +58,11 @@ export class ConnectionPool extends Service {
     public constructor(...servers: NetworkServer[]) {
         super();
         this.servers = servers;
+
+        for (const connection of servers) {
+            connection.clientConnected$.subscribe(client => this.serverByClientId.set(client.id, connection));
+            connection.clientDisconnected$.subscribe(client => this.serverByClientId.delete(client.id));
+        }
     }
 
 
@@ -75,10 +83,6 @@ export class ConnectionPool extends Service {
     }
 
     public emit(message: NetworkMessage, client: NetworkClient): void {
-        for (const connection of this.servers) {
-            if (connection.currentClients.find(c => c.id === client.id)) {
-                connection.broadcast(message, [ client ]);
-            }
-        }
+        this.serverByClientId.get(client.id)?.broadcast(message, [ client ]);
     }
 }
