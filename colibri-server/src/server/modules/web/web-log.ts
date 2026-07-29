@@ -1,6 +1,6 @@
 import { LogMessage, Metadata, Payload, RingBuffer, Service } from '../core/index.js';
 import { SocketIOServer } from '../networking/socket-io-server.js';
-import { filter, merge } from 'rxjs';
+import { filter } from 'rxjs';
 import { randomUUID } from 'crypto';
 
 const LOGGING_APP = 'colibri';
@@ -61,7 +61,7 @@ export class WebLog extends Service {
                 }
             });
 
-        merge(...Service.Current.map(s => s.output$)).subscribe(this.redirectLogMessage.bind(this));
+        Service.output$.subscribe(this.redirectLogMessage.bind(this));
     }
 
     private redirectLogMessage(log: LogMessage): void {
@@ -90,6 +90,13 @@ export class WebLog extends Service {
                 metadata: log.metadata
             };
             this.logMessages.push(webMsg);
+        }
+
+        // history above is kept regardless (a client may request it later), but skip
+        // building the broadcast payload and filtering currentClients when there's no
+        // admin UI connected to receive it.
+        if (!this.socketio.currentClients.some(c => c.app === LOGGING_APP)) {
+            return;
         }
 
         const clients = this.socketio.currentClients

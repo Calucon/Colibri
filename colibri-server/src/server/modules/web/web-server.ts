@@ -45,7 +45,7 @@ export class WebServer extends Service {
         // add default route for 404s last
         this.app.use(this.baseUrl, (req, res) => {
             res.sendFile(path.join(this.webRoot, 'index.html'));
-            this.logWarning(`Unmatched route: ${req.path}`);
+            this.logDebug(`Unmatched route: ${req.path}`);
         });
 
         // lock server so no more route changes are allowed
