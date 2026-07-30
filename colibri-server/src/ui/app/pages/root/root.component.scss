@@ -27,6 +27,13 @@
         align-items: center;
         justify-content: space-between;
 
+        .selector {
+            display: flex;
+            flex-direction: row;
+            align-items: center;
+            gap: 16px;
+        }
+
         .logo {
             display: flex;
             flex-direction: row;

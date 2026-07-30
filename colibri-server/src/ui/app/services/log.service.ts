@@ -20,6 +20,13 @@ export class LogService {
     public messages: ReadonlyArray<LogMessage> = [];
     public readonly messages$ = new Subject<LogMessage>();
     public readonly filter$ = new BehaviorSubject<string>('');
+    public readonly showBroadcastTraffic$ = new BehaviorSubject<boolean>(false);
+
+    public get visibleMessages(): ReadonlyArray<LogMessage> {
+        return this.showBroadcastTraffic$.value
+            ? this.messages
+            : this.messages.filter(m => !m.metadata?.['broadcastTraffic']);
+    }
 
     // for quick lookup of messages by id
     private messageIds: { [id: string]: LogMessage } = {};

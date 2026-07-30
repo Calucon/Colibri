@@ -23,6 +23,7 @@ export class BroadcastLogger extends Service {
                 clientId: msg.origin?.id ?? 'UNKNOWN',
                 channel: msg.channel,
                 command: msg.command,
+                broadcastTraffic: true,
             }
         );
     }
