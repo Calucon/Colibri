@@ -27,6 +27,11 @@ export abstract class NetworkServer {
     // group clients server-side (Socket.IO rooms) encode the packet once for the whole
     // group instead of once per recipient. Transports without such a grouping simply don't
     // implement this, and ConnectionPool falls back to the per-client broadcast() above.
+    //
+    // Implementations must early-out on an app with no recipient *before* touching
+    // message.payload - resolving a payload across transports costs a JSON parse or
+    // stringify, and every client connect/disconnect broadcasts to app 'colibri', which
+    // in practice has clients on exactly one of the two transports.
     public broadcastToApp?(message: NetworkMessage, app: string, exceptClientId?: string): void;
 }
 
@@ -40,6 +45,10 @@ export class ConnectionPool extends Service {
     // Maintained from clientConnected$/clientDisconnected$ so emit() can find a client's
     // owning server in O(1) instead of an O(servers * clients) scan-and-find.
     private readonly serverByClientId = new Map<string, NetworkServer>();
+    // Same source, keyed by app: the broadcast() fallback for a transport without
+    // broadcastToApp resolves its recipients from here instead of scanning that
+    // transport's entire client list per broadcast.
+    private readonly clientsByApp = new Map<string, Set<NetworkClient>>();
 
     // Every command-hook used to subscribe to the `messages$` getter below independently,
     // each rebuilding its own merge() of every transport's messages$ - N subscribers meant
@@ -67,8 +76,14 @@ export class ConnectionPool extends Service {
         this.servers = servers;
 
         for (const connection of servers) {
-            connection.clientConnected$.subscribe(client => this.serverByClientId.set(client.id, connection));
-            connection.clientDisconnected$.subscribe(client => this.serverByClientId.delete(client.id));
+            connection.clientConnected$.subscribe(client => {
+                this.serverByClientId.set(client.id, connection);
+                this.addToAppIndex(client);
+            });
+            connection.clientDisconnected$.subscribe(client => {
+                this.serverByClientId.delete(client.id);
+                this.removeFromAppIndex(client);
+            });
         }
 
         merge(...servers.map(c => c.messages$)).subscribe(message => this.dispatch(message));
@@ -110,10 +125,16 @@ export class ConnectionPool extends Service {
                 continue;
             }
 
-            let clients = connection.currentClients;
-            if (app) {
-                clients = clients.filter(client => client.app === app && client.id !== message.origin?.id);
+            if (!app) {
+                connection.broadcast(message, connection.currentClients);
+                continue;
             }
+
+            const clients = this.clientsForApp(app, connection, message.origin?.id);
+            // Skipping the call rather than passing an empty list matters: a transport's
+            // broadcast() may serialize the payload (or ship it across a worker boundary)
+            // before it ever looks at the recipient list.
+            if (clients.length === 0) continue;
 
             connection.broadcast(message, clients);
         }
@@ -121,5 +142,37 @@ export class ConnectionPool extends Service {
 
     public emit(message: NetworkMessage, client: NetworkClient): void {
         this.serverByClientId.get(client.id)?.broadcast(message, [ client ]);
+    }
+
+    private clientsForApp(app: string, connection: NetworkServer, excludeClientId?: string): NetworkClient[] {
+        const candidates = this.clientsByApp.get(app);
+        if (!candidates) return [];
+
+        const clients: NetworkClient[] = [];
+        for (const client of candidates) {
+            if (client.id === excludeClientId) continue;
+            if (this.serverByClientId.get(client.id) !== connection) continue;
+            clients.push(client);
+        }
+        return clients;
+    }
+
+    private addToAppIndex(client: NetworkClient): void {
+        let clients = this.clientsByApp.get(client.app);
+        if (!clients) {
+            clients = new Set();
+            this.clientsByApp.set(client.app, clients);
+        }
+        clients.add(client);
+    }
+
+    private removeFromAppIndex(client: NetworkClient): void {
+        const clients = this.clientsByApp.get(client.app);
+        if (!clients) return;
+
+        clients.delete(client);
+        if (clients.size === 0) {
+            this.clientsByApp.delete(client.app);
+        }
     }
 }

@@ -1,5 +1,5 @@
 import { LogMessage, Metadata, Payload, RingBuffer, Service } from '../core/index.js';
-import { SocketIOServer } from '../networking/socket-io-server.js';
+import { SocketIoClient, SocketIOServer } from '../networking/socket-io-server.js';
 import { filter } from 'rxjs';
 import { randomUUID } from 'crypto';
 
@@ -34,31 +34,28 @@ export class WebLog extends Service {
         this.socketio.messages$
             .pipe(filter(msg => msg.channel === 'colibri::log' && msg.command === 'requestLog'))
             .subscribe(networkMsg => {
-                const socketClient = this.socketio.currentClients.find(c => c === networkMsg.origin);
-
-                if (networkMsg.origin) {
-                    networkMsg.origin.metadata['log::filter'] = networkMsg.payload?.asValue<{ filter?: string }>()?.filter || '';
-                }
-
-                if (socketClient) {
-                    const filter = socketClient.metadata['log::filter'] || '';
-
-                    // client can't handle too many messages at once
-                    const clientLimit = 10000;
-
-                    this.logMessages
-                        .toArray()
-                        .filter(msg => !filter || msg.metadata.clientApp === filter)
-                        .slice(-clientLimit)
-                        .map(msg => ({
-                            channel: 'colibri::log',
-                            command: 'message',
-                            payload: Payload.fromValue(msg)
-                        }))
-                        .forEach(msg => this.socketio.broadcast(msg, [ socketClient ]));
-                } else {
+                const socketClient = networkMsg.origin && this.socketio.getClient(networkMsg.origin.id);
+                if (!socketClient) {
                     this.logError('Unkown origin requested log messages', false);
+                    return;
                 }
+
+                const filter = networkMsg.payload?.asValue<{ filter?: string }>()?.filter || '';
+                socketClient.metadata['log::filter'] = filter;
+
+                // client can't handle too many messages at once
+                const clientLimit = 10000;
+
+                this.logMessages
+                    .toArray()
+                    .filter(msg => !filter || msg.metadata.clientApp === filter)
+                    .slice(-clientLimit)
+                    .map(msg => ({
+                        channel: 'colibri::log',
+                        command: 'message',
+                        payload: Payload.fromValue(msg)
+                    }))
+                    .forEach(msg => this.socketio.broadcast(msg, [ socketClient ]));
             });
 
         Service.output$.subscribe(this.redirectLogMessage.bind(this));
@@ -92,16 +89,21 @@ export class WebLog extends Service {
             this.logMessages.push(webMsg);
         }
 
-        // history above is kept regardless (a client may request it later), but skip
-        // building the broadcast payload and filtering currentClients when there's no
-        // admin UI connected to receive it.
-        if (!this.socketio.currentClients.some(c => c.app === LOGGING_APP)) {
-            return;
+        // History above is kept regardless (a client may request it later), but a single
+        // pass over currentClients decides the recipients, and building the broadcast
+        // payload is skipped entirely when no admin UI is connected to receive it.
+        const clients: SocketIoClient[] = [];
+        for (const client of this.socketio.currentClients) {
+            if (client.app !== LOGGING_APP) continue;
+
+            const clientFilter = client.metadata['log::filter'];
+            if (clientFilter && clientFilter !== log.metadata.clientApp) continue;
+
+            clients.push(client);
         }
 
-        const clients = this.socketio.currentClients
-            .filter(c => c.app === LOGGING_APP)
-            .filter(c => !c.metadata['log::filter'] || c.metadata['log::filter'] === log.metadata.clientApp);
+        if (clients.length === 0) return;
+
         this.socketio.broadcast({
             channel: 'colibri::log',
             command: 'message',
