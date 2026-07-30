@@ -1,10 +1,9 @@
 import { bench, describe } from 'vitest';
 import { DataStore } from '../src/server/modules/command-hooks/data-store.js';
 
-// DataStore now nests app -> channel -> model id as Maps (Phase 1 item 13), replacing
-// the array + Array.find/Array.filter storage the numbers in bench/baseline.md were
-// measured against. Sized to resemble a busy app with a few hundred synced objects on
-// one channel.
+// DataStore now nests app -> channel -> model id as Maps (Phase 1 item 13), replacing the
+// array + Array.find/Array.filter storage the Phase 0 numbers were measured against. Sized
+// to resemble a busy app with a few hundred synced objects on one channel.
 const MODEL_COUNT = 500;
 
 const seeded = function (): DataStore {

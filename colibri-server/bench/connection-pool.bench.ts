@@ -26,9 +26,9 @@ class FakeNetworkServer extends NetworkServer {
 }
 
 // Mirrors main.ts: 7 command-hook classes each register interest in messages once at
-// startup. The Phase 0 baseline (bench/baseline.md) measured the old `messages$` getter,
-// where each of the 7 subscribers independently rebuilt merge(...of every transport's
-// messages$) - 7 independent merge/filter chains evaluated per message. Phase 1 item 14
+// startup. The Phase 0 baseline measured the old `messages$` getter, where each of the 7
+// subscribers independently rebuilt merge(...of every transport's messages$) - 7
+// independent merge/filter chains evaluated per message. Phase 1 item 14
 // replaces that with a single merge() subscription in the constructor dispatching through
 // onCommand's Map<command, handlers[]>.
 //
@@ -36,8 +36,8 @@ class FakeNetworkServer extends NetworkServer {
 // bench() callback, so this isolates steady-state dispatch cost from one-time constructor
 // work - that construction cost isn't part of the hot path this item targets, and folding
 // it into the timed loop would conflate the two. This differs from how the Phase 0 number
-// for this file was measured (it built a fresh pool per timed iteration), so the two
-// numbers aren't directly comparable - see bench/baseline.md's Phase 1 item 14 section.
+// for this file was measured (it built a fresh pool per timed iteration), so a Phase 0
+// number recorded before that change is not directly comparable to this one.
 const HOOK_COUNT = 7;
 const MESSAGE_COUNT = 1000;
 

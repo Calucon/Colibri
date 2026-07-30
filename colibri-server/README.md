@@ -50,6 +50,9 @@ WEBSERVER_ROOT='../ui/'
 BASE_URL=''
 
 DATA_ROOT='../../data'
+
+# Frames walked when capturing a stack trace for a logged error.
+STACK_TRACE_LIMIT=30
 ```
 
 ## Features
@@ -71,7 +74,8 @@ envelope is unaffected.
 * `npm start`: Start server -- make sure to compile first.
 * `npm run lint`: Lint the server and admin UI sources.
 * `npm test`: Run the vitest unit suite.
-* `npm run bench`: Run the vitest benchmark harness (see [bench/baseline.md](bench/baseline.md)
-  for recorded before/after numbers across the v2 modernization).
+* `npm run bench`: Run the vitest benchmark harness. Results are machine- and runtime-specific,
+  so they are reported in the pull request that claims them rather than committed here; always
+  measure a before/after pair on the same machine and the same Node version.
 * `npm run test:tcpclient`: Manual smoke test - connects with the v3 TCP framing and sends a
   handshake.
