@@ -4,6 +4,7 @@ import { AddressInfo } from 'net';
 import wavefile from 'wavefile';
 const { WaveFile } = wavefile;
 import { mkdir, writeFile } from 'fs/promises';
+import * as path from 'path';
 
 // Recordings can run for minutes at 48kHz, so a plain number[] would mean millions of
 // boxed-double pushes. This keeps samples in a flat Int16Array, growing (doubling) only
@@ -65,6 +66,10 @@ export class VoiceServer extends Service {
     // Rebuilt only when a client joins or times out, instead of re-scanning/re-deriving
     // `this.clients` on every incoming voice packet (received at up to ~50 packets/s/client).
     private clientsCache: VoiceClient[] | undefined;
+
+    // Guards checkClientsDisconnected against overlapping fs work when a save outlives its
+    // tick; see the comment there.
+    private savingRecordings = false;
 
     public constructor(private samplingRate: number, private voiceRecordingPath: string, private recordingVoiceData: boolean = false) {
         super();
@@ -150,9 +155,10 @@ export class VoiceServer extends Service {
         this.disconnectCheckInterval = setInterval(() => this.checkClientsDisconnected(), 1000);
     }
 
+    // Tolerates never having been started, for the same reason as SocketIOServer.stop().
     public stop(): void {
-        clearInterval(this.disconnectCheckInterval);
-        this.udpSocket.close();
+        if (this.disconnectCheckInterval) clearInterval(this.disconnectCheckInterval);
+        if (this.udpSocket) this.udpSocket.close();
     }
 
     private getClientsCache(): VoiceClient[] {
@@ -162,22 +168,39 @@ export class VoiceServer extends Service {
         return this.clientsCache;
     }
 
+    // setInterval never awaits this, so the timed-out clients are collected and removed
+    // before anything is awaited. Deleting only after `await saveRecording(...)` meant a
+    // save slower than the 1s tick let the next tick find the same client still registered
+    // and write the same recording to the same filename a second time.
     private async checkClientsDisconnected(): Promise<void> {
+        if (this.savingRecordings) return;
+
         const now = Date.now();
+        const pendingRecordings: VoiceClient[] = [];
+
         for (const [key, value] of this.clients) {
             // Remove inactive clients
             if (now - value.lastHeartbeat > this.disconnectTimeoutMillis) {
-
-                // Check if recording data is available
-                if (value.recordingData.length > 0) {
-                    await this.saveRecording(value);
-                }
-
-                // Delete client
                 this.clients.delete(key);
                 this.clientsCache = undefined;
                 this.logDebug(`Voice client ${value.ip}:${value.port} disconnected ID: ${value.userId}`);
+
+                // Check if recording data is available
+                if (value.recordingData.length > 0) {
+                    pendingRecordings.push(value);
+                }
             }
+        }
+
+        if (pendingRecordings.length === 0) return;
+
+        this.savingRecordings = true;
+        try {
+            for (const client of pendingRecordings) {
+                await this.saveRecording(client);
+            }
+        } finally {
+            this.savingRecordings = false;
         }
     }
 
@@ -191,7 +214,7 @@ export class VoiceServer extends Service {
             const dateString = client.recordingStartDate.toISOString().replace(/:/g, '_');
             await mkdir(this.voiceRecordingPath, { recursive: true });
             const filename = `rec_${dateString}_ID_${client.userId}.wav`;
-            await writeFile(`${this.voiceRecordingPath}/${filename}`, wav.toBuffer());
+            await writeFile(path.join(this.voiceRecordingPath, filename), wav.toBuffer());
             this.logDebug(`Voice recording saved to ${filename}`);
         } catch (err) {
             this.logError(`Failed to save voice recording: ${err instanceof Error ? err.message : String(err)}`, false);

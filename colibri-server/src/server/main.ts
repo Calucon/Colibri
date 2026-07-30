@@ -75,34 +75,56 @@ startup().catch((err) => {
 // store.json write could be lost. Guarded against running twice since SIGTERM and SIGINT
 // could both arrive (e.g. an operator hits Ctrl+C right after `docker stop`).
 let shuttingDown = false;
-const shutdown = async (signal: NodeJS.Signals) => {
+
+// If a shutdown step wedges (a socket that won't close, a hung fs write) the process must
+// still go away, or `docker stop` waits out its grace period and SIGKILLs us anyway.
+const SHUTDOWN_TIMEOUT_MILLIS = 5000;
+
+// Each step is isolated: a signal or crash arriving before startup() finished leaves some
+// of these unstarted, and one failing stop() must not skip the steps behind it - least of
+// all restApi.flush(), which is the only thing standing between a crash and up to
+// SAVE_DEBOUNCE_MILLIS of lost store writes.
+const runShutdownStep = async (name: string, step: () => void | Promise<void>): Promise<void> => {
+    try {
+        await step();
+    } catch (err) {
+        console.error(`Error stopping ${name}:`, err);
+    }
+};
+
+const shutdown = async (reason: string, exitCode: number) => {
     if (shuttingDown) return;
     shuttingDown = true;
 
-    console.log(`Received ${signal}, shutting down...`);
-    try {
-        webServer.stop();
-        socketioServer.stop();
-        voiceServer.stop();
-        await tcpServer.stop();
-        await restApi.flush();
-    } catch (err) {
-        console.error('Error during shutdown:', err);
-        process.exit(1);
-    }
+    console.log(`${reason}, shutting down...`);
 
-    process.exit(0);
+    const watchdog = setTimeout(() => {
+        console.error(`Shutdown did not complete within ${SHUTDOWN_TIMEOUT_MILLIS}ms, exiting`);
+        process.exit(exitCode);
+    }, SHUTDOWN_TIMEOUT_MILLIS);
+    watchdog.unref();
+
+    await runShutdownStep('WebServer', () => webServer.stop());
+    await runShutdownStep('SocketIOServer', () => socketioServer.stop());
+    await runShutdownStep('VoiceServer', () => voiceServer.stop());
+    await runShutdownStep('TCPServer', () => tcpServer.stop());
+    await runShutdownStep('RestAPI', () => restApi.flush());
+
+    clearTimeout(watchdog);
+    process.exit(exitCode);
 };
 
-process.on('SIGTERM', (signal) => void shutdown(signal));
-process.on('SIGINT', (signal) => void shutdown(signal));
+process.on('SIGTERM', (signal) => void shutdown(`Received ${signal}`, 0));
+process.on('SIGINT', (signal) => void shutdown(`Received ${signal}`, 0));
 
+// Both of these used to process.exit(1) directly, discarding whatever the debounced store
+// save still had pending - in exactly the situation where losing it hurts most.
 process.on('unhandledRejection', (reason) => {
     console.error('Unhandled rejection:', reason);
-    process.exit(1);
+    void shutdown('Unhandled rejection', 1);
 });
 
 process.on('uncaughtException', (err) => {
     console.error('Uncaught exception:', err);
-    process.exit(1);
+    void shutdown('Uncaught exception', 1);
 });

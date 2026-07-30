@@ -34,8 +34,18 @@ export class MeasureLatency extends Service {
             if (m.channel !== 'colibri') return;
 
             try {
+                const ping = m.payload?.asValue<number | string>();
+                // Defaulting a missing timestamp to 0 turned every payload-less 'latency'
+                // message into a multi-million-millisecond sample in the ring buffer and
+                // the admin UI's chart. There is nothing to measure here, so skip it.
+                if (ping === undefined || ping === null || ping === '') return;
+
+                // hrtime nanoseconds can exceed Number.MAX_SAFE_INTEGER, in which case
+                // JSON.parse hands back a rounded float that BigInt() rejects outright -
+                // truncating keeps the sample instead of discarding it over a few nanos.
+                const pingNanos = typeof ping === 'number' ? BigInt(Math.trunc(ping)) : BigInt(ping);
                 const now = hrtime.bigint();
-                const latency = Number(now - BigInt(m.payload?.asValue<number>() ?? 0)) / 1000000;
+                const latency = Number(now - pingNanos) / 1000000;
 
                 if (m.origin) {
                     if (m.origin.metadata['latency'] === undefined) {

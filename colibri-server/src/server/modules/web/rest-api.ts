@@ -115,12 +115,33 @@ export class RestAPI extends Service {
     public override async init(): Promise<void> {
         try {
             const raw = await readFile(this.storeFilePath, 'utf8');
-            this.data = JSON.parse(raw);
+            this.data = this.parseStore(raw);
         } catch (err) {
             if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
                 this.logError(err instanceof Error ? err.message : String(err), false);
             }
         }
+    }
+
+    // The routes below assume `data` is an object of objects. A store file that parses to
+    // null, an array, or a scalar (hand-edited, truncated by an older version, restored
+    // from the wrong place) would otherwise make every GET throw instead of 404.
+    private parseStore(raw: string): { [key: string]: { [key: string]: unknown } } {
+        const parsed: unknown = JSON.parse(raw);
+        if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            this.logError(`Ignoring ${STORE_FILENAME}: expected a JSON object at the top level`, false);
+            return {};
+        }
+
+        const store: { [key: string]: { [key: string]: unknown } } = {};
+        for (const [app, values] of Object.entries(parsed)) {
+            if (values === null || typeof values !== 'object' || Array.isArray(values)) {
+                this.logError(`Ignoring app '${app}' in ${STORE_FILENAME}: expected an object of values`, false);
+                continue;
+            }
+            store[app] = values as { [key: string]: unknown };
+        }
+        return store;
     }
 
     // Cancels any pending debounce and writes the current data immediately - used at
@@ -141,7 +162,11 @@ export class RestAPI extends Service {
         if (this.saveTimeout) return;
         this.saveTimeout = setTimeout(() => {
             this.saveTimeout = undefined;
-            this.savePromise = this.writeStoreFile();
+            // Chained onto whatever write is still in flight rather than started alongside
+            // it: two concurrent writeStoreFile() calls share one store.json.tmp, and
+            // interleaved writes followed by two renames can publish a partial file -
+            // defeating the whole point of the temp-file-then-rename swap.
+            this.savePromise = this.savePromise.then(() => this.writeStoreFile());
         }, SAVE_DEBOUNCE_MILLIS);
     }
 
