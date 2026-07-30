@@ -62,4 +62,71 @@ describe('Payload', () => {
         const payload = Payload.fromValue({ x: 1 });
         expect(payload.asBytes()).toEqual(Buffer.from('{"x":1}', 'utf8'));
     });
+
+    // JSON.stringify(undefined) returns undefined rather than a string, which used to make
+    // asString() return undefined despite its type and asBytes() throw ERR_INVALID_ARG_TYPE
+    // - killing the process on the first payload-less broadcast relayed to a TCP client.
+    describe('missing and empty payloads', () => {
+        it('fromValue(undefined): asString() is an empty string', () => {
+            const payload = Payload.fromValue(undefined);
+            expect(payload.asString()).toBe('');
+        });
+
+        it('fromValue(undefined): asBytes() is an empty buffer', () => {
+            const payload = Payload.fromValue(undefined);
+            expect(payload.asBytes()).toEqual(Buffer.alloc(0));
+        });
+
+        it('fromValue(undefined): asValue() stays undefined', () => {
+            expect(Payload.fromValue(undefined).asValue()).toBeUndefined();
+        });
+
+        it('fromValue(undefined): asString() memoizes instead of re-stringifying', () => {
+            const payload = Payload.fromValue(undefined);
+            const spy = vi.spyOn(JSON, 'stringify');
+            payload.asString();
+            payload.asString();
+            expect(spy).toHaveBeenCalledTimes(1);
+            spy.mockRestore();
+        });
+
+        it('fromValue(null): round-trips as JSON null', () => {
+            const payload = Payload.fromValue(null);
+            expect(payload.asString()).toBe('null');
+            expect(payload.asBytes()).toEqual(Buffer.from('null', 'utf8'));
+            expect(payload.asValue()).toBeNull();
+        });
+
+        it('fromString(""): asValue() is undefined and asBytes() is empty', () => {
+            const payload = Payload.fromString('');
+            expect(payload.asValue()).toBeUndefined();
+            expect(payload.asBytes()).toEqual(Buffer.alloc(0));
+        });
+
+        it('fromBytes(empty): asString() is empty and asValue() is undefined', () => {
+            const payload = Payload.fromBytes(Buffer.alloc(0));
+            expect(payload.asString()).toBe('');
+            expect(payload.asValue()).toBeUndefined();
+        });
+    });
+
+    describe('payloads that are not JSON', () => {
+        it('asValue() throws but asString() still returns the raw text', () => {
+            const payload = Payload.fromString('not json');
+            expect(() => payload.asValue()).toThrow();
+            expect(payload.asString()).toBe('not json');
+        });
+
+        it('caches the parse failure instead of re-parsing on every call', () => {
+            const payload = Payload.fromBytes(Buffer.from('not json', 'utf8'));
+            const spy = vi.spyOn(JSON, 'parse');
+
+            const first = (() => { try { payload.asValue(); } catch (err) { return err; } })();
+            const second = (() => { try { payload.asValue(); } catch (err) { return err; } })();
+
+            expect(spy).toHaveBeenCalledTimes(1);
+            expect(first).toBe(second);
+            spy.mockRestore();
+        });
+    });
 });

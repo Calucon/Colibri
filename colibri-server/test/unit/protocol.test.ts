@@ -192,4 +192,68 @@ describe('protocol v3 framing', () => {
             expect(reader.pendingBytes).toBe(partial.length);
         });
     });
+
+    // Ingress was fully bounds-checked from the start; egress was not, and an
+    // unrepresentable frame surfaced as a raw ERR_OUT_OF_RANGE out of Buffer.writeUInt16LE
+    // in the middle of the write path.
+    describe('encodeMessageFrame validation', () => {
+        it('throws FrameError for a channel longer than the u16 length field', () => {
+            expect(() => encodeMessageFrame({
+                channel: 'c'.repeat(0x10000),
+                command: 'cmd',
+                payload: Buffer.alloc(0),
+            })).toThrow(FrameError);
+        });
+
+        it('throws FrameError for a command longer than the u16 length field', () => {
+            expect(() => encodeMessageFrame({
+                channel: 'c',
+                command: 'x'.repeat(0x10000),
+                payload: Buffer.alloc(0),
+            })).toThrow(FrameError);
+        });
+
+        it('throws FrameError rather than emitting a frame the reader would reject', () => {
+            const maxFrameLength = 1024;
+            expect(() => encodeMessageFrame({
+                channel: 'c',
+                command: 'cmd',
+                payload: Buffer.alloc(maxFrameLength),
+            }, maxFrameLength)).toThrow(FrameError);
+        });
+
+        it('accepts a frame exactly at the limit', () => {
+            const maxFrameLength = 1024;
+            // 1 type + 2 + 1 channel + 2 + 3 command = 9 bytes of overhead.
+            const payload = Buffer.alloc(maxFrameLength - 9);
+            const frame = encodeMessageFrame({ channel: 'c', command: 'cmd', payload }, maxFrameLength);
+
+            const reader = new FrameReader(maxFrameLength);
+            expect(readAll(reader, frame)).toEqual([
+                { type: FrameType.Message, channel: 'c', command: 'cmd', payload },
+            ]);
+        });
+    });
+
+    describe('handshake field validation', () => {
+        it('rejects a handshake with fewer than three fields', () => {
+            const reader = new FrameReader(MAX_FRAME_LENGTH);
+            const body = Buffer.from('1::appOnly', 'utf8');
+            const frame = Buffer.alloc(5 + body.length);
+            frame.writeUInt32LE(1 + body.length, 0);
+            frame.writeUInt8(FrameType.Handshake, 4);
+            body.copy(frame, 5);
+
+            expect(() => readAll(reader, frame)).toThrow(FrameError);
+        });
+
+        // '::' is the field separator and docs/protocol.md forbids it inside a field; the
+        // parser used to silently keep the first three parts and drop the rest of the name.
+        it('rejects a handshake whose name contains the field separator', () => {
+            const reader = new FrameReader(MAX_FRAME_LENGTH);
+            const frame = encodeHandshakeFrame('1', 'app', 'na::me');
+
+            expect(() => readAll(reader, frame)).toThrow(FrameError);
+        });
+    });
 });
