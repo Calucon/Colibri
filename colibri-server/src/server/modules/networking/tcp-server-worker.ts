@@ -1,12 +1,19 @@
 import * as net from 'net';
-import { WorkerService } from '../core/index.js';
+import { WorkerMessage, WorkerService } from '../core/index.js';
 import * as threads from 'worker_threads';
 import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
-import { FrameError, FrameReader, FrameType, encodeHeartbeatFrame, encodeMessageFrame } from './protocol.js';
+import { FrameError, FrameReader, FrameType, MAX_FRAME_LENGTH, encodeHeartbeatFrame, encodeMessageFrame } from './protocol.js';
 
 export const TCP_SERVER_WORKER = fileURLToPath(import.meta.url);
-const maxBufferSize = 1024 * 1024 * 5;
+
+// Passed as workerData by TCPServerProxy and checked by the bootstrap at the bottom of this
+// file. `!threads.isMainThread` alone was not enough of a guard: any test runner that
+// executes its suites inside worker threads (vitest's default pool does) would construct a
+// second TCPServerWorker on import and have it subscribe to *that* thread's message
+// channel, which is the runner's own RPC.
+export const TCP_SERVER_WORKER_ROLE = 'colibri-tcp-server';
+const maxBufferSize = MAX_FRAME_LENGTH;
 
 // For a last-write-wins synchronization server, a client whose socket write buffer is
 // already this full is not keeping up - queuing yet another update behind it only grows
@@ -50,10 +57,17 @@ interface TcpClient {
     // error is always followed by its own 'close' event, so without this both paths would
     // post a duplicate clientDisconnected$.
     disconnected: boolean;
+    // Set while writes to this client are being dropped for backpressure. Only the
+    // transitions in and out of that state are logged: a stalled client drops at least ten
+    // heartbeats a second, and each dropped-packet warning is postMessage'd to the main
+    // thread and re-broadcast to every admin UI, which WebLog can't dedupe because the
+    // byte count is interpolated into the message.
+    dropping: boolean;
+    droppedSinceWarning: number;
 }
 
 export class TCPServerWorker extends WorkerService {
-    private server!: net.Server;
+    private server: net.Server | undefined;
 
     // waiting for client to specify app name
     private readonly waitingClients = new Map<string, TcpClient>();
@@ -63,45 +77,60 @@ export class TCPServerWorker extends WorkerService {
     // every connected client
     private readonly clientsByApp = new Map<string, Set<TcpClient>>();
 
-    private heartbeatInterval!: NodeJS.Timeout;
+    private heartbeatInterval: NodeJS.Timeout | undefined;
 
     public constructor() {
         super(true);
 
+        // Anything thrown out of this subscriber escapes into the worker's own
+        // uncaughtException path and takes the whole thread - and with it the entire TCP
+        // transport - down, while HTTP and Socket.IO keep serving as if nothing happened.
+        // One bad message must never cost more than that message.
         this.parentMessages$.subscribe((msg) => {
-            switch (msg.channel) {
-                case 'm:start':
-                    this.start(
-                        msg.content.port as number,
-                        msg.content.host as string
-                    );
-                    break;
-
-                case 'm:stop':
-                    this.stop();
-                    break;
-
-                case 'm:broadcast': {
-                    const ids = msg.content.clients as string[];
-                    const clients = ids
-                        .map((id) => this.clients.get(id))
-                        .filter((c): c is TcpClient => !!c);
-
-                    this.broadcast(msg.content.msg as WireNetworkMessage, clients);
-                    break;
-                }
-
-                case 'm:broadcastToApp': {
-                    const app = msg.content.app as string;
-                    const exclude = msg.content.exclude as string | undefined;
-                    const clients = Array.from(this.clientsByApp.get(app) ?? [])
-                        .filter((c) => c.id !== exclude);
-
-                    this.broadcast(msg.content.msg as WireNetworkMessage, clients);
-                    break;
-                }
+            try {
+                this.handleParentMessage(msg);
+            } catch (err) {
+                this.logError(
+                    `Error handling '${msg.channel}' from the main thread: ${err instanceof Error ? err.message : String(err)}`,
+                    false
+                );
             }
         });
+    }
+
+    private handleParentMessage(msg: WorkerMessage): void {
+        switch (msg.channel) {
+            case 'm:start':
+                this.start(
+                    msg.content.port as number,
+                    msg.content.host as string
+                );
+                break;
+
+            case 'm:stop':
+                this.stop();
+                break;
+
+            case 'm:broadcast': {
+                const ids = msg.content.clients as string[];
+                const clients = ids
+                    .map((id) => this.clients.get(id))
+                    .filter((c): c is TcpClient => !!c);
+
+                this.broadcast(msg.content.msg as WireNetworkMessage, clients);
+                break;
+            }
+
+            case 'm:broadcastToApp': {
+                const app = msg.content.app as string;
+                const exclude = msg.content.exclude as string | undefined;
+                const clients = Array.from(this.clientsByApp.get(app) ?? [])
+                    .filter((c) => c.id !== exclude);
+
+                this.broadcast(msg.content.msg as WireNetworkMessage, clients);
+                break;
+            }
+        }
     }
 
     public start(port: number, host: string): void {
@@ -114,9 +143,20 @@ export class TCPServerWorker extends WorkerService {
         this.heartbeatInterval = setInterval(() => this.handleHeartbeat(), 100);
     }
 
+    // Tolerates being called before start() (an 'm:stop' racing startup) and destroys live
+    // sockets rather than leaving them to the terminate() that usually follows - so a stop
+    // without a terminate, or a restart in the same thread, doesn't leak connections or
+    // leave stale entries in the client indexes.
     public stop(): void {
-        this.server.close();
         clearInterval(this.heartbeatInterval);
+        this.server?.close();
+
+        for (const client of [...this.clients.values(), ...this.waitingClients.values()]) {
+            client.socket.destroy();
+        }
+        this.clients.clear();
+        this.waitingClients.clear();
+        this.clientsByApp.clear();
     }
 
     public broadcast(
@@ -127,11 +167,23 @@ export class TCPServerWorker extends WorkerService {
             return;
         }
 
-        const packet = encodeMessageFrame({
-            channel: msg.channel,
-            command: msg.command,
-            payload: toBuffer(msg.payload),
-        });
+        let packet: Buffer;
+        try {
+            packet = encodeMessageFrame({
+                channel: msg.channel,
+                command: msg.command,
+                payload: toBuffer(msg.payload),
+            }, maxBufferSize);
+        } catch (err) {
+            // An unrepresentable frame (channel/command over 64 KiB, or a body over
+            // maxBufferSize) is dropped as a single bad message. Emitting it anyway would
+            // produce a frame this server's own FrameReader would reject.
+            this.logError(
+                `Dropping unencodable message (${msg.channel} / ${msg.command}): ${err instanceof Error ? err.message : String(err)}`,
+                false
+            );
+            return;
+        }
 
         for (const client of clients) {
             this.writeToClient(client, packet);
@@ -140,10 +192,22 @@ export class TCPServerWorker extends WorkerService {
 
     private writeToClient(client: TcpClient, packet: Buffer): void {
         if (client.socket.writableLength > highWaterMark) {
-            this.logWarning(
-                `Dropping message to client ${client.id}: writable buffer exceeds high-water mark (${client.socket.writableLength} bytes)`
-            );
+            client.droppedSinceWarning += 1;
+            if (!client.dropping) {
+                client.dropping = true;
+                this.logWarning(
+                    `Dropping messages to client ${client.id}: writable buffer exceeds high-water mark (${client.socket.writableLength} bytes)`
+                );
+            }
             return;
+        }
+
+        if (client.dropping) {
+            client.dropping = false;
+            this.logWarning(
+                `Client ${client.id} caught up; dropped ${client.droppedSinceWarning} message(s) while backed up`
+            );
+            client.droppedSinceWarning = 0;
         }
 
         client.socket.write(packet, (err) => {
@@ -171,6 +235,8 @@ export class TCPServerWorker extends WorkerService {
             name: '',
             version: '0',
             disconnected: false,
+            dropping: false,
+            droppedSinceWarning: 0,
         };
         this.waitingClients.set(tcpClient.id, tcpClient);
 
@@ -194,7 +260,7 @@ export class TCPServerWorker extends WorkerService {
     private handleSocketData(client: TcpClient, data: Buffer): void {
         let frames;
         try {
-            frames = Array.from(client.reader.append(data));
+            frames = client.reader.append(data);
         } catch (err) {
             const reason = err instanceof FrameError ? err.message : String(err);
             this.logError(
@@ -251,6 +317,14 @@ export class TCPServerWorker extends WorkerService {
     }
 
     private assignApp(client: TcpClient, app: string, name: string, version: string): void {
+        // A second handshake frame with a different app would otherwise leave the client in
+        // its previous app's Set forever - removeFromAppIndex only ever looks at the
+        // client's *current* app - so a disconnected socket would keep receiving
+        // writeToClient calls for the app it first announced.
+        if (client.app) {
+            this.removeFromAppIndex(client);
+        }
+
         client.app = app;
         client.name = name;
         client.version = version;
@@ -336,7 +410,7 @@ export class TCPServerWorker extends WorkerService {
         }
     }
 
-    private handleHeartbeat() {
+    private handleHeartbeat(): void {
         const packet = encodeHeartbeatFrame(process.hrtime.bigint());
         for (const client of [...this.clients.values(), ...this.waitingClients.values()]) {
             this.writeToClient(client, packet);
@@ -344,7 +418,7 @@ export class TCPServerWorker extends WorkerService {
     }
 }
 
-if (!threads.isMainThread) {
+if (!threads.isMainThread && (threads.workerData as { role?: string } | null)?.role === TCP_SERVER_WORKER_ROLE) {
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const server = new TCPServerWorker();
 }

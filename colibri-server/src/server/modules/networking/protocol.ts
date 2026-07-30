@@ -22,6 +22,13 @@ const TYPE_FIELD_SIZE = 1;
 const HEADER_SIZE = LENGTH_FIELD_SIZE + TYPE_FIELD_SIZE;
 const HEARTBEAT_BODY_SIZE = 8;
 
+// Channel and command are length-prefixed with a u16, so anything longer is unrepresentable.
+export const MAX_FIELD_LENGTH = 0xffff;
+
+// The largest frame either side will accept. Shared by the encoder and the default
+// FrameReader limit so the server can never emit a frame its own parser would reject.
+export const MAX_FRAME_LENGTH = 1024 * 1024 * 5;
+
 export class FrameError extends Error {}
 
 export type DecodedFrame =
@@ -55,10 +62,27 @@ export interface EncodableMessage {
 // Single pre-sized allocation: no separate flatbuffers.Builder, no TextEncoder, no
 // merged Uint8Array. Payload bytes are copied verbatim - never round-tripped through
 // a JS string - so a byte-verbatim relay never pays a utf8 transcode.
-export const encodeMessageFrame = function (msg: EncodableMessage): Buffer {
+//
+// Throws FrameError rather than letting Buffer.writeUInt16LE throw ERR_OUT_OF_RANGE:
+// ingress is fully bounds-checked, and egress needs to be too, since a frame the server
+// can't represent (or that exceeds maxFrameLength) must be dropped as one bad message
+// instead of propagating out of the write path.
+export const encodeMessageFrame = function (msg: EncodableMessage, maxFrameLength = MAX_FRAME_LENGTH): Buffer {
     const channel = Buffer.from(msg.channel, 'utf8');
     const command = Buffer.from(msg.command, 'utf8');
+
+    if (channel.length > MAX_FIELD_LENGTH) {
+        throw new FrameError(`Channel exceeds ${MAX_FIELD_LENGTH} bytes (${channel.length})`);
+    }
+    if (command.length > MAX_FIELD_LENGTH) {
+        throw new FrameError(`Command exceeds ${MAX_FIELD_LENGTH} bytes (${command.length})`);
+    }
+
     const bodyLength = 2 + channel.length + 2 + command.length + msg.payload.length;
+    if (TYPE_FIELD_SIZE + bodyLength > maxFrameLength) {
+        throw new FrameError(`Frame exceeds the maximum length of ${maxFrameLength} bytes (${TYPE_FIELD_SIZE + bodyLength})`);
+    }
+
     const buffer = Buffer.allocUnsafe(HEADER_SIZE + bodyLength);
 
     let offset = 0;
@@ -94,7 +118,7 @@ export class FrameReader {
     private writePos = 0;
 
     public constructor(
-        private readonly maxFrameLength: number,
+        private readonly maxFrameLength: number = MAX_FRAME_LENGTH,
         initialCapacity = 4096
     ) {
         this.buffer = Buffer.allocUnsafe(initialCapacity);
@@ -109,13 +133,22 @@ export class FrameReader {
         this.writePos = 0;
     }
 
-    // Appends newly received bytes and yields every complete frame now available.
+    // Appends newly received bytes and returns every complete frame now available.
     // Throws FrameError on a malformed or oversized frame - callers should treat that
     // as fatal for the connection, same as the old maxBufferSize kill-switch.
-    public *append(data: Buffer): Generator<DecodedFrame> {
+    //
+    // Deliberately not a generator: the read cursor only advances as frames are decoded,
+    // so a caller that stopped iterating early (or never started) would have left the
+    // reader with a stale cursor and silently re-delivered or dropped bytes. Draining
+    // eagerly makes the cursor state a function of append() alone.
+    public append(data: Buffer): DecodedFrame[] {
         this.ensureCapacity(data.length);
         data.copy(this.buffer, this.writePos);
         this.writePos += data.length;
+
+        // A partial frame is the common case on a fragmented stream, so don't allocate a
+        // result array until there is something to put in it.
+        let frames: DecodedFrame[] | undefined;
 
         for (;;) {
             const available = this.writePos - this.readPos;
@@ -133,12 +166,15 @@ export class FrameReader {
             const frameEnd = this.readPos + frameLength;
 
             const type = this.buffer.readUInt8(this.readPos + LENGTH_FIELD_SIZE);
-            yield this.decodeFrame(type, this.readPos + HEADER_SIZE, frameEnd);
-
+            const frame = this.decodeFrame(type, this.readPos + HEADER_SIZE, frameEnd);
             this.readPos = frameEnd;
+
+            frames ??= [];
+            frames.push(frame);
         }
 
         this.compact();
+        return frames ?? [];
     }
 
     private decodeFrame(type: number, bodyStart: number, bodyEnd: number): DecodedFrame {
@@ -152,8 +188,12 @@ export class FrameReader {
 
             case FrameType.Handshake: {
                 const text = this.buffer.toString('utf8', bodyStart, bodyEnd);
-                const [version, app, name] = text.split('::');
-                if (version === undefined || app === undefined || name === undefined) {
+                // Exactly three fields. '::' is the field separator and docs/protocol.md
+                // forbids it inside a field, so a name containing one is a malformed
+                // frame - previously it was silently truncated at the first extra '::'.
+                const parts = text.split('::');
+                const [version, app, name] = parts;
+                if (parts.length !== 3 || version === undefined || app === undefined || name === undefined) {
                     throw new FrameError(`Malformed handshake frame: "${text}"`);
                 }
                 return { type: FrameType.Handshake, version, app, name };

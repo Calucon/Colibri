@@ -9,6 +9,10 @@ export class Payload {
     private raw: string | undefined;
     private value: unknown;
     private valueResolved: boolean;
+    // Negative cache for asValue(): a payload that isn't JSON (e.g. plain text off the
+    // TCP wire) is relayed over and over, and re-running JSON.parse to re-throw the same
+    // error on every broadcast is exactly the repeated work this class exists to remove.
+    private parseError: Error | undefined;
 
     private constructor(bytes: Buffer | undefined, raw: string | undefined, value: unknown, valueResolved: boolean) {
         this.bytes = bytes;
@@ -38,17 +42,31 @@ export class Payload {
         return this.bytes;
     }
 
+    // JSON.stringify(undefined) returns undefined, not a string - so a payload-less
+    // message (Payload.fromValue(undefined), which is what a Socket.IO event with no
+    // `payload` key produces) has to serialize to an empty body. Without the `?? ''` this
+    // returned undefined despite its type, never memoized, and made asBytes() throw
+    // ERR_INVALID_ARG_TYPE on the way out to a TCP client.
     public asString(): string {
         if (this.raw === undefined) {
-            this.raw = this.bytes !== undefined ? this.bytes.toString('utf8') : JSON.stringify(this.value);
+            this.raw = this.bytes !== undefined ? this.bytes.toString('utf8') : (JSON.stringify(this.value) ?? '');
         }
         return this.raw;
     }
 
+    // Throws for a payload that isn't valid JSON; callers that relay across transports
+    // (SocketIOServer.resolvePayload) fall back to asString() instead.
     public asValue<T = unknown>(): T {
+        if (this.parseError !== undefined) throw this.parseError;
+
         if (!this.valueResolved) {
             const raw = this.asString();
-            this.value = raw ? JSON.parse(raw) : undefined;
+            try {
+                this.value = raw ? JSON.parse(raw) : undefined;
+            } catch (err) {
+                this.parseError = err instanceof Error ? err : new Error(String(err));
+                throw this.parseError;
+            }
             this.valueResolved = true;
         }
         return this.value as T;
