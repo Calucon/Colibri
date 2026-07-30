@@ -1,13 +1,14 @@
 import { Component } from '@angular/core';
 import { RouterModule } from '@angular/router';
 import { FilterBarComponent } from '../../components/filter-bar/filter-bar.component';
+import { BroadcastToggleComponent } from '../../components/broadcast-toggle/broadcast-toggle.component';
 
 
 @Component({
     selector: 'app-root',
     templateUrl: './root.component.html',
     styleUrls: ['./root.component.scss'],
-    imports: [RouterModule, FilterBarComponent]
+    imports: [RouterModule, FilterBarComponent, BroadcastToggleComponent]
 })
 export class RootComponent {
     tabs = [

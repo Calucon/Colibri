@@ -43,9 +43,7 @@ new colibri.ClientLogger(connectionPool);
 new colibri.WebLog(socketioServer);
 new colibri.ModelSynchronization(connectionPool, dataStore);
 new colibri.Broadcaster(connectionPool);
-if (Config.LOG_BROADCAST_TRAFFIC) {
-    new colibri.BroadcastLogger(connectionPool);
-}
+new colibri.BroadcastLogger(connectionPool);
 new colibri.ClientBroadcast(connectionPool);
 new colibri.MeasureLatency(connectionPool, socketioServer);
 

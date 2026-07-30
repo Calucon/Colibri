@@ -57,8 +57,8 @@ export class LogComponent implements OnInit, AfterViewChecked {
         if (index === 0) 
             return true;
 
-        const currentDay = new Date(this.log.messages[index].created);
-        const previousDay = new Date(this.log.messages[index - 1].created);
+        const currentDay = new Date(this.log.visibleMessages[index].created);
+        const previousDay = new Date(this.log.visibleMessages[index - 1].created);
         return currentDay.getDate() !== previousDay.getDate();
     }
 }

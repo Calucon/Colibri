@@ -85,6 +85,7 @@ describe('BroadcastLogger', () => {
             clientId: 'c1',
             channel: 'position',
             command: 'broadcast::string',
+            broadcastTraffic: true,
         });
     });
 
