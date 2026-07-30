@@ -1,3 +1,4 @@
+export * from './broadcast-logger.js';
 export * from './broadcaster.js';
 export * from './client-logger.js';
 export * from './client-broadcast.js';

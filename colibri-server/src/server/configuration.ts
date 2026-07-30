@@ -38,6 +38,11 @@ export const Config = {
     VOICE_SAMPLING_RATE: parsePositiveInt('VOICE_SAMPLING_RATE', process.env.VOICE_SAMPLING_RATE, 48000),
     VOICE_RECORDING: process.env.VOICE_RECORDING?.toLowerCase() === 'true',
 
+    // Mirrors broadcast/sync traffic into the admin log page (debug level) for visibility.
+    // Defaults ON; set to 'false' to silence it if a high-frequency sync channel floods
+    // the log page's ring buffer.
+    LOG_BROADCAST_TRAFFIC: process.env.LOG_BROADCAST_TRAFFIC?.toLowerCase() !== 'false',
+
     WEBSERVER_HOST: process.env.WEBSERVER_HOST || '0.0.0.0',
     WEBSERVER_PORT: parsePort('WEBSERVER_PORT', process.env.WEBSERVER_PORT, 9011),
     WEBSERVER_ROOT: path.join(
