@@ -65,6 +65,17 @@ relays it verbatim to other TCP clients without ever decoding it as a string, an
 (via `Payload.fromBytes(...).asValue()`) when a hook needs to inspect it or when relaying
 cross-transport to a Socket.IO client.
 
+### `broadcast::` commands
+
+`command`s prefixed `broadcast::` are a convention, not a protocol-level concept: they identify
+app-to-its-own-clients sync traffic (state/position ticks and similar) relayed through the server,
+as opposed to one-off application messages. `BroadcastLogger`
+(`src/server/modules/command-hooks/broadcast-logger.ts`) matches on that prefix and logs each one
+at Debug level, tagged `metadata.broadcastTraffic = true`. The admin log page's "Sync traffic"
+toggle filters on that tag specifically - independent of the Error/Warn/Info/Debug level
+checkboxes - since this traffic is typically continuous and would otherwise drown out everything
+else; see `WebLog.isVisibleToClient` (`src/server/modules/web/web-log.ts`).
+
 ### Reading frames off the wire
 
 `FrameReader` (`src/server/modules/networking/protocol.ts`) is a growable buffer with read/write
