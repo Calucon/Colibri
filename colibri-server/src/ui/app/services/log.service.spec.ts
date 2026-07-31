@@ -78,15 +78,20 @@ describe('LogService', () => {
         });
     });
 
-    it('updates an existing message in place and moves it to the end', () => {
+    it('updates an existing message and moves it to the end', () => {
         const service = TestBed.inject(LogService);
 
         logChannel.next({ command: 'x', payload: message({ id: '1', count: 0 }) });
         logChannel.next({ command: 'x', payload: message({ id: '2', count: 0 }) });
+        const before = service.messages().find(m => m.id === '1');
         logChannel.next({ command: 'x', payload: message({ id: '1', count: 1 }) });
 
         expect(service.messages().map(m => m.id)).toEqual(['2', '1']);
         expect(service.messages().find(m => m.id === '1')?.count).toBe(1);
+        // Must be a new object, not the same one mutated in place: LogMessageComponent is OnPush
+        // with a signal input, so a same-reference update would never re-render the row's
+        // count/timestamp - it would only appear to jump position in the list.
+        expect(service.messages().find(m => m.id === '1')).not.toBe(before);
     });
 
     it('evicts the oldest message once more than 10001 messages have arrived', () => {
