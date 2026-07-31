@@ -1,4 +1,4 @@
-import { Component, Input } from '@angular/core';
+import { ChangeDetectionStrategy, Component, input } from '@angular/core';
 import { LogMessage } from '../../services';
 import { DatePipe } from '@angular/common';
 
@@ -6,11 +6,10 @@ import { DatePipe } from '@angular/common';
     selector: 'app-log-message',
     templateUrl: './log-message.component.html',
     styleUrls: ['./log-message.component.scss'],
-    imports: [DatePipe]
+    imports: [DatePipe],
+    changeDetection: ChangeDetectionStrategy.OnPush
 })
 export class LogMessageComponent {
-    @Input() public log!: LogMessage;
-    @Input() public isNewDay = false;
-
-    constructor() { }
+    public log = input.required<LogMessage>();
+    public isNewDay = input(false);
 }

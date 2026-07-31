@@ -1,5 +1,5 @@
 
-import { Component } from '@angular/core';
+import { ChangeDetectionStrategy, Component } from '@angular/core';
 import { LatencyChartComponent } from '../../components/latency-chart/latency-chart.component';
 
 @Component({
@@ -8,6 +8,7 @@ import { LatencyChartComponent } from '../../components/latency-chart/latency-ch
     LatencyChartComponent
 ],
     templateUrl: './statistics.component.html',
-    styleUrl: './statistics.component.scss'
+    styleUrl: './statistics.component.scss',
+    changeDetection: ChangeDetectionStrategy.OnPush
 })
 export class StatisticsComponent { }

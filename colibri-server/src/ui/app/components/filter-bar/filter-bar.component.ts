@@ -1,6 +1,5 @@
-import { Component, OnDestroy, OnInit, inject } from '@angular/core';
-import { LogMessage, LogService } from '../../services';
-import { Subscription } from 'rxjs';
+import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
+import { LogService } from '../../services';
 import { SelectChangeEvent, SelectModule } from 'primeng/select';
 import { FormsModule } from '@angular/forms';
 
@@ -10,40 +9,28 @@ interface ListElement {
 
 @Component({
     selector: 'app-filter-bar',
-    standalone: true,
     templateUrl: './filter-bar.component.html',
     styleUrls: ['./filter-bar.component.scss'],
-    imports: [SelectModule, FormsModule]
+    imports: [SelectModule, FormsModule],
+    changeDetection: ChangeDetectionStrategy.OnPush
 })
-export class FilterBarComponent implements OnInit, OnDestroy {
+export class FilterBarComponent {
     private log = inject(LogService);
 
-    appNames: ListElement[] = [];
-    selected: ListElement | undefined = undefined;
-
-    private subscription!: Subscription;
-
-    ngOnInit(): void {
-        this.log.messages.forEach(m => this.updateAppNames(m));
-        this.subscription = this.log.messages$.subscribe(m => this.updateAppNames(m));
-        this.log.filter$.subscribe(f => this.selected = this.appNames.find(a => a.name === f));
-
-    }
-
-    private updateAppNames(m: LogMessage): void {
-        if (m.metadata && m.metadata.clientApp) {
-            const app = m.metadata.clientApp as string;
-            if (!this.appNames.find(c => c.name === app)) {
-                this.appNames.push({ name: app });
+    appNames = computed<ListElement[]>(() => {
+        const seen = new Set<string>();
+        for (const m of this.log.messages()) {
+            const app = m.metadata?.['clientApp'] as string | undefined;
+            if (app) {
+                seen.add(app);
             }
         }
-    }
+        return [...seen].map(name => ({ name }));
+    });
+
+    selected = computed(() => this.appNames().find(a => a.name === this.log.filter()));
 
     onFilterChanged(e: SelectChangeEvent): void {
-        this.log.filter$.next(e.value);
-    }
-
-    ngOnDestroy(): void {
-        this.subscription.unsubscribe();
+        this.log.filter.set(e.value);
     }
 }

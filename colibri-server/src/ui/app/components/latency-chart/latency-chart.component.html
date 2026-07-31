@@ -1,7 +1,7 @@
 <div #latencyChart id="latency-chart"></div>
 
 <div class="client-stats">
-  @for (client of clients; track client) {
+  @for (client of clients(); track client) {
     <div>
       <div class="client" [style]="{ 'border-color': getColor(client) }">
         <h3> {{ client.name }}</h3>

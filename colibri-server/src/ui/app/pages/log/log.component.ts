@@ -1,4 +1,4 @@
-import { Component, OnInit, ElementRef, ViewChild, AfterViewChecked, inject } from '@angular/core';
+import { AfterViewChecked, AfterViewInit, ChangeDetectionStrategy, Component, ElementRef, inject, signal, viewChild } from '@angular/core';
 import { LogMessage, LogService } from '../../services';
 
 import { LogMessageComponent } from '../../components/log-message/log-message.component';
@@ -9,16 +9,17 @@ import { ButtonModule } from 'primeng/button';
     selector: 'app-log',
     templateUrl: './log.component.html',
     styleUrls: ['./log.component.scss'],
-    imports: [CdkVirtualScrollableElement, CdkVirtualScrollViewport, CdkFixedSizeVirtualScroll, CdkVirtualForOf, LogMessageComponent, ButtonModule]
+    imports: [CdkVirtualScrollableElement, CdkVirtualScrollViewport, CdkFixedSizeVirtualScroll, CdkVirtualForOf, LogMessageComponent, ButtonModule],
+    changeDetection: ChangeDetectionStrategy.OnPush
 })
-export class LogComponent implements OnInit, AfterViewChecked {
+export class LogComponent implements AfterViewInit, AfterViewChecked {
     log = inject(LogService);
 
-    @ViewChild('scrollContainer', { static: true }) private scrollContainer!: ElementRef;
-    manualScroll = false;
+    private scrollContainer = viewChild.required<ElementRef>('scrollContainer');
+    manualScroll = signal(false);
 
-    ngOnInit() {
-        this.scrollContainer.nativeElement.addEventListener('wheel', (ev: WheelEvent) => this.onScroll(ev.deltaY), { passive: true });
+    ngAfterViewInit() {
+        this.scrollContainer().nativeElement.addEventListener('wheel', (ev: WheelEvent) => this.onScroll(ev.deltaY), { passive: true });
     }
 
     ngAfterViewChecked(): void {
@@ -26,9 +27,10 @@ export class LogComponent implements OnInit, AfterViewChecked {
     }
 
     private scrollToBottom(): void {
-        if (!this.manualScroll) {
+        if (!this.manualScroll()) {
             try {
-                this.scrollContainer.nativeElement.scrollTop = this.scrollContainer.nativeElement.scrollHeight;
+                const el = this.scrollContainer().nativeElement;
+                el.scrollTop = el.scrollHeight;
             } catch (err) {
                 console.error(err);
             }
@@ -40,25 +42,26 @@ export class LogComponent implements OnInit, AfterViewChecked {
     }
 
     onScroll(deltaY: number): void {
-        const el = this.scrollContainer.nativeElement;
+        const el = this.scrollContainer().nativeElement;
         if (deltaY < 0) {
-            this.manualScroll = true;
+            this.manualScroll.set(true);
         } else if (el.scrollTop + el.offsetHeight >= el.scrollHeight) {
-            this.manualScroll = false;
+            this.manualScroll.set(false);
         }
     }
 
     scrollAutomatically(): void {
-        this.manualScroll = false;
+        this.manualScroll.set(false);
         this.scrollToBottom();
     }
 
     isNewDay(index: number): boolean {
-        if (index === 0) 
+        if (index === 0)
             return true;
 
-        const currentDay = new Date(this.log.visibleMessages[index].created);
-        const previousDay = new Date(this.log.visibleMessages[index - 1].created);
+        const messages = this.log.visibleMessages();
+        const currentDay = new Date(messages[index].created);
+        const previousDay = new Date(messages[index - 1].created);
         return currentDay.getDate() !== previousDay.getDate();
     }
 }
