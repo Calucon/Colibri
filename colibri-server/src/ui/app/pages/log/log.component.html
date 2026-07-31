@@ -1,7 +1,7 @@
 <div #scrollContainer id="log" cdkVirtualScrollingElement>
   <cdk-virtual-scroll-viewport itemSize="20">
     <app-log-message
-      *cdkVirtualFor="let entry of log.visibleMessages(); let index = index; trackBy: getId"
+      *cdkVirtualFor="let entry of log.messages(); let index = index; trackBy: getId"
       [log]="entry"
       [isNewDay]="isNewDay(index)">
     </app-log-message>

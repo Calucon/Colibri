@@ -35,6 +35,22 @@ export default definePreset(Material, {
                     }
                 }
             }
+        },
+        togglebutton: {
+            colorScheme: {
+                light: {
+                    root: {
+                        background: '#434c5e',         // nord2
+                        borderColor: '#4c566a',        // nord3
+                        color: '#eceff4',               // nord6
+                        hoverColor: '#eceff4',
+                        hoverBackground: '#4c566a',     // nord3
+                        checkedBackground: '#81a1c1',   // nord9
+                        checkedBorderColor: '#81a1c1',  // nord9
+                        checkedColor: '#2e3440'         // nord0, contrasts against the light accent
+                    }
+                }
+            }
         }
     }
 });
