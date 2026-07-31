@@ -32,8 +32,9 @@ fixes (noted inline).
   `colibri-web` workflow, path-filtered on `colibri-server/**`.
 - Removed `body-parser` (→ `express.json()`/`express.urlencoded()`), `uuid` (→
   `crypto.randomUUID()`), `source-map-support`, and `flatbuffers` (removed once the v3 TCP protocol
-  landed). `lodash` was removed from all server-side code; the dependency itself stays in
-  `package.json` because `src/ui` (out of scope) still imports it.
+  landed). `lodash` was removed from all server-side code; the dependency itself stayed in
+  `package.json` because `src/ui` (out of scope) still imported it — closed out in the UI
+  modernization pass below.
 - Version bumped `1.3.1` → `2.0.0`; dropped the blanket `eslint-disable no-unused-vars` in `main.ts`
   and cleaned up its unused imports.
 - Documented the v3 wire protocol in `docs/protocol.md`.
@@ -172,6 +173,35 @@ Not part of this release:
 - **`colibri-unity`** client rewrite for the v3 protocol — required to actually exercise items 17–22
   end-to-end (framing, heartbeat/latency merge) over TCP; the client in this repo is still on v1
   FlatBuffers, so no TCP client can currently connect.
+
+## `src/ui` modernization (follow-up pass)
+
+The Angular admin UI was explicitly out of scope for the `2.0.0` release above; it was modernized
+separately in a follow-up pass:
+
+- Replaced the dead Karma/Protractor `test`/`server-app-e2e` targets in `angular.json` (both pointed
+  at files that never existed) with Angular's first-party `@angular/build:unit-test` builder
+  (Vitest runner) — the UI previously had zero test coverage; an initial `LogService`/`ClientService`/
+  `BroadcastToggleComponent` spec batch now exists under `src/ui`, wired into
+  `.github/workflows/lint-server.yml` as a `gui:test` step.
+- Replaced `socketio.service.ts`'s `_.throttle` NgZone-batching with RxJS `throttleTime`; `lodash`
+  and `@types/lodash` are now fully removed from `package.json` — the note above is closed.
+- Fixed the services barrel (`src/ui/app/services/index.ts`) to re-export `ClientService`, matching
+  `SocketIOService`/`LogService`.
+- Replaced `RootComponent`'s direct `location.pathname` read with the Angular `Router`, fixing the
+  tab-underline indicator not updating on browser back/forward navigation.
+- Self-hosted fonts via `@fontsource/roboto` and `@fontsource/fira-mono`, and dropped the Material
+  Icons webfont in favor of the already-loaded `primeicons` — the UI no longer loads anything from
+  `fonts.googleapis.com`/`fonts.gstatic.com` at runtime.
+- Migrated `LogService`/`ClientService`'s materialized state (message list, client list, filter,
+  broadcast-traffic toggle) from `BehaviorSubject` to Angular signals/`computed()`, and converted
+  `@Input()`/`@ViewChild` to `input()`/`viewChild()` across the log and latency-chart components,
+  applying `OnPush` app-wide. Socket.IO's streaming ingestion layer (`SocketIOService`) stayed RxJS
+  deliberately — it's a better fit for multiplexed async event streams than for synchronous
+  snapshot state. Zoneless change detection was evaluated and deliberately deferred (the D3 latency
+  chart renders entirely outside Angular's template bindings, and the zone-throttle mechanism above
+  only exists because zone.js CD is expensive on this app's bursty socket traffic) — this pass makes
+  a future zoneless flip cheaper and safer, but doesn't attempt it.
 
 ## Known residuals (not blocking, tracked for follow-up)
 
