@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, inject } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
 import { LOG_LEVELS, LogService } from '../../services';
 import { ToggleSwitchModule } from 'primeng/toggleswitch';
 import { SelectButtonChangeEvent, SelectButtonModule } from 'primeng/selectbutton';
@@ -16,9 +16,10 @@ export class LogFiltersComponent {
 
     levelOptions = [ ...LOG_LEVELS ];
 
-    get selectedLevels(): number[] {
-        return [ ...this.log.levels() ];
-    }
+    // computed(), not a getter: a getter returns a new array every template
+    // check, and SelectButton's ngModel binding spins into an infinite
+    // change-detection loop when the bound value is never reference-stable.
+    selectedLevels = computed(() => [ ...this.log.levels() ]);
 
     onLevelsChanged(e: SelectButtonChangeEvent): void {
         this.log.setLevels(e.value ?? []);
