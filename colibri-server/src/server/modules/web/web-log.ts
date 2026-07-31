@@ -18,6 +18,12 @@ interface WebMessage {
     metadata: Metadata;
 }
 
+interface RequestLogPayload {
+    filter?: string;
+    levels?: number[];
+    showBroadcastTraffic?: boolean;
+}
+
 export class WebLog extends Service {
     public serviceName = 'WebLog';
     public groupName = 'web';
@@ -40,8 +46,14 @@ export class WebLog extends Service {
                     return;
                 }
 
-                const filter = networkMsg.payload?.asValue<{ filter?: string }>()?.filter || '';
+                const body = networkMsg.payload?.asValue<RequestLogPayload>() ?? {};
+                const filter = body.filter || '';
+                const levels = body.levels ? new Set(body.levels) : undefined;
+                const showBroadcastTraffic = body.showBroadcastTraffic === true;
+
                 socketClient.metadata['log::filter'] = filter;
+                socketClient.metadata['log::levels'] = levels;
+                socketClient.metadata['log::broadcast'] = showBroadcastTraffic;
 
                 // client can't handle too many messages at once
                 const clientLimit = 10000;
@@ -49,6 +61,7 @@ export class WebLog extends Service {
                 this.logMessages
                     .toArray()
                     .filter(msg => !filter || msg.metadata.clientApp === filter)
+                    .filter(msg => this.isVisibleToClient(msg.level, msg.metadata, levels, showBroadcastTraffic))
                     .slice(-clientLimit)
                     .map(msg => ({
                         channel: 'colibri::log',
@@ -99,6 +112,10 @@ export class WebLog extends Service {
             const clientFilter = client.metadata['log::filter'];
             if (clientFilter && clientFilter !== log.metadata.clientApp) continue;
 
+            const clientLevels = client.metadata['log::levels'] as Set<number> | undefined;
+            const clientBroadcast = client.metadata['log::broadcast'] as boolean | undefined;
+            if (!this.isVisibleToClient(log.level, log.metadata, clientLevels, clientBroadcast)) continue;
+
             clients.push(client);
         }
 
@@ -109,5 +126,15 @@ export class WebLog extends Service {
             command: 'message',
             payload: Payload.fromValue(webMsg)
         }, clients);
+    }
+
+    // Broadcast/sync traffic is governed exclusively by showBroadcastTraffic, never by levels,
+    // even though it's always logged at Debug: lets an admin watch Debug output without sync
+    // spam, or watch sync spam without unrelated Debug noise.
+    private isVisibleToClient(level: number, metadata: Metadata, levels: Set<number> | undefined, showBroadcastTraffic: boolean | undefined): boolean {
+        if (metadata['broadcastTraffic'] === true) {
+            return showBroadcastTraffic === true;
+        }
+        return !levels || levels.has(level);
     }
 }
