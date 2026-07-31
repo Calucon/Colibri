@@ -52,14 +52,17 @@ export class LogService {
                 }
 
                 if (this.messageIds[m.id]) {
-                    // update existing message
+                    // Replace with a new object (not mutate in place): LogMessageComponent is
+                    // OnPush with a signal input, so it only re-renders when the reference passed
+                    // into [log] actually changes - mutating the existing object left the count
+                    // and timestamp stuck at their first-seen values on screen.
                     const existing = this.messageIds[m.id];
-                    existing.count = m.count;
-                    existing.created = m.created;
+                    const updated = { ...existing, count: m.count, created: m.created };
+                    this.messageIds[m.id] = updated;
 
                     // put it to the end of the list
                     const index = messages.indexOf(existing);
-                    messages = [ ...messages.slice(0, index), ...messages.slice(index + 1), existing ];
+                    messages = [ ...messages.slice(0, index), ...messages.slice(index + 1), updated ];
                 } else {
                     // create new entry
                     messages = [ ...messages, m ];
