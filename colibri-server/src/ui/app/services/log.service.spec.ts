@@ -17,48 +17,65 @@ const message = (overrides: Partial<LogMessage>): LogMessage => ({
 
 describe('LogService', () => {
     let logChannel: Subject<{ command: string; payload: LogMessage }>;
+    let emit: ReturnType<typeof vi.fn>;
 
     beforeEach(() => {
         logChannel = new Subject();
+        emit = vi.fn();
 
         TestBed.configureTestingModule({
             providers: [{
                 provide: SocketIOService,
-                useValue: { listen: () => logChannel.asObservable(), emit: vi.fn() }
+                useValue: { listen: () => logChannel.asObservable(), emit }
             }]
         });
     });
 
-    it('hides broadcastTraffic messages by default', () => {
-        const service = TestBed.inject(LogService);
+    it('requests the log with the default filter/levels/broadcast payload on construction', () => {
+        TestBed.inject(LogService);
+        TestBed.flushEffects();
 
-        logChannel.next({ command: 'x', payload: message({ id: '1', metadata: { broadcastTraffic: true } }) });
-        logChannel.next({ command: 'x', payload: message({ id: '2', metadata: {} }) });
-
-        expect(service.visibleMessages().map(m => m.id)).toEqual(['2']);
+        expect(emit).toHaveBeenCalledWith('colibri::log', 'requestLog', {
+            filter: '',
+            levels: [ 0, 1, 2, 3 ],
+            showBroadcastTraffic: false
+        });
     });
 
-    it('shows broadcastTraffic messages once the toggle is on', () => {
+    it('re-requests the log and clears messages when levels change', () => {
         const service = TestBed.inject(LogService);
-        service.showBroadcastTraffic.set(true);
+        TestBed.flushEffects();
 
-        logChannel.next({ command: 'x', payload: message({ id: '1', metadata: { broadcastTraffic: true } }) });
-        logChannel.next({ command: 'x', payload: message({ id: '2', metadata: {} }) });
+        logChannel.next({ command: 'x', payload: message({ id: '1' }) });
+        expect(service.messages().length).toBe(1);
 
-        expect(service.visibleMessages().map(m => m.id)).toEqual(['1', '2']);
+        service.setLevels([ 0 ]);
+        TestBed.flushEffects();
+
+        expect(service.messages().length).toBe(0);
+        expect(emit).toHaveBeenLastCalledWith('colibri::log', 'requestLog', {
+            filter: '',
+            levels: [ 0 ],
+            showBroadcastTraffic: false
+        });
     });
 
-    it('recomputes visibleMessages when the toggle changes after messages arrived', () => {
+    it('re-requests the log and clears messages when showBroadcastTraffic changes', () => {
         const service = TestBed.inject(LogService);
+        TestBed.flushEffects();
 
-        logChannel.next({ command: 'x', payload: message({ id: '1', metadata: { broadcastTraffic: true } }) });
-        expect(service.visibleMessages().length).toBe(0);
+        logChannel.next({ command: 'x', payload: message({ id: '1' }) });
+        expect(service.messages().length).toBe(1);
 
         service.showBroadcastTraffic.set(true);
-        expect(service.visibleMessages().length).toBe(1);
+        TestBed.flushEffects();
 
-        service.showBroadcastTraffic.set(false);
-        expect(service.visibleMessages().length).toBe(0);
+        expect(service.messages().length).toBe(0);
+        expect(emit).toHaveBeenLastCalledWith('colibri::log', 'requestLog', {
+            filter: '',
+            levels: [ 0, 1, 2, 3 ],
+            showBroadcastTraffic: true
+        });
     });
 
     it('updates an existing message in place and moves it to the end', () => {
@@ -68,8 +85,8 @@ describe('LogService', () => {
         logChannel.next({ command: 'x', payload: message({ id: '2', count: 0 }) });
         logChannel.next({ command: 'x', payload: message({ id: '1', count: 1 }) });
 
-        expect(service.visibleMessages().map(m => m.id)).toEqual(['2', '1']);
-        expect(service.visibleMessages().find(m => m.id === '1')?.count).toBe(1);
+        expect(service.messages().map(m => m.id)).toEqual(['2', '1']);
+        expect(service.messages().find(m => m.id === '1')?.count).toBe(1);
     });
 
     it('evicts the oldest message once more than 10001 messages have arrived', () => {
@@ -78,22 +95,13 @@ describe('LogService', () => {
         for (let i = 0; i <= 10000; i++) {
             logChannel.next({ command: 'x', payload: message({ id: `${i}` }) });
         }
-        expect(service.visibleMessages().length).toBe(10001);
-        expect(service.visibleMessages().find(m => m.id === '0')).toBeDefined();
+        expect(service.messages().length).toBe(10001);
+        expect(service.messages().find(m => m.id === '0')).toBeDefined();
 
         logChannel.next({ command: 'x', payload: message({ id: '10001' }) });
 
-        expect(service.visibleMessages().length).toBe(10001);
-        expect(service.visibleMessages().find(m => m.id === '0')).toBeUndefined();
-        expect(service.visibleMessages().find(m => m.id === '10001')).toBeDefined();
-    });
-
-    it('exposes the raw message list unfiltered by the broadcast-traffic toggle', () => {
-        const service = TestBed.inject(LogService);
-
-        logChannel.next({ command: 'x', payload: message({ id: '1', metadata: { broadcastTraffic: true } }) });
-        logChannel.next({ command: 'x', payload: message({ id: '2', metadata: {} }) });
-
-        expect(service.messages().map(m => m.id)).toEqual(['1', '2']);
+        expect(service.messages().length).toBe(10001);
+        expect(service.messages().find(m => m.id === '0')).toBeUndefined();
+        expect(service.messages().find(m => m.id === '10001')).toBeDefined();
     });
 });
