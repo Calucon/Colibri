@@ -42,10 +42,12 @@ export class WebServer extends Service {
     }
 
     public start(): http.Server {
-        // add default route for 404s last
+        // SPA fallback, added last: the Angular router owns every path that isn't a static
+        // asset or an API route (e.g. /log, /statistics), so this fires on every normal page
+        // load/refresh, not just on genuine 404s - it must not log, or the log viewer fills up
+        // with a spurious entry every time someone opens the very page that's watching it.
         this.app.use(this.baseUrl, (req, res) => {
             res.sendFile(path.join(this.webRoot, 'index.html'));
-            this.logDebug(`Unmatched route: ${req.path}`);
         });
 
         // lock server so no more route changes are allowed
