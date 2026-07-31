@@ -16,5 +16,25 @@ export default definePreset(Material, {
             900: '#1f2d3d',
             950: '#17202c'
         }
+    },
+    components: {
+        toggleswitch: {
+            colorScheme: {
+                light: {
+                    root: {
+                        background: '#434c5e',        // nord2
+                        hoverBackground: '#4c566a',    // nord3
+                        checkedBackground: '#81a1c1',  // nord9
+                        checkedHoverBackground: '#81a1c1'
+                    },
+                    handle: {
+                        background: '#eceff4',         // nord6
+                        hoverBackground: '#eceff4',
+                        checkedBackground: '#eceff4',
+                        checkedHoverBackground: '#eceff4'
+                    }
+                }
+            }
+        }
     }
 });
