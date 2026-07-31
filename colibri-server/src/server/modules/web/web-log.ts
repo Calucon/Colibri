@@ -5,7 +5,6 @@ import { randomUUID } from 'crypto';
 
 const LOGGING_APP = 'colibri';
 const MAX_LOG_SIZE = 20000;
-const LOOKUP_COUNT = 5; // how far back log messages are searched for identical messages
 
 interface WebMessage {
     id: string;
@@ -29,6 +28,13 @@ export class WebLog extends Service {
     public groupName = 'web';
 
     private readonly logMessages = new RingBuffer<WebMessage>(MAX_LOG_SIZE);
+
+    // Exact-match index for merging repeats of the same (level, group, message), independent of
+    // how much unrelated log traffic interleaves between occurrences - a positional lookback over
+    // logMessages (the old approach) missed most repeats under any real amount of other traffic,
+    // since the previous occurrence would already have scrolled past the lookback window.
+    private readonly recentByKey = new Map<string, { msg: WebMessage; seq: number }>();
+    private totalPushed = 0;
 
     public constructor(private socketio: SocketIOServer) {
         super();
@@ -66,7 +72,7 @@ export class WebLog extends Service {
                     .map(msg => ({
                         channel: 'colibri::log',
                         command: 'message',
-                        payload: Payload.fromValue(msg)
+                        payload: Payload.fromValue({ ...msg })
                     }))
                     .forEach(msg => this.socketio.broadcast(msg, [ socketClient ]));
             });
@@ -75,20 +81,18 @@ export class WebLog extends Service {
     }
 
     private redirectLogMessage(log: LogMessage): void {
-        // search last few messages for identical messages, group them together
-        let webMsg: WebMessage | undefined = undefined;
-        for (let i = this.logMessages.length - 1; i >= 0 && i > this.logMessages.length - LOOKUP_COUNT && !webMsg; i--) {
-            const tmpMsg = this.logMessages.at(i);
+        // group identical messages together, as long as the earlier occurrence hasn't since
+        // been evicted from logMessages (its seq would then be below the oldest surviving one)
+        const key = JSON.stringify([ log.level, log.group, log.message ]);
+        const oldestSurvivingSeq = this.totalPushed - this.logMessages.length;
+        const candidate = this.recentByKey.get(key);
 
-            if (tmpMsg && tmpMsg.message === log.message && tmpMsg.group === log.group && tmpMsg.level === log.level) {
-                webMsg = tmpMsg;
-                webMsg.count += 1;
-                webMsg.created = log.created.getTime();
-            }
-        }
-
-        // if no similar message was found, add a new one
-        if (!webMsg) {
+        let webMsg: WebMessage;
+        if (candidate && candidate.seq >= oldestSurvivingSeq) {
+            webMsg = candidate.msg;
+            webMsg.count += 1;
+            webMsg.created = log.created.getTime();
+        } else {
             webMsg = {
                 id: randomUUID(),
                 origin: log.origin,
@@ -100,6 +104,8 @@ export class WebLog extends Service {
                 metadata: log.metadata
             };
             this.logMessages.push(webMsg);
+            this.recentByKey.set(key, { msg: webMsg, seq: this.totalPushed });
+            this.totalPushed += 1;
         }
 
         // History above is kept regardless (a client may request it later), but a single
@@ -121,10 +127,14 @@ export class WebLog extends Service {
 
         if (clients.length === 0) return;
 
+        // Snapshot, not a reference: webMsg is a merge target that gets mutated in place on its
+        // next repeat, and Payload.fromValue() stores whatever it's given verbatim - passing the
+        // live object would let a later merge silently rewrite what an earlier broadcast for this
+        // same entry sends.
         this.socketio.broadcast({
             channel: 'colibri::log',
             command: 'message',
-            payload: Payload.fromValue(webMsg)
+            payload: Payload.fromValue({ ...webMsg })
         }, clients);
     }
 

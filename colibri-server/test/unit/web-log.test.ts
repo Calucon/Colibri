@@ -185,6 +185,65 @@ describe('WebLog', () => {
         expect(server.broadcasts[0]!.message.payload!.asValue<{ message: string }>().message).toBe('err');
     });
 
+    it('merges a repeated message into one entry with an incrementing count, even with unrelated traffic interleaved', async () => {
+        const server = new FakeSocketIOServer();
+        const webLog = new WebLog(server as unknown as SocketIOServer);
+        await webLog.init();
+
+        const admin = makeClient('admin1', 'colibri');
+        server.connectClient(admin);
+
+        const emitter = new Emitter();
+        emitter.emitDebug('tick');
+        // unrelated traffic between repeats - a positional lookback would lose the match here
+        for (let i = 0; i < 10; i++) {
+            emitter.emitDebug(`unrelated-${i}`);
+        }
+        emitter.emitDebug('tick');
+        emitter.emitDebug('tick');
+
+        const ticks = server.broadcasts
+            .map(b => b.message.payload!.asValue<{ message: string; count: number }>())
+            .filter(m => m.message === 'tick');
+
+        expect(ticks).toHaveLength(3);
+        expect(ticks.map(t => t.count)).toEqual([ 0, 1, 2 ]);
+        // all three broadcasts refer to the same log entry id
+        const ids = server.broadcasts
+            .map(b => b.message.payload!.asValue<{ message: string; id: string }>())
+            .filter(m => m.message === 'tick')
+            .map(m => m.id);
+        expect(new Set(ids).size).toBe(1);
+    });
+
+    it('does not merge into a message that has since been evicted from history', async () => {
+        const server = new FakeSocketIOServer();
+        const webLog = new WebLog(server as unknown as SocketIOServer);
+        await webLog.init();
+
+        const admin = makeClient('admin1', 'colibri');
+        server.connectClient(admin);
+
+        const emitter = new Emitter();
+        emitter.emitDebug('tick');
+
+        // Reach into the private ring buffer capacity via repeated unrelated messages to force
+        // the 'tick' entry out of history (MAX_LOG_SIZE = 20000).
+        for (let i = 0; i < 20000; i++) {
+            emitter.emitDebug(`filler-${i}`);
+        }
+        server.broadcasts.length = 0;
+
+        emitter.emitDebug('tick');
+
+        const ticks = server.broadcasts
+            .map(b => b.message.payload!.asValue<{ message: string; count: number }>())
+            .filter(m => m.message === 'tick');
+
+        expect(ticks).toHaveLength(1);
+        expect(ticks[0]!.count).toBe(0);
+    });
+
     it('does not throw on a missing or empty requestLog payload, and defaults to all levels / hidden broadcast', async () => {
         const server = new FakeSocketIOServer();
         const webLog = new WebLog(server as unknown as SocketIOServer);
