@@ -1,7 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Injectable, NgZone, inject } from '@angular/core';
-import { Subject, Observable } from 'rxjs';
-import * as _ from 'lodash';
+import { Subject, Observable, throttleTime } from 'rxjs';
 import * as io from 'socket.io-client';
 
 @Injectable({
@@ -12,12 +11,16 @@ export class SocketIOService {
 
     private socket: io.Socket<any, any>;
     private listeners: { [name: string]: Subject<any> } = {};
-    private triggerAngularChanges: () => void;
+    // coalesces NgZone re-entry from bursty socket events; only needed while zone.js CD is active
+    private readonly changeTrigger$ = new Subject<void>();
 
     constructor() {
         this.socket = io.connect('', { query: { app: 'colibri', version: '1' } });
-        // eslint-disable-next-line no-empty-function
-        this.triggerAngularChanges = _.throttle(() => this.zone.run(() => {}), 50);
+
+        this.changeTrigger$
+            .pipe(throttleTime(50, undefined, { leading: true, trailing: true }))
+            // eslint-disable-next-line no-empty-function
+            .subscribe(() => this.zone.run(() => {}));
     }
 
 
@@ -28,7 +31,7 @@ export class SocketIOService {
 
             this.socket.on(channel, (msg: any) => {
                 msgStream.next({ command: msg.command, payload: msg.payload });
-                this.triggerAngularChanges();
+                this.changeTrigger$.next();
             });
         }
 
