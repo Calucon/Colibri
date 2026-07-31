@@ -1,6 +1,5 @@
-import { AfterViewInit, ChangeDetectionStrategy, ChangeDetectorRef, Component, DestroyRef, ElementRef, HostListener, OnDestroy, ViewChild, inject } from '@angular/core';
-import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { ClientService, ColibriClient } from '../../services/client.service';
+import { AfterViewInit, ChangeDetectionStrategy, Component, ElementRef, HostListener, Injector, OnDestroy, effect, inject, viewChild } from '@angular/core';
+import { ClientService, ColibriClient } from '../../services';
 import * as d3 from 'd3';
 import { CommonModule } from '@angular/common';
 import { boxplot, boxplotStats, boxplotSymbolDot } from './boxplot';
@@ -34,12 +33,10 @@ const colors = [
 })
 export class LatencyChartComponent implements AfterViewInit, OnDestroy {
     private clientService = inject(ClientService);
-    private changeRef = inject(ChangeDetectorRef);
+    private injector = inject(Injector);
 
-    private readonly destroyRef = inject(DestroyRef);
-    @ViewChild('latencyChart')
-    latencyChart!: ElementRef<HTMLDivElement>;
-    clients: ReadonlyArray<ColibriClient> = [];
+    private latencyChart = viewChild.required<ElementRef<HTMLDivElement>>('latencyChart');
+    clients = this.clientService.clients;
 
     private lineChartSvg: d3.Selection<SVGGElement, unknown, null, undefined> | null = null;
     private boxplotSvg: d3.Selection<SVGGElement, unknown, null, undefined> | null = null;
@@ -53,14 +50,12 @@ export class LatencyChartComponent implements AfterViewInit, OnDestroy {
 
     ngAfterViewInit(): void {
         this.initChart();
+        this.updateChart();
 
-        this.clientService.clients$
-            .pipe(takeUntilDestroyed(this.destroyRef))
-            .subscribe(clients => {
-                this.clients = clients;
-                this.updateChart();
-                this.changeRef.markForCheck();
-            });
+        effect(() => {
+            this.clients();
+            this.updateChart();
+        }, { injector: this.injector });
 
         this.intervalTimer = window.setInterval(() => {
             this.animateChart();
@@ -85,13 +80,13 @@ export class LatencyChartComponent implements AfterViewInit, OnDestroy {
     }
 
     getColor(client: ColibriClient): string {
-        return colors[this.clients.indexOf(client) % colors.length];
+        return colors[this.clients().indexOf(client) % colors.length];
     }
 
     private initChart(): void {
-        const totalWidth = this.latencyChart.nativeElement.clientWidth;
+        const totalWidth = this.latencyChart().nativeElement.clientWidth;
 
-        const svg = d3.select(this.latencyChart.nativeElement).append('svg')
+        const svg = d3.select(this.latencyChart().nativeElement).append('svg')
             .attr('width', totalWidth)
             .attr('height', totalHeight);
 
@@ -116,12 +111,12 @@ export class LatencyChartComponent implements AfterViewInit, OnDestroy {
     }
 
     private animateChart(): void {
-        const totalWidth = this.latencyChart.nativeElement.clientWidth;
+        const totalWidth = this.latencyChart().nativeElement.clientWidth;
         const plotWidth = totalWidth - margin.left - margin.right;
         const now = Date.now();
 
         const boxplotPadding = 5;
-        const boxplotWidth = this.clients.length * (barWidth + boxplotPadding);
+        const boxplotWidth = this.clients().length * (barWidth + boxplotPadding);
         const linechartWidth = plotWidth - boxplotWidth;
 
         if (this.boxplotSvg) {
@@ -138,7 +133,7 @@ export class LatencyChartComponent implements AfterViewInit, OnDestroy {
             this.lineChartSvg
                 .interrupt()
                 .attr('transform', 'translate(0, 0)');
-            
+
             this.lineChartSvg
                 .transition()
                 .ease(d3.easeLinear)
@@ -158,28 +153,29 @@ export class LatencyChartComponent implements AfterViewInit, OnDestroy {
 
     @HostListener('window:resize')
     onResize() {
-        const svg = d3.select(this.latencyChart.nativeElement).select('svg');
-        const totalWidth = this.latencyChart.nativeElement.clientWidth;
+        const svg = d3.select(this.latencyChart().nativeElement).select('svg');
+        const totalWidth = this.latencyChart().nativeElement.clientWidth;
         svg.attr('width', totalWidth);
         this.animateChart();
     }
 
     private updateChart(): void {
+        const clients = this.clients();
         const plotHeight = totalHeight - margin.top - margin.bottom;
         const boxplotPadding = 5;
-        const boxplotWidth = this.clients.length * (barWidth + boxplotPadding);
+        const boxplotWidth = clients.length * (barWidth + boxplotPadding);
 
-        const boxplotData =  this.clients
+        const boxplotData = clients
             .filter(c => c.latency.length > 0)
             .map(client => boxplotStats((client.latency)
                 .map(l => l[1])));
 
         const xScale = d3.scalePoint()
-            .domain(this.clients.map(client => client.id))
+            .domain(clients.map(client => client.id))
             .rangeRound([0, boxplotWidth])
             .padding(0.5);
 
-        const maxLatency = d3.max(this.clients.flatMap(c => (c.latency || []).map(l => l[1]))) || 1;
+        const maxLatency = d3.max(clients.flatMap(c => (c.latency || []).map(l => l[1]))) || 1;
         const yScale = d3.scaleLinear()
             .domain([Math.max(maxLatency, 10), 0])
             .range([0, plotHeight])
@@ -190,17 +186,17 @@ export class LatencyChartComponent implements AfterViewInit, OnDestroy {
                 .selectAll('g.plot')
                 .data(boxplotData)
                 .join('g')
-                .attr('transform', (_, i: number) => `translate(${(xScale(this.clients[i].id) || 0) - barWidth / 2}, 0)`)
+                .attr('transform', (_, i: number) => `translate(${(xScale(clients[i].id) || 0) - barWidth / 2}, 0)`)
                 .attr('color', (_, i) => colors[i % colors.length])
                 .attr('class', 'plot')
                 .call(boxplot(true, yScale, barWidth, barWidth, false, boxplotSymbolDot, 0.5, 0.5));
         }
 
-        
+
         if (this.lineChartSvg) {
             const path = this.lineChartSvg
                 .selectAll('path.line')
-                .data(this.clients.map(c => c.latency).filter(l => l.length > 0));
+                .data(clients.map(c => c.latency).filter(l => l.length > 0));
             path.enter()
                     .append('path')
                     .attr('class', 'line')

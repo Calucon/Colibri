@@ -1,6 +1,5 @@
-import { Injectable, inject } from '@angular/core';
+import { Injectable, computed, effect, inject, signal } from '@angular/core';
 import { SocketIOService } from './socketio.service';
-import { BehaviorSubject, Subject } from 'rxjs';
 
 export interface LogMessage {
     id: string;
@@ -17,31 +16,33 @@ export interface LogMessage {
     providedIn: 'root'
 })
 export class LogService {
-    public messages: ReadonlyArray<LogMessage> = [];
-    public readonly messages$ = new Subject<LogMessage>();
-    public readonly filter$ = new BehaviorSubject<string>('');
-    public readonly showBroadcastTraffic$ = new BehaviorSubject<boolean>(false);
+    private readonly socketio = inject(SocketIOService);
 
-    public get visibleMessages(): ReadonlyArray<LogMessage> {
-        return this.showBroadcastTraffic$.value
-            ? this.messages
-            : this.messages.filter(m => !m.metadata?.['broadcastTraffic']);
-    }
+    private readonly _messages = signal<ReadonlyArray<LogMessage>>([]);
+    public readonly messages = this._messages.asReadonly();
+
+    public readonly filter = signal<string>(location.hash.substring(1));
+    public readonly showBroadcastTraffic = signal(false);
+
+    public readonly visibleMessages = computed(() =>
+        this.showBroadcastTraffic()
+            ? this._messages()
+            : this._messages().filter(m => !m.metadata?.['broadcastTraffic'])
+    );
 
     // for quick lookup of messages by id
     private messageIds: { [id: string]: LogMessage } = {};
 
     constructor() {
-        const socketio = inject(SocketIOService);
-
-        socketio
+        this.socketio
             .listen('colibri::log')
             .subscribe((msg) => {
                 const m = msg.payload as LogMessage;
 
-                while (this.messages.length > 10000) {
-                    delete this.messageIds[this.messages[0].id];
-                    this.messages = this.messages.slice(1);
+                let messages = this._messages();
+                while (messages.length > 10000) {
+                    delete this.messageIds[messages[0].id];
+                    messages = messages.slice(1);
                 }
 
                 if (this.messageIds[m.id]) {
@@ -51,28 +52,25 @@ export class LogService {
                     existing.created = m.created;
 
                     // put it to the end of the list
-                    const index = this.messages.indexOf(existing);
-                    this.messages = [ ...this.messages.slice(0, index), ...this.messages.slice(index + 1), existing];
-
-                    this.messages$.next(existing);
+                    const index = messages.indexOf(existing);
+                    messages = [ ...messages.slice(0, index), ...messages.slice(index + 1), existing ];
                 } else {
                     // create new entry
-                    this.messages = [ ...this.messages, m ];
-                    this.messages$.next(m);
+                    messages = [ ...messages, m ];
                     this.messageIds[m.id] = m;
                 }
+
+                this._messages.set(messages);
             });
 
+        effect(() => {
+            const filter = this.filter();
 
-        // retrieve current filter from URL hash
-        this.filter$.next(location.hash.substring(1));
-
-        this.filter$.subscribe(filter => {
-            socketio.emit('colibri::log', 'requestLog', { filter });
+            this.socketio.emit('colibri::log', 'requestLog', { filter });
             location.hash = filter || '';
 
             // reload messages
-            this.messages = [];
+            this._messages.set([]);
             this.messageIds = {};
         });
     }

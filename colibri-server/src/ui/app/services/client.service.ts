@@ -1,6 +1,5 @@
-import { Injectable, inject } from '@angular/core';
+import { Injectable, inject, signal } from '@angular/core';
 import { SocketIOService } from './socketio.service';
-import { BehaviorSubject } from 'rxjs';
 
 export interface ColibriClient {
     id: string;
@@ -14,8 +13,8 @@ export interface ColibriClient {
     providedIn: 'root'
 })
 export class ClientService {
-    public clients: ReadonlyArray<ColibriClient> = [];
-    public readonly clients$ = new BehaviorSubject<ReadonlyArray<ColibriClient>>(this.clients);
+    private readonly _clients = signal<ReadonlyArray<ColibriClient>>([]);
+    public readonly clients = this._clients.asReadonly();
 
     constructor() {
         const socketio = inject(SocketIOService);
@@ -23,18 +22,20 @@ export class ClientService {
         socketio
             .listen('colibri::latency')
             .subscribe(msg => {
-                for (const clientId in msg.payload) {
-                    const client = this.clients.find(c => c.id === clientId);
-
-                    if (client) {
-                        client.latency = [
-                            ...client.latency,
-                            ...msg.payload[clientId]
-                        ].slice(-1000);
+                let changed = false;
+                const clients = this._clients().map(client => {
+                    const latency = msg.payload[client.id];
+                    if (!latency) {
+                        return client;
                     }
-                }
 
-                this.clients$.next(this.clients);
+                    changed = true;
+                    return { ...client, latency: [...client.latency, ...latency].slice(-1000) };
+                });
+
+                if (changed) {
+                    this._clients.set(clients);
+                }
             });
 
         socketio
@@ -45,11 +46,9 @@ export class ClientService {
                         ...msg.payload,
                         latency: []
                     };
-                    this.clients = [...this.clients, client];
-                    this.clients$.next(this.clients);
+                    this._clients.set([...this._clients(), client]);
                 } else if (msg.command === 'client::disconnected') {
-                    this.clients = this.clients.filter(c => c.id !== msg.payload.id);
-                    this.clients$.next(this.clients);
+                    this._clients.set(this._clients().filter(c => c.id !== msg.payload.id));
                 } else {
                     console.error('unknown client command', msg);
                 }
