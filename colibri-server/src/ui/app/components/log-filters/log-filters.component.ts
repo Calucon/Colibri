@@ -1,23 +1,34 @@
 import { ChangeDetectionStrategy, Component, inject } from '@angular/core';
-import { LogService } from '../../services';
+import { LOG_LEVELS, LogService } from '../../services';
 import { ToggleSwitchModule } from 'primeng/toggleswitch';
+import { SelectButtonChangeEvent, SelectButtonModule } from 'primeng/selectbutton';
 import { FormsModule } from '@angular/forms';
 
 @Component({
-    selector: 'app-broadcast-toggle',
-    templateUrl: './broadcast-toggle.component.html',
-    styleUrls: ['./broadcast-toggle.component.scss'],
-    imports: [ToggleSwitchModule, FormsModule],
+    selector: 'app-log-filters',
+    templateUrl: './log-filters.component.html',
+    styleUrls: ['./log-filters.component.scss'],
+    imports: [ToggleSwitchModule, SelectButtonModule, FormsModule],
     changeDetection: ChangeDetectionStrategy.OnPush
 })
-export class BroadcastToggleComponent {
+export class LogFiltersComponent {
     private log = inject(LogService);
 
-    get checked(): boolean {
+    levelOptions = [ ...LOG_LEVELS ];
+
+    get selectedLevels(): number[] {
+        return [ ...this.log.levels() ];
+    }
+
+    onLevelsChanged(e: SelectButtonChangeEvent): void {
+        this.log.setLevels(e.value ?? []);
+    }
+
+    get showBroadcastTraffic(): boolean {
         return this.log.showBroadcastTraffic();
     }
 
-    set checked(value: boolean) {
+    set showBroadcastTraffic(value: boolean) {
         this.log.showBroadcastTraffic.set(value);
     }
 }
