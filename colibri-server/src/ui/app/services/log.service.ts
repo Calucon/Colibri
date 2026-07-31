@@ -1,4 +1,4 @@
-import { Injectable, computed, effect, inject, signal } from '@angular/core';
+import { Injectable, effect, inject, signal } from '@angular/core';
 import { SocketIOService } from './socketio.service';
 
 export interface LogMessage {
@@ -12,6 +12,13 @@ export interface LogMessage {
     metadata: Record<string, unknown>;
 }
 
+export const LOG_LEVELS: ReadonlyArray<{ value: number; label: string }> = [
+    { value: 0, label: 'Error' },
+    { value: 1, label: 'Warn' },
+    { value: 2, label: 'Info' },
+    { value: 3, label: 'Debug' }
+];
+
 @Injectable({
     providedIn: 'root'
 })
@@ -22,13 +29,12 @@ export class LogService {
     public readonly messages = this._messages.asReadonly();
 
     public readonly filter = signal<string>(location.hash.substring(1));
+    public readonly levels = signal<ReadonlySet<number>>(new Set(LOG_LEVELS.map(l => l.value)));
     public readonly showBroadcastTraffic = signal(false);
 
-    public readonly visibleMessages = computed(() =>
-        this.showBroadcastTraffic()
-            ? this._messages()
-            : this._messages().filter(m => !m.metadata?.['broadcastTraffic'])
-    );
+    public setLevels(values: ReadonlyArray<number>): void {
+        this.levels.set(new Set(values));
+    }
 
     // for quick lookup of messages by id
     private messageIds: { [id: string]: LogMessage } = {};
@@ -65,8 +71,10 @@ export class LogService {
 
         effect(() => {
             const filter = this.filter();
+            const levels = this.levels();
+            const showBroadcastTraffic = this.showBroadcastTraffic();
 
-            this.socketio.emit('colibri::log', 'requestLog', { filter });
+            this.socketio.emit('colibri::log', 'requestLog', { filter, levels: [ ...levels ], showBroadcastTraffic });
             location.hash = filter || '';
 
             // reload messages
