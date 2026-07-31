@@ -8,7 +8,7 @@
     (onChange)="onLevelsChanged($event)">
   </p-selectbutton>
 
-  <label class="sync-toggle">
+  <label class="sync-toggle" title="Show broadcast:: sync traffic between an app's own clients (e.g. state/position ticks). Hidden by default since it's high-volume; shown regardless of the level filter above.">
     <span>Sync traffic</span>
     <p-toggleswitch [(ngModel)]="showBroadcastTraffic"></p-toggleswitch>
   </label>
