@@ -1,6 +1,11 @@
 /* You can add global styles to this file, and also import other style files */
 @use 'sass/nord' as *;
 
+@import '@fontsource/roboto/300.css';
+@import '@fontsource/roboto/400.css';
+@import '@fontsource/roboto/500.css';
+@import '@fontsource/fira-mono/400.css';
+
 html,
 body {
     height: 100%;
