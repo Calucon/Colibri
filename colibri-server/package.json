@@ -22,6 +22,7 @@
     "test:tcpclient": "tsx test/tcp-client-test.ts",
     "test": "vitest run",
     "test:watch": "vitest",
+    "gui:test": "ng test --watch=false",
     "bench": "vitest bench"
   },
   "private": true,
@@ -52,6 +53,7 @@
   "devDependencies": {
     "@angular-devkit/build-angular": "21.2.9",
     "@angular-eslint/eslint-plugin": "^21.3.1",
+    "@angular/build": "21.2.9",
     "@angular/cli": "21.2.9",
     "@angular/compiler-cli": "21.2.11",
     "@angular/language-service": "21.2.11",
@@ -65,6 +67,7 @@
     "concurrently": "^9.2.1",
     "eslint": "^9.0.0",
     "globals": "^15.0.0",
+    "jsdom": "^25.0.1",
     "nodemon": "^3.1.14",
     "tsx": "^4.21.0",
     "typescript": "5.9.3",
