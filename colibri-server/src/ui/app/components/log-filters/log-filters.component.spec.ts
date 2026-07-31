@@ -36,11 +36,11 @@ describe('LogFiltersComponent', () => {
         const fixture = TestBed.createComponent(LogFiltersComponent);
         const component = fixture.componentInstance;
 
-        expect(component.selectedLevels).toEqual([ 0, 1, 2, 3 ]);
+        expect(component.selectedLevels()).toEqual([ 0, 1, 2, 3 ]);
 
         component.onLevelsChanged({ value: [ 0 ] });
 
         expect(levels()).toEqual(new Set([ 0 ]));
-        expect(component.selectedLevels).toEqual([ 0 ]);
+        expect(component.selectedLevels()).toEqual([ 0 ]);
     });
 });
