@@ -13,6 +13,6 @@ export const appConfig: ApplicationConfig = {
         provideRouter(routes),
         importProvidersFrom(BrowserModule, FormsModule),
         provideAnimations(),
-        providePrimeNG({ theme: { preset: ColibriTheme } })
+        providePrimeNG({ theme: { preset: ColibriTheme, options: { darkModeSelector: false } } })
     ]
 };
