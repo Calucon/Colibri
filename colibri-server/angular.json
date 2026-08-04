@@ -64,6 +64,9 @@
                   "maximumError": "5mb"
                 }
               ]
+            },
+            "test": {
+              "polyfills": ["src/ui/polyfills.ts", "zone.js/testing"]
             }
           },
           "defaultConfiguration": ""
@@ -89,7 +92,7 @@
         "test": {
           "builder": "@angular/build:unit-test",
           "options": {
-            "buildTarget": "server-app:build",
+            "buildTarget": "server-app:build:test",
             "runner": "vitest",
             "tsConfig": "src/ui/tsconfig.spec.json"
           }

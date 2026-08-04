@@ -5,6 +5,7 @@
     "rootDir": ".",
     "sourceMap": true,
     "declaration": false,
+    "skipLibCheck": true,
     "module": "nodenext",
     "moduleResolution": "nodenext",
     "target": "es2023",
