@@ -22,6 +22,7 @@ path, and removing them made the sync loop allocation-free while idle.
 
 - [Why](#why)
 - [1. Installation: three packages to one URL](#1-installation-three-packages-to-one-url)
+- [What a student actually writes](#what-a-student-actually-writes)
 - [2. The sync loop](#2-the-sync-loop)
 - [3. Removing UniTask](#3-removing-unitask)
 - [4. Four silent failures, made loud](#4-four-silent-failures-made-loud)
@@ -82,6 +83,116 @@ What was removed along the way:
 - The R3 and UniTask entries in `THIRD_PARTY_NOTICES.txt`
 
 Total call sites removed: eight. That is what the two dependencies were buying.
+
+---
+
+## What a student actually writes
+
+Everything below this section is internals. This is the surface — and the surface is the point, so
+it is worth seeing before the machinery.
+
+### Level 0 — no code at all
+
+Add `SyncTransform` to a GameObject and drop one `SyncTransformManager` in the scene. Position,
+rotation, scale and active state now follow every other client. Nothing to write, nothing to
+register, nothing to unregister.
+
+### Level 1 — send a value to everyone
+
+```csharp
+// Ping.cs
+using HCIKonstanz.Colibri.Synchronization;
+using UnityEngine;
+
+public class Ping : MonoBehaviour
+{
+    void OnEnable()  => Sync.Receive<Vector3>("ping", OnPing);
+    void OnDisable() => Sync.Unregister<Vector3>("ping", OnPing);
+
+    // Hook this up to a UI Button.
+    public void SendPing() => Sync.Send("ping", transform.position);
+
+    void OnPing(Vector3 where) => Debug.Log($"Someone pinged at {where}");
+}
+```
+
+That is the whole thing. No connection to open, no server object to find, no coroutine: the first
+call to `Sync.Receive` brings the connection up by itself.
+
+The `<Vector3>` is the change. The same script before:
+
+```csharp
+//                              vvvvvvvvvvvvvvvvv  and you had to know to write this
+Sync.Receive("ping", (Action<Vector3>)OnPing);
+Sync.Unregister("ping", (Action<Vector3>)OnPing);
+```
+
+Without the cast, `Sync.Receive("ping", OnPing)` failed to compile against 17 overloads with an
+error message that pointed at overload resolution rather than at anything the student had done. It
+is the single most common wall people hit in the first ten minutes.
+
+### Level 2 — a shared object
+
+```csharp
+// Player.cs — every client sees the same Players, with these two values kept in step.
+using HCIKonstanz.Colibri.Synchronization;
+using UnityEngine;
+
+public class Player : SyncBehaviour<Player>
+{
+    [Sync] public int Score;
+    [Sync] public Color Colour;
+}
+```
+
+```csharp
+// PlayerManager.cs — one in the scene, so clients can create Players for each other.
+using HCIKonstanz.Colibri.Synchronization;
+
+public class PlayerManager : SyncBehaviourManager<Player> { }
+```
+
+Assign `Score` from anywhere and every other client's `Player` has the new value on its next frame.
+There is no `SendScore()` and nothing to call — §2 is the machinery that makes plain field
+assignment enough, and it is why that machinery has to be cheap.
+
+> Two `MonoBehaviour`s cannot share one `.cs` file in Unity — only the class matching the filename
+> can be added to a GameObject. Hence two files.
+
+### What it looks like when you get it wrong
+
+This is the part that did not exist before. Send a `float` on a channel whose listener expects an
+`int`, and the message used to vanish without a word. Now:
+
+```
+Colibri: a float arrived on channel 'score', but the listener registered there expects int.
+The message was dropped, because Colibri matches messages on the channel *and* the type.
+Either send it as int, or listen for it with Sync.Receive<float>("score", MyHandler).
+```
+
+Forget to configure the project, and instead of a `NullReferenceException` from whichever call site
+happened to touch the config first:
+
+```
+Colibri is not configured yet. Open Window -> Colibri Configuration, enter an App Name,
+and press Save Config. (Every client that should see each other has to use the same App Name.)
+```
+
+Get connected but see nobody, and the connect log already names the reason:
+
+```
+Colibri: connected to colibri.hci.uni-konstanz.de:9012 as app 'my-seminar-project'.
+Only clients using the same App Name can see each other.
+```
+
+Put a type Colibri cannot serialize behind `[Sync]`, and it is reported when the scene loads rather
+than on the first message that happens to arrive:
+
+```
+Colibri: cannot synchronize 'Player.Inventory' - [Sync] does not support Dictionary`2.
+Supported types are bool, int, float, string, Vector2, Vector3, Quaternion, Color, JObject
+and arrays of those. For your own classes, sync a JObject built with JToken.FromObject(...).
+```
 
 ---
 
@@ -291,7 +402,7 @@ for, updated from `AddListener`/`RemoveListener`, and the miss branch says:
 ```
 Colibri: a float arrived on channel 'chat', but the listener registered there expects string.
 The message was dropped, because Colibri matches messages on the channel *and* the type.
-Either send a string instead, or listen for it with Sync.Receive<float>("chat", MyHandler).
+Either send it as string, or listen for it with Sync.Receive<float>("chat", MyHandler).
 ```
 
 Three deliberate restrictions on when it speaks:
