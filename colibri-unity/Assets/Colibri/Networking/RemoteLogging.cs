@@ -1,5 +1,3 @@
-using Cysharp.Threading.Tasks;
-using R3;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -20,28 +18,41 @@ namespace HCIKonstanz.Colibri.Networking
             }
         }
 
+        private const float SendIntervalSeconds = 1f;
+
         private readonly LockFreeQueue<LogMsg> _messages = new LockFreeQueue<LogMsg>();
-        private readonly Subject<int> _msgSubject = new Subject<int>();
         private WebServerConnection _server;
 
         // Written from the send task, which may resume off the main thread.
         private volatile bool _isSending;
 
+        // Set from Unity's threaded log callback, i.e. from arbitrary threads; drained in Update.
+        private volatile bool _hasPendingMessages;
+
+        private float _nextSendTime;
+        private bool _hasReportedSendFailure;
+
         void OnEnable()
         {
             _server = WebServerConnection.Instance;
             Application.logMessageReceivedThreaded += OnLogMessage;
-
-            _msgSubject
-                .Where(_ => !_isSending)
-                .ThrottleLast(TimeSpan.FromSeconds(1))
-                .Subscribe(_ => SendLog().Forget())
-                .AddTo(this);
         }
 
         void OnDisable()
         {
             Application.logMessageReceivedThreaded -= OnLogMessage;
+        }
+
+        void Update()
+        {
+            // Batches a second's worth of log lines into one send, and never starts a second
+            // send while one is still in flight.
+            if (!_hasPendingMessages || _isSending || Time.unscaledTime < _nextSendTime)
+                return;
+
+            _hasPendingMessages = false;
+            _nextSendTime = Time.unscaledTime + SendIntervalSeconds;
+            SendLog();
         }
 
         private void OnLogMessage(string condition, string stackTrace, LogType type)
@@ -76,10 +87,10 @@ namespace HCIKonstanz.Colibri.Networking
             _messages.Enqueue(new LogMsg(logType, msg));
 
             // start sendMessages timer
-            _msgSubject.OnNext(0);
+            _hasPendingMessages = true;
         }
 
-        private async UniTaskVoid SendLog()
+        private async void SendLog()
         {
             var needsRetry = false;
             _isSending = true;
@@ -105,15 +116,27 @@ namespace HCIKonstanz.Colibri.Networking
 
                 needsRetry = !hasSent;
             }
+            catch (Exception e)
+            {
+                needsRetry = true;
+
+                // Reported once only: logging from inside the log sender feeds straight back
+                // into this queue, so a permanent failure would otherwise spam the console.
+                if (!_hasReportedSendFailure)
+                {
+                    _hasReportedSendFailure = true;
+                    Debug.LogWarning($"Colibri: remote logging could not reach the server, retrying quietly - {e.Message}");
+                }
+            }
             finally
             {
                 _isSending = false;
             }
 
-            // Re-armed only after clearing _isSending: the Where() gate in front of the
-            // throttle drops anything published while a send is still in flight.
+            // Re-armed only after clearing _isSending: Update() ignores anything raised while a
+            // send is still in flight.
             if (needsRetry)
-                _msgSubject.OnNext(0);
+                _hasPendingMessages = true;
         }
     }
 }
