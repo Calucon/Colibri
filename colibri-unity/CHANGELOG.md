@@ -17,8 +17,12 @@ binary v3 protocol and its changelog listed the Unity client rewrite as
   that were never available there).
 - **UniRx → R3.** `SyncBehaviour<T>.ModelCreated()` and `ModelDestroyed()` now return
   `R3.Observable<SyncBehaviour<T>>` instead of `IObservable<>`.
-- **`WebServerConnection.Connected`** is a `UniTask` gate instead of an `IObservable<bool>`.
-  `await connection.Connected` is unchanged; anything that subscribed to it is not.
+- **`WebServerConnection.Connected`** is a `Task` gate instead of an `IObservable<bool>`.
+  `await connection.Connected` is unchanged; anything that subscribed to it is not. (A
+  `UniTaskCompletionSource` would have been the natural fit, but it throws
+  "can not await twice" on a second *pending* awaiter, and several `SendCommandAsync` calls
+  routinely wait on this gate at once — a `SyncBehaviour` pushes one update per synced attribute
+  at startup.)
 - **`ObservableModel<T>`, `ObservableManager<T>` and `Samples/ObservableModel` are deleted.**
 - **Vendored `Newtonsoft.Json.dll` is gone**, replaced by the `com.unity.nuget.newtonsoft-json`
   package. See the README for the install steps — R3 in particular needs both a UPM package and a
