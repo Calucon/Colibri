@@ -2,7 +2,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using R3;
 using UnityEngine;
 
 namespace HCIKonstanz.Colibri.Synchronization
@@ -30,21 +29,8 @@ namespace HCIKonstanz.Colibri.Synchronization
             Sync.AddModelUpdateListener(Channel, OnModelUpdate);
 
             // Listen for newly instantiated objects and propagate initial state
-            SyncBehaviour<T>.ModelCreated()
-                .Where(m => m is T && (m.ModelId == Template?.ModelId || (Template == null && String.IsNullOrEmpty(m.ModelId))))
-                .Where(_ => !_isCreatingObject)
-                .Where(m => !_existingObjects.Any(e => e.Id == m.Id))
-                .Subscribe(m =>
-                {
-                    _existingObjects.Add(m as T);
-                    m.TriggerSync();
-                })
-                .AddTo(this);
-
-            SyncBehaviour<T>.ModelDestroyed()
-                .Where(m => m is T)
-                .Subscribe(m => _existingObjects.Remove(m as T))
-                .AddTo(this);
+            SyncBehaviour<T>.ModelCreated += OnModelCreated;
+            SyncBehaviour<T>.ModelDestroyed += OnModelDestroyed;
 
             // Help developers debug potential Colibri issues
             if (!Template)
@@ -60,6 +46,32 @@ namespace HCIKonstanz.Colibri.Synchronization
         private void OnDestroy()
         {
             Sync.RemoveModelUpdateListener(Channel, OnModelUpdate);
+
+            // Static events do not unsubscribe themselves. Missing this leaks a handler - and its
+            // destroyed manager - into the next Play session whenever domain reload is disabled.
+            SyncBehaviour<T>.ModelCreated -= OnModelCreated;
+            SyncBehaviour<T>.ModelDestroyed -= OnModelDestroyed;
+        }
+
+        private void OnModelCreated(SyncBehaviour<T> model)
+        {
+            if (!(model is T))
+                return;
+            if (model.ModelId != Template?.ModelId && !(Template == null && String.IsNullOrEmpty(model.ModelId)))
+                return;
+            if (_isCreatingObject)
+                return;
+            if (_existingObjects.Any(e => e.Id == model.Id))
+                return;
+
+            _existingObjects.Add(model as T);
+            model.TriggerSync();
+        }
+
+        private void OnModelDestroyed(SyncBehaviour<T> model)
+        {
+            if (model is T typed)
+                _existingObjects.Remove(typed);
         }
 
         private void OnModelUpdate(JObject data)
