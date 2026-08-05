@@ -1,8 +1,8 @@
 # colibri-unity 2.0.0 — ease of use and the sync loop
 
 Companion to [`CHANGELOG.md`](../CHANGELOG.md), covering the last pass over colibri-unity 2.0.0 in
-the depth a change log cannot carry: what changed, why, how the replacements work, and what still
-has to be checked in the Editor.
+the depth a change log cannot carry: what changed, why, how the replacements work, and what the
+Editor verification showed — including the two numbers that were only ever argued before it.
 
 Two goals, and they turned out not to conflict:
 
@@ -337,6 +337,15 @@ Per `SyncTransform`, idle:
 | Allocation per change | 1 `async void` state machine | 0 |
 | Allocation per message | 1 `JObject` | 1 `JObject` (unchanged) |
 
+**Free of garbage is not free of time.** The profiler run in §8 puts one `SyncTicker.Update()` at
+**0.335 ms for 100 idle `SyncTransform`s**, against a `PlayerLoop` total of 0.786 ms in the same
+frame — a little under half the player loop, spent establishing that nothing changed. The poll is
+O(objects × attributes) whether or not anything moves, because that is what change detection by
+polling *is*; what the rewrite removed is the allocation and the per-attribute machinery around it,
+not the comparison itself. At 100 objects × 5 attributes that is 500 typed comparisons a frame. It
+is a fixed, predictable cost rather than a growing one, but a scene with thousands of synced objects
+would want an explicit dirty flag instead of a poll, and that is a different design.
+
 ### What did *not* change
 
 **The network path never touched either library.** `WebServerConnection` is raw `Socket`, `Task`,
@@ -606,14 +615,16 @@ wire protocol, and `WebServerConnection.Connected`.
 The ten items below were the acceptance criteria for this work, and they have now been run. The
 environment was Unity **6000.5.7f1** with a URP-template project (`ColibriTest`) that has Colibri
 added as a `file:` UPM package, against `colibri-server` 2.0.0 built and run locally on Node 26.5.1
-(ports 9011 web/REST/Socket.IO, 9012 TCP v3). Two of the criteria ask for a *second Unity instance*;
-neither was met that way, because no standalone player was built. They were met instead with three
-non-Unity endpoints: a non-interactive Socket.IO peer written against colibri-web, a raw v3 TCP
-client, and a pass-through proxy in front of the TCP port that decodes every frame in both
-directions. The proxy is why several claims below can be quoted at the byte level rather than
-inferred from behaviour.
+(ports 9011 web/REST/Socket.IO, 9012 TCP v3). Two of the criteria ask for a *second Unity instance*,
+and they were answered in two stages. The message-level checks were run against three non-Unity
+endpoints — a non-interactive Socket.IO peer written against colibri-web, a raw v3 TCP client, and a
+pass-through proxy in front of the TCP port that decodes every frame in both directions — because
+those are what make the wire observable; the proxy is why several claims below can be quoted at the
+byte level rather than inferred from behaviour. Separately, a standalone player *was* built and run
+alongside the Editor, so the two-Unity-clients configuration itself is covered too. What that does
+not cover is the visual half; see the subsection after the ten.
 
-Nine of the problems the run turned up were fixed; they are listed in
+Ten of the problems the run turned up were fixed; they are listed in
 [`CHANGELOG.md`](../CHANGELOG.md), and the full record of the pass is in
 `colibri-unity-v2-verification-findings.md` at the repository root. Two more were diagnoses rather
 than defects, and both are worth knowing before teaching with this:
@@ -645,17 +656,41 @@ than defects, and both are worth knowing before teaching with this:
    `HCIKonstanz.Colibri.Tests` assembly. `colibri-server`'s own suite was green at the same time —
    102 passed — which matters for `ProtocolVectorTests`, since those vectors are only meaningful
    against a server encoder that is itself behaving.
-4. **Not covered.** The profiler was never opened. The claim that the idle sync path allocates 0 B of
-   GC and shows one `SyncTicker.Update` entry rather than N frame-provider items remains **derived,
-   not measured**. Idle `SyncTransform`s were observed to send no traffic at all, which is consistent
-   with it, but sending nothing is not the same evidence as allocating nothing. This item is now more
-   worth running, not less: item 9 found a leak that had the Editor accumulating one live
-   `SyncTicker` per Play session, each of them driving the same static list, so "exactly one
-   `SyncTicker.Update` entry" was simply false in any second or later session with domain reload
-   disabled. The leak is fixed, and the profiler is what would have caught it here — and is still
-   the only thing that can confirm the allocation half.
-5. **Done, against a web peer rather than a second Editor.** Every supported type crossed Unity →
-   web and web → Unity: bool, int, float, string, Vector3, Quaternion, Color, the
+4. **Done — the headline claim, measured.** 100 `SyncTransform`s in an otherwise empty scene, all
+   idle, Deep Profile off, Editor Play mode, sampled through `ProfilerDriver`. Over a 231-frame
+   window the **median frame allocated 0 bytes**:
+
+   ```
+   Frame Time Summary for the frame range [21001; 21231]:
+     4 frames out of 231 (1.7 %) exceeding target frame GC Allocation of 8192 bytes
+     Frame with Median GC Allocation (50th percentile):
+       Frame 21138: 0 bytes of GC Allocation
+   ```
+
+   The four outliers are not the sync path: breaking the worst one down puts its allocations on
+   background threads (`Thread Index: 134` for 2093 bytes, `128` for 537, `4` for 56), not on the
+   main thread. And the main thread's individual samples for a median frame show one ticker entry,
+   not N:
+
+   ```
+   Top 3 Individual Samples in Frame 21139 on Main Thread by Total Time:
+     EditorLoop                                                     3.282ms (73.4 %)
+     HCIKonstanz.Colibri.dll!...::SyncTicker.Update() [Invoke]      0.335ms  (7.5 %)
+        Object Name: [Colibri SyncTicker]
+     Profiler.FlushMemoryCounters                                   0.248ms  (5.6 %)
+   ```
+
+   Exactly one `SyncTicker.Update()`, attributed to the single `[Colibri SyncTicker]` object rather
+   than one frame-provider item per synced attribute. Both halves of the claim hold. Two things to
+   keep with the number, though. It only means anything **because item 9's leak was fixed first**:
+   before that, the n-th Play session had n ticker objects and this frame would have shown n
+   `SyncTicker.Update` entries, which is how the leak and the claim contradicted each other. And
+   polling costs time even when it allocates nothing — 0.335 ms for 100 idle objects against a
+   `PlayerLoop` total of 0.786 ms in the same frame, a little under half the player loop spent
+   discovering that nothing changed. §2 now says so.
+5. **Done, against a web peer rather than a second Editor** — deliberately, since a web peer is what
+   makes the payload bytes readable. Every supported type crossed Unity → web and web → Unity: bool,
+   int, float, string, Vector3, Quaternion, Color, the
    bool/int/float/string/Vector3 arrays, and `JToken`. All 17 payload shapes, both directions. The
    string fix from the protocol pass is directly visible in the frame bytes: a `broadcast::string`
    payload goes out as `"hello from unity round 1"`, 26 bytes for 24 characters, i.e. quoted. The
@@ -721,7 +756,9 @@ than defects, and both are worth knowing before teaching with this:
    ```
 
    — the first cycle counting four only because the late-joined remote model had already arrived by
-   the time the probe ran. The 52 EditMode tests still pass afterwards. Note that `ColibriTest` was
+   the time the probe ran. The 52 EditMode tests still pass afterwards, and item 4's profiler run was
+   taken after this fix, which is why it sees the one ticker entry the design intends rather than one
+   per Play session so far. Note that `ColibriTest` was
    left with *Enter Play Mode Options → Disable Domain Reload* enabled, since that is the
    configuration this check requires.
 10. **Done, against injected traffic rather than a second instance.** On connect, each
@@ -737,8 +774,52 @@ than defects, and both are worth knowing before teaching with this:
     `volatile bool` + 1 s timer rewrite in §3 behaves. Its payload is **unquoted** —
     `payload(23B)="verification log line 1"`, 23 bytes for 23 characters, against the quoted
     `broadcast::string` in item 5 — which is exactly the `log`-channel exception the protocol pass
-    documented. What this does not cover is how two Unity clients *look* while syncing; smoothness
-    was never observed, only correctness of what goes on the wire.
+    documented. What this does not cover is how two Unity clients *look* while syncing: the next
+    subsection has two of them connected at once, but nobody watched a cube in one follow a cube in
+    the other.
+
+### Beyond the ten: the standalone player, and two Unity clients at once
+
+A development Windows 64-bit player was built from `ColibriTest` with the `SyncTransform` and
+`SyncBehaviour` sample scenes in it: `result=Succeeded errors=0 warnings=13 time=00:01:59`. That on
+its own is worth having: it says the package compiles and links for a real player target and not
+only for the Editor, which a clean Editor compile does not imply.
+
+Run alongside the Editor, both clients were connected to the same app at the same time:
+
+```
+State        LocalPort  OwningProcess
+Established      53594          12476   <- standalone player
+Established      49539           6976   <- Unity Editor
+```
+
+and the player's own log shows a clean session with no `FrameException`:
+
+```
+Colibri: connecting to localhost:9012
+Colibri: connected to localhost:9012 as app 'myAppName'. Only clients using the same App Name can see each other.
+```
+
+Two Unity clients on one machine is the configuration the two-client recipe asks for, and the one
+the old hardcoded voice port and the old `static` socket fields would have broken. What it still
+does **not** show is the visual half: that moving a cube in one client moves it in the other was
+never confirmed, because the player's scene state is not observable from outside its process. Every
+message path underneath it was verified separately, but "both connected" is not "sync confirmed".
+
+Two incidental observations from the player run, both of which matter to anyone following the
+two-client recipe:
+
+- **TextMeshPro is missing from a fresh project.** The sample scenes' `Instructions` object raised
+  `NullReferenceException at TMPro.TMP_Settings.get_defaultFontAsset` in the player, because a new
+  project has no TMP Essentials imported. Not a Colibri fault, but it is the first thing a student
+  building this recipe will hit.
+- **One orphaned socket, unexplained.** A single Editor connection created at 21:14 was still
+  `Established` nearly an hour later with **zero** `WebServerConnection` components alive — a socket
+  whose owner was gone. It did not reproduce: a clean enter/exit Play cycle afterwards added no new
+  connection and left that one alone. It also appeared during a stretch where the configured TCP port
+  was being edited while Play mode ran and proxies were being killed underneath the connection, so
+  this is recorded as an observation and not as a diagnosed defect — nothing was changed in response
+  to it. It is worth a deliberate look, because a phantom client stays in the server's client list.
 
 ### Beyond the ten: the `SyncBehaviour` sample
 
@@ -762,13 +843,16 @@ up as a second copy.
 
 ### Still not covered
 
-Item 4 (profiler measurement) is the only outstanding one of the original ten, and item 2 stands as
-written rather than as a run still to do. Beyond them, this pass did not touch:
+All ten of the original criteria have now been addressed. Nine came back as results; the tenth, item
+2, is a question about the criterion rather than a run still owed — opening the `colibri-unity`
+project can no longer mean what it meant before the samples moved to `Samples~`, and what it was
+really asking is covered by item 1. Beyond the ten, this pass did not touch:
 
-- **Voice chat.** It needs two real clients and a microphone, so neither the port-0 bind nor the
-  `CancellationToken` shutdown that replaced `Thread.Abort` has been exercised.
-- **A standalone player, and therefore Unity ↔ Unity.** Nothing was built; every message path was
-  verified against a raw v3 TCP client and a colibri-web peer instead.
+- **Voice chat.** It needs a microphone, so neither the port-0 bind nor the `CancellationToken`
+  shutdown that replaced `Thread.Abort` has been exercised. It is the one sample with no coverage at
+  all.
+- **The visual half of Unity ↔ Unity.** The player was built and both clients were connected
+  concurrently, but object-follows-object between them was not confirmed.
 - **The `colibri-unity` dev project itself.** Only `ColibriTest` was opened — see item 2.
 
 ---
