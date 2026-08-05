@@ -105,7 +105,10 @@ namespace HCIKonstanz.Colibri.Samples
                 Sync.Send(Channel, SyncedQuaternionArray);
                 Sync.Send(Channel, SyncedColorArray);
 
-                Sync.Send("myJson", new JObject
+                // Same channel as everything else above: the JToken listener registered in
+                // OnEnable listens on Channel, so sending this anywhere else would make the
+                // sample's own JSON round trip unobservable from the sample.
+                Sync.Send(Channel, new JObject
                 {
                     { "attribute1", "example" },
                     { "attribute2", 5 }
