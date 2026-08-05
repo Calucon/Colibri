@@ -1,0 +1,175 @@
+#if UNITY_EDITOR
+using System.Linq;
+using HCIKonstanz.Colibri.Networking;
+using HCIKonstanz.Colibri.Synchronization;
+using UnityEditor;
+using UnityEngine;
+
+namespace HCIKonstanz.Colibri.Setup
+{
+    /// <summary>
+    /// "Am I actually connected, and is anything arriving?" answered without reading the console.
+    ///
+    /// Everything here is read-only observation of the running app: the window never creates or
+    /// touches scene objects, and in particular never goes through WebServerConnection.Instance,
+    /// because SingletonBehaviour.Instance *creates* a GameObject when none exists - which outside
+    /// Play mode would mean an editor window quietly adding an object to the open scene.
+    /// </summary>
+    public class ColibriStatusWindow : EditorWindow
+    {
+        private const double RepaintIntervalSeconds = 0.1;
+
+        private Vector2 _scroll;
+        private double _nextRepaint;
+
+        [MenuItem("Window/Colibri Status")]
+        private static void ShowStatusWindow()
+        {
+            var window = GetWindow<ColibriStatusWindow>();
+            window.titleContent = new GUIContent("Colibri Status", EditorGUIUtility.IconContent("d_UnityEditor.ConsoleWindow").image);
+            window.minSize = new Vector2(360, 320);
+            window.Show();
+        }
+
+        private void OnEnable() => EditorApplication.update += OnEditorUpdate;
+        private void OnDisable() => EditorApplication.update -= OnEditorUpdate;
+
+        private void OnEditorUpdate()
+        {
+            // Only while playing, and only ten times a second: nothing here changes in edit mode,
+            // and repainting on every editor tick would show up in the editor's own profile.
+            if (!EditorApplication.isPlaying || EditorApplication.timeSinceStartup < _nextRepaint)
+                return;
+
+            _nextRepaint = EditorApplication.timeSinceStartup + RepaintIntervalSeconds;
+            Repaint();
+        }
+
+        private void OnGUI()
+        {
+            _scroll = EditorGUILayout.BeginScrollView(_scroll);
+
+            DrawConfiguration();
+            EditorGUILayout.Space();
+            DrawConnection();
+            EditorGUILayout.Space();
+            DrawChannels();
+            EditorGUILayout.Space();
+            DrawTraffic();
+            EditorGUILayout.Space();
+            DrawButtons();
+
+            EditorGUILayout.EndScrollView();
+        }
+
+        private void DrawConfiguration()
+        {
+            var config = ColibriConfig.Load();
+
+            EditorGUILayout.LabelField("Configuration", EditorStyles.boldLabel);
+            if (!config.IsConfigured)
+                EditorGUILayout.HelpBox(ColibriConfig.NOT_CONFIGURED_MESSAGE, MessageType.Error);
+
+            EditorGUILayout.LabelField("App Name", string.IsNullOrEmpty(config.AppName) ? "(not set)" : config.AppName);
+            EditorGUILayout.LabelField("Server", $"{config.ServerAddress}  (tcp {config.TcpServerPort}, web {config.WebServerPort})");
+        }
+
+        private void DrawConnection()
+        {
+            EditorGUILayout.LabelField("Connection", EditorStyles.boldLabel);
+
+            if (!EditorApplication.isPlaying)
+            {
+                EditorGUILayout.HelpBox("Colibri only connects while the game is running. Press Play to see the connection.", MessageType.Info);
+                return;
+            }
+
+            // Never WebServerConnection.Instance - see the class comment.
+            var connection = FindFirstObjectByType<WebServerConnection>();
+            if (connection == null)
+            {
+                EditorGUILayout.HelpBox("No Colibri connection in the scene yet. It is created automatically the first time something calls Sync.Send, Sync.Receive, or a SyncBehaviour wakes up.", MessageType.Info);
+                return;
+            }
+
+            var status = connection.Status;
+            var previous = GUI.contentColor;
+            GUI.contentColor = StatusColor(status);
+            EditorGUILayout.LabelField("Status", status.ToString());
+            GUI.contentColor = previous;
+
+            EditorGUILayout.LabelField("Server", $"{connection.ServerAddress}:{connection.TcpPort}");
+            EditorGUILayout.LabelField("App Name", string.IsNullOrEmpty(connection.AppName) ? "(not set)" : connection.AppName);
+            EditorGUILayout.LabelField("Protocol", $"v{WebServerConnection.ClientVersion} (binary TCP)");
+
+            if (status == ConnectionStatus.Connected)
+            {
+                // Not a latency: the heartbeat carries the server's clock, so no round trip can be
+                // derived from it. It does say whether the server is still talking to us.
+                EditorGUILayout.LabelField("Last heartbeat", $"{connection.MillisSinceLastHeartbeat()} ms ago");
+            }
+            else
+            {
+                EditorGUILayout.HelpBox("Not connected. Check that colibri-server is running and that the server address above is reachable.", MessageType.Warning);
+            }
+        }
+
+        private void DrawChannels()
+        {
+            EditorGUILayout.LabelField("Channels with listeners", EditorStyles.boldLabel);
+
+            var channels = ChannelListenerRegistry.Channels.OrderBy(c => c).ToArray();
+            if (channels.Length == 0)
+            {
+                EditorGUILayout.LabelField("(none registered)");
+                return;
+            }
+
+            foreach (var channel in channels)
+                EditorGUILayout.LabelField(channel, string.Join(", ", ChannelListenerRegistry.ListenerTypesFor(channel)));
+
+            EditorGUILayout.HelpBox("A message is only delivered when the channel *and* the type match.", MessageType.None);
+        }
+
+        private void DrawTraffic()
+        {
+            EditorGUILayout.LabelField("Recent messages", EditorStyles.boldLabel);
+
+            var traffic = Sync.RecentTraffic.ToArray();
+            if (traffic.Length == 0)
+            {
+                EditorGUILayout.LabelField("(nothing sent or received yet)");
+                return;
+            }
+
+            var now = Time.realtimeSinceStartup;
+            foreach (var entry in traffic)
+                EditorGUILayout.LabelField($"{(entry.Incoming ? "in " : "out")}  {entry.Channel}", $"{entry.Command}   {now - entry.Time:0.0}s ago");
+        }
+
+        private void DrawButtons()
+        {
+            EditorGUILayout.BeginHorizontal();
+
+            if (GUILayout.Button("Colibri Configuration"))
+                EditorApplication.ExecuteMenuItem("Window/Colibri Configuration");
+
+            if (GUILayout.Button("Open Server Web UI"))
+                Application.OpenURL(ColibriConfig.GetWebUrl(""));
+
+            EditorGUILayout.EndHorizontal();
+        }
+
+        private static Color StatusColor(ConnectionStatus status)
+        {
+            switch (status)
+            {
+                case ConnectionStatus.Connected: return new Color(0.3f, 0.8f, 0.3f);
+                case ConnectionStatus.Connecting:
+                case ConnectionStatus.Reconnecting: return new Color(0.9f, 0.7f, 0.2f);
+                default: return new Color(0.9f, 0.4f, 0.4f);
+            }
+        }
+    }
+}
+#endif
