@@ -74,11 +74,14 @@ namespace HCIKonstanz.Colibri.Setup
         {
             Instance = this;
 
-            // Load() never returns null - without an asset it hands back an unsaved instance
-            // holding the defaults, which is exactly what this window wants to start editing.
             Config = ColibriConfig.Load();
             if (!ConfigExists())
+            {
+                // Load() hands back a shared, hidden defaults object when there is no asset yet.
+                // That one must not *become* the asset, so this window creates its own to save.
+                Config = CreateInstance<ColibriConfig>();
                 SaveConfig();
+            }
         }
 
         private void SaveConfig()
