@@ -32,7 +32,13 @@ Alternatively, download the latest [Colibri release](https://github.com/hcigroup
 3. Import the **SendData** sample: *Window → Package Manager → Colibri → Samples → Import*.
 4. Open the sample scene and press Play. Tick `SendProperties` on the `SendMessages` object and
    watch the console.
-5. To see two clients talk to each other, build the scene and run the build alongside the Editor —
+5. Turn on *Project Settings → Player → Resolution and Presentation → **Run In Background***.
+   Unity leaves this off by default, and with it off the Editor stops running your game the
+   moment its window loses focus. The connection stays up and the status window still says
+   *Connected* — but nothing is sent and nothing that arrived is delivered, because none of that
+   happens until `Update` runs again. It is the single most confusing way for two clients on one
+   machine to appear broken.
+6. To see two clients talk to each other, build the scene and run the build alongside the Editor —
    or open the project a second time from the Unity Hub.
 
 Stuck? Open **Window → Colibri Status**. It shows whether you are connected, which app name you
@@ -54,9 +60,12 @@ Upon installation, a configuration window should show up:
 If your server is running a non-default configuration, the advanced configuration allows you modify server ports.
 Do not modify port numbers unless you know what you are doing!
 
-When using the REST API, the `UnityWebRequest` does not allow Non-Https calls.
-All requests are sent by default using `https`. Disable the toggle `SSL/TLS` and `http` will be used for all request.
-Make sure to `Allow download over HTTP` in the Player Settings!
+The Remote Store talks to the server over REST. With the `SSL/TLS` toggle off those requests go
+out as plain `http`, and Unity blocks cleartext HTTP by default. **Loopback is exempt**, so a
+server on `localhost` needs no change at all — this only comes up once the server is a real
+remote host that is not on HTTPS. In that case set *Project Settings → Player → Other Settings →
+**Insecure HTTP Option*** to *Always allowed*, or put the server behind HTTPS and turn `SSL/TLS`
+back on.
 
 When using the voice chat, Colibri allows to adjust the sampling rate on the server. In this case, clients need to manually set the `Voice Sampling Rate` setting in the configuration.
 
@@ -69,7 +78,13 @@ Default values:
 
 ## Samples
 
-Samples can be found in the `Samples` tab (when installed via Package Manager) or in the `Colibri/Samples` folder (when installed via UnityPackage).
+Samples live in the `Samples` tab of the Package Manager: select Colibri, then *Samples →
+Import*. Importing copies a sample into `Assets/Samples/Colibri/`, which is yours to edit — the
+package's own copy is not compiled into your project until you import it, so nothing you never
+asked for ends up in your build.
+
+The `[RemoteLogger]` and `[SyncTransformManager]` prefabs are **not** samples: they are part of
+the package proper. Drag them straight out of `Packages/Colibri/Prefabs/` in the Project window.
 
 ## Troubleshooting
 
@@ -77,7 +92,7 @@ Open **Window → Colibri Status** while the game is running. It shows, at a gla
 
 - whether you are connected, to which server, and **as which app name** — a typo there gives a
   perfectly healthy connection on which no other client is ever seen
-- how long ago the server was last heard from
+- whether the server's heartbeat is still arriving, and how long the silence has been if not
 - every channel that has listeners, and the type each one expects
 - the last 20 messages sent and received
 
@@ -89,6 +104,8 @@ Colibri also reports the common mistakes in the console rather than failing quie
 | Nothing connects, no errors | `Colibri is not configured yet. Open Window → Colibri Configuration…` |
 | Two clients don't see each other | The connect log names the app name in use; both clients must show the same one |
 | A `[Sync]` field never syncs | Its type is reported at startup if Colibri cannot put it on the wire |
+| Connected, but one client is silent | That client's Editor window is in the background and *Run In Background* is off — see step 5 of the Quickstart |
+| `Store.Get`/`Put` reports a failure | The log names the operation, the object, the URL, the transport error and the HTTP status; requests give up after 10 s rather than hanging |
 
 ## Documentation
 
