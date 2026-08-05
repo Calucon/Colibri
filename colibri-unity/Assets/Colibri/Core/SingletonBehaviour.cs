@@ -18,7 +18,7 @@ namespace HCIKonstanz.Colibri.Core
                     try
                     {
                         // try searching scene for available instance
-                        _instance = FindObjectOfType<T>();
+                        _instance = FindFirstObjectByType<T>();
 
                         // No singleton found in scene, create a new one
                         if (!_instance)
