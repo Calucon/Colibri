@@ -55,7 +55,9 @@ namespace HCIKonstanz.Colibri.Samples
             Sync.Receive<JToken>(Channel, OnJsonMessage);
         }
 
-        // Always unregister what you registered - a listener on a destroyed object still runs.
+        // Destroying this object would drop these listeners on its own - Colibri knows they belong
+        // to it. Disabling it does not, because the object is still very much alive, so the pairing
+        // with OnEnable is what stops a disabled component from going on receiving.
         private void OnDisable()
         {
             Sync.Unregister<bool>(Channel, OnBoolMessage);
