@@ -80,6 +80,7 @@ namespace HCIKonstanz.Colibri.Networking
         private readonly LockFreeQueue<InPacket> _queuedCommands = new LockFreeQueue<InPacket>();
         private long _lastHeartbeatTime;
         private int _connectAttempts;
+        private bool _hasReportedMissingConfig;
 
         // ColibriConfig.Load() goes through Resources.Load, which is main-thread only, so the
         // connection loop reads this snapshot instead of the ScriptableObject.
@@ -159,9 +160,9 @@ namespace HCIKonstanz.Colibri.Networking
 
         private void RefreshConfig()
         {
+            // Never null - an unconfigured project gets the defaults, and the empty app name is
+            // what RunConnectionLoop reports and waits on.
             var config = ColibriConfig.Load();
-            if (config == null)
-                return;
 
             _serverAddress = config.ServerAddress;
             _appName = config.AppName;
@@ -228,11 +229,19 @@ namespace HCIKonstanz.Colibri.Networking
                 if (string.IsNullOrEmpty(address) || string.IsNullOrEmpty(app))
                 {
                     // Nothing configured (yet) - poll rather than give up, so setting the app
-                    // name at runtime still connects.
+                    // name at runtime still connects. Said once, not twice a second.
+                    if (!_hasReportedMissingConfig)
+                    {
+                        _hasReportedMissingConfig = true;
+                        Debug.LogError(ColibriConfig.NOT_CONFIGURED_MESSAGE);
+                    }
+
                     if (!await Delay(RECONNECT_DELAY_MIN_MS, token))
                         break;
                     continue;
                 }
+
+                _hasReportedMissingConfig = false;
 
                 try
                 {
@@ -292,7 +301,10 @@ namespace HCIKonstanz.Colibri.Networking
 
                 StampLiveness();
                 await SendFrame(socket, FrameCodec.EncodeHandshake(CLIENT_VERSION, app, _hostname), token);
-                Debug.Log("Colibri: connection to web server established");
+
+                // The app name is named explicitly: a typo in it produces a perfectly healthy
+                // connection on which no other client is ever seen.
+                Debug.Log($"Colibri: connected to {host}:{port} as app '{app}'. Only clients using the same App Name can see each other.");
 
                 // Drain anything queued during the outage before opening the gate, so retried
                 // messages stay ahead of new ones.
@@ -404,7 +416,24 @@ namespace HCIKonstanz.Colibri.Networking
 
         private void StampLiveness() => Interlocked.Exchange(ref _lastHeartbeatTime, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
 
-        private long MillisSinceLastHeartbeat() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - Interlocked.Read(ref _lastHeartbeatTime);
+        /// <summary>
+        /// How long ago the server was last heard from. Not a round-trip latency: the server's
+        /// heartbeat carries the server's own clock, so the client cannot derive an RTT from it.
+        /// Real latency figures live on the server's admin UI.
+        /// </summary>
+        public long MillisSinceLastHeartbeat() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - Interlocked.Read(ref _lastHeartbeatTime);
+
+        /// <summary>Server the connection loop is currently using, as configured.</summary>
+        public string ServerAddress => _serverAddress;
+
+        /// <summary>TCP port the connection loop is currently using.</summary>
+        public int TcpPort => _tcpPort;
+
+        /// <summary>App name this client identifies as. Only clients sharing it can see each other.</summary>
+        public string AppName => _appName;
+
+        /// <summary>Client-library protocol version sent in the handshake.</summary>
+        public static string ClientVersion => CLIENT_VERSION;
 
 
         /*
