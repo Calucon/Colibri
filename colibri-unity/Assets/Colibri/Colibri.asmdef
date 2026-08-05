@@ -1,17 +1,12 @@
 {
     "name": "HCIKonstanz.Colibri",
-    "references": [
-        "R3.Unity",
-        "UniTask",
-        "Unity.TextMeshPro"
-    ],
+    "references": [],
     "includePlatforms": [],
     "excludePlatforms": [],
     "allowUnsafeCode": false,
     "overrideReferences": true,
     "precompiledReferences": [
-        "Newtonsoft.Json.dll",
-        "R3.dll"
+        "Newtonsoft.Json.dll"
     ],
     "autoReferenced": true,
     "defineConstraints": [],
