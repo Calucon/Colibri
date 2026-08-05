@@ -22,7 +22,7 @@ public class VoiceManager : MonoBehaviour
         Id = (short)UnityEngine.Random.Range(1, 32000);
 
         // Receive IDs of other clients
-        Sync.Receive(CHANNEL, OnIdArrived);
+        Sync.Receive<int>(CHANNEL, OnIdArrived);
 
         // Start broadcasting voice
         VoiceBroadcast.StartBroadcast(Id);
@@ -31,7 +31,7 @@ public class VoiceManager : MonoBehaviour
     void OnDisable()
     {
         // Remove receive ID listener
-        Sync.Unregister(CHANNEL, OnIdArrived);
+        Sync.Unregister<int>(CHANNEL, OnIdArrived);
 
         // Stop broadcasting voice
         VoiceBroadcast.StopBroadcast();

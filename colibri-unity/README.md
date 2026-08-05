@@ -10,51 +10,33 @@
 
 ## Installation
 
-Colibri depends on three packages. Two are installable from the Package Manager; R3's core
-assembly comes from NuGet.
-
-### 1. Newtonsoft JSON and UniTask
-
-Add via *Window → Package Manager → + → Install package by name / from git URL*:
-
-```
-com.unity.nuget.newtonsoft-json
-```
-```
-https://github.com/Cysharp/UniTask.git?path=src/UniTask/Assets/Plugins/UniTask
-```
-
-### 2. R3
-
-R3 comes in two halves and **both are required** — the UPM package cannot declare the NuGet half
-as a dependency, so this step has to be done by hand.
-
-1. Install [NuGetForUnity](https://github.com/GlitchEnzo/NuGetForUnity) (Package Manager, git URL):
-
-   ```
-   https://github.com/GlitchEnzo/NuGetForUnity.git?path=/src/NuGetForUnity
-   ```
-
-2. *NuGet → Manage NuGet Packages*, search for **R3** and install it. This drops `R3.dll` under
-   `Assets/Packages`.
-
-3. Install R3's Unity layer from the Package Manager:
-
-   ```
-   https://github.com/Cysharp/R3.git?path=src/R3.Unity/Assets/R3.Unity
-   ```
-
-See [R3's own installation guide](https://github.com/Cysharp/R3#unity) for details.
-
-### 3. Colibri
+One URL. In Unity, open *Window → Package Manager → + → Install package from git URL* and paste:
 
 ```
 https://github.com/hcigroupkonstanz/Colibri.git?path=colibri-unity/Assets/Colibri
 ```
 
+Colibri's only dependency is `com.unity.nuget.newtonsoft-json`, which the Package Manager
+installs by itself.
+
 ### UnityPackage
 
-Download the latest release of [UniTask](https://github.com/Cysharp/UniTask/releases), [R3](https://github.com/Cysharp/R3/releases), and [Colibri](https://github.com/hcigroupkonstanz/Colibri/releases) from GitHub and import it to your Unity project. Newtonsoft JSON still has to come from the Package Manager (`com.unity.nuget.newtonsoft-json`); Colibri no longer bundles its own copy of `Newtonsoft.Json.dll`.
+Alternatively, download the latest [Colibri release](https://github.com/hcigroupkonstanz/Colibri/releases) from GitHub and import it into your project. Installed this way, Newtonsoft JSON has to be added by hand from the Package Manager (`com.unity.nuget.newtonsoft-json`) — a `.unitypackage` cannot declare dependencies.
+
+## Quickstart
+
+1. Install Colibri (above). A configuration window opens on its own.
+2. Enter an **App Name** — any word you like, but every client that should see each other has to
+   use the *same* one — and press *Save Config*. The default server
+   (`colibri.hci.uni-konstanz.de`) works out of the box.
+3. Import the **SendData** sample: *Window → Package Manager → Colibri → Samples → Import*.
+4. Open the sample scene and press Play. Tick `SendProperties` on the `SendMessages` object and
+   watch the console.
+5. To see two clients talk to each other, build the scene and run the build alongside the Editor —
+   or open the project a second time from the Unity Hub.
+
+Stuck? Open **Window → Colibri Status**. It shows whether you are connected, which app name you
+are connected as, which channels have listeners, and the last messages in and out.
 
 ## Configuration
 
@@ -89,6 +71,25 @@ Default values:
 
 Samples can be found in the `Samples` tab (when installed via Package Manager) or in the `Colibri/Samples` folder (when installed via UnityPackage).
 
+## Troubleshooting
+
+Open **Window → Colibri Status** while the game is running. It shows, at a glance:
+
+- whether you are connected, to which server, and **as which app name** — a typo there gives a
+  perfectly healthy connection on which no other client is ever seen
+- how long ago the server was last heard from
+- every channel that has listeners, and the type each one expects
+- the last 20 messages sent and received
+
+Colibri also reports the common mistakes in the console rather than failing quietly:
+
+| Symptom | What Colibri tells you |
+|---|---|
+| Nothing arrives, no errors | `a float arrived on channel 'chat', but the listener registered there expects string…` — the channel *and* the type have to match |
+| Nothing connects, no errors | `Colibri is not configured yet. Open Window → Colibri Configuration…` |
+| Two clients don't see each other | The connect log names the app name in use; both clients must show the same one |
+| A `[Sync]` field never syncs | Its type is reported at startup if Colibri cannot put it on the wire |
+
 ## Documentation
 
 ### Web Interface for Logging
@@ -109,11 +110,12 @@ float myNumber = 5;
 Sync.Send("MyChannel", myNumber);
 ```
 
-The sent data can then be received anywhere within Unity by registering a listener:
+The sent data can then be received anywhere within Unity by registering a listener. Name the type
+you expect in the angle brackets:
 
 ```c#
 void Start() {
-    Sync.Receive("MyChannel", (Action<float>)MyListener);
+    Sync.Receive<float>("MyChannel", MyListener);
 }
 
 private void MyListener(float myNumber) {
@@ -126,7 +128,7 @@ The listener can be deregistered with `Sync.Unregister`:
 
 ```c#
 private void OnDestroy() {
-    Sync.Unregister("MyChannel", (Action<float>)MyListener);
+    Sync.Unregister<float>("MyChannel", MyListener);
 }
 ```
 
@@ -149,7 +151,7 @@ Sync.Send("myJson", new JObject
     { "attribute2", 5 }
 });
 
-Sync.Receive("myJson", (Action<JToken>)MyListener);
+Sync.Receive<JToken>("myJson", MyListener);
 
 private void MyListener(JToken jtoken) {
     string attribute1 = jtoken["attribute1"].Value<string>(); 
@@ -179,7 +181,7 @@ Sync.Send("example", JToken.FromObject(exampleObject));
 ```
 
 ```c#
-Sync.Receive("example", (Action<JToken>)MyListener);
+Sync.Receive<JToken>("example", MyListener);
 
 private void MyListener(JToken jtoken) {
     ExampleClass exampleObject = jtoken.ToObject<ExampleClass>();
@@ -189,9 +191,9 @@ private void MyListener(JToken jtoken) {
 Limitations:
 
 - You have to register the listener *before* sending out data
-- Type and channel *must* match between Listener and Sender
+- Type and channel *must* match between listener and sender. If they don't, Colibri says so in the
+  console — naming the channel, both types, and how to fix it.
 - Remember to unregister your listener where necessary!
-- Due to overloading, some methods may have to be cast explicitly: `Sync.Receive("...", (Action<JToken>)OnJsonMessage);`
 
 
 
@@ -303,7 +305,7 @@ VoiceBroadcast.StartBroadcast(VoiceId);
 ```c#
 void Start()
 {
-    Sync.Receive("VoiceChat", OnIdArrived);
+    Sync.Receive<int>("VoiceChat", OnIdArrived);
 }
 
 private void OnIdArrived(int id) 

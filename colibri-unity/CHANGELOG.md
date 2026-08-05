@@ -15,18 +15,17 @@ binary v3 protocol and its changelog listed the Unity client rewrite as
   negotiation — both sides must agree on the framing out of band, i.e. by matching versions.
 - **Minimum Unity is 2022.3 LTS** (the package manifest previously claimed 2019.4 while using APIs
   that were never available there).
-- **UniRx → R3.** `SyncBehaviour<T>.ModelCreated()` and `ModelDestroyed()` now return
-  `R3.Observable<SyncBehaviour<T>>` instead of `IObservable<>`.
+- **No more third-party runtime dependencies.** UniRx is gone and was not replaced;
+  `SyncBehaviour<T>.ModelCreated()` and `ModelDestroyed()` are now plain
+  `static event Action<SyncBehaviour<T>>` instead of observables. Anything that subscribed to them
+  as `IObservable<>` has to be rewritten as `+=` / `-=` — and, unlike a UniRx subscription, a static
+  event does **not** unsubscribe itself when the component is destroyed.
 - **`WebServerConnection.Connected`** is a `Task` gate instead of an `IObservable<bool>`.
-  `await connection.Connected` is unchanged; anything that subscribed to it is not. (A
-  `UniTaskCompletionSource` would have been the natural fit, but it throws
-  "can not await twice" on a second *pending* awaiter, and several `SendCommandAsync` calls
-  routinely wait on this gate at once — a `SyncBehaviour` pushes one update per synced attribute
-  at startup.)
+  `await connection.Connected` is unchanged; anything that subscribed to it is not.
 - **`ObservableModel<T>`, `ObservableManager<T>` and `Samples/ObservableModel` are deleted.**
 - **Vendored `Newtonsoft.Json.dll` is gone**, replaced by the `com.unity.nuget.newtonsoft-json`
-  package. See the README for the install steps — R3 in particular needs both a UPM package and a
-  NuGetForUnity package.
+  package, which is declared as a real dependency — so installing Colibri is one git URL and
+  nothing else.
 
 ## v3 wire protocol
 
@@ -103,15 +102,70 @@ binary v3 protocol and its changelog listed the Unity client rewrite as
 - **`Store`** serializes with Newtonsoft instead of `JsonUtility`, which cannot handle dictionaries,
   properties, or top-level arrays and so silently disagreed with what `Sync` can carry.
 
+## Getting started
+
+Colibri is used to teach, by people who know some C# and almost no Unity. Every silent failure is
+an hour they do not spend on their prototype, so:
+
+- **Installing is one git URL.** No UniRx, no R3, no UniTask, no NuGetForUnity — the only
+  dependency is `com.unity.nuget.newtonsoft-json`, resolved automatically from `package.json`.
+- **`Sync.Receive<float>("ch", MyHandler)`.** `Receive` is overloaded once per supported type,
+  which made `Sync.Receive("ch", MyHandler)` ambiguous and forced a cast onto every call site. The
+  generic version dispatches by pattern-matching the delegate — no reflection — and the existing
+  overloads still work. Same for `Unregister<T>`. There is deliberately no `Send<T>`:
+  `Sync.Send("ch", value)` already resolves, and a generic version would demote today's compile
+  error on an unsupported type to a runtime message.
+- **Type mismatches are reported.** Colibri routes on (channel, type), so a `float` sent to a
+  `string` listener used to be dropped without a word (`Sync.cs`, the missing-listener branch). The
+  new `ChannelListenerRegistry` tracks which types each channel has listeners for, and the warning
+  names the channel, both types, and the fix. It stays quiet for a channel with *no* listeners,
+  which is normal traffic, and reports each `(channel, type)` mistake once rather than per message.
+- **A missing configuration says so.** `ColibriConfig.Load()` returned `null` without
+  `Resources/ColibriConfig.asset`, so `GetWebUrl` threw an NRE and the connection loop polled
+  forever in silence. It now returns the defaults and reports the missing config once, pointing at
+  the menu item that fixes it. The "connected" log names the host, port and **app name**, because a
+  typo there produces a healthy connection on which no other client is ever seen.
+- **`Window → Colibri Status`** — connection state, server, app name, protocol version, time since
+  the last server heartbeat (not a latency: the heartbeat carries the *server's* clock), the
+  channels with listeners and the type each expects, and the last 20 messages in and out. It uses
+  `FindFirstObjectByType`, never `WebServerConnection.Instance`, which *creates* a GameObject.
+- **`[Sync]` members are validated at startup** — an unsupported type, a property missing an
+  accessor, or two members whose lowercased names collide are reported when the model type is first
+  initialized instead of failing on the first message.
+- Samples and README lead with the cast-free form.
+
+## Performance
+
+- **The sync tick allocates nothing while idle.** `Observable.EveryValueChanged` registered one
+  frame-provider work item per synced attribute per object — five for every `SyncTransform` — and
+  polled through a `Func<T, object>` getter, boxing four values per object per frame. On 100 idle
+  synced objects at 60 fps that is roughly 24,000 allocations and 575 KB of garbage per second
+  before anything moves.
+- `SyncTicker` replaces it with **one `Update` and one `LateUpdate` for the whole application**,
+  iterating an index loop over its registrations. `SyncedAttribute` became a typed hierarchy whose
+  per-instance tracker compares with `EqualityComparer<TValue>.Default` — the `IEquatable<>` path
+  for `Vector3`/`Quaternion` — so an unchanged attribute costs a comparison and nothing else. A
+  value is boxed only on the frame it actually changes, to hand it to `AddUpdate`.
+- Poll (`Update`) and flush (`LateUpdate`) are separate phases, which keeps the existing
+  one-message-per-frame coalescing while removing the `async void` + `UniTask.Yield(PostLateUpdate)`
+  state machine that used to allocate once per change.
+- Nothing on the network path changed: `WebServerConnection` never used either library — raw
+  `Socket`, `Task`, `SemaphoreSlim`, `FrameCodec` — so latency and throughput are untouched.
+
 ## Dependencies and API modernization
 
-- **UniRx → R3** (Cysharp, actively maintained, pairs with the UniTask dependency already present).
-  `IObservable<T>` → `Observable<T>`, `this.ObserveEveryValueChanged(f)` →
-  `Observable.EveryValueChanged(this, f)`, `Sample()` → `ThrottleLast()`,
-  `TakeUntilDestroy`/`TakeUntilDisable` → `.AddTo(this)` on the subscription.
-  `RemoteLogging.SendLog`'s `Observable.Start` + `Observable.WhenAll` + `ObserveOnMainThread` is now
-  plain UniTask; its retry is also re-armed only after clearing the in-flight flag, which the
-  `Where()` gate in front of the throttle previously swallowed.
+- **UniRx removed, not replaced.** `IObservable<T>` subscriptions became plain methods and static
+  events; `this.ObserveEveryValueChanged(f)` became the typed change tracking above;
+  `RemoteLogging`'s `Observable.Start` + `WhenAll` + `ObserveOnMainThread` + `Sample()` became a
+  volatile flag set from Unity's threaded log callback and a one-second timer in `Update`. Its retry
+  is still re-armed only after clearing the in-flight flag, and a send that throws is now caught and
+  reported once instead of escaping as an unhandled `async void` exception — it cannot be reported
+  repeatedly, because logging from inside the log sender feeds back into this queue.
+- **UniTask removed.** `UniTaskCompletionSource` → `TaskCompletionSource` (which also tolerates
+  several pending awaiters); `await request.SendWebRequest()` → a three-line `TaskCompletionSource`
+  wrapper over `UnityWebRequestAsyncOperation.completed`, completing inline so the caller stays on
+  the main thread. The plain awaiter never throws, so `Store` now checks `request.result` and
+  reports what failed, at which URL, with the HTTP status.
 - **Legacy observable API deleted.** `ObservableModel<T>`/`ObservableManager<T>` speak
   `channel::register`/`deregister` plus bare `add`, `update`, `request` and `remove`. A 2.0 server
   registers only `broadcast::*`, `model::request`, `model::update`, `model::delete`,
@@ -136,15 +190,22 @@ binary v3 protocol and its changelog listed the Unity client rewrite as
   against `FrameCodec`. This is what catches an endianness or off-by-one drift between the two
   implementations; the round-trip tests alone would pass just as happily with both C# sides wrong in
   the same direction.
+- `ChannelListenerRegistryTests` covers the type-mismatch diagnostics — including the cases where a
+  message must *not* be reported. `Sync` itself is not directly testable, because registering a
+  listener reaches `WebServerConnection.Instance`, which spawns a GameObject; the registry was split
+  out as plain C# precisely so the interesting part could be.
 - No GameCI workflow: the EditMode suite is run from Unity's Test Runner, and the end-to-end round
   trip against a live server is documented rather than automated.
 
 ## Known residuals
 
-- `.AddTo(this)` ties subscriptions to destruction, where UniRx's `TakeUntilDisable` tied them to
-  disabling. `SyncBehaviourManager` only ever subscribed in `Start()`, so in practice this only
-  matters for a component that is disabled and re-enabled — it will not double-subscribe, but its
-  subscriptions do stay live while disabled.
-- The R3 install needs two steps (UPM package + NuGetForUnity) because a UPM `dependencies` entry
-  cannot express the NuGet half. This is documented in the README rather than worked around by
-  vendoring `R3.dll`, which is the pattern this release removes.
+- A disabled `SyncBehaviour` neither polls nor sends, and picks changes made while it was disabled
+  up as ordinary changes the frame it comes back. That matches UniRx's original `TakeUntilDisable`
+  scoping rather than the `.AddTo(this)` (destroy-scoped) behaviour it had in between.
+- `SyncBehaviourManager` must unsubscribe from `SyncBehaviour<T>.ModelCreated` / `ModelDestroyed` in
+  `OnDestroy`, since static events do not do it themselves. It does; anything else subscribing to
+  them has to as well, or it leaks across Play sessions when domain reload is disabled.
+- `Expression.Compile()` is still used to build the `[Sync]` accessors, so the model layer depends
+  on Unity's expression-tree support on AOT platforms. Attribute construction dispatches through an
+  explicit per-type `if` chain rather than `MakeGenericMethod`, which keeps every instantiation
+  visible to the AOT compiler.
