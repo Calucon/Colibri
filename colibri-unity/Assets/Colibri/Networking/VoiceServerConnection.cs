@@ -14,10 +14,9 @@ namespace HCIKonstanz.Colibri.Networking
     {
         private UdpClient udpClient;
         private IPEndPoint sendIPEndPoint;
-        private IPEndPoint receiveIPEndPoint;
         private IPEndPoint inEndPoint = new IPEndPoint(IPAddress.Any, 0);
-        private List<Byte> receivedBytes;
         private Thread udpThread;
+        private CancellationTokenSource shutdown;
         private static LockFreeQueue<VoicePacket> queuedVoicePackets = new LockFreeQueue<VoicePacket>();
         private readonly Dictionary<int, List<Action<VoicePacket>>> voicePacketListeners = new Dictionary<int, List<Action<VoicePacket>>>();
         private bool isConnected = false;
@@ -32,9 +31,23 @@ namespace HCIKonstanz.Colibri.Networking
 
         private void OnDisable()
         {
-            if (udpClient != null)
-                udpClient.Dispose();
-            udpThread.Abort();
+            isConnected = false;
+
+            // Thread.Abort is unsupported on .NET Core / IL2CPP and would leave the socket in
+            // an undefined state anyway. Cancelling and closing the client is what actually
+            // unblocks the blocking Receive() the thread is parked in.
+            shutdown?.Cancel();
+
+            udpClient?.Close();
+            udpClient = null;
+
+            // Every field here is null if Connect() bailed out (or was never reached), which
+            // used to make OnDisable throw on udpThread.Abort().
+            udpThread?.Join(500);
+            udpThread = null;
+
+            shutdown?.Dispose();
+            shutdown = null;
         }
 
         private void Update()
@@ -54,14 +67,19 @@ namespace HCIKonstanz.Colibri.Networking
             if (ip.AddressList.Length > 0)
             {
                 sendIPEndPoint = new IPEndPoint(ip.AddressList[0], ColibriConfig.Load().VoiceServerPort);
-                receiveIPEndPoint = new IPEndPoint(IPAddress.Any, 9014);
 
                 udpClient = new UdpClient();
-                udpClient.ExclusiveAddressUse = false;
-                udpClient.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
-                udpClient.Client.Bind(receiveIPEndPoint);
-                udpThread = new Thread(new ThreadStart(Receive));
-                udpThread.Name = "Voice UDP Thread";
+                // Port 0 lets the OS pick an ephemeral port. The server replies to whatever
+                // source port the datagram came from (voice-server.ts), so the hardcoded 9014
+                // this used to bind bought nothing and capped a machine at one Unity client.
+                udpClient.Client.Bind(new IPEndPoint(IPAddress.Any, 0));
+
+                shutdown = new CancellationTokenSource();
+                udpThread = new Thread(Receive)
+                {
+                    Name = "Voice UDP Thread",
+                    IsBackground = true
+                };
                 udpThread.Start();
 
                 isConnected = true;
@@ -75,17 +93,34 @@ namespace HCIKonstanz.Colibri.Networking
 
         private void Receive()
         {
-            while (true)
+            // Captured locally: OnDisable clears the fields while this thread is still winding down.
+            var client = udpClient;
+            var token = shutdown.Token;
+
+            while (!token.IsCancellationRequested)
             {
                 try
                 {
-                    byte[] bytes = udpClient.Receive(ref inEndPoint);
-                    // Debug.Log(bytes.Length + " bytes recieved");
+                    byte[] bytes = client.Receive(ref inEndPoint);
                     VoicePacket voicePacket = GetVoicePacket(bytes);
                     if (voicePacket.Id != 0)
                     {
                         queuedVoicePackets.Enqueue(voicePacket);
                     }
+                }
+                catch (ObjectDisposedException)
+                {
+                    // Client closed by OnDisable - this is the shutdown path.
+                    return;
+                }
+                catch (SocketException e)
+                {
+                    if (token.IsCancellationRequested)
+                        return;
+
+                    // Transient on UDP (an ICMP port-unreachable from a peer surfaces here as
+                    // ECONNRESET); keep receiving.
+                    Debug.LogWarning($"Colibri voice: {e.SocketErrorCode}");
                 }
                 catch (Exception e)
                 {
@@ -96,8 +131,12 @@ namespace HCIKonstanz.Colibri.Networking
 
         public void SendByteData(short id, short sequence, short frameSize, Codec codec, byte[] data)
         {
+            var client = udpClient;
+            if (client == null)
+                return;
+
             byte[] bytes = AddMetadataBytes(id, sequence, frameSize, codec, data);
-            udpClient.Send(bytes, bytes.Length, sendIPEndPoint);
+            client.Send(bytes, bytes.Length, sendIPEndPoint);
         }
 
         public void AddVoicePacketListener(short id, Action<VoicePacket> listener)
