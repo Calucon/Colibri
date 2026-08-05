@@ -464,6 +464,41 @@ public static void Receive<T>(string channel, Action<T> listener)
 Every existing call site keeps compiling. An unsupported `T` names the supported set and shows the
 `JToken` route.
 
+### The `Unregister` you had to remember
+
+Forgetting the matching `Sync.Unregister` in `OnDestroy` was the most expensive mistake the API
+allowed. The delegate keeps the destroyed `MonoBehaviour` reachable, so calling it *works* right up
+until the first line that touches `transform` or `gameObject`, which throws
+`MissingReferenceException` — out of `WebServerConnection.Update`, taking every message still queued
+behind it that frame with it. The symptom is not "my handler misbehaves after I destroy the object";
+it is "the connection drops messages at random", on a channel that has nothing to do with the object
+that was destroyed.
+
+A listener already carries the answer to who owns it, and it only has to be read once:
+
+```csharp
+Sync.Receive<float>("Temperature", OnTemperature);        // Target *is* the component
+Sync.Receive<float>("Temperature", v => label.text = ...); // Target is a closure holding it
+```
+
+A method group hands over the instance directly, so `listener.Target is UnityEngine.Object` settles
+it. A lambda does not: the compiler hoists what it captured into a generated class, and the
+enclosing component sits in its `<>4__this` field — or one closure further out, if the lambda is
+nested. `ListenerOwner` walks that, with the captured `this` preferred over anything else the lambda
+happens to hold, and the result is stored next to the delegate at registration time. Per message the
+check is one `UnityEngine.Object` null comparison.
+
+Orphans are dropped on dispatch and on the next registration for the same channel and type. The
+second is what keeps a scene reload from stacking the old scene's listeners on a channel that
+nothing happens to send on. Pruning also decrements `ChannelListenerRegistry`, or the channel would
+keep claiming a listener that no longer exists and every later message on it would be reported as a
+mismatch against a component that has been gone for minutes.
+
+What is deliberately *not* automatic: a `static` listener, and one belonging to a plain C# object.
+Neither has a Unity lifetime to follow, so `Unregister` remains the only thing that could be meant.
+It also stays the way to stop listening while the object is alive — the `OnEnable`/`OnDisable` pair
+in the samples is unaffected by any of this, since a disabled component has not been destroyed.
+
 ### Missing configuration
 
 `ColibriConfig.Load()` returned `null` when `Resources/ColibriConfig.asset` did not exist, so
@@ -551,6 +586,7 @@ Repaints are throttled to 10 Hz and only while playing.
 |---|---|
 | `static Observable<SyncBehaviour<T>> ModelCreated()` | `static event Action<SyncBehaviour<T>> ModelCreated` |
 | `static Observable<SyncBehaviour<T>> ModelDestroyed()` | `static event Action<SyncBehaviour<T>> ModelDestroyed` |
+| A `Sync.Receive` listener outlives its object | Dropped once the object that registered it is destroyed |
 | `ColibriConfig.Load()` may return `null` | Never returns `null` |
 | `Store.*` may throw `UnityWebRequestException` | Never throws; logs and returns `default`/`false` |
 

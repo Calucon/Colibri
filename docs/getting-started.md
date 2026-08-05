@@ -78,12 +78,10 @@ private void OnTemperature(float value)
 {
     Debug.Log($"It is {value} degrees somewhere else");
 }
-
-private void OnDestroy()
-{
-    Sync.Unregister<float>("Temperature", OnTemperature);
-}
 ```
+
+That is the whole thing — there is no matching line to write in `OnDestroy`. Colibri notices when
+the object that registered a listener is destroyed and stops calling it.
 
 Three things worth knowing straight away:
 
@@ -93,6 +91,9 @@ Three things worth knowing straight away:
 - **Register before anyone sends.** A message that arrives with no listener is gone; there is no
   replay.
 - **You never receive your own messages.** Only the other clients do.
+
+If you want to stop listening while the object is still alive — say, only while a menu is open —
+`Sync.Unregister<float>("Temperature", OnTemperature)` does exactly that.
 
 ### What you can send
 

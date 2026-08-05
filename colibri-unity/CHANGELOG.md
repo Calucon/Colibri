@@ -126,6 +126,16 @@ an hour they do not spend on their prototype, so:
   overloads still work. Same for `Unregister<T>`. There is deliberately no `Send<T>`:
   `Sync.Send("ch", value)` already resolves, and a generic version would demote today's compile
   error on an unsupported type to a runtime message.
+- **Listeners clean themselves up.** `Sync.Receive` had to be paired with a `Sync.Unregister` in
+  `OnDestroy`, and forgetting it was the most expensive mistake in the API: the delegate keeps
+  calling into a destroyed `MonoBehaviour`, the first line touching `transform` throws
+  `MissingReferenceException`, and that exception surfaces out of `WebServerConnection.Update` —
+  discarding every message still queued behind it that frame. Colibri now records which Unity object
+  each listener belongs to and drops the listener once that object is destroyed. It works for a
+  method group (the delegate's target *is* the component) and for a lambda written inside one (the
+  component is a field of the compiler-generated closure), resolved once at registration, never per
+  message. `Unregister` is unchanged and still needed to stop listening while the object lives on,
+  or for a `static` listener, which has no Unity lifetime to follow.
 - **Type mismatches are reported.** Colibri routes on (channel, type), so a `float` sent to a
   `string` listener used to be dropped without a word (`Sync.cs`, the missing-listener branch). The
   new `ChannelListenerRegistry` tracks which types each channel has listeners for, and the warning
@@ -205,6 +215,11 @@ an hour they do not spend on their prototype, so:
   message must *not* be reported. `Sync` itself is not directly testable, because registering a
   listener reaches `WebServerConnection.Instance`, which spawns a GameObject; the registry was split
   out as plain C# precisely so the interesting part could be.
+- `ListenerOwnerTests` covers which Unity object a listener is judged to belong to, since that is
+  what automatic unregistration hangs on: a method group, a lambda written in a component, a lambda
+  nested two closures deep, and the cases that must resolve to *nothing* — a static method, a plain
+  C# object, a lambda over locals — because pruning one of those would be a new bug in place of the
+  old one.
 - `JsonExtensionsTests` covers the conversions every inbound message passes through — both wire
   forms of a colour, integer tokens where a float is expected, and every malformed shape, each of
   which has to fall back and warn exactly once rather than throw. This is the file the colour bug
