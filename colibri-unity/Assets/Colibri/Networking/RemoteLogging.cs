@@ -1,8 +1,8 @@
-﻿using System;
+using Cysharp.Threading.Tasks;
+using R3;
+using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Threading.Tasks;
-using UniRx;
 using UnityEngine;
 
 namespace HCIKonstanz.Colibri.Networking
@@ -19,21 +19,24 @@ namespace HCIKonstanz.Colibri.Networking
                 Message = msg;
             }
         }
+
         private readonly LockFreeQueue<LogMsg> _messages = new LockFreeQueue<LogMsg>();
         private readonly Subject<int> _msgSubject = new Subject<int>();
         private WebServerConnection _server;
 
-        private bool _isSending = false;
+        // Written from the send task, which may resume off the main thread.
+        private volatile bool _isSending;
 
         void OnEnable()
         {
             _server = WebServerConnection.Instance;
             Application.logMessageReceivedThreaded += OnLogMessage;
+
             _msgSubject
-                .TakeUntilDisable(this)
                 .Where(_ => !_isSending)
-                .Sample(TimeSpan.FromSeconds(1))
-                .Subscribe(_ => SendLog());
+                .ThrottleLast(TimeSpan.FromSeconds(1))
+                .Subscribe(_ => SendLog().Forget())
+                .AddTo(this);
         }
 
         void OnDisable()
@@ -76,10 +79,11 @@ namespace HCIKonstanz.Colibri.Networking
             _msgSubject.OnNext(0);
         }
 
-        private void SendLog()
+        private async UniTaskVoid SendLog()
         {
+            var needsRetry = false;
             _isSending = true;
-            var sendTask = Observable.Start(async () =>
+            try
             {
                 var msgs = new List<LogMsg>();
                 while (_messages.Dequeue(out var logMsg))
@@ -99,20 +103,17 @@ namespace HCIKonstanz.Colibri.Networking
                         _messages.Enqueue(msg);
                 }
 
-                return hasSent;
-            });
+                needsRetry = !hasSent;
+            }
+            finally
+            {
+                _isSending = false;
+            }
 
-            Observable
-                .WhenAll(sendTask)
-                .TakeUntilDisable(this)
-                .ObserveOnMainThread()
-                .Subscribe(async result =>
-                {
-                    _isSending = false;
-                    if (!await result[0])
-                        _msgSubject.OnNext(0);
-                });
+            // Re-armed only after clearing _isSending: the Where() gate in front of the
+            // throttle drops anything published while a send is still in flight.
+            if (needsRetry)
+                _msgSubject.OnNext(0);
         }
     }
-
 }
