@@ -205,8 +205,28 @@ an hour they do not spend on their prototype, so:
   message must *not* be reported. `Sync` itself is not directly testable, because registering a
   listener reaches `WebServerConnection.Instance`, which spawns a GameObject; the registry was split
   out as plain C# precisely so the interesting part could be.
-- No GameCI workflow: the EditMode suite is run from Unity's Test Runner, and the end-to-end round
-  trip against a live server is documented rather than automated.
+- `JsonExtensionsTests` covers the conversions every inbound message passes through — both wire
+  forms of a colour, integer tokens where a float is expected, and every malformed shape, each of
+  which has to fall back and warn exactly once rather than throw. This is the file the colour bug
+  lived in, and it had no tests at all.
+- New PlayMode assembly `HCIKonstanz.Colibri.E2E` (`Assets/Tests/`, in the development project
+  rather than the shipped package). A real Unity client, a real colibri-server and a raw v3 peer as
+  the second endpoint — the server excludes the sender from its own broadcasts, so one client can
+  never observe anything it sends. It covers the handshake and heartbeat, all 17 payload shapes in
+  both directions asserting the exact bytes outbound, per-member `SyncBehaviour` updates, a model
+  from another client being instantiated exactly once, `SyncTransform`'s per-field switches, the
+  once-only mismatch warning, the Store over REST, and the ticker invariants behind the "one
+  `Update` for the whole application" claim. Without a reachable server it skips with instructions
+  rather than failing.
+- `node colibri-unity/run-tests.mjs` runs both suites, starting and stopping a server with
+  `docker compose` — unless one is already listening, which it uses as it stands. See
+  [README.md](README.md#for-maintainers).
+- The cross-implementation protocol vectors are checked automatically: `npm run test:vectors` in
+  colibri-server re-encodes each one and fails if `ProtocolVectorTests.cs` no longer expects the
+  same bytes. It runs in the server's CI workflow, which now also triggers on changes to the C#
+  vectors.
+- Still no GameCI workflow: the Unity suites run locally, since a Unity container in CI needs a
+  licence secret. Voice chat remains uncovered — it needs a microphone.
 
 ## End-to-end verification, and what it fixed
 

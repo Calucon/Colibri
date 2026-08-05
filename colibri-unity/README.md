@@ -354,6 +354,44 @@ This repository includes third-party open source libraries as listed in [THIRD_P
 
 ## For maintainers
 
+### Running the tests
+
+```sh
+node colibri-unity/run-tests.mjs              # both suites
+node colibri-unity/run-tests.mjs --editmode   # unit tests only, no server needed
+node colibri-unity/run-tests.mjs --playmode   # end-to-end only
+```
+
+Two suites, and they need different things:
+
+- **EditMode** (`Assets/Colibri/Tests/Editor/`) is plain NUnit over the framing, the JSON
+  conversions and the diagnostics. No server, no network, runs anywhere Unity does.
+- **PlayMode** (`Assets/Tests/`) is the real thing: a Unity client and a raw v3 peer talking to a
+  running `colibri-server`. The script starts one with `docker compose` and stops it again — unless
+  something is already listening on the port, which it uses as it stands and leaves running.
+
+Results land in `TestResults/` as NUnit XML plus the editor log. Without a reachable server the
+end-to-end tests report as *skipped* with the command that fixes it, rather than failing.
+
+| Variable | Meaning |
+| --- | --- |
+| `COLIBRI_E2E_SERVER` | Host of a server to use instead of starting one. Setting it means the script never starts or stops anything. |
+| `COLIBRI_E2E_PORT` | Web/Socket.IO port, default `9011` |
+| `COLIBRI_E2E_TCP_PORT` | Binary v3 port, default `9012` |
+| `COLIBRI_E2E_NO_BUILD` | Skip `docker compose --build` |
+| `UNITY_PATH` | The editor to use, if it is not where Unity Hub puts it |
+
+The script insists on the exact editor version in `ProjectSettings/ProjectVersion.txt` unless
+`UNITY_PATH` says otherwise: opening the project with a different one upgrades it in place, which
+turns a test run into a diff across the manifest and half of `ProjectSettings`.
+
+Both suites can also be run from **Window → General → Test Runner** in the editor. The end-to-end
+ones need *Run In Background* on, which they set for themselves.
+
+Voice chat has no automated coverage — it needs a microphone.
+
+### Documents
+
 - [CHANGELOG.md](CHANGELOG.md) — everything that changed in `1.3.1` → `2.0.0`
 - [docs/v2-ease-of-use-and-performance.md](docs/v2-ease-of-use-and-performance.md) — how the sync
   loop and the diagnostics work, why they were built that way, and how to migrate an existing project
