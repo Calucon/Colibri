@@ -2,6 +2,9 @@
 Assets/Resources/ColibriConfig*
 Assets/Resources.meta
 
+# NUnit XML and editor logs from run-tests.mjs
+/[Tt]est[Rr]esults/
+
 # This .gitignore file should be placed at the root of your Unity project directory
 #
 # Get latest from https://github.com/github/gitignore/blob/main/Unity.gitignore
