@@ -94,12 +94,17 @@ const receiveBoolArray = (channel: string, callback: (val: boolean[]) => void) =
     registerListener<boolean[]>(channel, 'broadcast::bool[]', callback);
 };
 
+// JavaScript has one number type, but Unity distinguishes int from float and tags the
+// message accordingly, so `Sync.Send(channel, 5)` in Unity arrives as broadcast::int.
+// Listening for only broadcast::float silently dropped every integer a Unity client sent.
 const receiveNumber = (channel: string, callback: (val: number) => void) => {
     registerListener<number>(channel, 'broadcast::float', callback);
+    registerListener<number>(channel, 'broadcast::int', callback);
 };
 
 const receiveNumberArray = (channel: string, callback: (val: number[]) => void) => {
     registerListener<number[]>(channel, 'broadcast::float[]', callback);
+    registerListener<number[]>(channel, 'broadcast::int[]', callback);
 };
 
 const receiveString = (channel: string, callback: (val: string) => void) => {
