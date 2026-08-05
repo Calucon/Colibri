@@ -1,35 +1,90 @@
-﻿using UnityEngine;
-using R3;
+using UnityEngine;
 using System.Reflection;
 using System.Collections.Generic;
 using System;
 using System.Linq.Expressions;
 using Newtonsoft.Json.Linq;
 using System.Linq;
-using Cysharp.Threading.Tasks;
+using System.Threading.Tasks;
 
 namespace HCIKonstanz.Colibri.Synchronization
 {
-    public abstract class SyncBehaviour<T> : MonoBehaviour
+    public abstract class SyncBehaviour<T> : MonoBehaviour, SyncTicker.ITickable
         where T : SyncBehaviour<T>
     {
-        private struct SyncedAttribute
+        private const string SupportedTypes = "bool, int, float, string, Vector2, Vector3, Quaternion, Color, JObject and arrays of those";
+
+        /*
+         *  Synced attribute metadata. Built once per model type, never per instance, and typed
+         *  all the way down: the change comparison never sees `object`, so an idle synced object
+         *  allocates nothing at all.
+         */
+
+        private interface IChangeTracker
         {
-            public Func<T, object> Getter;
-            public Action<T, object> Setter;
+            /// <summary>
+            /// Latches the attribute's current value and reports whether it differs from the
+            /// previously latched one.
+            /// </summary>
+            bool CaptureChange(T target);
+        }
+
+        private abstract class SyncedAttribute
+        {
+            public string Name;
+            public int Index;
             public Type PropertyType;
+
+            /// <summary>Boxes, so it is only called once a change has actually been detected.</summary>
+            public abstract object GetBoxed(T target);
+            public abstract void SetBoxed(T target, object value);
+            public abstract IChangeTracker CreateTracker(T target);
+        }
+
+        private sealed class SyncedAttribute<TValue> : SyncedAttribute
+        {
+            public Func<T, TValue> Getter;
+            public Action<T, TValue> Setter;
+
+            public override object GetBoxed(T target) => Getter(target);
+            public override void SetBoxed(T target, object value) => Setter(target, (TValue)value);
+            public override IChangeTracker CreateTracker(T target) => new ChangeTracker<TValue>(Getter, target);
+        }
+
+        private sealed class ChangeTracker<TValue> : IChangeTracker
+        {
+            private readonly Func<T, TValue> _getter;
+            private TValue _lastValue;
+
+            public ChangeTracker(Func<T, TValue> getter, T target)
+            {
+                _getter = getter;
+                _lastValue = getter(target);
+            }
+
+            public bool CaptureChange(T target)
+            {
+                var current = _getter(target);
+
+                // EqualityComparer<TValue>.Default resolves to the IEquatable<> implementation
+                // for Vector3/Quaternion/..., so comparing costs nothing and boxes nothing.
+                if (EqualityComparer<TValue>.Default.Equals(current, _lastValue))
+                    return false;
+
+                _lastValue = current;
+                return true;
+            }
         }
 
 
-        private static readonly Subject<SyncBehaviour<T>> _modelCreateSubject = new Subject<SyncBehaviour<T>>();
-        public static Observable<SyncBehaviour<T>> ModelCreated() => _modelCreateSubject;
-
-        private static readonly Subject<SyncBehaviour<T>> _modelDestroySubject = new Subject<SyncBehaviour<T>>();
-        public static Observable<SyncBehaviour<T>> ModelDestroyed() => _modelDestroySubject;
+        public static event Action<SyncBehaviour<T>> ModelCreated;
+        public static event Action<SyncBehaviour<T>> ModelDestroyed;
 
 
         private static readonly Dictionary<string, SyncedAttribute> _syncedAttributes = new Dictionary<string, SyncedAttribute>();
+        private static readonly List<SyncedAttribute> _attributeList = new List<SyncedAttribute>();
         private static bool _isInitialized = false;
+
         private static void Initialize()
         {
             if (_isInitialized)
@@ -37,76 +92,106 @@ namespace HCIKonstanz.Colibri.Synchronization
 
             _isInitialized = true;
 
-            var props = typeof(T).GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-            foreach (var prop in props)
+            const BindingFlags memberFlags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+
+            foreach (var prop in typeof(T).GetProperties(memberFlags))
+                if (prop.IsDefined(typeof(SyncAttribute), true))
+                    RegisterAttribute(prop.Name, prop.PropertyType, prop);
+
+            foreach (var field in typeof(T).GetFields(memberFlags))
+                if (field.IsDefined(typeof(SyncAttribute), true))
+                    RegisterAttribute(field.Name, field.FieldType, field);
+        }
+
+        private static void RegisterAttribute(string memberName, Type valueType, MemberInfo member)
+        {
+            var name = memberName.ToLower();
+            if (_syncedAttributes.ContainsKey(name))
             {
-                object[] attrs = prop.GetCustomAttributes(true);
-                foreach (object attr in attrs)
-                {
-                    var syncAttribute = attr as SyncAttribute;
-                    if (syncAttribute != null)
-                    {
-                        _syncedAttributes.Add(prop.Name.ToLower(), new SyncedAttribute
-                        {
-                            Getter = BuildUntypedGetter(prop),
-                            Setter = BuildUntypedSetter(prop),
-                            PropertyType = prop.PropertyType
-                        });
-                    }
-                }
+                Debug.LogError($"Colibri: '{typeof(T).Name}' has more than one [Sync] member named '{memberName}' (names are matched case-insensitively). Rename one of them.");
+                return;
             }
 
-            var fields = typeof(T).GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-            foreach (var field in fields)
+            var attribute = BuildAttribute(name, valueType, member);
+            if (attribute == null)
+                return;
+
+            attribute.Index = _attributeList.Count;
+            _attributeList.Add(attribute);
+            _syncedAttributes.Add(name, attribute);
+        }
+
+        // Explicit per-type dispatch rather than MakeGenericMethod: it keeps every instantiation
+        // visible to the AOT compiler, and it is the one place that can tell a student up front
+        // that their [Sync] member has a type Colibri cannot put on the wire.
+        private static SyncedAttribute BuildAttribute(string name, Type valueType, MemberInfo member)
+        {
+            if (valueType == typeof(bool)) return BuildAttribute<bool>(name, member);
+            if (valueType == typeof(int)) return BuildAttribute<int>(name, member);
+            if (valueType == typeof(float)) return BuildAttribute<float>(name, member);
+            if (valueType == typeof(string)) return BuildAttribute<string>(name, member);
+            if (valueType == typeof(Vector2)) return BuildAttribute<Vector2>(name, member);
+            if (valueType == typeof(Vector3)) return BuildAttribute<Vector3>(name, member);
+            if (valueType == typeof(Quaternion)) return BuildAttribute<Quaternion>(name, member);
+            if (valueType == typeof(Color)) return BuildAttribute<Color>(name, member);
+            if (valueType == typeof(bool[])) return BuildAttribute<bool[]>(name, member);
+            if (valueType == typeof(int[])) return BuildAttribute<int[]>(name, member);
+            if (valueType == typeof(float[])) return BuildAttribute<float[]>(name, member);
+            if (valueType == typeof(string[])) return BuildAttribute<string[]>(name, member);
+            if (valueType == typeof(Vector2[])) return BuildAttribute<Vector2[]>(name, member);
+            if (valueType == typeof(Vector3[])) return BuildAttribute<Vector3[]>(name, member);
+            if (valueType == typeof(Quaternion[])) return BuildAttribute<Quaternion[]>(name, member);
+            if (valueType == typeof(Color[])) return BuildAttribute<Color[]>(name, member);
+            if (valueType == typeof(JObject)) return BuildAttribute<JObject>(name, member);
+
+            Debug.LogError($"Colibri: cannot synchronize '{typeof(T).Name}.{member.Name}' - [Sync] does not support {valueType.Name}. Supported types are {SupportedTypes}. For your own classes, sync a JObject built with JToken.FromObject(...).");
+            return null;
+        }
+
+        private static SyncedAttribute BuildAttribute<TValue>(string name, MemberInfo member)
+        {
+            var exTarget = Expression.Parameter(typeof(T), "target");
+            var exValue = Expression.Parameter(typeof(TValue), "value");
+
+            Expression exGet;
+            Expression exSet;
+
+            if (member is PropertyInfo property)
             {
-                object[] attrs = field.GetCustomAttributes(true);
-                foreach (object attr in attrs)
+                // see: https://stackoverflow.com/a/17669142/4090817
+                var getMethod = property.GetGetMethod(true);
+                var setMethod = property.GetSetMethod(true);
+                if (getMethod == null || setMethod == null)
                 {
-                    var syncAttribute = attr as SyncAttribute;
-                    if (syncAttribute != null)
-                    {
-                        _syncedAttributes.Add(field.Name.ToLower(), new SyncedAttribute
-                        {
-                            Getter = t => field.GetValue(t),
-                            Setter = (t, val) => field.SetValue(t, val),
-                            PropertyType = field.FieldType
-                        });
-                    }
+                    Debug.LogError($"Colibri: cannot synchronize '{typeof(T).Name}.{member.Name}' - a [Sync] property needs both a getter and a setter.");
+                    return null;
                 }
+
+                exGet = Expression.Call(exTarget, getMethod);
+                exSet = Expression.Call(exTarget, setMethod, exValue);
             }
+            else
+            {
+                var field = (FieldInfo)member;
+                if (field.IsInitOnly)
+                {
+                    Debug.LogError($"Colibri: cannot synchronize '{typeof(T).Name}.{member.Name}' - a [Sync] field cannot be readonly.");
+                    return null;
+                }
+
+                exGet = Expression.Field(exTarget, field);
+                exSet = Expression.Assign(Expression.Field(exTarget, field), exValue);
+            }
+
+            return new SyncedAttribute<TValue>
+            {
+                Name = name,
+                PropertyType = typeof(TValue),
+                Getter = Expression.Lambda<Func<T, TValue>>(exGet, exTarget).Compile(),
+                Setter = Expression.Lambda<Action<T, TValue>>(exSet, exTarget, exValue).Compile()
+            };
         }
 
-
-        // see: https://stackoverflow.com/a/17669142/4090817
-        private static Action<T, object> BuildUntypedSetter(PropertyInfo propertyInfo)
-        {
-            var targetType = propertyInfo.DeclaringType;
-            var methodInfo = propertyInfo.GetSetMethod(true);
-            var exTarget = Expression.Parameter(targetType, "t");
-            var exValue = Expression.Parameter(typeof(object), "p");
-            var exBody = Expression.Call(exTarget, methodInfo,
-               Expression.Convert(exValue, propertyInfo.PropertyType));
-            var lambda = Expression.Lambda<Action<T, object>>(exBody, exTarget, exValue);
-            var action = lambda.Compile();
-            return action;
-        }
-
-        // see: https://stackoverflow.com/a/17669142/4090817
-        private static Func<T, object> BuildUntypedGetter(PropertyInfo propertyInfo)
-        {
-            var targetType = propertyInfo.DeclaringType;
-            var methodInfo = propertyInfo.GetGetMethod(true);
-            var returnType = methodInfo.ReturnType;
-
-            var exTarget = Expression.Parameter(targetType, "t");
-            var exBody = Expression.Call(exTarget, methodInfo);
-            var exBody2 = Expression.Convert(exBody, typeof(object));
-
-            var lambda = Expression.Lambda<Func<T, object>>(exBody2, exTarget);
-
-            var action = lambda.Compile();
-            return action;
-        }
 
         public string Id;
 
@@ -114,7 +199,10 @@ namespace HCIKonstanz.Colibri.Synchronization
         private readonly string ChannelPrefix = typeof(T).Name.ToLower();
         private string Channel { get => ChannelPrefix + (String.IsNullOrEmpty(ModelId) ? "" : $"_{ModelId}"); }
 
-        private readonly Dictionary<string, bool> _hasReceivedUpdate = new Dictionary<string, bool>();
+        // Parallel to _attributeList: true while an incoming server value is still waiting to be
+        // observed by the change poll, so that it is not immediately echoed back to the server.
+        private bool[] _hasReceivedUpdate;
+        private IChangeTracker[] _trackers;
 
         private JObject _nextUpdate;
 
@@ -122,7 +210,10 @@ namespace HCIKonstanz.Colibri.Synchronization
         private bool _hasReceivedDestroyCommand;
         private bool _hasReceivedFirstUpdate;
 
-        private UniTaskCompletionSource<bool> _isReady = new UniTaskCompletionSource<bool>();
+        private readonly TaskCompletionSource<bool> _isReady = new TaskCompletionSource<bool>();
+
+        private int _tickIndex = -1;
+        int SyncTicker.ITickable.TickIndex { get => _tickIndex; set => _tickIndex = value; }
 
 
         protected virtual void Awake()
@@ -132,22 +223,19 @@ namespace HCIKonstanz.Colibri.Synchronization
             var isPrefab = gameObject.scene == null;
             if (!isPrefab && String.IsNullOrEmpty(Id))
                 Id = Guid.NewGuid().ToString();
-            
-            foreach (var attribute in _syncedAttributes)
-            {
-                if (!_hasReceivedUpdate.ContainsKey(attribute.Key))
-                    _hasReceivedUpdate.Add(attribute.Key, false);
 
-                Observable.EveryValueChanged(this, _ => attribute.Value.Getter(this as T))
-                    .Where(_ => _hasReceivedFirstUpdate)
-                    .Subscribe(_ => AddUpdate(attribute.Key, attribute.Value.Getter(this as T)))
-                    .AddTo(this);
-            }
+            var self = this as T;
+            _hasReceivedUpdate = new bool[_attributeList.Count];
+            _trackers = new IChangeTracker[_attributeList.Count];
+            for (var i = 0; i < _attributeList.Count; i++)
+                _trackers[i] = _attributeList[i].CreateTracker(self);
+
+            SyncTicker.Register(this);
 
             Sync.AddModelUpdateListener(Channel, OnModelUpdate, Id);
             Sync.AddModelDeleteListener(Channel, OnModelDelete);
 
-            _modelCreateSubject.OnNext(this);
+            ModelCreated?.Invoke(this);
 
             // check if the scene contains a matching manager
             var hasManager = FindObjectsByType<SyncBehaviourManager<T>>(FindObjectsSortMode.None)
@@ -158,7 +246,7 @@ namespace HCIKonstanz.Colibri.Synchronization
             {
                 if (String.IsNullOrEmpty(ModelId))
                     Debug.LogWarning("No generic Colibri SyncManager found (without ModelId) - synchronization of newly created objects may be restricted");
-                else 
+                else
                     Debug.LogWarning($"No Colibri SyncManager found (ModelID '{ModelId}') - synchronization of newly created objects may be restricted");
             }
         }
@@ -170,17 +258,53 @@ namespace HCIKonstanz.Colibri.Synchronization
 
         protected virtual void OnDestroy()
         {
+            SyncTicker.Deregister(this);
+
             Sync.RemoveModelUpdateListener(Channel, OnModelUpdate);
             Sync.RemoveModelDeleteListener(Channel, OnModelDelete);
-            _hasReceivedUpdate.Clear();
 
-            _modelDestroySubject.OnNext(this);
+            ModelDestroyed?.Invoke(this);
             if (_isQuitting || _hasReceivedDestroyCommand)
                 return;
 
             Sync.SendModelDelete(Channel, Id);
             _isReady.TrySetCanceled();
         }
+
+
+        /*
+         *  Driven by SyncTicker - one Update and one LateUpdate for the whole application.
+         */
+
+        void SyncTicker.ITickable.PollChanges()
+        {
+            // A disabled object neither latches nor sends, so whatever changed while it was
+            // disabled is picked up as a normal change the frame it comes back.
+            if (!isActiveAndEnabled)
+                return;
+
+            var self = this as T;
+            for (var i = 0; i < _trackers.Length; i++)
+            {
+                // Latched unconditionally, but only reported once the server has sent this
+                // object's state - otherwise the local value would overwrite it on arrival.
+                if (!_trackers[i].CaptureChange(self))
+                    continue;
+
+                if (_hasReceivedFirstUpdate)
+                    AddUpdate(_attributeList[i], _attributeList[i].GetBoxed(self));
+            }
+        }
+
+        void SyncTicker.ITickable.FlushUpdate()
+        {
+            if (_nextUpdate == null)
+                return;
+
+            Sync.SendModelUpdate(Channel, _nextUpdate);
+            _nextUpdate = null;
+        }
+
 
         public void OnModelUpdate(JObject data)
         {
@@ -201,10 +325,22 @@ namespace HCIKonstanz.Colibri.Synchronization
 
         public async void TriggerSync()
         {
-            await _isReady.Task;
+            try
+            {
+                await _isReady.Task;
+            }
+            catch (OperationCanceledException)
+            {
+                // destroyed before the server ever sent its state - nothing left to sync
+                return;
+            }
 
-            foreach (var attribute in _syncedAttributes)
-                AddUpdate(attribute.Key, attribute.Value.Getter(this as T));
+            if (!this)
+                return;
+
+            var self = this as T;
+            foreach (var attribute in _attributeList)
+                AddUpdate(attribute, attribute.GetBoxed(self));
         }
 
 
@@ -218,34 +354,24 @@ namespace HCIKonstanz.Colibri.Synchronization
             }
         }
 
-        private void AddUpdate(string name, object value)
+        private void AddUpdate(SyncedAttribute attribute, object value)
         {
-            if (_hasReceivedUpdate[name])
+            if (_hasReceivedUpdate[attribute.Index])
             {
-                _hasReceivedUpdate[name] = false;
+                _hasReceivedUpdate[attribute.Index] = false;
                 return;
             }
-
 
             if (_nextUpdate == null)
                 _nextUpdate = new JObject { { "id", Id } };
 
-            if (_nextUpdate.ContainsKey(name))
-                _nextUpdate[name] = value.ToJson();
+            if (_nextUpdate.ContainsKey(attribute.Name))
+                _nextUpdate[attribute.Name] = value.ToJson();
             else
-                _nextUpdate.Add(name, value.ToJson());
+                _nextUpdate.Add(attribute.Name, value.ToJson());
 
-            SendUpdate();
-        }
-
-        private async void SendUpdate()
-        {
-            await UniTask.Yield(PlayerLoopTiming.PostLateUpdate);
-            if (_nextUpdate != null)
-            {
-                Sync.SendModelUpdate(Channel, _nextUpdate);
-                _nextUpdate = null;
-            }
+            // The message itself goes out in FlushUpdate(), so all of this frame's changes
+            // travel together in one message.
         }
 
         private void UpdateAttribute(string name, JToken value)
@@ -254,53 +380,54 @@ namespace HCIKonstanz.Colibri.Synchronization
             {
                 Debug.LogWarning($"Unable to sync attribute {name}");
                 return;
-            }    
+            }
 
+            var self = this as T;
             var attribute = _syncedAttributes[name];
-            var oldValue = attribute.Getter(this as T);
+            var oldValue = attribute.GetBoxed(self);
 
             if (attribute.PropertyType == typeof(bool))
-                attribute.Setter(this as T, value.Value<bool>());
+                attribute.SetBoxed(self, value.Value<bool>());
             else if (attribute.PropertyType == typeof(int))
-                attribute.Setter(this as T, value.Value<int>());
+                attribute.SetBoxed(self, value.Value<int>());
             else if (attribute.PropertyType == typeof(float))
-                attribute.Setter(this as T, value.Value<float>());
+                attribute.SetBoxed(self, value.Value<float>());
             else if (attribute.PropertyType == typeof(string))
-                attribute.Setter(this as T, value.Value<string>());
+                attribute.SetBoxed(self, value.Value<string>());
             else if (attribute.PropertyType == typeof(Vector2))
-                attribute.Setter(this as T, value.ToVector2());
+                attribute.SetBoxed(self, value.ToVector2());
             else if (attribute.PropertyType == typeof(Vector3))
-                attribute.Setter(this as T, value.ToVector3());
+                attribute.SetBoxed(self, value.ToVector3());
             else if (attribute.PropertyType == typeof(Quaternion))
-                attribute.Setter(this as T, value.ToQuaternion());
+                attribute.SetBoxed(self, value.ToQuaternion());
             else if (attribute.PropertyType == typeof(Color))
-                attribute.Setter(this as T, value.ToColor());
+                attribute.SetBoxed(self, value.ToColor());
             else if (attribute.PropertyType == typeof(bool[]))
-                attribute.Setter(this as T, value.Select(x => (bool)x).ToArray());
+                attribute.SetBoxed(self, value.Select(x => (bool)x).ToArray());
             else if (attribute.PropertyType == typeof(int[]))
-                attribute.Setter(this as T, value.Select(x => (int)x).ToArray());
+                attribute.SetBoxed(self, value.Select(x => (int)x).ToArray());
             else if (attribute.PropertyType == typeof(float[]))
-                attribute.Setter(this as T, value.Select(x => (float)x).ToArray());
+                attribute.SetBoxed(self, value.Select(x => (float)x).ToArray());
             else if (attribute.PropertyType == typeof(string[]))
-                attribute.Setter(this as T, value.Select(x => (string)x).ToArray());
+                attribute.SetBoxed(self, value.Select(x => (string)x).ToArray());
             else if (attribute.PropertyType == typeof(Vector2[]))
-                attribute.Setter(this as T, value.Select(x => x.ToVector2()).ToArray());
+                attribute.SetBoxed(self, value.Select(x => x.ToVector2()).ToArray());
             else if (attribute.PropertyType == typeof(Vector3[]))
-                attribute.Setter(this as T, value.Select(x => x.ToVector3()).ToArray());
+                attribute.SetBoxed(self, value.Select(x => x.ToVector3()).ToArray());
             else if (attribute.PropertyType == typeof(Quaternion[]))
-                attribute.Setter(this as T, value.Select(x => x.ToQuaternion()).ToArray());
+                attribute.SetBoxed(self, value.Select(x => x.ToQuaternion()).ToArray());
             else if (attribute.PropertyType == typeof(Color[]))
-                attribute.Setter(this as T, value.Select(x => x.ToColor()).ToArray());
+                attribute.SetBoxed(self, value.Select(x => x.ToColor()).ToArray());
             else if (attribute.PropertyType == typeof(JObject))
-                attribute.Setter(this as T, value);
+                attribute.SetBoxed(self, value);
             else
                 Debug.LogError($"Unable to update attribute {name}: Unsupported type {attribute.PropertyType}");
 
-            var newValue = attribute.Getter(this as T);
+            var newValue = attribute.GetBoxed(self);
             if (newValue != null)
-                _hasReceivedUpdate[name] = !newValue.Equals(oldValue);
+                _hasReceivedUpdate[attribute.Index] = !newValue.Equals(oldValue);
             else
-                _hasReceivedUpdate[name] = newValue != oldValue;
+                _hasReceivedUpdate[attribute.Index] = newValue != oldValue;
         }
     }
 }
