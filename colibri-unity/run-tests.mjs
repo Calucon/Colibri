@@ -20,7 +20,7 @@
  * poor way to repay them for it.
  */
 import { execFile, spawn } from 'node:child_process';
-import { existsSync, readFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, mkdirSync } from 'node:fs';
 import * as net from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -110,13 +110,15 @@ const startServer = async () => {
  *  The Editor
  */
 
-const editorExecutable = version => {
-    const hub = {
+const hubDirectory = () =>
+    ({
         win32: path.join('C:', 'Program Files', 'Unity', 'Hub', 'Editor'),
         darwin: '/Applications/Unity/Hub/Editor',
         linux: path.join(os.homedir(), 'Unity', 'Hub', 'Editor'),
-    }[process.platform];
+    })[process.platform] ?? null;
 
+const editorExecutable = version => {
+    const hub = hubDirectory();
     if (!hub) return null;
 
     const relative = {
@@ -127,6 +129,18 @@ const editorExecutable = version => {
 
     const candidate = path.join(hub, version, relative);
     return existsSync(candidate) ? candidate : null;
+};
+
+/** Every editor Unity Hub has installed, so a version mismatch can say what you do have. */
+const installedEditors = () => {
+    const hub = hubDirectory();
+    if (!hub || !existsSync(hub)) return [];
+
+    try {
+        return readdirSync(hub).filter(entry => editorExecutable(entry));
+    } catch {
+        return [];
+    }
 };
 
 const projectEditorVersion = () => {
@@ -150,12 +164,17 @@ const findUnity = () => {
 
     // Deliberately not falling back to whatever else is installed: opening the project with a
     // different editor upgrades it in place, which shows up as an unrelated diff in
-    // ProjectVersion.txt, the package manifest and half of ProjectSettings.
-    throw new Error(
-        `Unity ${version} is not installed where Unity Hub puts it.\n` +
-            `Install ${version} from Unity Hub, or set UNITY_PATH to the editor to use - note that a ` +
-            'different version will upgrade the project in place.'
-    );
+    // ProjectVersion.txt, the package manifest and half of ProjectSettings. Better to say so than
+    // to hand someone that diff and let them work out where it came from.
+    const installed = installedEditors();
+    const alternatives = installed.length
+        ? `Installed here: ${installed.join(', ')}.\n` +
+          `To use one of those instead: UNITY_PATH="${editorExecutable(installed[installed.length - 1])}"\n` +
+          'It will upgrade the project in place, so commit the resulting ProjectVersion.txt and ' +
+          'ProjectSettings changes deliberately rather than alongside something else.'
+        : 'No editors were found where Unity Hub puts them; set UNITY_PATH to the one to use.';
+
+    throw new Error(`Unity ${version} (from ProjectSettings/ProjectVersion.txt) is not installed.\n${alternatives}`);
 };
 
 const runUnity = (unity, platform) =>
