@@ -1,5 +1,5 @@
 ﻿using UnityEngine;
-using UniRx;
+using R3;
 using System.Reflection;
 using System.Collections.Generic;
 using System;
@@ -22,10 +22,10 @@ namespace HCIKonstanz.Colibri.Synchronization
 
 
         private static readonly Subject<SyncBehaviour<T>> _modelCreateSubject = new Subject<SyncBehaviour<T>>();
-        public static IObservable<SyncBehaviour<T>> ModelCreated() => _modelCreateSubject.AsObservable();
+        public static Observable<SyncBehaviour<T>> ModelCreated() => _modelCreateSubject;
 
         private static readonly Subject<SyncBehaviour<T>> _modelDestroySubject = new Subject<SyncBehaviour<T>>();
-        public static IObservable<SyncBehaviour<T>> ModelDestroyed() => _modelDestroySubject.AsObservable();
+        public static Observable<SyncBehaviour<T>> ModelDestroyed() => _modelDestroySubject;
 
 
         private static readonly Dictionary<string, SyncedAttribute> _syncedAttributes = new Dictionary<string, SyncedAttribute>();
@@ -138,10 +138,10 @@ namespace HCIKonstanz.Colibri.Synchronization
                 if (!_hasReceivedUpdate.ContainsKey(attribute.Key))
                     _hasReceivedUpdate.Add(attribute.Key, false);
 
-                this.ObserveEveryValueChanged(_ => attribute.Value.Getter(this as T))
-                    .TakeUntilDestroy(this)
+                Observable.EveryValueChanged(this, _ => attribute.Value.Getter(this as T))
                     .Where(_ => _hasReceivedFirstUpdate)
-                    .Subscribe(_ => AddUpdate(attribute.Key, attribute.Value.Getter(this as T)));
+                    .Subscribe(_ => AddUpdate(attribute.Key, attribute.Value.Getter(this as T)))
+                    .AddTo(this);
             }
 
             Sync.AddModelUpdateListener(Channel, OnModelUpdate, Id);
@@ -150,8 +150,7 @@ namespace HCIKonstanz.Colibri.Synchronization
             _modelCreateSubject.OnNext(this);
 
             // check if the scene contains a matching manager
-            var managers = FindObjectsOfType<SyncBehaviourManager<T>>();
-            var hasManager = FindObjectsOfType<SyncBehaviourManager<T>>()
+            var hasManager = FindObjectsByType<SyncBehaviourManager<T>>(FindObjectsSortMode.None)
                 .Where(m => m.Template?.ModelId == ModelId || (String.IsNullOrEmpty(m.Template?.ModelId) && String.IsNullOrEmpty(ModelId)))
                 .Any();
 
