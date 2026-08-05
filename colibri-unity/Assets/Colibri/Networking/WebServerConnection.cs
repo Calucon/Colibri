@@ -1,7 +1,6 @@
-﻿using Colibri.Networking;
-using Google.FlatBuffers;
+using Cysharp.Threading.Tasks;
 using HCIKonstanz.Colibri.Core;
-using HCIKonstanz.Colibri.Samples;
+using HCIKonstanz.Colibri.Networking.Protocol;
 using HCIKonstanz.Colibri.Setup;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -11,510 +10,505 @@ using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using UniRx;
 using UnityEngine;
 
 namespace HCIKonstanz.Colibri.Networking
 {
     public enum ConnectionStatus { Connected, Disconnected, Connecting, Reconnecting };
 
+    /// <summary>
+    /// TCP connection to a colibri-server, speaking the v3 binary protocol
+    /// (see <see cref="Protocol.FrameCodec"/> and <c>colibri-server/docs/protocol.md</c>).
+    ///
+    /// Requires colibri-server >= 2.0.0; there is no version negotiation, so a 1.x server
+    /// cannot be talked to at all.
+    /// </summary>
     [DefaultExecutionOrder(-100)]
     public class WebServerConnection : SingletonBehaviour<WebServerConnection>
     {
-        const int BUFFER_SIZE = 10 * 1024 * 1024;
-        const long HEARTBEAT_TIMEOUT_THRESHOLD_MS = 2000;
-        const int SOCKET_TIMEOUT_MS = 500;
-        const int RECONNECT_DELAY_MS = 5 * 1000;
-        const int VERSION = 1;
+        /// <summary>
+        /// Client library version announced in the handshake. Matches colibri-web's
+        /// <c>query: { app, version: '2' }</c>. The server does not validate it - it is
+        /// metadata shown on the admin UI's Clients page.
+        /// </summary>
+        private const string CLIENT_VERSION = "2";
 
-        private static Socket _socket;
-        private static AsyncCallback _receiveCallback = new AsyncCallback(ReceiveData);
-        private static byte[] _receiveBuffer = new byte[BUFFER_SIZE];
-        private static int _receiveBufferOffset = 0;
-        private static int _expectedPacketSize = -1;
+        /// <summary>
+        /// The server heartbeats every 100 ms, so silence for this long means the connection
+        /// is gone even if the socket has not noticed yet.
+        /// </summary>
+        private const long HEARTBEAT_TIMEOUT_THRESHOLD_MS = 2000;
 
-        private static UTF8Encoding _encoding = new UTF8Encoding();
-        private static LockFreeQueue<InPacket> _queuedCommands = new LockFreeQueue<InPacket>();
+        private const int RECEIVE_BUFFER_SIZE = 64 * 1024;
+        private const int RECONNECT_DELAY_MIN_MS = 500;
+        private const int RECONNECT_DELAY_MAX_MS = 10 * 1000;
+
+        /// <summary>
+        /// Retry queue bound. This is a last-write-wins sync client: growing the queue without
+        /// limit during a long outage would only buffer updates that are already superseded.
+        /// </summary>
+        private const int MAX_QUEUED_MESSAGES = 256;
+
+        /// <summary>
+        /// ClientLogger (<c>client-logger.ts</c>) reads this channel's payload with
+        /// <c>asString()</c>, so it is the one channel that ships raw text instead of JSON -
+        /// quoting it would put stray quotes in the admin UI's log page.
+        /// </summary>
+        private const string LOG_CHANNEL = "log";
+
+        private static readonly Encoding Utf8 = new UTF8Encoding(false, false);
 
         public delegate void MessageAction(string channel, string command, JToken payload);
         public event MessageAction OnMessageReceived;
         public event Action OnConnected;
         public event Action OnDisconnected;
 
-        private Task _connectionTask;
-        private static long LastHeartbeatTime;
+        // Instance, not static: static state survives Enter Play Mode with domain reload
+        // disabled and would leave a second play session talking to a dead socket.
+        private Socket _socket;
+        private CancellationTokenSource _lifetime;
+        private string _hostname = "";
+
+        // Serializes every write to the socket. Concurrent SendCommandAsync calls used to
+        // interleave their bytes and corrupt the framing for everything that followed.
+        private readonly SemaphoreSlim _sendLock = new SemaphoreSlim(1, 1);
+
+        // Written from the send path, drained from the connect path - both off the main
+        // thread, so it needs a lock (it had none).
         private readonly List<byte[]> _msgQueue = new List<byte[]>();
+        private readonly object _msgQueueLock = new object();
 
-        private BehaviorSubject<bool> _isConnected = new BehaviorSubject<bool>(false);
-        public IObservable<bool> Connected => _isConnected.Where(x => x).First();
+        private readonly LockFreeQueue<InPacket> _queuedCommands = new LockFreeQueue<InPacket>();
+        private long _lastHeartbeatTime;
+        private int _connectAttempts;
 
+        // ColibriConfig.Load() goes through Resources.Load, which is main-thread only, so the
+        // connection loop reads this snapshot instead of the ScriptableObject.
+        private volatile string _serverAddress;
+        private volatile string _appName;
+        private volatile int _tcpPort;
+
+        // Gate that `await Connected` waits on. A UniTaskCompletionSource rather than an Rx
+        // observable keeps Rx off the send hot path.
+        private UniTaskCompletionSource _connectedGate = new UniTaskCompletionSource();
+        private volatile bool _isGateOpen;
+        public UniTask Connected => _connectedGate.Task;
 
         // workaround to execute events in main unity thread
-        private bool fireOnConnected;
-        private bool fireOnDisconnected;
+        private volatile bool _fireOnConnected;
+        private volatile bool _fireOnDisconnected;
+
         private ConnectionStatus _status = ConnectionStatus.Disconnected;
         public ConnectionStatus Status
         {
             get { return _status; }
             private set
             {
-                if (_status != value)
+                if (_status == value)
+                    return;
+
+                _status = value;
+
+                if (_status == ConnectionStatus.Connected)
                 {
-                    _status = value;
-                    if (_status == ConnectionStatus.Connected)
-                    {
-                        fireOnConnected = true;
-                        _isConnected.OnNext(true);
-                    }
-                    else
-                    {
-                        _isConnected.OnNext(false);
-                    }
-
-                    if (_status == ConnectionStatus.Disconnected)
-                        fireOnDisconnected = true;
+                    _connectAttempts = 0;
+                    _fireOnConnected = true;
+                    _isGateOpen = true;
+                    _connectedGate.TrySetResult();
                 }
+                else if (_isGateOpen)
+                {
+                    // Re-arm the gate so a send issued while disconnected waits for the next
+                    // successful connection instead of racing straight onto a dead socket.
+                    _isGateOpen = false;
+                    _connectedGate = new UniTaskCompletionSource();
+                }
+
+                if (_status == ConnectionStatus.Disconnected)
+                    _fireOnDisconnected = true;
             }
-        }
-
-
-        private struct PacketHeader
-        {
-            public int PacketSize;
-            public int PacketStartOffset;
-            public bool IsHeartbeat;
         }
 
         private struct InPacket
         {
-            public string channel;
-            public string command;
-            public JToken payload;
+            public string Channel;
+            public string Command;
+            public JToken Payload;
         }
-
 
 
         private void OnEnable()
         {
             DontDestroyOnLoad(this);
 
-            if (!String.IsNullOrEmpty(ColibriConfig.Load().ServerAddress))
-                Connect();
+            // Can only be read from the main thread.
+            _hostname = SanitizeHandshakeField(SystemInfo.deviceName);
+            RefreshConfig();
 
-            // to get rid of unity warning
-            var ignoreUnityCompilerWarning = new InPacket
-            {
-                channel = "",
-                command = "",
-                payload = null
-            };
+            _connectedGate = new UniTaskCompletionSource();
+            _isGateOpen = false;
+
+            _lifetime = new CancellationTokenSource();
+            _ = RunConnectionLoop(_lifetime.Token);
+        }
+
+        private void RefreshConfig()
+        {
+            var config = ColibriConfig.Load();
+            if (config == null)
+                return;
+
+            _serverAddress = config.ServerAddress;
+            _appName = config.AppName;
+            _tcpPort = config.TcpServerPort;
         }
 
         private void OnDisable()
         {
-            if (_socket != null)
-                _socket.Dispose();
+            _lifetime?.Cancel();
+            _lifetime?.Dispose();
+            _lifetime = null;
+
+            CloseSocket(_socket);
             _socket = null;
-        }
 
-        private void Reconnect()
-        {
-            if (_socket != null)
-            {
-                try
-                {
-                    _socket.Disconnect(false);
-                }
-                catch (Exception e)
-                {
-                    Debug.LogWarning(e.Message);
-                }
-
-                _socket.Dispose();
-                _socket = null;
-            }
-
+            _connectedGate.TrySetCanceled();
             Status = ConnectionStatus.Disconnected;
-
-            Connect();
-        }
-
-        private void Connect()
-        {
-            Status = ConnectionStatus.Connecting;
-            bool isReconnect = _socket != null;
-
-            if (_socket != null)
-                _socket.Dispose();
-
-            _socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-            _socket.NoDelay = true;
-            _socket.ReceiveTimeout = SOCKET_TIMEOUT_MS;
-            _socket.SendTimeout = SOCKET_TIMEOUT_MS;
-
-            // avoid multithreading problems due to variable changes...
-            var ip = ColibriConfig.Load().ServerAddress;
-            var app = ColibriConfig.Load().AppName;
-            var socket = _socket;
-            // Can only be called from main thread
-            var hostname = SystemInfo.deviceName;
-
-
-            Task.Run(async () =>
-            {
-                Debug.Log("Connecting to " + ip);
-                if (isReconnect)
-                {
-                    Status = ConnectionStatus.Reconnecting;
-                    await Task.Delay(RECONNECT_DELAY_MS);
-                }
-
-                try
-                {
-                    _receiveBufferOffset = 0;
-                    _expectedPacketSize = -1;
-
-                    socket.Connect(ip, ColibriConfig.Load().TcpServerPort);
-                    socket.BeginReceive(_receiveBuffer, _receiveBufferOffset, _receiveBuffer.Length - _receiveBufferOffset, SocketFlags.None, _receiveCallback, null);
-                    await SendHandshake(VERSION, app, hostname);
-                    Debug.Log("Connection to web server established");
-                    LastHeartbeatTime = DateTimeOffset.Now.ToUnixTimeMilliseconds();
-                    Status = ConnectionStatus.Connected;
-
-                    while (_msgQueue.Count > 0)
-                    {
-                        var isSent = await SendDataAsync(_msgQueue[0]);
-                        if (isSent)
-                            _msgQueue.RemoveAt(0);
-                        else
-                            // something went wrong, abort and retry later!
-                            break;
-                    }
-                }
-                catch (SocketException ex)
-                {
-                    Debug.LogError(ex.Message);
-                    Debug.Log($"Unable to connect to server {ip}, trying again in a few seconds...");
-                    Status = ConnectionStatus.Disconnected;
-                }
-            });
-
         }
 
         private void Update()
         {
-            if (fireOnConnected)
+            RefreshConfig();
+
+            if (_fireOnConnected)
             {
+                _fireOnConnected = false;
                 OnConnected?.Invoke();
-                fireOnConnected = false;
             }
 
-            if (fireOnDisconnected)
+            if (_fireOnDisconnected)
             {
+                _fireOnDisconnected = false;
                 OnDisconnected?.Invoke();
-                fireOnDisconnected = false;
             }
 
-            if (Status == ConnectionStatus.Connected)
+            // Handlers run on the main thread to keep threading issues out of user code.
+            while (_queuedCommands.Dequeue(out var packet))
+                OnMessageReceived?.Invoke(packet.Channel, packet.Command, packet.Payload);
+
+            if (Status == ConnectionStatus.Connected && MillisSinceLastHeartbeat() > HEARTBEAT_TIMEOUT_THRESHOLD_MS)
             {
-                while (_queuedCommands.Dequeue(out var packet))
-                {
-                    OnMessageReceived?.Invoke(packet.channel, packet.command, packet.payload);
-                }
-
-                if (Math.Abs(LastHeartbeatTime - DateTimeOffset.Now.ToUnixTimeMilliseconds()) > HEARTBEAT_TIMEOUT_THRESHOLD_MS)
-                {
-                    Status = ConnectionStatus.Disconnected;
-                    Debug.Log("Connection lost, trying to reconnect...");
-                }
-            }
-
-            if (Status == ConnectionStatus.Disconnected && !String.IsNullOrEmpty(ColibriConfig.Load().AppName))
-            {
-                Connect();
-            }
-        }
-
-
-        private static void ReceiveData(IAsyncResult asyncResult)
-        {
-            try
-            {
-                int numReceived = _socket.EndReceive(asyncResult);
-                Debug.Assert(numReceived >= 0, "Received negative amount of bytes from surface connection");
-
-                var processingOffset = 0;
-                var bufferEnd = _receiveBufferOffset + numReceived;
-                LastHeartbeatTime = DateTimeOffset.Now.ToUnixTimeMilliseconds();
-
-                while (processingOffset < bufferEnd)
-                {
-                    if (_expectedPacketSize <= 0)
-                    {
-                        if (HasPacketHeader(processingOffset))
-                        {
-                            var header = GetPacketHeader(processingOffset);
-
-                            if (header.IsHeartbeat)
-                                processingOffset += header.PacketSize;
-                            else
-                            {
-                                processingOffset = header.PacketStartOffset;
-                                _expectedPacketSize = header.PacketSize;
-                            }
-                        }
-                        else
-                        {
-                            Debug.LogWarning("Invalid packet received, skipping ahead!");
-                            while (processingOffset < bufferEnd && !HasPacketHeader(processingOffset))
-                                processingOffset++;
-
-                        }
-                    }
-                    else if (processingOffset + _expectedPacketSize <= bufferEnd)
-                    {
-                        byte[] rawPacket = new byte[_expectedPacketSize];
-                        Buffer.BlockCopy(_receiveBuffer, processingOffset, rawPacket, 0, rawPacket.Length);
-
-                        var message = Message.GetRootAsMessage(new ByteBuffer(rawPacket));
-
-                        try
-                        {
-                            JToken payload;
-                            if (message.Payload.StartsWith("{") || message.Payload.StartsWith("["))
-                                payload = JToken.Parse(message.Payload);
-                            else
-                                payload = new JValue(message.Payload);
-
-                            // messages have to be handled in main update() thread, to avoid possible threading issues in handlers
-                            _queuedCommands.Enqueue(new InPacket
-                            {
-                                channel = message.Channel,
-                                command = message.Command,
-                                payload = payload
-                            });
-
-
-                            // return latency messages immediately
-                            if (message.Channel == "colibri" && message.Command == "latency")
-                                _ = Instance.SendCommandAsync("colibri", "latency", payload);
-                        }
-                        catch (Exception e)
-                        {
-                            Debug.LogError(e.Message);
-                            Debug.LogError(message.Payload);
-                        }
-
-                        processingOffset += _expectedPacketSize;
-                        _expectedPacketSize = -1;
-                    }
-                    else
-                    {
-                        // neither header nor complete package
-                        // -> currently incomplete packet in buffer, wait for rest
-                        break;
-                    }
-                }
-
-                if (processingOffset == bufferEnd)
-                {
-                    // cleared buffer entirely, no need to rearrange memory due to incomplete packet
-                    _receiveBufferOffset = 0;
-                }
-                else
-                {
-                    // incomplete packet in buffer, move to front
-                    _receiveBufferOffset = bufferEnd - processingOffset;
-                    Buffer.BlockCopy(_receiveBuffer, processingOffset, _receiveBuffer, 0, _receiveBufferOffset);
-                }
-
-
-                if (_receiveBuffer.Length - _receiveBufferOffset < 100)
-                {
-                    var error = "Receive buffer getting too small, aborting receive";
-                    Debug.LogError(error);
-                    throw new OverflowException(error);
-                }
-
-                _socket.BeginReceive(_receiveBuffer, _receiveBufferOffset, _receiveBuffer.Length - _receiveBufferOffset, SocketFlags.None, _receiveCallback, null);
-            }
-            catch (Exception)
-            {
-                // ignore.
+                Debug.Log("Colibri: no heartbeat from the server, dropping the connection");
+                // Flip the status first so this does not re-fire every frame while the session
+                // unwinds, then fault the receive loop into the reconnect backoff below.
+                Status = ConnectionStatus.Disconnected;
+                CloseSocket(_socket);
             }
         }
 
 
         /*
-         *  Message format:
-         *  \0\0\0 (Packet header as string) \0 (Actual packet json string)
+         *  Connection lifecycle
          */
 
-        private static bool HasPacketHeader(int offset)
+        // One long-lived task per component lifetime, instead of Update() re-entering
+        // Connect() every frame while disconnected.
+        private async Task RunConnectionLoop(CancellationToken token)
         {
-            if (offset + 2 >= _receiveBuffer.Length)
+            while (!token.IsCancellationRequested)
+            {
+                var address = _serverAddress;
+                var app = _appName;
+
+                if (string.IsNullOrEmpty(address) || string.IsNullOrEmpty(app))
+                {
+                    // Nothing configured (yet) - poll rather than give up, so setting the app
+                    // name at runtime still connects.
+                    if (!await Delay(RECONNECT_DELAY_MIN_MS, token))
+                        break;
+                    continue;
+                }
+
+                try
+                {
+                    await RunSession(address, _tcpPort, SanitizeHandshakeField(app), token);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch (FrameException e)
+                {
+                    // A desynchronized stream cannot be recovered from - there is no delimiter
+                    // to resynchronize on - so the connection is dropped and rebuilt.
+                    Debug.LogError($"Colibri: invalid frame from server, dropping connection: {e.Message}");
+                }
+                catch (SocketException e)
+                {
+                    Debug.Log($"Colibri: connection to {address} failed ({e.SocketErrorCode}), retrying...");
+                }
+                catch (ObjectDisposedException)
+                {
+                    // Socket closed underneath us by OnDisable or the heartbeat watchdog.
+                }
+                catch (Exception e)
+                {
+                    Debug.LogException(e);
+                }
+                finally
+                {
+                    CloseSocket(_socket);
+                    _socket = null;
+                    Status = ConnectionStatus.Disconnected;
+                }
+
+                if (token.IsCancellationRequested)
+                    break;
+
+                if (!await Delay(NextBackoffDelay(), token))
+                    break;
+            }
+        }
+
+        private async Task RunSession(string host, int port, string app, CancellationToken token)
+        {
+            Status = _connectAttempts == 0 ? ConnectionStatus.Connecting : ConnectionStatus.Reconnecting;
+            Debug.Log($"Colibri: connecting to {host}:{port}");
+
+            var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
+            _socket = socket;
+
+            // Closing the socket is what unblocks an in-flight ReceiveAsync/SendAsync; there is
+            // no cancellation token overload for either on this API surface.
+            using (token.Register(() => CloseSocket(socket)))
+            {
+                await socket.ConnectAsync(host, port);
+                token.ThrowIfCancellationRequested();
+
+                StampLiveness();
+                await SendFrame(socket, FrameCodec.EncodeHandshake(CLIENT_VERSION, app, _hostname), token);
+                Debug.Log("Colibri: connection to web server established");
+
+                // Drain anything queued during the outage before opening the gate, so retried
+                // messages stay ahead of new ones.
+                await FlushQueue(socket, token);
+                Status = ConnectionStatus.Connected;
+
+                await ReceiveLoop(socket, token);
+            }
+        }
+
+        private async Task ReceiveLoop(Socket socket, CancellationToken token)
+        {
+            var reader = new FrameReader();
+            var buffer = new byte[RECEIVE_BUFFER_SIZE];
+
+            while (!token.IsCancellationRequested)
+            {
+                var received = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), SocketFlags.None);
+                if (received <= 0)
+                {
+                    Debug.Log("Colibri: server closed the connection");
+                    return;
+                }
+
+                // The server heartbeats every 100 ms whether or not there is traffic, so any
+                // received byte is proof of life.
+                StampLiveness();
+
+                var frames = ReadFrames(reader, buffer, received);
+                for (var i = 0; i < frames.Count; i++)
+                {
+                    var frame = frames[i];
+                    switch (frame.Type)
+                    {
+                        case FrameType.Heartbeat:
+                            // Echoed back verbatim - the u64 is the server's own monotonic clock
+                            // reading and is never interpreted here. Since 2.0.0 this echo is the
+                            // sole source of the server's TCP latency measurements; the old
+                            // `colibri`/`latency` message echo is Socket.IO-only and nothing
+                            // sends it to a TCP client any more.
+                            await SendFrame(socket, FrameCodec.EncodeHeartbeat(frame.PingTimestamp), token);
+                            break;
+
+                        case FrameType.Message:
+                            _queuedCommands.Enqueue(new InPacket
+                            {
+                                Channel = frame.Channel,
+                                Command = frame.Command,
+                                Payload = ParsePayload(frame.Payload)
+                            });
+                            break;
+
+                        case FrameType.Handshake:
+                            // Server -> client handshakes are not part of the protocol.
+                            Debug.LogWarning("Colibri: ignoring unexpected handshake frame from server");
+                            break;
+                    }
+                }
+            }
+
+            token.ThrowIfCancellationRequested();
+        }
+
+        // Kept out of the async method above: a ReadOnlySpan<byte> local may not live inside
+        // an async state machine.
+        private static IReadOnlyList<DecodedFrame> ReadFrames(FrameReader reader, byte[] buffer, int count)
+            => reader.Append(new ReadOnlySpan<byte>(buffer, 0, count));
+
+        private int NextBackoffDelay()
+        {
+            var shift = Math.Min(_connectAttempts, 5);
+            _connectAttempts++;
+            return Math.Min(RECONNECT_DELAY_MAX_MS, RECONNECT_DELAY_MIN_MS << shift);
+        }
+
+        /// <returns><c>false</c> if the wait was cancelled - i.e. the caller should stop looping.</returns>
+        private static async Task<bool> Delay(int delayMs, CancellationToken token)
+        {
+            try
+            {
+                await Task.Delay(delayMs, token);
+                return true;
+            }
+            catch (OperationCanceledException)
             {
                 return false;
             }
+        }
 
-            if (_receiveBuffer[offset] == '\0' &&
-                _receiveBuffer[offset + 1] == '\0' &&
-                _receiveBuffer[offset + 2] == '\0')
+        private static void CloseSocket(Socket socket)
+        {
+            if (socket == null)
+                return;
+
+            try
             {
+                socket.Close();
+            }
+            catch (ObjectDisposedException)
+            {
+                // Already closed - closing is idempotent by design here, since both OnDisable
+                // and the heartbeat watchdog can race the session's own teardown.
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"Colibri: error while closing socket: {e.Message}");
+            }
+        }
+
+        private void StampLiveness() => Interlocked.Exchange(ref _lastHeartbeatTime, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+
+        private long MillisSinceLastHeartbeat() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - Interlocked.Read(ref _lastHeartbeatTime);
+
+
+        /*
+         *  Sending
+         */
+
+        // All socket writes funnel through here so that a frame is never interleaved with
+        // another frame's bytes, and so that a partial send is completed rather than silently
+        // truncating the frame.
+        private async Task SendFrame(Socket socket, byte[] frame, CancellationToken token)
+        {
+            await _sendLock.WaitAsync(token);
+            try
+            {
+                var offset = 0;
+                while (offset < frame.Length)
+                {
+                    var sent = await socket.SendAsync(new ArraySegment<byte>(frame, offset, frame.Length - offset), SocketFlags.None);
+                    if (sent <= 0)
+                        throw new SocketException((int)SocketError.ConnectionReset);
+
+                    offset += sent;
+                }
+            }
+            finally
+            {
+                _sendLock.Release();
+            }
+        }
+
+        private async Task<bool> TrySendFrame(byte[] frame)
+        {
+            var socket = _socket;
+            if (socket == null || Status != ConnectionStatus.Connected)
+                return false;
+
+            try
+            {
+                await SendFrame(socket, frame, _lifetime?.Token ?? CancellationToken.None);
                 return true;
             }
-
-            return false;
+            catch (Exception e)
+            {
+                Debug.LogWarning($"Colibri: failed to send frame: {e.Message}");
+                return false;
+            }
         }
 
-        private static PacketHeader GetPacketHeader(int offset)
+        private async Task FlushQueue(Socket socket, CancellationToken token)
         {
-            var start = offset + 3;
-            var end = start;
-
-            if (_receiveBuffer[start] == 'h')
+            while (true)
             {
-                return new PacketHeader
+                byte[] frame;
+                lock (_msgQueueLock)
                 {
-                    PacketSize = 5,
-                    IsHeartbeat = true
-                };
+                    if (_msgQueue.Count == 0)
+                        return;
+                    frame = _msgQueue[0];
+                }
+
+                await SendFrame(socket, frame, token);
+
+                lock (_msgQueueLock)
+                {
+                    // The frame may already be gone if the queue was trimmed meanwhile.
+                    if (_msgQueue.Count > 0 && ReferenceEquals(_msgQueue[0], frame))
+                        _msgQueue.RemoveAt(0);
+                }
             }
-
-            while (end < _receiveBuffer.Length && _receiveBuffer[end] != '\0')
-            {
-                // searching ...
-                end++;
-            }
-
-            if (end >= _receiveBuffer.Length)
-            {
-                throw new OverflowException("Receive buffer overflow");
-            }
-
-            // don't want to deal with integer formatting, so it's transmitted as text instead
-            byte[] packetSizeRaw = new byte[end - start + 1];
-            Buffer.BlockCopy(_receiveBuffer, start, packetSizeRaw, 0, packetSizeRaw.Length);
-            var packetSizeText = _encoding.GetString(packetSizeRaw);
-
-            return new PacketHeader
-            {
-                PacketSize = int.Parse(packetSizeText),
-                PacketStartOffset = end + 1,
-                IsHeartbeat = false
-            };
         }
 
-
-        private async Task<bool> SendHandshake(int version, string app, string hostname)
+        private void EnqueueForRetry(byte[] frame)
         {
-            if (_socket != null)
+            lock (_msgQueueLock)
             {
-                try
-                {
-                    SocketAsyncEventArgs socketAsyncData = new SocketAsyncEventArgs();
-                    var encoding = new UTF8Encoding();
-                    var buffer = encoding.GetBytes($"\0\0\0h\0{version}::{app}::{hostname}\0");
-
-                    socketAsyncData.SetBuffer(buffer, 0, buffer.Length);
-                    _socket.SendAsync(socketAsyncData);
-                    var signal = new SemaphoreSlim(0, 1);
-
-                    socketAsyncData.Completed += (sender, e) => signal.Release();
-
-                    await signal.WaitAsync();
-                    return true;
-                }
-                catch (Exception e)
-                {
-                    Debug.LogError(e);
-                }
+                _msgQueue.Add(frame);
+                if (_msgQueue.Count > MAX_QUEUED_MESSAGES)
+                    _msgQueue.RemoveRange(0, _msgQueue.Count - MAX_QUEUED_MESSAGES);
             }
-
-            return false;
-        }
-
-
-        private async Task<bool> SendDataAsync(byte[] data)
-        {
-            if (_socket != null)
-            {
-                try
-                {
-                    SocketAsyncEventArgs socketAsyncData = new SocketAsyncEventArgs();
-                    var encoding = new UTF8Encoding();
-                    // TODO: could reuse byte buffer to avoid unnecessary memory allocation
-                    var header = encoding.GetBytes($"\0\0\0{data.Length}\0");
-                    // TODO: could be more efficient!
-                    var buffer = new byte[header.Length + data.Length];
-                    header.CopyTo(buffer, 0);
-                    data.CopyTo(buffer, header.Length);
-
-                    socketAsyncData.SetBuffer(buffer, 0, buffer.Length);
-                    _socket.SendAsync(socketAsyncData);
-                    var signal = new SemaphoreSlim(0, 1);
-
-                    var success = false;
-                    // TODO: could be more efficient! (i.e., don't rebuild a lambda every time this is called)
-                    socketAsyncData.Completed += (sender, e) =>
-                    {
-                        success = e.SocketError == SocketError.Success;
-                        signal.Release();
-                    };
-
-                    await signal.WaitAsync();
-                    return success;
-                }
-                catch (Exception e)
-                {
-                    Debug.LogError(e);
-                }
-            }
-
-            return false;
         }
 
         public async Task<bool> SendCommandAsync(string channel, string command, JToken payload)
         {
-            await Connected;
-            var builder = new FlatBufferBuilder(512);
+            byte[] frame;
+            try
+            {
+                frame = FrameCodec.EncodeMessage(channel, command, EncodePayload(channel, payload));
+            }
+            catch (FrameException e)
+            {
+                // One unrepresentable message is dropped as one bad message, exactly as the
+                // server does on its own egress path.
+                Debug.LogError($"Colibri: dropping unencodable message ({channel} / {command}): {e.Message}");
+                return false;
+            }
 
             try
             {
-                // order is important because "calls cannot be nested"
-                var fbChannel = builder.CreateString(channel);
-                var fbCommand = builder.CreateString(command);
-                // TODO: replace this with dictionary to avoid JSON serialization
-                //       see: https://flatbuffers.dev/flatbuffers_guide_use_c-sharp.html#autotoc_md93
-                string payloadString;
-                // Serialize strings as raw value to prevent quotation marks
-                if (payload?.Type == JTokenType.String)
-                    payloadString = payload?.Value<string>();
-                else
-                    payloadString = payload?.ToString(Formatting.None);
-                var fbPayload = builder.CreateString(payloadString);
-                
-                Message.StartMessage(builder);
-                Message.AddChannel(builder, fbChannel);
-                Message.AddCommand(builder, fbCommand);
-                Message.AddPayload(builder, fbPayload);
-                var msg = Message.EndMessage(builder);
-                builder.Finish(msg.Value);
+                await Connected;
             }
-            catch (Exception e)
+            catch (OperationCanceledException)
             {
-                Debug.LogError(e);
+                return false;
             }
 
-            var rawMsg = builder.SizedByteArray();
-            var result = await SendDataAsync(rawMsg);
-
-            // message sent successfully
-            if (result)
+            if (await TrySendFrame(frame))
                 return true;
 
-            // something went wrong - queue message for later
-            _msgQueue.Add(rawMsg);
+            EnqueueForRetry(frame);
             return false;
         }
 
@@ -522,5 +516,47 @@ namespace HCIKonstanz.Colibri.Networking
         {
             _ = SendCommandAsync(channel, command, payload);
         }
+
+
+        /*
+         *  Payload encoding
+         */
+
+        private static byte[] EncodePayload(string channel, JToken payload)
+        {
+            if (payload == null || payload.Type == JTokenType.Null)
+                return Array.Empty<byte>();
+
+            // Everything except the log channel goes out as JSON. Writing a string payload
+            // unquoted (as v1 did) is not valid JSON, so the server's Payload.asValue() threw
+            // and fell back to asString() - meaning a Unity string and a web client's string
+            // did not round-trip identically.
+            if (channel == LOG_CHANNEL)
+                return Utf8.GetBytes(payload.Type == JTokenType.String ? payload.Value<string>() : payload.ToString(Formatting.None));
+
+            return Utf8.GetBytes(payload.ToString(Formatting.None));
+        }
+
+        private static JToken ParsePayload(byte[] payload)
+        {
+            if (payload == null || payload.Length == 0)
+                return JValue.CreateNull();
+
+            var text = Utf8.GetString(payload);
+            try
+            {
+                return JToken.Parse(text);
+            }
+            catch (JsonException)
+            {
+                // A non-JSON body (e.g. a raw log line) is still delivered, as a raw string.
+                return new JValue(text);
+            }
+        }
+
+        // '::' is the handshake field separator; a device or app name containing one would
+        // produce a frame the server rejects outright.
+        private static string SanitizeHandshakeField(string value)
+            => string.IsNullOrEmpty(value) ? value : value.Replace(FrameCodec.FieldSeparator, "_");
     }
 }
