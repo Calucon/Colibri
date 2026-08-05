@@ -46,6 +46,11 @@ namespace HCIKonstanz.Colibri.Synchronization
             if (tickable.TickIndex >= 0)
                 return;
 
+            // Nothing ticks outside Play mode, and registering there would leave an entry that
+            // ResetState clears while the object still believes it is registered.
+            if (!Application.isPlaying)
+                return;
+
             EnsureInstance();
             tickable.TickIndex = _tickables.Count;
             _tickables.Add(tickable);
@@ -69,11 +74,8 @@ namespace HCIKonstanz.Colibri.Synchronization
             if (_instance)
                 return;
 
-            // Deliberately not a SingletonBehaviour: this must never spawn a GameObject from
-            // edit mode, where synced objects register their attributes in Awake as well.
-            if (!Application.isPlaying)
-                return;
-
+            // Deliberately not a SingletonBehaviour: that one creates its GameObject on any
+            // property access, including from an editor window.
             var go = new GameObject("[Colibri SyncTicker]") { hideFlags = HideFlags.DontSave };
             _instance = go.AddComponent<SyncTicker>();
             DontDestroyOnLoad(go);
