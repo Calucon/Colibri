@@ -6,7 +6,7 @@ binary v3 protocol and its changelog listed the Unity client rewrite as
 [deferred work](../colibri-server/docs/v2-changelog.md#deferred-work); this release is that work.
 
 The ease-of-use and sync-loop pass that closes the release is written up in more depth — mechanism,
-rationale, migration steps and the outstanding Editor checks — in
+rationale, migration steps, and what the Editor verification did and did not cover — in
 [`docs/v2-ease-of-use-and-performance.md`](docs/v2-ease-of-use-and-performance.md).
 
 ---
@@ -30,6 +30,13 @@ rationale, migration steps and the outstanding Editor checks — in
 - **Vendored `Newtonsoft.Json.dll` is gone**, replaced by the `com.unity.nuget.newtonsoft-json`
   package, which is declared as a real dependency — so installing Colibri is one git URL and
   nothing else.
+- **The samples are no longer compiled into your project.** `Samples/` was a live package folder, so
+  every consumer built `HCIKonstanz.Colibri.Samples.*` into the Colibri assembly whether it wanted
+  them or not. They now live in `Samples~`, which Unity does not compile, so those types exist only
+  after the sample is imported from the Package Manager — and then they are yours, in
+  `Assets/Samples/`, in `Assembly-CSharp`. Code that referenced a sample type without importing the
+  sample no longer compiles. The `Prefabs` folder is unaffected and stays live: `[RemoteLogger]` and
+  `[SyncTransformManager]` are still draggable straight out of `Packages/Colibri/Prefabs`.
 
 ## v3 wire protocol
 
@@ -200,6 +207,97 @@ an hour they do not spend on their prototype, so:
   out as plain C# precisely so the interesting part could be.
 - No GameCI workflow: the EditMode suite is run from Unity's Test Runner, and the end-to-end round
   trip against a live server is documented rather than automated.
+
+## End-to-end verification, and what it fixed
+
+The Editor acceptance criteria for the release were run on 2026-08-05: Unity 6000.5.7f1, a
+URP-template project with Colibri as a `file:` UPM package, against `colibri-server` 2.0.0 built and
+run locally. The EditMode suite came back **52 passed, 0 failed**, and the server's own suite was
+green at 102. No standalone player was built, so the other end of every exchange was a Socket.IO peer
+written against colibri-web or a raw v3 TCP client, with a pass-through proxy in front of the TCP
+port decoding every frame in both directions. The type-mismatch warning fires once for 60 offending
+messages rather than once each, and the `SyncBehaviour` sample propagates private `[Sync,
+SerializeField]` fields, public fields and properties alike, instantiates its template for a
+remote-created model, and recovers that model from server state as a late joiner — one instance, not
+a duplicate. The leak check is the one that found a defect rather than confirming a claim; it is the
+last fix below. Item-by-item results, including the one criterion still uncovered — the profiler
+measurement — are in [`docs/v2-ease-of-use-and-performance.md`](docs/v2-ease-of-use-and-performance.md)
+§8.
+
+The fixes it produced:
+
+- **The `SendData` sample never round-tripped its JSON.** `SendMessages` sent its `JObject` on the
+  literal channel `"myJson"` while listening on `Channel`, so the one payload type that most needs
+  demonstrating was the one that appeared not to work. It sends on `Channel` now.
+- **Samples moved to `Samples~`, and `Prefabs` left `samples[]`.** As live package folders they were
+  compiled into every consumer *and* offered for import, so Package Manager → Import produced a
+  second copy of everything: importing `SendData` the way the README says logged a GUID conflict
+  against `Packages/de.uni.kn.colibri/Samples/SendMessages/SendMessages.cs`, left two definitions of
+  `HCIKonstanz.Colibri.Samples.SendMessages` — one in `Assembly-CSharp`, one in `HCIKonstanz.Colibri`
+  — and two copies of every scene. Not a hard compile error, but any user code naming the type was
+  ambiguous. After the move: zero sample types in the package assembly, and a re-import yields
+  exactly one `SendMessages.unity` with no GUID warnings. See the breaking-change note above. The
+  tradeoff, as expected, is that the `colibri-unity` dev project can no longer open the sample scenes
+  in place; they are opened from a consuming project now.
+- **Stale `SyncTransform` sample assets.** `SyncTransformSample.unity` carried a dead
+  `propertyPath: Channel` override (`synctransform_CUBE`) that no longer corresponds to anything, and
+  `CubeModelTemplate`/`SphereModelTemplate` predate the `SyncActive` and `UseLocalTransform` fields.
+  Both are updated, so the scene demonstrates the component as it currently exists.
+- **Colour did not round-trip, and took the frame down with it.** Unity writes a colour as the HTML
+  string `#RRGGBBAA` — which is what colibri-web's `receiveColor` is typed for — but colibri-web's
+  `sendColor` puts an `[r,g,b,a]` array on the wire. A colour from a web client arrived as
+  `InvalidCastException: Cannot cast JObject to JToken` out of `JsonExtensions.ToColor`, and because
+  that escaped `WebServerConnection.Update` unhandled it also dropped every message queued behind it
+  that frame. `ToColor` accepts either form now, and all of the vector, quaternion and colour
+  conversions report a wrong-shaped payload as a warning naming the type and the expected shape
+  instead of throwing. A web client's `[1, 0.5, 0.25, 1]` now arrives as
+  `RGBA(1.000, 0.500, 0.250, 1.000)`. colibri-web's own `sendColor`/`receiveColor` asymmetry is left
+  as it is on purpose: changing the wire format would move behaviour under existing web-only users,
+  and Unity copes with both forms.
+- **Integers sent from Unity were dropped by web clients.** `Sync.Send(channel, 5)` goes out tagged
+  `broadcast::int`, but colibri-web's `receiveNumber` only listened for `broadcast::float`.
+  JavaScript has a single number type, so there was nothing to distinguish and every integer a Unity
+  client sent vanished without a trace. Fixed in colibri-web: `receiveNumber` and
+  `receiveNumberArray` listen for both commands, with its 108 tests still passing.
+- **The status window's heartbeat readout counted down.** `MillisSinceLastHeartbeat()` is a 0-100 ms
+  sawtooth and the window repaints at 10 Hz, so the raw sample beat against the server's heartbeat
+  and read like a timer running out. It now peak-holds the worst gap over a one-second window, which
+  is steady and is the number that actually indicates trouble.
+- **`Store` waited forever.** `UnityWebRequest.timeout` defaults to no timeout, so on an unconfigured
+  project — where `ServerAddress` still points at the public `colibri.hci.uni-konstanz.de` —
+  `Store.Get` neither threw nor logged, and was still outstanding after a minute. The detailed
+  failure log added in this release only runs when the request finishes, so `Get`/`Put`/`Delete` now
+  set a ten-second timeout: long enough for a slow link, short enough that the failure is reported
+  while the student is still looking at the console.
+- **`SyncTicker` leaked one GameObject per Play session, and they all ticked.** With *Enter Play Mode
+  Options → Disable Domain Reload* on, three enter/exit cycles left one extra `[Colibri SyncTicker]`
+  behind each time; measured outside Play mode the Editor had collected seven, all still enabled:
+
+  ```
+  live SyncTicker components (outside Play mode): 7
+    go='[Colibri SyncTicker]' hideFlags=DontSave activeSelf=True enabled=True scene='' valid=False
+    ... x7
+  ```
+
+  `HideFlags.DontSave` exempts an object from Play-mode teardown as well as from being saved, and
+  `DontDestroyOnLoad` was already covering the saving half by itself. The stale object is not the
+  real cost: every ticker drives the same static `_tickables` list, so the n-th Play session ran
+  `PollChanges` and `FlushUpdate` n times per frame — duplicate `model::update` messages on the wire
+  and a sync cost that grew each time someone pressed Play, which is the direct contradiction of the
+  one-`Update`-for-the-whole-application claim above. The flag is gone and `ResetState` destroys
+  strays first, so an Editor that already accumulated them recovers on the next Play. Afterwards:
+  zero tickers alive outside Play mode, three cycles holding steady, and the 52 EditMode tests still
+  green.
+
+  ```
+  LEAK syncedBehaviours=4 connections=1 tickerObjects=1 tickables=4
+  LEAK syncedBehaviours=3 connections=0 tickerObjects=1 tickables=3
+  LEAK syncedBehaviours=3 connections=0 tickerObjects=1 tickables=3
+  ```
+
+  (The first cycle counts four because the late-joined remote model had already arrived when the
+  probe ran.) `ColibriTest` was left with *Disable Domain Reload* enabled, since that is the
+  configuration this check requires.
 
 ## Known residuals
 

@@ -590,7 +590,7 @@ wire protocol, and `WebServerConnection.Connected`.
 
 ## 8. Verification status
 
-### Done
+### Done without the Editor
 
 - **Both assemblies compile clean.** The 43 runtime sources and the 4 EditMode test sources were
   compiled with Roslyn against Unity 6000.2's managed assemblies at `langversion:9.0`
@@ -601,33 +601,175 @@ wire protocol, and `WebServerConnection.Connected`.
   match, the mismatch message content, once-per-pair suppression, re-arming, plural wording,
   listener ref-counting, channel cleanup, and the friendly type names.
 
-### Pending — needs the Unity Editor
+### The Editor pass, 2026-08-05
 
-These cannot be run headlessly and are the acceptance criteria for this work:
+The ten items below were the acceptance criteria for this work, and they have now been run. The
+environment was Unity **6000.5.7f1** with a URP-template project (`ColibriTest`) that has Colibri
+added as a `file:` UPM package, against `colibri-server` 2.0.0 built and run locally on Node 26.5.1
+(ports 9011 web/REST/Socket.IO, 9012 TCP v3). Two of the criteria ask for a *second Unity instance*;
+neither was met that way, because no standalone player was built. They were met instead with three
+non-Unity endpoints: a non-interactive Socket.IO peer written against colibri-web, a raw v3 TCP
+client, and a pass-through proxy in front of the TCP port that decodes every frame in both
+directions. The proxy is why several claims below can be quoted at the byte level rather than
+inferred from behaviour.
 
-1. **The point of the whole dependency removal:** a *fresh* Unity 2022.3 project with only the
-   Colibri git URL added, and nothing else, compiles clean.
-2. `colibri-unity` itself opens with zero compile errors now that R3/UniTask are out of the manifest.
-3. Test Runner → EditMode → `HCIKonstanz.Colibri.Tests`: the 41 existing codec tests stay green,
-   plus the 11 new `ChannelListenerRegistryTests`.
-4. **Performance, measured rather than derived.** 100 `SyncTransform`s, Deep Profile off, Play mode:
-   - *GC Alloc per frame in the sync path must be 0 while objects are idle.* This is the headline
-     number; it was ~4 boxes × 100 objects before.
-   - `SyncBehaviour` total ms/frame before vs after — expect a decrease.
-   - One `SyncTicker.Update` entry in the profiler rather than N frame-provider items.
-5. `SendMessages` sample between two Editor instances against a running colibri-server — every type
-   arrives.
-6. **Type mismatch:** point one sample handler at the wrong type; the console must name the channel,
-   both types, and the fix.
-7. **Missing config:** delete `Assets/Resources/ColibriConfig.asset` and press Play. The message
-   must appear *once*, not per frame, and `Store.Get` must log rather than throw.
-8. **Status window:** open it during play and confirm the fields update live — and that opening it
-   *outside* Play mode does not create a `[WebServerConnection]` or `[Colibri SyncTicker]` GameObject.
-9. **Leak check:** enter/exit Play mode three times with domain reload disabled and a
-   `SyncBehaviourManager` in the scene. Object counts must not double (static events) and
-   `SyncTicker`'s list must not grow.
-10. `SyncTransform` between two instances still syncs smoothly, and `[RemoteLogger]` still reaches
-    the server web UI (this is what covers the throttle rewrite).
+Nine of the problems the run turned up were fixed; they are listed in
+[`CHANGELOG.md`](../CHANGELOG.md), and the full record of the pass is in
+`colibri-unity-v2-verification-findings.md` at the repository root. Two more were diagnoses rather
+than defects, and both are worth knowing before teaching with this:
+
+- Unity 6's *Insecure HTTP Option* defaults to *Not allowed*, and the `Store` round trip over
+  `http://localhost:9011` worked anyway, because Unity exempts loopback. It only bites when the
+  server is remote and not on HTTPS.
+- Unity's `Run In Background` also defaults to off, and with it off the Editor suspends the player
+  loop as soon as its window loses focus. The socket stays up and heartbeats keep being echoed,
+  because that happens off the main thread, so the client looks perfectly healthy — but `Update`
+  never runs, so nothing is sent and nothing the receive thread queued is ever delivered. It lands
+  squarely on the two-client recipe: the unfocused instance goes silent while looking connected.
+
+1. **Done, with a narrower claim than the item asks for.** `ColibriTest` resolved
+   `de.uni.kn.colibri` 2.0.0 with **zero compile errors** and with no R3 and no UniTask anywhere in
+   the manifest, which is the point of §1. `com.unity.nuget.newtonsoft-json` resolved automatically
+   from the package's own `dependencies`, and the lock file's 3.2.2 satisfied the requested 3.2.1
+   with no conflict. What was *not* tested is the wording of the item: the project is Unity
+   6000.5.7f1 rather than 2022.3, and Colibri was added as a local `file:` reference rather than
+   through the git URL the README hands out, so the URL itself is still unexercised.
+2. **Not covered, and it wants rephrasing rather than running.** The whole pass happened inside
+   `ColibriTest`; the `colibri-unity` project was never opened. After the samples moved to `Samples~`
+   (see the change log) that project can no longer open the sample scenes in place anyway, which is
+   most of what opening it was for — `ColibriTest` is where they are opened now. What the item was
+   really asking, namely that the package compiles with R3 and UniTask out of the manifest, is
+   covered by item 1.
+3. **Done. 52 passed, 0 failed.** `FrameCodecTests`, `FrameReaderTests`, `ProtocolVectorTests` and
+   `ChannelListenerRegistryTests`, run through `TestRunnerApi` against the package's
+   `HCIKonstanz.Colibri.Tests` assembly. `colibri-server`'s own suite was green at the same time —
+   102 passed — which matters for `ProtocolVectorTests`, since those vectors are only meaningful
+   against a server encoder that is itself behaving.
+4. **Not covered.** The profiler was never opened. The claim that the idle sync path allocates 0 B of
+   GC and shows one `SyncTicker.Update` entry rather than N frame-provider items remains **derived,
+   not measured**. Idle `SyncTransform`s were observed to send no traffic at all, which is consistent
+   with it, but sending nothing is not the same evidence as allocating nothing. This item is now more
+   worth running, not less: item 9 found a leak that had the Editor accumulating one live
+   `SyncTicker` per Play session, each of them driving the same static list, so "exactly one
+   `SyncTicker.Update` entry" was simply false in any second or later session with domain reload
+   disabled. The leak is fixed, and the profiler is what would have caught it here — and is still
+   the only thing that can confirm the allocation half.
+5. **Done, against a web peer rather than a second Editor.** Every supported type crossed Unity →
+   web and web → Unity: bool, int, float, string, Vector3, Quaternion, Color, the
+   bool/int/float/string/Vector3 arrays, and `JToken`. All 17 payload shapes, both directions. The
+   string fix from the protocol pass is directly visible in the frame bytes: a `broadcast::string`
+   payload goes out as `"hello from unity round 1"`, 26 bytes for 24 characters, i.e. quoted. The
+   run also found the `SendData` sample itself broken — it sent its `JObject` on `"myJson"` while
+   listening on `Channel` — and that is fixed.
+6. **Done.** A second client sent **60** `broadcast::float` messages on `verification`, a channel
+   where Unity had registered only a `string` listener. The console got **exactly one** warning:
+
+   ```
+   Colibri: a float arrived on channel 'verification', but the listener registered there
+   expects string. The message was dropped, because Colibri matches messages on the channel
+   *and* the type. Either send it as string, or listen for it with
+   Sync.Receive<float>("verification", MyHandler).
+   ```
+
+   Channel, both types, and both routes out of the mistake — and the once-per-`(channel,
+   receivedType)` suppression from §4 holding against 60 messages rather than against the unit
+   tests' synthetic ones.
+7. **Done for the message; the `Store` half found a bug instead.** With no `ColibriConfig.asset` in
+   the project at all, a ~60 s Play session logged `NOT_CONFIGURED_MESSAGE` **exactly once**, not
+   once per frame — the fallback in §4 behaves. `Store.Get`, however, neither threw *nor* logged:
+   the default `ServerAddress` points at the public `colibri.hci.uni-konstanz.de`, and the request
+   was still outstanding after ~60 s, because `UnityWebRequest.timeout` defaults to no timeout at
+   all. §3's promise that a `Store` failure surfaces as a detailed log only holds if the request
+   ever finishes, so the requests now carry a ten-second timeout.
+8. **Done for both halves, and the live half produced a fix.** Opening *Window → Colibri Status* in
+   edit mode rendered the "press Play" hint and created **no** `[WebServerConnection]` and **no**
+   `[Colibri SyncTicker]` GameObject — the scene still contained only what was already in it, which
+   is what the `FindFirstObjectByType` constraint in §5 is for. During Play the readout tracked the
+   connection over many minutes and stayed in the 7-99 ms band, and the 2 s watchdog never fired.
+   Watching it is also what exposed the readout itself: sampling `MillisSinceLastHeartbeat()` raw at
+   the window's 10 Hz repaint beats against the server's 100 ms heartbeat and reads like a number
+   counting down. The window now peak-holds the worst gap over one second, which is both steady and
+   the figure that actually matters.
+9. **Done, and it failed before it passed.** This is the one item that found a defect rather than
+   confirming a claim. With `EnterPlayModeOptions.DisableDomainReload` on, three enter/exit cycles of
+   the `SyncBehaviour` sample left one extra `[Colibri SyncTicker]` GameObject behind *each time*.
+   Measured outside Play mode, the Editor had accumulated seven, all still enabled:
+
+   ```
+   live SyncTicker components (outside Play mode): 7
+     go='[Colibri SyncTicker]' hideFlags=DontSave activeSelf=True enabled=True scene='' valid=False
+     ... x7
+   ```
+
+   They belong to no scene (`scene=''`), which is why item 8's edit-mode check could truthfully
+   report an untouched scene while these were sitting in the Editor.
+
+   The cause is one flag. `HideFlags.DontSave` does not only keep an object out of the saved scene,
+   it also exempts it from being destroyed when Play mode ends — and `DontDestroyOnLoad` was already
+   covering the "not saved" half on its own, so the flag was buying nothing and costing this. The
+   consequence is worse than a stale object in the hierarchy: every ticker drives the same *static*
+   `_tickables` list, so the n-th Play session ran `PollChanges` and `FlushUpdate` **n times per
+   frame** — duplicate `model::update` messages on the wire, and a sync cost that grew every time
+   someone pressed Play. The flag is removed, and `ResetState` now destroys strays first, so an
+   Editor that already collected a pile of them recovers on the next Play. After the fix: zero
+   tickers alive outside Play mode, and three cycles that hold steady —
+
+   ```
+   LEAK syncedBehaviours=4 connections=1 tickerObjects=1 tickables=4
+   LEAK syncedBehaviours=3 connections=0 tickerObjects=1 tickables=3
+   LEAK syncedBehaviours=3 connections=0 tickerObjects=1 tickables=3
+   ```
+
+   — the first cycle counting four only because the late-joined remote model had already arrived by
+   the time the probe ran. The 52 EditMode tests still pass afterwards. Note that `ColibriTest` was
+   left with *Enter Play Mode Options → Disable Domain Reload* enabled, since that is the
+   configuration this check requires.
+10. **Done, against injected traffic rather than a second instance.** On connect, each
+    `SyncTransform` broadcast its full state on `synctransform` (`active`, `position`, `rotation`,
+    `scale`, `physicsid`). Selective sync holds: with position *and* rotation *and* scale changed on
+    both objects, `CubePosOnly` sent `{"id":...,"position":[5,1,2]}` and `CubeRotOnly` sent
+    `{"id":...,"rotation":[...]}` — each only its own axis. Injecting a `model::update` for an
+    unknown id on `synctransform_cube` made `[SyncTransformManager] (Cube)` instantiate
+    `CubeModelTemplate(Clone)` at exactly the injected `[3,4,5]`. Idle objects sent nothing at all,
+    which is what the sync-loop rewrite intends. `[RemoteLogger]`, dragged in from
+    `Packages/de.uni.kn.colibri/Prefabs/[RemoteLogger].prefab`, put one line per second on the wire
+    for 25+ seconds with no storm and no stuck in-flight gate, so the `Subject` + `ThrottleLast` →
+    `volatile bool` + 1 s timer rewrite in §3 behaves. Its payload is **unquoted** —
+    `payload(23B)="verification log line 1"`, 23 bytes for 23 characters, against the quoted
+    `broadcast::string` in item 5 — which is exactly the `log`-channel exception the protocol pass
+    documented. What this does not cover is how two Unity clients *look* while syncing; smoothness
+    was never observed, only correctness of what goes on the wire.
+
+### Beyond the ten: the `SyncBehaviour` sample
+
+The ten items are silent about `SyncBehaviour` itself — they cover `SyncTransform`, which is one
+particular subclass — so the sample was run as well, and it is the thing that exercises §2's typed
+change tracking on members a student actually declares. On connect, each of the three scene models
+broadcast its full `[Sync]` state on `samplesyncedbehaviour` (the channel is
+`typeof(T).Name.ToLower()`), e.g.
+`{"id":"nonrandom_id","position":[...],"scale":[...],"rotation":[...],"color":"#00000000","randomvalue":0,"editorteststring":"1234"}`.
+All three member kinds propagate: `randomvalue` is a `[Sync, SerializeField]` *private field*,
+`editorteststring` a public field, and `position` / `scale` / `rotation` / `color` are properties —
+so the `Expression.Compile()` accessors reach non-public state as intended. Injecting a
+`model::update` for `remote-model-1` produced a `SampleSyncedBehaviourTemplate(Clone)` whose
+component read back `RandomValue: 99`, `EditorTestString: "from the injector"`, `Scale: (2,2,2)`,
+`Color: RGBA(1,0,0,1)` (parsed from `#FF0000FF`) and `Id: remote-model-1` — every synced member
+applied, colour included. Finally, after a full exit and re-enter of Play with no other client
+running, Unity re-created that model from the server's stored state via `model::request`, at the
+injected position `[7,1,3]` and scale `[2,2,2]`, as exactly **one** instance rather than a
+duplicate — which is the late-joiner path, and the one where a double-registration bug would show
+up as a second copy.
+
+### Still not covered
+
+Item 4 (profiler measurement) is the only outstanding one of the original ten, and item 2 stands as
+written rather than as a run still to do. Beyond them, this pass did not touch:
+
+- **Voice chat.** It needs two real clients and a microphone, so neither the port-0 bind nor the
+  `CancellationToken` shutdown that replaced `Thread.Abort` has been exercised.
+- **A standalone player, and therefore Unity ↔ Unity.** Nothing was built; every message path was
+  verified against a raw v3 TCP client and a colibri-web peer instead.
+- **The `colibri-unity` dev project itself.** Only `ColibriTest` was opened — see item 2.
 
 ---
 

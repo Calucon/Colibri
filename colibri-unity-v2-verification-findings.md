@@ -149,6 +149,7 @@ With no `ColibriConfig.asset` at all, a ~60 s Play session logged
 | I | `Run In Background` off silently stops a Colibri client | **Documented** |
 | J | Status window's heartbeat readout aliases into a countdown | **Fixed** |
 | K | `Store` hangs indefinitely against an unreachable server | **Fixed** |
+| L | `SyncTicker` leaked one GameObject per Play session, and they all ticked | **Fixed** |
 
 ### B/C — the import really was broken
 
@@ -228,6 +229,45 @@ outstanding after ~60 s, because `UnityWebRequest.timeout` defaults to "no timeo
 ease-of-use doc's promise that a Store failure surfaces as a detailed log only holds if the
 request finishes.
 
+### L — the leak check found an actual leak (§8.9, plan item 25)
+
+With `EnterPlayModeOptions.DisableDomainReload` on, three enter/exit cycles of
+`SyncBehaviourSample` left one extra `[Colibri SyncTicker]` GameObject behind each time.
+Measured outside Play mode, the Editor had accumulated **seven**, all still enabled:
+
+```
+live SyncTicker components (outside Play mode): 7
+  go='[Colibri SyncTicker]' hideFlags=DontSave activeSelf=True enabled=True scene='' valid=False
+  ... x7
+```
+
+`HideFlags.DontSave` does not only keep an object out of the saved scene; it also exempts it
+from being destroyed when Play mode ends. `DontDestroyOnLoad` already covered the "not saved"
+half on its own.
+
+The consequence is worse than a stale object. Every ticker drives the same *static*
+`_tickables` list, so the n-th Play session ran `PollChanges` and `FlushUpdate` **n times per
+frame** — duplicate `model::update` messages on the wire, and a sync cost that grew each time
+someone pressed play. It is also the direct contradiction of §8.4's "exactly one
+`SyncTicker.Update` entry" claim.
+
+The flag is removed, and `ResetState` now destroys strays first so an Editor that already
+collected them recovers on the next play. After the fix: **0** tickers alive outside Play
+mode, and three enter/exit cycles hold at exactly one ticker, three tickables and three synced
+behaviours:
+
+```
+LEAK syncedBehaviours=4 connections=1 tickerObjects=1 tickables=4
+LEAK syncedBehaviours=3 connections=0 tickerObjects=1 tickables=3
+LEAK syncedBehaviours=3 connections=0 tickerObjects=1 tickables=3
+```
+
+(The first cycle counts four because the late-joined remote model had already arrived by the
+time the probe ran.) The 52 EditMode tests still pass afterwards.
+
+**Note:** `ColibriTest` was left with *Enter Play Mode Options → Disable Domain Reload*
+enabled, since that is the configuration this check requires.
+
 ---
 
 ## Not covered by this pass
@@ -238,8 +278,6 @@ State these plainly rather than implying they passed:
   bind and the `CancellationToken` shutdown were not exercised.
 - **Standalone player / Unity ↔ Unity (plan items 19-20).** Not built. Every message path
   was instead verified against a raw v3 TCP client and a colibri-web peer.
-- **Leak check (§8.9, plan item 25).** Enter/exit Play three times with domain reload
-  disabled was not run.
 - **Profiler measurement (§8.4, plan item 26).** The "0 B GC alloc in the idle sync path,
   one `SyncTicker.Update` entry" claim is **unmeasured**. Idle objects were observed to send
   no traffic at all, which is consistent with it, but that is not the measurement.
