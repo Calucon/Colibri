@@ -9,6 +9,16 @@ namespace HCIKonstanz.Colibri.Store
     public static class Store
     {
         /// <summary>
+        /// UnityWebRequest defaults to no timeout at all, so a wrong or unreachable server
+        /// address left Get/Put/Delete outstanding forever - no result, no error, nothing in
+        /// the console. An unconfigured project reaches the public default server, where this
+        /// was observed to still be waiting after a minute. Ten seconds is long enough for a
+        /// slow link and short enough that the failure is reported while the student is still
+        /// looking at it.
+        /// </summary>
+        private const int TimeoutSeconds = 10;
+
+        /// <summary>
         /// Awaits a UnityWebRequest without pulling in a third-party awaiter.
         /// </summary>
         /// <remarks>
@@ -35,6 +45,7 @@ namespace HCIKonstanz.Colibri.Store
             using (UnityWebRequest request = UnityWebRequest.Get(url))
             {
                 request.method = UnityWebRequest.kHttpVerbGET;
+                request.timeout = TimeoutSeconds;
                 request.SetRequestHeader("Accept", "application/json");
                 await SendAsync(request);
 
@@ -58,6 +69,7 @@ namespace HCIKonstanz.Colibri.Store
             using (UnityWebRequest request = UnityWebRequest.Put(url, jsonData))
             {
                 request.method = UnityWebRequest.kHttpVerbPUT;
+                request.timeout = TimeoutSeconds;
                 request.SetRequestHeader("Content-Type", "application/json");
                 request.SetRequestHeader("Accept", "application/json");
                 await SendAsync(request);
@@ -76,6 +88,7 @@ namespace HCIKonstanz.Colibri.Store
             using (UnityWebRequest request = UnityWebRequest.Delete(url))
             {
                 request.method = UnityWebRequest.kHttpVerbDELETE;
+                request.timeout = TimeoutSeconds;
                 request.SetRequestHeader("Content-Type", "application/json");
                 await SendAsync(request);
 

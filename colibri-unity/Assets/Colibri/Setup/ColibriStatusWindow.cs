@@ -19,8 +19,22 @@ namespace HCIKonstanz.Colibri.Setup
     {
         private const double RepaintIntervalSeconds = 0.1;
 
+        /// <summary>
+        /// How long a gap has to be before it is worth showing a number for. The server
+        /// heartbeats every 100 ms, so anything under this is just the normal sawtooth.
+        /// </summary>
+        private const long HeartbeatConcernMillis = 500;
+
         private Vector2 _scroll;
         private double _nextRepaint;
+
+        // Peak-hold over one second. Showing MillisSinceLastHeartbeat() raw meant sampling a
+        // 0-100 ms sawtooth at the same 10 Hz this window repaints at, which beats against it
+        // and reads like a number counting down - alarming, and impossible to read anything
+        // out of. The worst gap in the last second is both steady and the figure that
+        // actually matters.
+        private long _worstRecentGap;
+        private double _gapWindowEnds;
 
         [MenuItem("Window/Colibri Status")]
         private static void ShowStatusWindow()
@@ -106,12 +120,34 @@ namespace HCIKonstanz.Colibri.Setup
             {
                 // Not a latency: the heartbeat carries the server's clock, so no round trip can be
                 // derived from it. It does say whether the server is still talking to us.
-                EditorGUILayout.LabelField("Last heartbeat", $"{connection.MillisSinceLastHeartbeat()} ms ago");
+                var gap = TrackHeartbeatGap(connection.MillisSinceLastHeartbeat());
+                EditorGUILayout.LabelField("Heartbeat",
+                    gap < HeartbeatConcernMillis
+                        ? "OK"
+                        : $"missing for {gap / 1000f:0.0} s - dropping the connection soon");
             }
             else
             {
                 EditorGUILayout.HelpBox("Not connected. Check that colibri-server is running and that the server address above is reachable.", MessageType.Warning);
             }
+        }
+
+        /// <returns>The worst gap seen in the last second, so the reading holds still long
+        /// enough to be read.</returns>
+        private long TrackHeartbeatGap(long currentGap)
+        {
+            if (currentGap > _worstRecentGap)
+                _worstRecentGap = currentGap;
+
+            if (EditorApplication.timeSinceStartup >= _gapWindowEnds)
+            {
+                _gapWindowEnds = EditorApplication.timeSinceStartup + 1.0;
+                var held = _worstRecentGap;
+                _worstRecentGap = currentGap;
+                return held;
+            }
+
+            return _worstRecentGap;
         }
 
         private void DrawChannels()

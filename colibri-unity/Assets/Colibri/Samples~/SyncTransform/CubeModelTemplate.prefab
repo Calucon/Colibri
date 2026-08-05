@@ -120,8 +120,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   Id: 
   ModelId: cube
+  SyncActive: 1
   SyncPosition: 1
   SyncRotation: 1
   SyncScale: 1
+  UseLocalTransform: 0
   PhysicsAuthority: 0
   isKinematic: 0
