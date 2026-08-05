@@ -20,6 +20,7 @@
     "server:watch:ts": "tsc --p src/server -w",
     "server:watch:node": "nodemon --watch dist/server/* --exec \"npm run server:start\"",
     "test:tcpclient": "tsx test/tcp-client-test.ts",
+    "test:vectors": "tsx test/emit-protocol-vectors.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "gui:test": "ng test --watch=false",

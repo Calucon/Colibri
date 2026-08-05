@@ -6,10 +6,16 @@ on:
     paths:
       - "colibri-server/**"
       - ".github/workflows/lint-server.yml"
+      # The protocol vectors are checked from here, so editing them on the Unity side has to
+      # run this workflow too - that is the whole point of the check.
+      - "colibri-unity/Assets/Colibri/Tests/Editor/ProtocolVectorTests.cs"
   pull_request:
     paths:
       - "colibri-server/**"
       - ".github/workflows/lint-server.yml"
+      # The protocol vectors are checked from here, so editing them on the Unity side has to
+      # run this workflow too - that is the whole point of the check.
+      - "colibri-unity/Assets/Colibri/Tests/Editor/ProtocolVectorTests.cs"
 
 jobs:
   lint:
@@ -31,3 +37,8 @@ jobs:
       - run: npm run lint
       - run: npm test
       - run: npm run gui:test
+
+      # Guards the byte-for-byte agreement between this server's encoders and the hardcoded
+      # vectors in colibri-unity's ProtocolVectorTests.cs - the two implementations have no
+      # other way of noticing they have drifted apart.
+      - run: npm run test:vectors
