@@ -141,13 +141,21 @@ private void MyListener(float myNumber) {
 }
 ```
 
-The listener can be deregistered with `Sync.Unregister`:
+There is no matching cleanup call to remember. A listener registered by a `MonoBehaviour` — as a
+method or as a lambda written inside it — is dropped automatically once that component or its
+GameObject is destroyed, so a destroyed object never gets called and never throws
+`MissingReferenceException` out of the middle of Colibri's message loop.
+
+`Sync.Unregister` is still there for when you want to stop listening while the object lives on:
 
 ```c#
-private void OnDestroy() {
+private void OnMenuClosed() {
     Sync.Unregister<float>("MyChannel", MyListener);
 }
 ```
+
+It is also the only way to remove a listener that is a `static` method, or that belongs to a plain
+C# object rather than a Unity one: neither has a lifetime Colibri can follow.
 
 The following types (including arrays) are available for sync: 
 - `bool`

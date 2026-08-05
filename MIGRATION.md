@@ -251,6 +251,18 @@ sent to a `string` listener was previously dropped without a word. That mismatch
 once per (channel, type), not once per message — and it names both types and the fix. If new
 warnings appear after upgrading, they were always happening; you just could not see them.
 
+**`Sync` listeners now unregister themselves.** `Sync.Receive` records which Unity object the
+listener belongs to — the component for a method group, the component the closure captured for a
+lambda — and drops the listener once that object is destroyed. Your existing `Sync.Unregister` calls
+in `OnDestroy` are still correct and still worth keeping; they are simply no longer the difference
+between working and not. What changes silently is the failure they used to cause: a forgotten
+`Unregister` meant the destroyed component kept being called, `MissingReferenceException` came out
+of `WebServerConnection.Update`, and every message queued behind it that frame was lost. If your
+project had unexplained gaps in delivery, this is a strong candidate.
+
+Note the asymmetry with the point above: **this covers `Sync.Receive` only.** `SyncBehaviour<T>`'s
+static `ModelCreated` / `ModelDestroyed` events are plain C# events and still need their `-=`.
+
 **Two server-side data bugs are fixed structurally.** `DataStore` keyed on `group + channel`
 concatenated, so app `ab` + channel `c` collided with app `a` + channel `bc`. And `clearApp`
 matched on a `startsWith` prefix, so the last client of app `test` disconnecting wiped app `test2`'s
@@ -263,7 +275,9 @@ store as well.
 1. **Every `[Sync]` member still has a supported type.** They are validated when the model type is
    first initialized, and an unsupported type, a property missing an accessor, or two members whose
    lowercased names collide are now reported at startup rather than on the first message.
-2. **Every static event you subscribe to is unsubscribed** in `OnDisable` or `OnDestroy`.
+2. **Every static event you subscribe to is unsubscribed** in `OnDisable` or `OnDestroy`. This is
+   `SyncBehaviour<T>.ModelCreated` and `ModelDestroyed`; `Sync.Receive` listeners look after
+   themselves now.
 3. **Turn on *Run In Background*** (Project Settings → Player). With it off, an unfocused Editor
    stops running the player loop, so the client silently stops sending and receiving — while the
    socket stays up and everything still reports itself connected. This is not new in 2.0, but it is
