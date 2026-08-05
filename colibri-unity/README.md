@@ -383,7 +383,12 @@ end-to-end tests report as *skipped* with the command that fixes it, rather than
 
 The script insists on the exact editor version in `ProjectSettings/ProjectVersion.txt` unless
 `UNITY_PATH` says otherwise: opening the project with a different one upgrades it in place, which
-turns a test run into a diff across the manifest and half of `ProjectSettings`.
+turns a test run into a diff across the manifest and half of `ProjectSettings`. If that version is
+not installed it lists the ones that are, with the `UNITY_PATH` to use — the upgrade is then yours
+to commit deliberately, rather than something that arrives attached to an unrelated change.
+
+The package itself supports **2022.3 LTS and newer**; the version pinned here is only what the
+development project is opened with.
 
 Both suites can also be run from **Window → General → Test Runner** in the editor. The end-to-end
 ones need *Run In Background* on, which they set for themselves.
