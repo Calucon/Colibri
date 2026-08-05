@@ -1,6 +1,5 @@
 ﻿using HCIKonstanz.Colibri.Synchronization;
 using Newtonsoft.Json.Linq;
-using System;
 using UnityEngine;
 
 namespace HCIKonstanz.Colibri.Samples
@@ -30,50 +29,54 @@ namespace HCIKonstanz.Colibri.Samples
         public Quaternion[] SyncedQuaternionArray;
         public Color[] SyncedColorArray;
 
+        // Naming the type - Sync.Receive<float> - is what makes this unambiguous. Without it the
+        // compiler has to pick between one Receive overload per supported type, and some of these
+        // handlers would need an explicit (Action<float>)-style cast.
         private void OnEnable()
         {
-            Sync.Receive(Channel, OnBoolMessage);
-            Sync.Receive(Channel, OnIntMessage);
-            Sync.Receive(Channel, (Action<float>)OnFloatMessage);
-            Sync.Receive(Channel, OnStringMessage);
-            Sync.Receive(Channel, (Action<Vector2>)OnVector2Message);
-            Sync.Receive(Channel, (Action<Vector3>)OnVector3Message);
-            Sync.Receive(Channel, OnQuaternionMessage);
-            Sync.Receive(Channel, OnColorMessage);
+            Sync.Receive<bool>(Channel, OnBoolMessage);
+            Sync.Receive<int>(Channel, OnIntMessage);
+            Sync.Receive<float>(Channel, OnFloatMessage);
+            Sync.Receive<string>(Channel, OnStringMessage);
+            Sync.Receive<Vector2>(Channel, OnVector2Message);
+            Sync.Receive<Vector3>(Channel, OnVector3Message);
+            Sync.Receive<Quaternion>(Channel, OnQuaternionMessage);
+            Sync.Receive<Color>(Channel, OnColorMessage);
 
-            Sync.Receive(Channel, OnBoolArrayMessage);
-            Sync.Receive(Channel, OnIntArrayMessage);
-            Sync.Receive(Channel, OnFloatArrayMessage);
-            Sync.Receive(Channel, OnStringArrayMessage);
-            Sync.Receive(Channel, OnVector2ArrayMessage);
-            Sync.Receive(Channel, OnVector3ArrayMessage);
-            Sync.Receive(Channel, OnQuaternionArrayMessage);
-            Sync.Receive(Channel, OnColorArrayMessage);
+            Sync.Receive<bool[]>(Channel, OnBoolArrayMessage);
+            Sync.Receive<int[]>(Channel, OnIntArrayMessage);
+            Sync.Receive<float[]>(Channel, OnFloatArrayMessage);
+            Sync.Receive<string[]>(Channel, OnStringArrayMessage);
+            Sync.Receive<Vector2[]>(Channel, OnVector2ArrayMessage);
+            Sync.Receive<Vector3[]>(Channel, OnVector3ArrayMessage);
+            Sync.Receive<Quaternion[]>(Channel, OnQuaternionArrayMessage);
+            Sync.Receive<Color[]>(Channel, OnColorArrayMessage);
 
-            Sync.Receive(Channel, (Action<JToken>)OnJsonMessage);
+            Sync.Receive<JToken>(Channel, OnJsonMessage);
         }
 
+        // Always unregister what you registered - a listener on a destroyed object still runs.
         private void OnDisable()
         {
-            Sync.Unregister(Channel, OnBoolMessage);
-            Sync.Unregister(Channel, OnIntMessage);
-            Sync.Unregister(Channel, (Action<float>)OnFloatMessage);
-            Sync.Unregister(Channel, OnStringMessage);
-            Sync.Unregister(Channel, (Action<Vector2>)OnVector2Message);
-            Sync.Unregister(Channel, (Action<Vector3>)OnVector3Message);
-            Sync.Unregister(Channel, OnQuaternionMessage);
-            Sync.Unregister(Channel, OnColorMessage);
+            Sync.Unregister<bool>(Channel, OnBoolMessage);
+            Sync.Unregister<int>(Channel, OnIntMessage);
+            Sync.Unregister<float>(Channel, OnFloatMessage);
+            Sync.Unregister<string>(Channel, OnStringMessage);
+            Sync.Unregister<Vector2>(Channel, OnVector2Message);
+            Sync.Unregister<Vector3>(Channel, OnVector3Message);
+            Sync.Unregister<Quaternion>(Channel, OnQuaternionMessage);
+            Sync.Unregister<Color>(Channel, OnColorMessage);
 
-            Sync.Unregister(Channel, OnBoolArrayMessage);
-            Sync.Unregister(Channel, OnIntArrayMessage);
-            Sync.Unregister(Channel, OnFloatArrayMessage);
-            Sync.Unregister(Channel, OnStringArrayMessage);
-            Sync.Unregister(Channel, OnVector2ArrayMessage);
-            Sync.Unregister(Channel, OnVector3ArrayMessage);
-            Sync.Unregister(Channel, OnQuaternionArrayMessage);
-            Sync.Unregister(Channel, OnColorArrayMessage);
+            Sync.Unregister<bool[]>(Channel, OnBoolArrayMessage);
+            Sync.Unregister<int[]>(Channel, OnIntArrayMessage);
+            Sync.Unregister<float[]>(Channel, OnFloatArrayMessage);
+            Sync.Unregister<string[]>(Channel, OnStringArrayMessage);
+            Sync.Unregister<Vector2[]>(Channel, OnVector2ArrayMessage);
+            Sync.Unregister<Vector3[]>(Channel, OnVector3ArrayMessage);
+            Sync.Unregister<Quaternion[]>(Channel, OnQuaternionArrayMessage);
+            Sync.Unregister<Color[]>(Channel, OnColorArrayMessage);
 
-            Sync.Unregister(Channel, (Action<JToken>)OnJsonMessage);
+            Sync.Unregister<JToken>(Channel, OnJsonMessage);
         }
 
 
