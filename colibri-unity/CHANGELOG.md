@@ -213,16 +213,26 @@ an hour they do not spend on their prototype, so:
 The Editor acceptance criteria for the release were run on 2026-08-05: Unity 6000.5.7f1, a
 URP-template project with Colibri as a `file:` UPM package, against `colibri-server` 2.0.0 built and
 run locally. The EditMode suite came back **52 passed, 0 failed**, and the server's own suite was
-green at 102. No standalone player was built, so the other end of every exchange was a Socket.IO peer
-written against colibri-web or a raw v3 TCP client, with a pass-through proxy in front of the TCP
-port decoding every frame in both directions. The type-mismatch warning fires once for 60 offending
+green at 102. The other end of every message-level exchange was a Socket.IO peer written against
+colibri-web or a raw v3 TCP client, with a pass-through proxy in front of the TCP port decoding every
+frame in both directions, because that is what makes the bytes quotable. A development Windows 64-bit
+player was also built from the same project (`result=Succeeded errors=0 warnings=13 time=00:01:59`)
+and run alongside the Editor with both clients connected to the same app at once and no
+`FrameException` in the player log — the configuration the old hardcoded voice port and the old
+`static` socket fields would have broken. The visual half of that is still unconfirmed: nobody
+watched an object in one client follow an object in the other, since the player's scene state is not
+observable from outside its process. The type-mismatch warning fires once for 60 offending
 messages rather than once each, and the `SyncBehaviour` sample propagates private `[Sync,
 SerializeField]` fields, public fields and properties alike, instantiates its template for a
 remote-created model, and recovers that model from server state as a late joiner — one instance, not
 a duplicate. The leak check is the one that found a defect rather than confirming a claim; it is the
-last fix below. Item-by-item results, including the one criterion still uncovered — the profiler
-measurement — are in [`docs/v2-ease-of-use-and-performance.md`](docs/v2-ease-of-use-and-performance.md)
-§8.
+last fix below. The headline performance claim was measured rather than argued: 100 idle
+`SyncTransform`s with Deep Profile off gave a median frame of **0 bytes** of GC allocation over a
+231-frame window, and exactly one `SyncTicker.Update()` on the main thread attributed to the single
+`[Colibri SyncTicker]` object — 0.335 ms of a 0.786 ms `PlayerLoop`, so the idle poll allocates
+nothing but is not free of time. All ten criteria are addressed; what the pass did not touch is voice
+chat and the visual half of Unity ↔ Unity. Item-by-item results are in §8 of
+[`docs/v2-ease-of-use-and-performance.md`](docs/v2-ease-of-use-and-performance.md).
 
 The fixes it produced:
 
