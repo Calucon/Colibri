@@ -58,6 +58,16 @@ namespace HCIKonstanz.Colibri.Synchronization
                 _listenerTypes.Remove(channel);
         }
 
+        /// <summary>
+        /// How many listeners the channel currently has for the given type. A test seam: it is the
+        /// only way to tell one live listener from one live listener still counted alongside a
+        /// destroyed one.
+        /// </summary>
+        internal static int ListenerCount(string channel, Type listenerType)
+            => _listenerTypes.TryGetValue(channel, out var types) && types.TryGetValue(listenerType, out var count)
+                ? count
+                : 0;
+
         /// <summary>The types the given channel has listeners for, in a form worth showing a human.</summary>
         public static IEnumerable<string> ListenerTypesFor(string channel)
         {
