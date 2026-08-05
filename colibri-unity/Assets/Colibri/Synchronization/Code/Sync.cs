@@ -1,4 +1,4 @@
-﻿using HCIKonstanz.Colibri.Networking;
+using HCIKonstanz.Colibri.Networking;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
@@ -44,6 +44,8 @@ namespace HCIKonstanz.Colibri.Synchronization
 
         private static void OnServerMessage(string channel, string command, JToken data)
         {
+            RecordTraffic(true, channel, command);
+
             switch (command)
             {
                 case "broadcast::bool":
@@ -130,40 +132,101 @@ namespace HCIKonstanz.Colibri.Synchronization
 
         private static void Invoke<T>(string channel, Dictionary<string, List<Action<T>>> listeners, T val)
         {
-            if (listeners.ContainsKey(channel) && val != null)
+            if (val == null)
+                return;
+
+            if (!listeners.TryGetValue(channel, out var channelListeners))
             {
-                foreach (var listener in listeners[channel].ToArray())
-                    listener.Invoke(val);
+                // Nothing is listening for this type on this channel. That is only worth reporting
+                // when *something else* is - a channel with no listeners at all is normal, since
+                // every client sees every channel its app uses.
+                if (ChannelListenerRegistry.TryDescribeMismatch(channel, typeof(T), out var message))
+                    Debug.LogWarning(message);
+                return;
             }
+
+            foreach (var listener in channelListeners.ToArray())
+                listener.Invoke(val);
         }
 
 
+        /*
+         *  Traffic log, for the Colibri Status window. Compiled out of release builds entirely,
+         *  so neither the buffer nor the calls that fill it cost a shipped build anything.
+         */
 
+        public struct TrafficEntry
+        {
+            public bool Incoming;
+            public string Channel;
+            public string Command;
+            public float Time;
+        }
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+        private const int TrafficLogSize = 20;
+        private static readonly TrafficEntry[] _traffic = new TrafficEntry[TrafficLogSize];
+        private static int _trafficCount;
+
+        /// <summary>The most recent messages sent and received, newest first.</summary>
+        public static IEnumerable<TrafficEntry> RecentTraffic
+        {
+            get
+            {
+                var count = Math.Min(_trafficCount, TrafficLogSize);
+                for (var i = 1; i <= count; i++)
+                    yield return _traffic[(_trafficCount - i) % TrafficLogSize];
+            }
+        }
+#else
+        public static IEnumerable<TrafficEntry> RecentTraffic => Enumerable.Empty<TrafficEntry>();
+#endif
+
+        [System.Diagnostics.Conditional("UNITY_EDITOR"), System.Diagnostics.Conditional("DEVELOPMENT_BUILD")]
+        private static void RecordTraffic(bool incoming, string channel, string command)
+        {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            _traffic[_trafficCount % TrafficLogSize] = new TrafficEntry
+            {
+                Incoming = incoming,
+                Channel = channel,
+                Command = command,
+                Time = Time.realtimeSinceStartup
+            };
+            _trafficCount++;
+#endif
+        }
+
+        private static void SendCommand(string channel, string command, JToken data)
+        {
+            RecordTraffic(false, channel, command);
+            Connection().SendCommand(channel, command, data);
+        }
 
 
         /*
          *  Sending data
          */
-        public static void Send(string channel, bool data) => Connection().SendCommand(channel, "broadcast::bool", data.ToJson());
-        public static void Send(string channel, int data) => Connection().SendCommand(channel, "broadcast::int", data.ToJson());
-        public static void Send(string channel, float data) => Connection().SendCommand(channel, "broadcast::float", data.ToJson());
-        public static void Send(string channel, string data) => Connection().SendCommand(channel, "broadcast::string", data.ToJson());
-        public static void Send(string channel, Vector2 data) => Connection().SendCommand(channel, "broadcast::vector2", data.ToJson());
-        public static void Send(string channel, Vector3 data) => Connection().SendCommand(channel, "broadcast::vector3", data.ToJson());
-        public static void Send(string channel, Quaternion data) => Connection().SendCommand(channel, "broadcast::quaternion", data.ToJson());
-        public static void Send(string channel, Color data) => Connection().SendCommand(channel, "broadcast::color", data.ToJson());
-        public static void Send(string channel, bool[] data) => Connection().SendCommand(channel, "broadcast::bool[]", new JArray(data));
-        public static void Send(string channel, int[] data) => Connection().SendCommand(channel, "broadcast::int[]", new JArray(data));
-        public static void Send(string channel, float[] data) => Connection().SendCommand(channel, "broadcast::float[]", new JArray(data));
-        public static void Send(string channel, string[] data) => Connection().SendCommand(channel, "broadcast::string[]", new JArray(data));
-        public static void Send(string channel, Vector2[] data) => Connection().SendCommand(channel, "broadcast::vector2[]", new JArray(data.Select(x => x.ToJson())));
-        public static void Send(string channel, Vector3[] data) => Connection().SendCommand(channel, "broadcast::vector3[]", new JArray(data.Select(x => x.ToJson())));
-        public static void Send(string channel, Quaternion[] data) => Connection().SendCommand(channel, "broadcast::quaternion[]", new JArray(data.Select(x => x.ToJson())));
-        public static void Send(string channel, Color[] data) => Connection().SendCommand(channel, "broadcast::color[]", new JArray(data.Select(x => x.ToJson())));
-        public static void Send(string channel, JToken data) => Connection().SendCommand(channel, "broadcast::json", data);
+        public static void Send(string channel, bool data) => SendCommand(channel, "broadcast::bool", data.ToJson());
+        public static void Send(string channel, int data) => SendCommand(channel, "broadcast::int", data.ToJson());
+        public static void Send(string channel, float data) => SendCommand(channel, "broadcast::float", data.ToJson());
+        public static void Send(string channel, string data) => SendCommand(channel, "broadcast::string", data.ToJson());
+        public static void Send(string channel, Vector2 data) => SendCommand(channel, "broadcast::vector2", data.ToJson());
+        public static void Send(string channel, Vector3 data) => SendCommand(channel, "broadcast::vector3", data.ToJson());
+        public static void Send(string channel, Quaternion data) => SendCommand(channel, "broadcast::quaternion", data.ToJson());
+        public static void Send(string channel, Color data) => SendCommand(channel, "broadcast::color", data.ToJson());
+        public static void Send(string channel, bool[] data) => SendCommand(channel, "broadcast::bool[]", new JArray(data));
+        public static void Send(string channel, int[] data) => SendCommand(channel, "broadcast::int[]", new JArray(data));
+        public static void Send(string channel, float[] data) => SendCommand(channel, "broadcast::float[]", new JArray(data));
+        public static void Send(string channel, string[] data) => SendCommand(channel, "broadcast::string[]", new JArray(data));
+        public static void Send(string channel, Vector2[] data) => SendCommand(channel, "broadcast::vector2[]", new JArray(data.Select(x => x.ToJson())));
+        public static void Send(string channel, Vector3[] data) => SendCommand(channel, "broadcast::vector3[]", new JArray(data.Select(x => x.ToJson())));
+        public static void Send(string channel, Quaternion[] data) => SendCommand(channel, "broadcast::quaternion[]", new JArray(data.Select(x => x.ToJson())));
+        public static void Send(string channel, Color[] data) => SendCommand(channel, "broadcast::color[]", new JArray(data.Select(x => x.ToJson())));
+        public static void Send(string channel, JToken data) => SendCommand(channel, "broadcast::json", data);
 
-        public static void SendModelUpdate(string channel, JObject data) => Connection().SendCommand(channel, "model::update", data);
-        public static void SendModelDelete(string channel, string id) => Connection().SendCommand(channel, "model::delete", new JObject { { "id", id } });
+        public static void SendModelUpdate(string channel, JObject data) => SendCommand(channel, "model::update", data);
+        public static void SendModelDelete(string channel, string id) => SendCommand(channel, "model::delete", new JObject { { "id", id } });
 
 
 
@@ -172,7 +235,10 @@ namespace HCIKonstanz.Colibri.Synchronization
          *  Listeners
          */
 
-        private static void AddListener<T>(string channel, Dictionary<string, List<Action<T>>> listeners, Action<T> listener)
+        // `track` is off for the model channels: they are Colibri's own SyncBehaviour plumbing,
+        // they never go through Invoke<T>, and listing them would only bury the channels the
+        // student actually wrote.
+        private static void AddListener<T>(string channel, Dictionary<string, List<Action<T>>> listeners, Action<T> listener, bool track = true)
         {
             if (!listeners.ContainsKey(channel))
             {
@@ -181,14 +247,19 @@ namespace HCIKonstanz.Colibri.Synchronization
                 Connection();
             }
             listeners[channel].Add(listener);
+
+            if (track)
+                ChannelListenerRegistry.Add(channel, typeof(T));
         }
 
-        private static void RemoveListener<T>(string channel, Dictionary<string, List<Action<T>>> listeners, Action<T> listener)
+        private static void RemoveListener<T>(string channel, Dictionary<string, List<Action<T>>> listeners, Action<T> listener, bool track = true)
         {
             if (listeners.ContainsKey(channel))
             {
                 var list = listeners[channel];
-                list.Remove(listener);
+                if (list.Remove(listener) && track)
+                    ChannelListenerRegistry.Remove(channel, typeof(T));
+
                 if (list.Count == 0)
                     listeners.Remove(channel);
             }
@@ -248,19 +319,98 @@ namespace HCIKonstanz.Colibri.Synchronization
 
         public static void AddModelUpdateListener(string channel, Action<JObject> listener)
         {
-            AddListener(channel, _modelUpdateListeners, listener);
-            Connection().SendCommand(channel, "model::request", null);
+            AddListener(channel, _modelUpdateListeners, listener, track: false);
+            SendCommand(channel, "model::request", null);
         }
 
         public static void AddModelUpdateListener(string channel, Action<JObject> listener, string fetchInitialStateId)
         {
-            AddListener(channel, _modelUpdateListeners, listener);
-            Connection().SendCommand(channel, "model::request", new JObject { { "id", fetchInitialStateId } });
+            AddListener(channel, _modelUpdateListeners, listener, track: false);
+            SendCommand(channel, "model::request", new JObject { { "id", fetchInitialStateId } });
         }
 
-        public static void RemoveModelUpdateListener(string channel, Action<JObject> listener) => RemoveListener(channel, _modelUpdateListeners, listener);
+        public static void RemoveModelUpdateListener(string channel, Action<JObject> listener) => RemoveListener(channel, _modelUpdateListeners, listener, track: false);
 
-        public static void AddModelDeleteListener(string channel, Action<JObject> listener) => AddListener(channel, _modelDeleteListeners, listener);
-        public static void RemoveModelDeleteListener(string channel, Action<JObject> listener) => RemoveListener(channel, _modelDeleteListeners, listener);
+        public static void AddModelDeleteListener(string channel, Action<JObject> listener) => AddListener(channel, _modelDeleteListeners, listener, track: false);
+        public static void RemoveModelDeleteListener(string channel, Action<JObject> listener) => RemoveListener(channel, _modelDeleteListeners, listener, track: false);
+
+
+
+
+        /*
+         *  Generic listener registration.
+         *
+         *  Receive is overloaded once per supported type, which makes
+         *      Sync.Receive("MyChannel", MyHandler)
+         *  ambiguous and forces a cast onto every call site. Naming the type instead -
+         *      Sync.Receive<float>("MyChannel", MyHandler)
+         *  - is unambiguous, because supplying type arguments rules the overloads out.
+         *
+         *  Dispatch is a pattern match on the delegate, so there is no reflection involved and
+         *  the compiler still sees the same typed calls as before.
+         *
+         *  There is deliberately no Send<T>: Sync.Send("ch", value) already resolves without a
+         *  cast, so a generic version would buy nothing and would turn today's compile error on
+         *  an unsupported type into a runtime message.
+         */
+
+        private const string SupportedTypes = "bool, int, float, string, Vector2, Vector3, Quaternion, Color, JToken and arrays of those";
+
+        public static void Receive<T>(string channel, Action<T> listener)
+        {
+            switch (listener)
+            {
+                case Action<bool> l: Receive(channel, l); break;
+                case Action<int> l: Receive(channel, l); break;
+                case Action<float> l: Receive(channel, l); break;
+                case Action<string> l: Receive(channel, l); break;
+                case Action<Vector2> l: Receive(channel, l); break;
+                case Action<Vector3> l: Receive(channel, l); break;
+                case Action<Quaternion> l: Receive(channel, l); break;
+                case Action<Color> l: Receive(channel, l); break;
+                case Action<bool[]> l: Receive(channel, l); break;
+                case Action<int[]> l: Receive(channel, l); break;
+                case Action<float[]> l: Receive(channel, l); break;
+                case Action<string[]> l: Receive(channel, l); break;
+                case Action<Vector2[]> l: Receive(channel, l); break;
+                case Action<Vector3[]> l: Receive(channel, l); break;
+                case Action<Quaternion[]> l: Receive(channel, l); break;
+                case Action<Color[]> l: Receive(channel, l); break;
+                case Action<JToken> l: Receive(channel, l); break;
+                default: LogUnsupportedType<T>(channel); break;
+            }
+        }
+
+        public static void Unregister<T>(string channel, Action<T> listener)
+        {
+            switch (listener)
+            {
+                case Action<bool> l: Unregister(channel, l); break;
+                case Action<int> l: Unregister(channel, l); break;
+                case Action<float> l: Unregister(channel, l); break;
+                case Action<string> l: Unregister(channel, l); break;
+                case Action<Vector2> l: Unregister(channel, l); break;
+                case Action<Vector3> l: Unregister(channel, l); break;
+                case Action<Quaternion> l: Unregister(channel, l); break;
+                case Action<Color> l: Unregister(channel, l); break;
+                case Action<bool[]> l: Unregister(channel, l); break;
+                case Action<int[]> l: Unregister(channel, l); break;
+                case Action<float[]> l: Unregister(channel, l); break;
+                case Action<string[]> l: Unregister(channel, l); break;
+                case Action<Vector2[]> l: Unregister(channel, l); break;
+                case Action<Vector3[]> l: Unregister(channel, l); break;
+                case Action<Quaternion[]> l: Unregister(channel, l); break;
+                case Action<Color[]> l: Unregister(channel, l); break;
+                case Action<JToken> l: Unregister(channel, l); break;
+                default: LogUnsupportedType<T>(channel); break;
+            }
+        }
+
+        private static void LogUnsupportedType<T>(string channel)
+        {
+            var name = ChannelListenerRegistry.FriendlyName(typeof(T));
+            Debug.LogError($"Colibri: cannot receive '{name}' on channel '{channel}' - supported types are {SupportedTypes}. "
+                + $"For your own classes, receive a JToken and convert it: Sync.Receive<JToken>(\"{channel}\", token => token.ToObject<{name}>()).");
+        }
     }
 }
