@@ -19,32 +19,27 @@
         {
             "displayName": "Remote Store",
             "description": "Example on how to use Colibri's 'store' API to store / retrieve data from server.",
-            "path": "Samples/RestApi"
+            "path": "Samples~/RestApi"
         },
         {
             "displayName": "SendData",
             "description": "Samples on how to use the PubSub methods for sending arbitrary data across the network to other lcients",
-            "path": "Samples/SendMessages"
+            "path": "Samples~/SendMessages"
         },
         {
             "displayName": "SyncBehaviour",
             "description": "Examples for using SyncBehaviour, which can be used to synchronize data models across a network (e.g., for using model-view-controller)",
-            "path": "Samples/SyncBehaviour"
+            "path": "Samples~/SyncBehaviour"
         },
         {
             "displayName": "SyncTransform",
             "description": "Example scene for SyncTransform script to sync location of objects between clients",
-            "path": "Samples/SyncTransform"
+            "path": "Samples~/SyncTransform"
         },
         {
             "displayName": "Voice Chat",
             "description": "Example for Colibri's (spatial) voice chat",
-            "path": "Samples/VoiceChat"
-        },
-        {
-            "displayName": "Prefabs",
-            "description": "Prefabs necessary for some features of Colibri (e.g., Remote Logging)",
-            "path": "Prefabs"
+            "path": "Samples~/VoiceChat"
         }
     ]
 }
