@@ -91,9 +91,11 @@ namespace HCIKonstanz.Colibri.Synchronization
             var expectation = types.Count == 1
                 ? $"the listener registered there expects {expected}"
                 : $"the listeners registered there expect {expected}";
+            // "send it as int" rather than "send a int" - the article cannot be picked correctly
+            // for every supported type, and "a Vector3[]" reads no better than "a int".
             var alternative = types.Count == 1
-                ? $"send a {expected} instead"
-                : $"send one of {expected} instead";
+                ? $"send it as {expected}"
+                : $"send it as one of {expected}";
 
             message = $"Colibri: a {received} arrived on channel '{channel}', but {expectation}. The message was dropped, because Colibri matches messages on the channel *and* the type. "
                     + $"Either {alternative}, or listen for it with Sync.Receive<{received}>(\"{channel}\", MyHandler).";
