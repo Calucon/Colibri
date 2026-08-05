@@ -1,4 +1,3 @@
-using Cysharp.Threading.Tasks;
 using HCIKonstanz.Colibri.Core;
 using HCIKonstanz.Colibri.Networking.Protocol;
 using HCIKonstanz.Colibri.Setup;
@@ -88,11 +87,17 @@ namespace HCIKonstanz.Colibri.Networking
         private volatile string _appName;
         private volatile int _tcpPort;
 
-        // Gate that `await Connected` waits on. A UniTaskCompletionSource rather than an Rx
-        // observable keeps Rx off the send hot path.
-        private UniTaskCompletionSource _connectedGate = new UniTaskCompletionSource();
+        // Gate that `await Connected` waits on, replacing the UniRx IObservable<bool> awaiter -
+        // no Rx on the send hot path. Deliberately a TaskCompletionSource and not a
+        // UniTaskCompletionSource: several SendCommandAsync calls routinely wait on this at once
+        // (a SyncBehaviour pushes one update per synced attribute at startup), and a
+        // UniTaskCompletionSource throws "can not await twice" on the second pending awaiter.
+        private TaskCompletionSource<bool> _connectedGate = NewGate();
         private volatile bool _isGateOpen;
-        public UniTask Connected => _connectedGate.Task;
+        public Task Connected => _connectedGate.Task;
+
+        private static TaskCompletionSource<bool> NewGate()
+            => new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         // workaround to execute events in main unity thread
         private volatile bool _fireOnConnected;
@@ -114,14 +119,14 @@ namespace HCIKonstanz.Colibri.Networking
                     _connectAttempts = 0;
                     _fireOnConnected = true;
                     _isGateOpen = true;
-                    _connectedGate.TrySetResult();
+                    _connectedGate.TrySetResult(true);
                 }
                 else if (_isGateOpen)
                 {
                     // Re-arm the gate so a send issued while disconnected waits for the next
                     // successful connection instead of racing straight onto a dead socket.
                     _isGateOpen = false;
-                    _connectedGate = new UniTaskCompletionSource();
+                    _connectedGate = NewGate();
                 }
 
                 if (_status == ConnectionStatus.Disconnected)
@@ -145,7 +150,7 @@ namespace HCIKonstanz.Colibri.Networking
             _hostname = SanitizeHandshakeField(SystemInfo.deviceName);
             RefreshConfig();
 
-            _connectedGate = new UniTaskCompletionSource();
+            _connectedGate = NewGate();
             _isGateOpen = false;
 
             _lifetime = new CancellationTokenSource();
