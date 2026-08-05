@@ -94,9 +94,10 @@ fixes (noted inline).
 - Backpressure: writes are checked against `socket.writableLength`/a high-water mark, and a stale
   update is dropped (logged) rather than buffered without bound for a client that can't keep up.
 - Heartbeat and latency ping merged into a single 100 ms frame (the ping timestamp rides in the type
-  `0x00` heartbeat), halving idle TCP packet rate. Confirmed correct for Socket.IO; **TCP-side latency
-  has no client to verify it yet** — `colibri-unity` is still on v1 framing, so nothing in this repo
-  currently echoes a v3 heartbeat (tracked, see [Deferred work](#deferred-work)).
+  `0x00` heartbeat), halving idle TCP packet rate. Confirmed correct for Socket.IO; TCP-side latency
+  was unverifiable at the time of this release because `colibri-unity` was still on v1 framing —
+  since `colibri-unity` 2.0.0 the Unity client echoes the v3 heartbeat verbatim, so the TCP latency
+  path now has a real client behind it.
 - `test/tcp-client-test.ts` updated to speak v3 framing (handshake + writes); it does not yet decode
   or echo frames back, so it currently only smoke-tests the handshake, not a full round trip.
 
@@ -170,9 +171,13 @@ Not part of this release:
   caps, no TLS. The structural wins Phase 5's costing had already credited as "free" (Socket.IO rooms,
   `Map` keying in `DataStore`, v3 ingress bounds checks) landed anyway as part of Phases 1–2, since
   they were justified on performance grounds independent of security.
-- **`colibri-unity`** client rewrite for the v3 protocol — required to actually exercise items 17–22
-  end-to-end (framing, heartbeat/latency merge) over TCP; the client in this repo is still on v1
-  FlatBuffers, so no TCP client can currently connect.
+- ~~**`colibri-unity`** client rewrite for the v3 protocol — required to actually exercise items
+  17–22 end-to-end (framing, heartbeat/latency merge) over TCP; the client in this repo is still on
+  v1 FlatBuffers, so no TCP client can currently connect.~~ **Landed** in `colibri-unity` 2.0.0 —
+  see [`colibri-unity/CHANGELOG.md`](../../colibri-unity/CHANGELOG.md). The Unity client now speaks
+  v3 framing and echoes the `0x00` heartbeat, so the TCP side of items 17–22 has a real client
+  exercising it; the C# codec is additionally pinned to this server's encoder by byte-for-byte
+  vectors in its EditMode test suite.
 
 ## `src/ui` modernization (follow-up pass)
 

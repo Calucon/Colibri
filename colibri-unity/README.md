@@ -2,27 +2,59 @@
 
 ## Requirements
 
-Unity 2019.4 or higher
+- Unity 2022.3 LTS or higher
+- **colibri-server 2.0.0 or higher.** Colibri Unity 2.0.0 speaks the [v3 binary TCP
+  protocol](../colibri-server/docs/protocol.md) and **cannot talk to a 1.x server** — there is no
+  version negotiation, both sides have to agree on the framing out of band. Colibri Unity 1.x
+  likewise cannot talk to a 2.0.0 server.
 
 ## Installation
 
-### Package Manager (Recommended)
+Colibri depends on three packages. Two are installable from the Package Manager; R3's core
+assembly comes from NuGet.
 
-Add the following Git URLs to the Unity Package Manager:
+### 1. Newtonsoft JSON and UniTask
 
+Add via *Window → Package Manager → + → Install package by name / from git URL*:
+
+```
+com.unity.nuget.newtonsoft-json
+```
 ```
 https://github.com/Cysharp/UniTask.git?path=src/UniTask/Assets/Plugins/UniTask
 ```
-```
-https://github.com/neuecc/UniRx.git?path=Assets/Plugins/UniRx/Scripts
-```
+
+### 2. R3
+
+R3 comes in two halves and **both are required** — the UPM package cannot declare the NuGet half
+as a dependency, so this step has to be done by hand.
+
+1. Install [NuGetForUnity](https://github.com/GlitchEnzo/NuGetForUnity) (Package Manager, git URL):
+
+   ```
+   https://github.com/GlitchEnzo/NuGetForUnity.git?path=/src/NuGetForUnity
+   ```
+
+2. *NuGet → Manage NuGet Packages*, search for **R3** and install it. This drops `R3.dll` under
+   `Assets/Packages`.
+
+3. Install R3's Unity layer from the Package Manager:
+
+   ```
+   https://github.com/Cysharp/R3.git?path=src/R3.Unity/Assets/R3.Unity
+   ```
+
+See [R3's own installation guide](https://github.com/Cysharp/R3#unity) for details.
+
+### 3. Colibri
+
 ```
 https://github.com/hcigroupkonstanz/Colibri.git?path=colibri-unity/Assets/Colibri
 ```
 
 ### UnityPackage
 
-Download the latest release of [UniTask](https://github.com/Cysharp/UniTask/releases), [UniRx](https://github.com/neuecc/UniRx/releases), and [Colibri](https://github.com/hcigroupkonstanz/Colibri/releases) from GitHub and import it to your Unity project.
+Download the latest release of [UniTask](https://github.com/Cysharp/UniTask/releases), [R3](https://github.com/Cysharp/R3/releases), and [Colibri](https://github.com/hcigroupkonstanz/Colibri/releases) from GitHub and import it to your Unity project. Newtonsoft JSON still has to come from the Package Manager (`com.unity.nuget.newtonsoft-json`); Colibri no longer bundles its own copy of `Newtonsoft.Json.dll`.
 
 ## Configuration
 
