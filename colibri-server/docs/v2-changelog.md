@@ -164,7 +164,9 @@ Not part of this release:
 - **Plan item 23 — batched `model::request` reply.** Left as one packet per model
   (`model-sync.ts` still loops `connectionPool.emit(...)`), specifically to avoid a coordinated
   breaking change with `colibri-web`'s `ModelSynchronization.ts`/e2e suite and `colibri-unity`. No
-  partial implementation exists.
+  partial implementation exists. The unbatched path is at least no longer untested against a Unity
+  client: in the 2026-08-05 run a late joiner re-created a model from stored state via
+  `model::request` with every synced member applied, as exactly one instance.
 - **Phase 5 — security hardening**, in full: no shared-secret handshake token, no split between the
   `colibri` app name and actual admin privilege, no CORS allowlist, no null-prototype model objects,
   no REST key rejection for `__proto__`/`constructor`/`prototype`, no rate limiting, no connection
@@ -173,11 +175,29 @@ Not part of this release:
   they were justified on performance grounds independent of security.
 - ~~**`colibri-unity`** client rewrite for the v3 protocol — required to actually exercise items
   17–22 end-to-end (framing, heartbeat/latency merge) over TCP; the client in this repo is still on
-  v1 FlatBuffers, so no TCP client can currently connect.~~ **Landed** in `colibri-unity` 2.0.0 —
-  see [`colibri-unity/CHANGELOG.md`](../../colibri-unity/CHANGELOG.md). The Unity client now speaks
-  v3 framing and echoes the `0x00` heartbeat, so the TCP side of items 17–22 has a real client
-  exercising it; the C# codec is additionally pinned to this server's encoder by byte-for-byte
-  vectors in its EditMode test suite.
+  v1 FlatBuffers, so no TCP client can currently connect.~~ **Landed and now exercised** —
+  `colibri-unity` 2.0.0, see [`colibri-unity/CHANGELOG.md`](../../colibri-unity/CHANGELOG.md). The
+  end-to-end run against a live 2.0.0 server on 2026-08-05 closes this out at the wire level, with a
+  decoding proxy in front of the TCP port:
+  - **Framing.** The handshake was read off the wire as
+    `C->S HANDSHAKE version=2 app=myAppName name=DESKTOP-PUO2MAQ` — the documented
+    `version::app::name` body, client version `2`. Message frames carried all 17 payload shapes in
+    both directions, relayed **byte-verbatim**: a `broadcast::string` payload arrives as
+    `"hello from unity round 1"`, 26 bytes for 24 characters, while the `log` channel's
+    `payload(23B)="verification log line 1"` stays unquoted at 23 bytes for 23 characters. That is
+    the relay being byte-verbatim in the way `Payload` was meant to make it: what a client sends is
+    what the other side receives, quoting included, with no re-serialization in between.
+  - **Heartbeat/latency merge.** The 100 ms server heartbeat was echoed continuously by the Unity
+    client; a raw client counted 369 heartbeats in one 40 s session, and the client-side 2 s watchdog
+    never fired across many minutes of connected time.
+  - **Reconnect.** Killing the transport mid-session produced exactly one
+    `connection to localhost failed (ConnectionReset), retrying...`, then a reconnect, a fresh
+    handshake, and queued messages resuming with no gap in their numbering — the retry queue
+    drained in order. No `FrameException` reached the client console and there was no retry spin, so
+    neither side was left mid-frame by the drop.
+
+  The C# codec remains pinned to this server's encoder by byte-for-byte vectors in its EditMode test
+  suite (52 tests, green against this server's own 102).
 
 ## `src/ui` modernization (follow-up pass)
 
