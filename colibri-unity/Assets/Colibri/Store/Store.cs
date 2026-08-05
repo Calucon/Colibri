@@ -3,6 +3,7 @@ using UnityEngine.Networking;
 using System.Threading.Tasks;
 using Cysharp.Threading.Tasks;
 using HCIKonstanz.Colibri.Setup;
+using Newtonsoft.Json;
 
 namespace HCIKonstanz.Colibri.Store
 {
@@ -20,7 +21,10 @@ namespace HCIKonstanz.Colibri.Store
                     await request.SendWebRequest();
                     if (request.result == UnityWebRequest.Result.Success && request.responseCode == 200)
                     {
-                        return JsonUtility.FromJson<T>(request.downloadHandler.text);
+                        // Newtonsoft rather than JsonUtility: JsonUtility cannot round-trip
+                        // dictionaries, properties, or top-level arrays, so Get/Put silently
+                        // disagreed with everything Sync can carry.
+                        return JsonConvert.DeserializeObject<T>(request.downloadHandler.text);
                     }
                 }
                 catch (UnityWebRequestException exception)
@@ -33,7 +37,7 @@ namespace HCIKonstanz.Colibri.Store
 
         public static async Task<bool> Put(string objectName, object putObject)
         {
-            string jsonData = JsonUtility.ToJson(putObject);
+            string jsonData = JsonConvert.SerializeObject(putObject);
             var url = ColibriConfig.GetWebUrl($"api/store/{ColibriConfig.Load().AppName}/{objectName}");
             using (UnityWebRequest request = UnityWebRequest.Put(url, jsonData))
             {
