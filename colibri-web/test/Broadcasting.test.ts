@@ -94,6 +94,42 @@ describe('Sync receivers', () => {
         expect(cb).toHaveBeenCalledWith(payload);
     });
 
+    it.each([
+        ['receiveNumber', 'broadcast::int', 42],
+        ['receiveNumberArray', 'broadcast::int[]', [1, 2, 3]]
+    ] as const)('%s also accepts %s, which is how Unity tags integers', (method, command, payload) => {
+        const cb = vi.fn();
+
+        (Sync as unknown as Record<string, SyncReceiver>)[method]('ch', cb);
+
+        const handler = registerChannel.mock.calls[0][1];
+        handler({ channel: 'ch', command, payload });
+
+        expect(cb).toHaveBeenCalledWith(payload);
+    });
+
+    it('delivers an integer to a number listener exactly once, not once per command it listens for', () => {
+        const cb = vi.fn();
+        Sync.receiveNumber('ch', cb);
+
+        const handler = registerChannel.mock.calls[0][1];
+        handler({ channel: 'ch', command: 'broadcast::int', payload: 7 });
+
+        expect(cb).toHaveBeenCalledTimes(1);
+    });
+
+    it('unregister removes a number listener from both the float and the int command', () => {
+        const cb = vi.fn();
+        Sync.receiveNumber('ch', cb);
+        Sync.unregister('ch', cb);
+
+        const handler = registerChannel.mock.calls[0][1];
+        handler({ channel: 'ch', command: 'broadcast::float', payload: 1 });
+        handler({ channel: 'ch', command: 'broadcast::int', payload: 2 });
+
+        expect(cb).not.toHaveBeenCalled();
+    });
+
     it('registers exactly one channel listener no matter how many types are received on it', () => {
         Sync.receiveBool('ch', () => undefined);
         Sync.receiveNumber('ch', () => undefined);
