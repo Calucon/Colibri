@@ -64,6 +64,26 @@ namespace HCIKonstanz.Colibri.Synchronization
             }
         }
 
+        /// <summary>
+        /// How many objects the ticker is currently driving, ignoring slots that have been cleared
+        /// but not yet compacted. Exists for the end-to-end suite: "one ticker" and "one entry per
+        /// synced object" are the two halves of the leak that made the *n*-th Play session send
+        /// every update n times, and neither is observable from the public API.
+        /// </summary>
+        internal static int RegisteredCount
+        {
+            get
+            {
+                var count = 0;
+                for (var i = 0; i < _tickables.Count; i++)
+                {
+                    if (_tickables[i] != null)
+                        count++;
+                }
+                return count;
+            }
+        }
+
         internal static void Register(ITickable tickable)
         {
             if (tickable.TickIndex >= 0)
