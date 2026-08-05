@@ -1,0 +1,136 @@
+/**
+ * Cross-implementation protocol vectors: encodes a fixed set of frames with *this* server's
+ * encoders and checks that colibri-unity's `ProtocolVectorTests.cs` still expects the same bytes.
+ *
+ * The C# suite's round-trip tests only prove that the C# encoder and decoder agree with each
+ * other - they would pass just as happily with both sides big-endian, or both off by one. The
+ * hardcoded hex in ProtocolVectorTests is what actually catches drift between the two
+ * implementations, and until now regenerating it meant reading a comment that said "run the
+ * encoders from colibri-server and hex-dump the buffers" and doing it by hand. Nobody was ever
+ * going to do that, which made the one file guarding wire compatibility the one file that would
+ * quietly go stale.
+ *
+ *   npm run test:vectors            check the C# file against these encoders
+ *   npm run test:vectors -- --emit  print the C# table, ready to paste
+ */
+import { readFileSync } from 'node:fs';
+import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import {
+    encodeHandshakeFrame,
+    encodeHeartbeatFrame,
+    encodeMessageFrame,
+} from '../src/server/modules/networking/protocol.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const CSHARP_VECTORS = path.resolve(
+    __dirname,
+    '../../colibri-unity/Assets/Colibri/Tests/Editor/ProtocolVectorTests.cs'
+);
+
+interface Vector {
+    /** How the C# case reads, for the failure message and the --emit table. */
+    readonly description: string;
+    readonly bytes: Buffer;
+}
+
+const vectors: Vector[] = [
+    { description: 'Heartbeat(0)', bytes: encodeHeartbeatFrame(0n) },
+    { description: 'Heartbeat(1)', bytes: encodeHeartbeatFrame(1n) },
+    { description: 'Heartbeat(123456789012345)', bytes: encodeHeartbeatFrame(123456789012345n) },
+    { description: 'Heartbeat(ulong.MaxValue)', bytes: encodeHeartbeatFrame(18446744073709551615n) },
+
+    { description: 'Handshake("2", "myApp", "myClient")', bytes: encodeHandshakeFrame('2', 'myApp', 'myClient') },
+    {
+        // Non-ASCII in the client name is ordinary: it comes from the device name.
+        description: 'Handshake("2", "app", "Bjorn-ü中")',
+        bytes: encodeHandshakeFrame('2', 'app', 'Bjorn-ü中'),
+    },
+
+    {
+        description: 'Message("app::chan", "model::update", {"x":1})',
+        bytes: encodeMessageFrame({
+            channel: 'app::chan',
+            command: 'model::update',
+            payload: Buffer.from('{"x":1}', 'utf8'),
+        }),
+    },
+    {
+        description: 'Message("c", "cmd", empty)',
+        bytes: encodeMessageFrame({ channel: 'c', command: 'cmd', payload: Buffer.alloc(0) }),
+    },
+    {
+        description: 'Message("känäl", "broadcast::string", "hello")',
+        bytes: encodeMessageFrame({
+            channel: 'känäl',
+            command: 'broadcast::string',
+            payload: Buffer.from('"hello"', 'utf8'),
+        }),
+    },
+    {
+        // Payload bytes are opaque to the codec, so a body that is not text has to survive too.
+        description: 'Message("b", "raw", 00 ff 7f 80)',
+        bytes: encodeMessageFrame({
+            channel: 'b',
+            command: 'raw',
+            payload: Buffer.from([0x00, 0xff, 0x7f, 0x80]),
+        }),
+    },
+];
+
+const hex = (buffer: Buffer) => buffer.toString('hex');
+
+const emit = function (): void {
+    console.log('Vectors produced by this server, for ProtocolVectorTests.cs:\n');
+    for (const vector of vectors) {
+        console.log(`  ${vector.description}`);
+        console.log(`  "${hex(vector.bytes)}"\n`);
+    }
+};
+
+const check = function (): number {
+    let source: string;
+    try {
+        source = readFileSync(CSHARP_VECTORS, 'utf8');
+    } catch {
+        console.error(`Cannot read ${CSHARP_VECTORS}`);
+        console.error('This check needs the colibri-unity package checked out alongside colibri-server.');
+        return 1;
+    }
+
+    // Every hex literal in the file. Nine bytes is the shortest frame there is, so anything
+    // shorter than that is some other string.
+    const literals = new Set((source.match(/"[0-9a-f]{18,}"/g) ?? []).map(match => match.slice(1, -1)));
+
+    const missing = vectors.filter(vector => !literals.has(hex(vector.bytes)));
+    for (const vector of missing) {
+        console.error(`MISSING  ${vector.description}`);
+        console.error(`         this server encodes it as ${hex(vector.bytes)},`);
+        console.error('         which does not appear in ProtocolVectorTests.cs');
+    }
+
+    const encoded = new Set(vectors.map(vector => hex(vector.bytes)));
+    const stale = [...literals].filter(literal => !encoded.has(literal));
+    for (const literal of stale) {
+        console.error(`STALE    ${literal}`);
+        console.error('         is expected by ProtocolVectorTests.cs but no vector here produces it');
+    }
+
+    if (missing.length > 0 || stale.length > 0) {
+        console.error(
+            `\n${missing.length} missing, ${stale.length} stale. The two implementations have drifted, ` +
+                'or a vector was added on one side only.'
+        );
+        console.error('Run `npm run test:vectors -- --emit` for the current bytes.');
+        return 1;
+    }
+
+    console.log(`All ${vectors.length} protocol vectors match colibri-unity's ProtocolVectorTests.cs.`);
+    return 0;
+};
+
+if (process.argv.includes('--emit')) {
+    emit();
+} else {
+    process.exit(check());
+}

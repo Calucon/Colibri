@@ -15,7 +15,10 @@ namespace HCIKonstanz.Colibri.Tests
     /// both off by one. These vectors are what actually catches drift between the two
     /// implementations.
     ///
-    /// To regenerate, run the encoders from colibri-server and hex-dump the buffers.
+    /// These bytes are checked against the server's encoders automatically:
+    /// <c>npm run test:vectors</c> in colibri-server re-encodes every vector below and fails if
+    /// this file no longer expects the same bytes, or if it expects bytes nothing produces.
+    /// <c>npm run test:vectors -- --emit</c> prints the current table.
     /// </summary>
     public class ProtocolVectorTests
     {
