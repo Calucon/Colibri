@@ -39,6 +39,29 @@ namespace HCIKonstanz.Colibri.Synchronization
             _tickables.Clear();
             _hasEmptySlots = false;
             _instance = null;
+
+            DestroyStrayTickers();
+        }
+
+        /// <summary>
+        /// Cleans up tickers left behind by an earlier Play session.
+        /// </summary>
+        /// <remarks>
+        /// The ticker GameObject used to carry <c>HideFlags.DontSave</c>, which does not only keep
+        /// it out of the saved scene - it also exempts it from being destroyed when Play mode ends.
+        /// One survived every Play session, still enabled, and since they all drive the same static
+        /// list, the *n*-th session ran PollChanges and FlushUpdate n times per frame: duplicate
+        /// messages on the wire and a sync cost that grew every time the play button was pressed.
+        /// The flag is gone, but a project that has already accumulated them needs them clearing,
+        /// and they outlive a domain reload.
+        /// </remarks>
+        private static void DestroyStrayTickers()
+        {
+            foreach (var stray in Resources.FindObjectsOfTypeAll<SyncTicker>())
+            {
+                if (stray)
+                    Destroy(stray.gameObject);
+            }
         }
 
         internal static void Register(ITickable tickable)
@@ -76,7 +99,10 @@ namespace HCIKonstanz.Colibri.Synchronization
 
             // Deliberately not a SingletonBehaviour: that one creates its GameObject on any
             // property access, including from an editor window.
-            var go = new GameObject("[Colibri SyncTicker]") { hideFlags = HideFlags.DontSave };
+            //
+            // No HideFlags: DontDestroyOnLoad already keeps this out of any saved scene, and
+            // HideFlags.DontSave additionally survives Play mode - see DestroyStrayTickers.
+            var go = new GameObject("[Colibri SyncTicker]");
             _instance = go.AddComponent<SyncTicker>();
             DontDestroyOnLoad(go);
         }
