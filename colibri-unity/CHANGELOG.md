@@ -5,6 +5,10 @@ release across all three packages. `colibri-server` 2.0.0 replaced the v1 TCP fr
 binary v3 protocol and its changelog listed the Unity client rewrite as
 [deferred work](../colibri-server/docs/v2-changelog.md#deferred-work); this release is that work.
 
+The ease-of-use and sync-loop pass that closes the release is written up in more depth — mechanism,
+rationale, migration steps and the outstanding Editor checks — in
+[`docs/v2-ease-of-use-and-performance.md`](docs/v2-ease-of-use-and-performance.md).
+
 ---
 
 ## Breaking changes

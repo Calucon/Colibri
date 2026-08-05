@@ -334,3 +334,10 @@ Copyright (c) HCI Group University of Konstanz. All rights reserved.
 Licensed under the [MIT](../LICENSE) license.
 
 This repository includes third-party open source libraries as listed in [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES.txt).
+
+## For maintainers
+
+- [CHANGELOG.md](CHANGELOG.md) — everything that changed in `1.3.1` → `2.0.0`
+- [docs/v2-ease-of-use-and-performance.md](docs/v2-ease-of-use-and-performance.md) — how the sync
+  loop and the diagnostics work, why they were built that way, and how to migrate an existing project
+- [../colibri-server/docs/protocol.md](../colibri-server/docs/protocol.md) — the v3 wire protocol
