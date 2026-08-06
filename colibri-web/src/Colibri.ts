@@ -11,6 +11,19 @@ export const PROTOCOL_VERSION = '2';
 
 const COLIBRI_CHANNEL = 'colibri';
 const PROTOCOL_REJECTED_COMMAND = 'protocol::rejected';
+const LATENCY_COMMAND = 'latency';
+
+/**
+ * How long to wait for the server's first latency beat before concluding it predates the
+ * protocol version check.
+ *
+ * A 2.0.0+ server broadcasts `colibri`/`latency` to every Socket.IO client every 100ms, and does
+ * so unconditionally - so 50 missed beats is not a slow server, it is a server that has no such
+ * broadcast to send. The window is this generous only to survive an event-loop stall on a loaded
+ * server; when the answer is "your server is years old", waiting five seconds for it costs
+ * nothing.
+ */
+const OLD_SERVER_TIMEOUT_MS = 5000;
 
 interface ProtocolRejection {
     reason?: string;
@@ -18,10 +31,11 @@ interface ProtocolRejection {
     clientVersion?: string;
 }
 
-// `window` is declared globally as non-optional by the "dom" lib, but colibri-web
-// also runs under plain Node (samples, e2e); shadow it here so the type reflects
-// that it's genuinely absent outside a browser.
+// `window` and `document` are declared globally as non-optional by the "dom" lib, but
+// colibri-web also runs under plain Node (samples, e2e); shadow them here so the types
+// reflect that they're genuinely absent outside a browser.
 declare const window: Window | undefined;
+declare const document: Document | undefined;
 
 export interface Message {
     channel: string;
@@ -44,6 +58,11 @@ export class Colibri {
     public readonly protocolMismatch = this.protocolMismatchSubject.asObservable();
     public readonly uri: string;
     public readonly uriRestApi: string;
+
+    private oldServerTimer: ReturnType<typeof setTimeout> | undefined;
+    // Once per instance, not once per connection: a server does not get newer between two
+    // reconnects, and repeating the warning on every one would bury it in its own noise.
+    private hasReportedOldServer = false;
 
     public constructor(
         public readonly app: string,
@@ -77,15 +96,77 @@ export class Colibri {
         this.socket.onAny(this.onSocketAny.bind(this));
 
         // latency statistics
-        this.registerChannel('colibri', msg => {
-            if (msg.command === 'latency') {
-                SendMessage('colibri', 'latency', msg.payload);
+        this.registerChannel(COLIBRI_CHANNEL, msg => {
+            if (msg.command === LATENCY_COMMAND) {
+                // Proof the server is 2.0.0+, since nothing older has a latency broadcast to
+                // send. Deliberately the *only* thing that clears the timer: ordinary traffic
+                // proves the server is alive, not that it is current, and a pre-2.0.0 server
+                // relays broadcasts and model updates perfectly well.
+                this.stopWaitingForLatency();
+                SendMessage(COLIBRI_CHANNEL, LATENCY_COMMAND, msg.payload);
             }
         });
     }
 
     private onSocketConnect() {
         console.debug(`Connected to colibri server on ${this.server}`);
+        this.waitForLatency();
+    }
+
+    /*
+     *  Detecting a server that predates the protocol version check.
+     *
+     *  The check is server-side, so a server too old to have it cannot refuse this client and
+     *  cannot announce its version - the only thing left to go on is the absence of something
+     *  every current server sends. Nothing here gates message delivery: the timer only observes.
+     */
+
+    private waitForLatency() {
+        if (this.hasReportedOldServer) return;
+
+        clearTimeout(this.oldServerTimer);
+        this.oldServerTimer = setTimeout(() => {
+            this.onLatencyMissing();
+        }, OLD_SERVER_TIMEOUT_MS);
+    }
+
+    private stopWaitingForLatency() {
+        clearTimeout(this.oldServerTimer);
+        this.oldServerTimer = undefined;
+    }
+
+    private onLatencyMissing() {
+        // A disconnected socket explains the silence by itself, and a reconnect re-arms this.
+        if (!this.socket.connected) return;
+
+        // A frozen or backgrounded tab stops draining the socket while timers keep their own
+        // schedule, so on resume this can fire ahead of beats already queued. Waiting another
+        // window costs nothing and removes the likeliest false positive there is.
+        //
+        // `typeof` rather than `document?.` - optional chaining does not save you from an
+        // identifier that was never declared, and under Node (samples, e2e) this would be a
+        // ReferenceError rather than undefined.
+        if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+            this.waitForLatency();
+            return;
+        }
+
+        this.hasReportedOldServer = true;
+        this.stopWaitingForLatency();
+
+        const error = new ProtocolMismatchError(
+            `No latency heartbeat in ${OLD_SERVER_TIMEOUT_MS / 1000}s: this server appears to predate ` +
+                `colibri-server 2.0.0, which is what this client (protocol v${PROTOCOL_VERSION}) expects.`,
+            '<2.0.0',
+            PROTOCOL_VERSION,
+            false
+        );
+
+        // Not disconnected, and deliberately so: the Socket.IO envelope did not change between
+        // v1 and v2, so this connection works. Tearing it down over a suspicion would turn a
+        // warning into an outage.
+        console.warn(`Colibri: ${error.message} The connection still works; upgrade the server when you can.`);
+        this.protocolMismatchSubject.next(error);
     }
 
     private onSocketAny(channel: string, msg: unknown) {
@@ -105,6 +186,11 @@ export class Colibri {
     // bare `protocol::rejected` with no body must still produce a usable error rather than a
     // TypeError that hides the real problem.
     private onProtocolRejected(rejection: ProtocolRejection | undefined) {
+        // The server has just told us exactly what is wrong, so the guess that would otherwise
+        // land five seconds later would only contradict it.
+        this.stopWaitingForLatency();
+        this.hasReportedOldServer = true;
+
         // A mismatch cannot resolve itself, so retrying only produces a reconnect loop that
         // buries the one log line explaining what is wrong.
         this.socket.io.reconnection(false);

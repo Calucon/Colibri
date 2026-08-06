@@ -9,6 +9,7 @@ import { connect } from 'socket.io-client';
 import {
     Colibri,
     GetRestApi,
+    type Message,
     PROTOCOL_VERSION,
     PutRestApi,
     RegisterChannel,
@@ -30,6 +31,9 @@ function makeFakeSocket() {
         onAny: vi.fn<(cb: SocketHandler) => void>(),
         emit: vi.fn<(event: string, ...args: unknown[]) => void>(),
         disconnect: vi.fn<() => void>(),
+        // Read when the old-server timer expires: a socket that is already down explains the
+        // silence by itself, so the check must not fire on it.
+        connected: true,
         // The Manager, which is what actually owns the retry policy - a protocol rejection
         // has to switch it off there, not on the socket.
         io: { reconnection: vi.fn<(on: boolean) => void>() }
@@ -390,6 +394,167 @@ describe('protocol version handshake', () => {
         const error = await mismatch;
         expect(error.serverVersion).toBe('unknown');
         expect(error.message).toContain(PROTOCOL_VERSION);
+
+        errorSpy.mockRestore();
+    });
+});
+
+describe('detecting a server that predates the version check', () => {
+    const TIMEOUT_MS = 5000;
+
+    // Mirrors socket.io: onAny sees every event, and a channel handler sees its own channel.
+    // Both matter here - the message stream runs through onAny, but only the colibri channel
+    // handler clears the timer.
+    const deliver = (channel: string, msg: { command: string; payload?: unknown }) => {
+        getAnyHandler(fakeSocket.onAny)(channel, msg);
+        const channelCall = fakeSocket.on.mock.calls.find(([event]) => event === channel);
+        if (channelCall) channelCall[1](msg);
+    };
+
+    const connectSocket = () => {
+        getHandler(fakeSocket.on, 'connect')();
+    };
+
+    let warnSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+        vi.useFakeTimers();
+        warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+        warnSpy.mockRestore();
+    });
+
+    it('reports a suspected old server when no latency beat arrives', async () => {
+        const client = new Colibri('app', 'localhost', 9011);
+        const mismatch = firstValueFrom(client.protocolMismatch);
+
+        connectSocket();
+        vi.advanceTimersByTime(TIMEOUT_MS);
+
+        const error = await mismatch;
+        expect(error).toBeInstanceOf(ProtocolMismatchError);
+        expect(error.serverVersion).toBe('<2.0.0');
+        expect(error.clientVersion).toBe(PROTOCOL_VERSION);
+        // The Socket.IO envelope did not change between v1 and v2, so this connection works.
+        // Reporting it as fatal, or hanging up, would turn a warning into an outage.
+        expect(error.fatal).toBe(false);
+        expect(fakeSocket.disconnect).not.toHaveBeenCalled();
+        expect(fakeSocket.io.reconnection).not.toHaveBeenCalled();
+    });
+
+    it('stays quiet once a latency beat arrives', () => {
+        const client = new Colibri('app', 'localhost', 9011);
+        const seen: ProtocolMismatchError[] = [];
+        client.protocolMismatch.subscribe(e => seen.push(e));
+
+        connectSocket();
+        // Late, but inside the window - a loaded server is not an old one.
+        vi.advanceTimersByTime(TIMEOUT_MS - 100);
+        deliver('colibri', { command: 'latency', payload: 1 });
+        vi.advanceTimersByTime(TIMEOUT_MS * 2);
+
+        expect(seen).toEqual([]);
+    });
+
+    // The case that decides whether this check is worth anything: a pre-2.0.0 server relays
+    // broadcasts and model updates perfectly well. If ordinary traffic cleared the timer, the
+    // check would never fire against precisely the servers it exists to find.
+    it('still reports a busy old server that is relaying traffic but sending no beat', async () => {
+        const client = new Colibri('app', 'localhost', 9011);
+        const mismatch = firstValueFrom(client.protocolMismatch);
+
+        connectSocket();
+        for (let i = 0; i < 10; i++) {
+            deliver('positions', { command: 'broadcast::vector3', payload: [i, 0, 0] });
+            deliver('player', { command: 'model::update', payload: { id: 'p1' } });
+            vi.advanceTimersByTime(400);
+        }
+        vi.advanceTimersByTime(TIMEOUT_MS);
+
+        await expect(mismatch).resolves.toBeInstanceOf(ProtocolMismatchError);
+    });
+
+    it('delivers messages untouched while the check is pending', () => {
+        const client = new Colibri('app', 'localhost', 9011);
+        const seen: Message[] = [];
+        client.messages.subscribe(msg => seen.push(msg));
+
+        connectSocket();
+        deliver('positions', { command: 'broadcast::vector3', payload: [1, 2, 3] });
+        deliver('player', { command: 'model::update', payload: { id: 'p1' } });
+        vi.advanceTimersByTime(TIMEOUT_MS);
+        deliver('positions', { command: 'broadcast::vector3', payload: [4, 5, 6] });
+
+        expect(seen).toEqual([
+            { channel: 'positions', command: 'broadcast::vector3', payload: [1, 2, 3] },
+            { channel: 'player', command: 'model::update', payload: { id: 'p1' } },
+            { channel: 'positions', command: 'broadcast::vector3', payload: [4, 5, 6] }
+        ]);
+    });
+
+    it('reports once, not once per reconnect', () => {
+        const client = new Colibri('app', 'localhost', 9011);
+        const seen: ProtocolMismatchError[] = [];
+        client.protocolMismatch.subscribe(e => seen.push(e));
+
+        for (let i = 0; i < 3; i++) {
+            connectSocket();
+            vi.advanceTimersByTime(TIMEOUT_MS);
+        }
+
+        expect(seen).toHaveLength(1);
+    });
+
+    it('says nothing when the socket went down before the window elapsed', () => {
+        const client = new Colibri('app', 'localhost', 9011);
+        const seen: ProtocolMismatchError[] = [];
+        client.protocolMismatch.subscribe(e => seen.push(e));
+
+        connectSocket();
+        fakeSocket.connected = false;
+        vi.advanceTimersByTime(TIMEOUT_MS);
+
+        expect(seen).toEqual([]);
+    });
+
+    // A frozen tab stops draining the socket while timers keep their own schedule, so beats can
+    // still be queued when this fires. Waiting another window costs nothing.
+    it('waits another window instead of reporting while the tab is hidden', () => {
+        vi.stubGlobal('document', { visibilityState: 'hidden' });
+        const client = new Colibri('app', 'localhost', 9011);
+        const seen: ProtocolMismatchError[] = [];
+        client.protocolMismatch.subscribe(e => seen.push(e));
+
+        connectSocket();
+        vi.advanceTimersByTime(TIMEOUT_MS);
+        expect(seen).toEqual([]);
+
+        vi.stubGlobal('document', { visibilityState: 'visible' });
+        deliver('colibri', { command: 'latency', payload: 1 });
+        vi.advanceTimersByTime(TIMEOUT_MS * 2);
+
+        expect(seen).toEqual([]);
+    });
+
+    it('does not follow an explicit refusal with a contradictory old-server guess', () => {
+        const client = new Colibri('app', 'localhost', 9011);
+        const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+        const seen: ProtocolMismatchError[] = [];
+        client.protocolMismatch.subscribe(e => seen.push(e));
+
+        connectSocket();
+        getAnyHandler(fakeSocket.onAny)('colibri', {
+            command: 'protocol::rejected',
+            payload: { reason: 'nope', serverVersion: '9', clientVersion: PROTOCOL_VERSION }
+        });
+        vi.advanceTimersByTime(TIMEOUT_MS * 2);
+
+        expect(seen).toHaveLength(1);
+        expect(seen[0].serverVersion).toBe('9');
+        expect(seen[0].fatal).toBe(true);
 
         errorSpy.mockRestore();
     });
