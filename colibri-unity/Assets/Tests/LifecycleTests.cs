@@ -98,5 +98,69 @@ namespace HCIKonstanz.Colibri.E2E
             Assert.That(connections.Length, Is.EqualTo(1),
                 $"Expected one WebServerConnection, found {connections.Length}");
         }
+
+
+        /*
+         *  Surviving Play mode with domain reload disabled - which the v2 docs recommend turning
+         *  on, so this is the configuration students actually run.
+         *
+         *  Ending a Play session destroys the singleton's GameObject but leaves the static field
+         *  pointing at it. The next session has to notice that and build a new one. When it did
+         *  not, the second press of Play produced a client with no connection at all: nothing in
+         *  the scene, no socket, and - because handing back a destroyed object throws nothing -
+         *  not one line in the console to say so.
+         *
+         *  Tested on singletons of their own rather than on WebServerConnection: the statics are
+         *  per-T, so destroying these cannot disturb the connection the rest of the suite is
+         *  using. One type per test, for the same reason - the state under test *is* the static,
+         *  so sharing a type would leave whichever test runs second reading the first one's
+         *  leftovers.
+         */
+
+        private class RebuiltSingleton : Core.SingletonBehaviour<RebuiltSingleton>
+        {
+        }
+
+        private class PlantedSingleton : Core.SingletonBehaviour<PlantedSingleton>
+        {
+        }
+
+        [UnityTest]
+        public IEnumerator ASingletonIsRebuiltAfterTheLastSessionsInstanceWasDestroyed()
+        {
+            var first = RebuiltSingleton.Instance;
+            Assert.That(first != null, Is.True, "the singleton was not created in the first place");
+
+            // What ending a Play session does to it, minus the session.
+            Object.DestroyImmediate(first.gameObject);
+            yield return null;
+
+            var second = RebuiltSingleton.Instance;
+
+            // Unity's !=, and checked before anything dereferences `second`: the failure being
+            // guarded against hands back the *destroyed* component, so asking whether it is alive
+            // has to come first or the test reports a MissingReferenceException instead of saying
+            // what went wrong. NUnit's own Is.Not.Null compares references and would pass here.
+            Assert.That(second != null, Is.True,
+                "The singleton was not rebuilt - Instance handed back the destroyed instance from "
+                + "the previous session. That is a client with no connection in the scene, no "
+                + "socket, and nothing in the console to say so");
+            Assert.That(ReferenceEquals(second, first), Is.False,
+                "A new instance was expected, not the previous session's");
+
+            Object.DestroyImmediate(second.gameObject);
+        }
+
+        [UnityTest]
+        public IEnumerator ASingletonAdoptsAnInstanceAlreadyInTheSceneInsteadOfAddingAnother()
+        {
+            var planted = new GameObject("planted").AddComponent<PlantedSingleton>();
+            yield return null;
+
+            Assert.That(ReferenceEquals(PlantedSingleton.Instance, planted), Is.True,
+                "A second instance was created alongside the one already in the scene");
+
+            Object.DestroyImmediate(planted.gameObject);
+        }
     }
 }
