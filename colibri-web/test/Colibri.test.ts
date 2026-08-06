@@ -4,16 +4,19 @@ vi.mock('socket.io-client', () => ({
     connect: vi.fn()
 }));
 
+import { firstValueFrom } from 'rxjs';
 import { connect } from 'socket.io-client';
 import {
     Colibri,
     GetRestApi,
+    PROTOCOL_VERSION,
     PutRestApi,
     RegisterChannel,
     RegisterOnce,
     SendMessage,
     UnregisterChannel
 } from '../src/Colibri';
+import { ProtocolMismatchError } from '../src/ColibriError';
 
 const connectMock = connect as unknown as Mock;
 
@@ -25,8 +28,18 @@ function makeFakeSocket() {
         once: vi.fn<(event: string, cb: SocketHandler) => void>(),
         off: vi.fn<(event: string, cb: SocketHandler) => void>(),
         onAny: vi.fn<(cb: SocketHandler) => void>(),
-        emit: vi.fn<(event: string, ...args: unknown[]) => void>()
+        emit: vi.fn<(event: string, ...args: unknown[]) => void>(),
+        disconnect: vi.fn<() => void>(),
+        // The Manager, which is what actually owns the retry policy - a protocol rejection
+        // has to switch it off there, not on the socket.
+        io: { reconnection: vi.fn<(on: boolean) => void>() }
     };
+}
+
+function getAnyHandler(mock: ReturnType<typeof makeFakeSocket>['onAny']): SocketHandler {
+    const call = mock.mock.calls.at(0);
+    if (!call) throw new Error('no onAny handler registered');
+    return call[0];
 }
 
 function getHandler(mock: ReturnType<typeof makeFakeSocket>['on'], event: string): SocketHandler {
@@ -317,5 +330,67 @@ describe('wrapper functions', () => {
 
         RegisterOnce('ch', handler);
         expect(fakeSocket.once).toHaveBeenCalledWith('ch', handler);
+    });
+});
+
+describe('protocol version handshake', () => {
+    it('announces the client protocol version in the handshake query', () => {
+        new Colibri('app', 'localhost', 9011);
+
+        expect(connectMock).toHaveBeenCalledWith(
+            'ws://localhost:9011',
+            expect.objectContaining({ query: { app: 'app', version: PROTOCOL_VERSION } })
+        );
+    });
+
+    it('stops reconnecting and reports a mismatch when the server refuses the version', async () => {
+        const client = new Colibri('app', 'localhost', 9011);
+        const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+        const mismatch = firstValueFrom(client.protocolMismatch);
+
+        getAnyHandler(fakeSocket.onAny)('colibri', {
+            command: 'protocol::rejected',
+            payload: { reason: 'nope', serverVersion: '9', clientVersion: PROTOCOL_VERSION }
+        });
+
+        const error = await mismatch;
+        expect(error).toBeInstanceOf(ProtocolMismatchError);
+        expect(error.serverVersion).toBe('9');
+        expect(error.clientVersion).toBe(PROTOCOL_VERSION);
+        // A mismatch cannot resolve itself; retrying would just bury the diagnostic.
+        expect(fakeSocket.io.reconnection).toHaveBeenCalledWith(false);
+        expect(fakeSocket.disconnect).toHaveBeenCalled();
+        expect(errorSpy).toHaveBeenCalled();
+
+        errorSpy.mockRestore();
+    });
+
+    it('keeps the rejection off the ordinary message stream', () => {
+        const client = new Colibri('app', 'localhost', 9011);
+        const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+        const seen: string[] = [];
+        client.messages.subscribe(msg => seen.push(msg.command));
+
+        const onAny = getAnyHandler(fakeSocket.onAny);
+        onAny('colibri', { command: 'protocol::rejected', payload: { serverVersion: '9' } });
+        onAny('colibri', { command: 'latency', payload: 1 });
+
+        expect(seen).toEqual(['latency']);
+
+        errorSpy.mockRestore();
+    });
+
+    it('survives a rejection payload with nothing useful in it', async () => {
+        const client = new Colibri('app', 'localhost', 9011);
+        const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+        const mismatch = firstValueFrom(client.protocolMismatch);
+
+        getAnyHandler(fakeSocket.onAny)('colibri', { command: 'protocol::rejected', payload: undefined });
+
+        const error = await mismatch;
+        expect(error.serverVersion).toBe('unknown');
+        expect(error.message).toContain(PROTOCOL_VERSION);
+
+        errorSpy.mockRestore();
     });
 });
