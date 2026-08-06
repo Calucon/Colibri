@@ -15,7 +15,9 @@ const port = Number(process.argv[3] ?? 9011);
 new Colibri('myAppName', host, port);
 console.log(`[peer] connecting to ${host}:${port} as myAppName`);
 
-const seen = (label: string) => (value: unknown) => console.log(`[peer] IN  ${label}:`, JSON.stringify(value));
+const seen = (label: string) => (value: unknown) => {
+    console.log(`[peer] IN  ${label}:`, JSON.stringify(value));
+};
 
 Sync.receiveBool('myChannel', seen('bool'));
 Sync.receiveNumber('myChannel', seen('number'));
