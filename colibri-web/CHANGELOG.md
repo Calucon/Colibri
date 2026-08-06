@@ -25,13 +25,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`toHexColor()` and `toRgbaColor()` (exported), plus the `ColorValue` type.** Normalize a
   received colour to whichever shape you want.
 - **A warning when the server predates the version check.** That check is server-side, so a server
-  too old to have it can neither refuse this client nor announce itself; the only thing left to go
-  on is that every 2.0.0+ server broadcasts `colibri`/`latency` every 100 ms and nothing older
-  does. Five seconds of silence emits a `ProtocolMismatchError` on `Colibri.protocolMismatch` with
-  `serverVersion: '<2.0.0'`. It **stays connected** — the Socket.IO envelope did not change between
-  v1 and v2, so the connection genuinely works and hanging up over a suspicion would turn a warning
-  into an outage. Ordinary traffic deliberately does not count as proof of life here: a 1.x server
-  relays broadcasts and model updates perfectly well.
+  too old to have it can neither refuse this client nor announce itself. A 2.0.0+ server now says
+  `colibri`/`protocol::accepted` on connect; five seconds without it emits a
+  `ProtocolMismatchError` on `Colibri.protocolMismatch` with `serverVersion: '<2.0.0'`. **Requires
+  colibri-server 2.0.0 or newer** to stay quiet, which is the point. It **stays connected** — the
+  Socket.IO envelope did not change between v1 and v2, so the connection genuinely works and
+  hanging up over this would turn a warning into an outage. Ordinary traffic deliberately does not
+  count as proof of life: a 1.x server relays broadcasts and model updates perfectly well, and the
+  100 ms `latency` broadcast it may also send has been there since colibri-server 1.2.0.
 - `ProtocolMismatchError.fatal` distinguishes the two cases: `true` when the server refused this
   client and the connection is gone, `false` for the suspicion above. **If you subscribe to
   `protocolMismatch` and tear anything down in response, check this flag** — previously every

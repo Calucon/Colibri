@@ -4,7 +4,7 @@ import { Observable, Subject } from 'rxjs';
 
 import { Payload, Service } from '../core/index.js';
 import { NetworkClient, NetworkMessage, NetworkServer } from '../command-hooks/index.js';
-import { COLIBRI_CHANNEL, PROTOCOL_REJECTED_COMMAND, PROTOCOL_VERSION, protocolRejection } from './protocol.js';
+import { COLIBRI_CHANNEL, PROTOCOL_ACCEPTED_COMMAND, PROTOCOL_REJECTED_COMMAND, PROTOCOL_VERSION, protocolAcceptance, protocolRejection } from './protocol.js';
 
 export interface SocketIoClient extends NetworkClient {
     socket: SocketIoSocket;
@@ -169,6 +169,11 @@ export class SocketIOServer extends Service implements NetworkServer {
                 clientId: client.id
             });
         }
+
+        // Announced to everyone that got this far, before any application traffic. A client
+        // waiting for this is how it tells a current server from one predating the version
+        // check, which cannot announce itself - see protocolAcceptance.
+        socket.emit(COLIBRI_CHANNEL, { command: PROTOCOL_ACCEPTED_COMMAND, payload: protocolAcceptance() });
 
         this.clients.push(client);
         this.addToAppIndex(client);

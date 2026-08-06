@@ -92,17 +92,53 @@ Clients must keep their announced version in step with this constant:
 `CLIENT_VERSION` in `colibri-unity`'s `WebServerConnection.cs`, `PROTOCOL_VERSION` in
 `colibri-web`'s `Colibri.ts`, and the `version` query in the admin UI's `socketio.service.ts`.
 
+**This is not the release version, and does not move with one.** It names the wire format, and
+nothing derives it from a `package.json`. A 2.0.1 bugfix and a 2.1.0 feature release both still
+announce `2`, so every combination of 2.x client and 2.x server interoperates - a client is
+refused only when the *wire format* it speaks differs, never because the two sides ship different
+release numbers.
+
+| change | `PROTOCOL_VERSION` | effect |
+| --- | --- | --- |
+| 2.0.0 → 2.0.1, bugfix | `2` | none, freely interoperable |
+| 2.0.0 → 2.1.0, new features, same wire format | `2` | none, freely interoperable |
+| a frame layout, field or encoding changes | `2` → `3` | **every deployed client is refused at once** |
+
+That last row is the whole cost of bumping it, and the whole point. Bump it only when an existing
+client would otherwise misread the bytes on the wire - not to signal that something was added.
+Adding a new `command` is not a wire-format change: unknown commands are ignored by every client
+(Unity's `Sync` switch has no default case, and colibri-web dispatches per registered channel).
+
 ### Detecting an out-of-date server
 
 Everything above is server-side, which leaves the mirror image uncovered: a server predating the
 check has no check to run, so it never refuses anyone and never says what it speaks. A client
-facing one has only inference from absence to work with, and both clients use the same signal -
-**a current server sends unprompted traffic every 100ms and an old one sends none.**
+facing one has only inference from absence to work with.
+
+So a current server **announces itself**. Immediately after accepting a Socket.IO client - before
+any application traffic - it sends:
+
+| field | value |
+| --- | --- |
+| channel | `colibri` |
+| command | `protocol::accepted` |
+| payload | `{ "serverVersion": string }` |
 
 | | how it notices | how long it takes | what it does |
 | --- | --- | --- | --- |
-| `colibri-web` | no `colibri`/`latency` event within 5s of connecting | 5s | warns, emits a **non-fatal** `ProtocolMismatchError` (`fatal: false`, `serverVersion: '<2.0.0'`), **stays connected** |
+| `colibri-web` | no `colibri`/`protocol::accepted` within 5s of connecting | 5s | warns, emits a **non-fatal** `ProtocolMismatchError` (`fatal: false`, `serverVersion: '<2.0.0'`), **stays connected** |
 | `colibri-unity` | 3 consecutive sessions accepted but ended before a frame decoded | ~4s (500/1000/2000ms backoff) | warns, sets `SuspectedProtocolMismatch`, keeps retrying |
+
+TCP clients are sent no announcement and need none: the framing itself changed incompatibly in
+2.0.0, so a pre-2.0.0 server is already unmistakable to them.
+
+**Why an explicit message rather than an inference from existing traffic.** The 100ms `latency`
+broadcast is the obvious candidate and is wrong: it was added in colibri-server 1.2.0, so keying on
+it silently accepts every 1.2.x and 1.3.x server as current. Verified against the published
+`hcikn/colibri:1.1.1` and `hcikn/colibri:1.3.1` images - 1.1.1 sends no beat, 1.3.1 sends it while
+still using the old `\0\0\0` framing. Nothing else a web client can observe separates them either:
+the Socket.IO envelope, the `client::connected` payload (both carry `version`) and the relay
+behaviour are identical.
 
 Two things follow from this being a guess rather than something the server said, and both are
 deliberate:
@@ -119,6 +155,11 @@ deliberate:
   event loop stalls for five seconds; it re-arms rather than reporting while the browser tab is
   hidden, since a frozen tab is the likeliest way to see that without a real stall.
 
+A web client facing an old server is warned, not cut off, because it genuinely still works -
+confirmed by running a current client against both images, with traffic relayed in both directions
+each time. Unity against the same servers cannot work at all, which is why its side of this is
+about naming the cause rather than deciding whether to continue.
+
 ### Heartbeat / latency
 
 The server sends a `heartbeat` frame to every connected client (handshaked or not) every 100ms,
@@ -132,12 +173,10 @@ per-client packet rate compared to running them as two independent 100ms timers.
 Socket.IO clients are not sent that frame - they get a `colibri`/`latency` event directly, also
 every 100ms, from the same `MeasureLatency` timer.
 
-**Both of these are contractual, not an implementation detail, and neither may become optional.**
-They are the only unprompted traffic a server sends, which makes their *absence* the sole way a
-client can tell it is talking to a server predating the version check - see
-[Detecting an out-of-date server](#detecting-an-out-of-date-server). `MeasureLatency` is
-constructed unconditionally in `main.ts` with no configuration gate, and must stay that way:
-making it opt-in would silently turn both clients' checks into false positives.
+**This is not a version signal.** The latency broadcast looks like one - only a current server
+sends it, surely? - but it was added in colibri-server **1.2.0**, so every 1.2.x and 1.3.x server
+sends it while still speaking the old protocol. Detecting an out-of-date server keys on
+`protocol::accepted` instead, for exactly this reason.
 
 ### Message
 

@@ -45,12 +45,21 @@ fixes (noted inline).
   needing a client release. Covered by the new `test/unit/client-logger.test.ts` — that hook had
   no tests at all.
 
-- **The 100 ms latency broadcast is now contractual**, documented under
-  [Heartbeat / latency](./protocol.md#heartbeat--latency). It is the only unprompted traffic a
-  server sends, which makes its absence the sole way a client can tell it is talking to a server
-  predating the version check — so `MeasureLatency` must stay unconditional, and making it opt-in
-  would silently turn both clients' checks into false positives. The inference itself is written up
-  under [Detecting an out-of-date server](./protocol.md#detecting-an-out-of-date-server).
+- **The server now announces its protocol version on connect**, as `colibri` /
+  `protocol::accepted` with `{ serverVersion }`, to every Socket.IO client it accepts. The version
+  check runs on the server, so it can only ever catch a stale *client*; this is what lets a client
+  catch a stale *server*, which otherwise neither refuses it nor says what it speaks.
+
+  It has to be an explicit message. The obvious alternative — inferring from the 100 ms `latency`
+  broadcast, which only a "current" server sends — is wrong: that broadcast was added in
+  colibri-server **1.2.0**, so every 1.2.x and 1.3.x server sends it while still speaking the old
+  protocol. Checked against the published `hcikn/colibri:1.1.1` and `hcikn/colibri:1.3.1` images
+  rather than assumed, after the repo's own `v1.1.2` tag turned out to predate both. Nothing else a
+  web client can observe separates them. Written up under
+  [Detecting an out-of-date server](./protocol.md#detecting-an-out-of-date-server).
+
+  TCP clients are sent no announcement and need none — the framing changed incompatibly in 2.0.0,
+  so an old server is already unmistakable to them.
 
 - **Documented the payload shape of every `broadcast::` command**, under
   [Payload shapes](./protocol.md#payload-shapes). The server never inspects these payloads, so
