@@ -10,7 +10,11 @@ namespace HCIKonstanz.Colibri.Networking
     /// </summary>
     public class ProtocolMismatchException : Exception
     {
-        /// <summary>Protocol version the server reported, or "unknown" if it did not say.</summary>
+        /// <summary>
+        /// Protocol version the server reported - a wire version like "1" or "2", never a release
+        /// version, so it is comparable with <see cref="ClientVersion"/>. "unknown" if the server
+        /// refused this client without saying what it speaks.
+        /// </summary>
         public string ServerVersion { get; }
 
         /// <summary>Protocol version this client announced in its handshake.</summary>

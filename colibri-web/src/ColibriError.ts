@@ -20,7 +20,15 @@ export class ColibriError extends CustomError {}
 export class ProtocolMismatchError extends ColibriError {
     public constructor(
         message: string,
+        /**
+         * Protocol version the server speaks - always a wire version like `'1'` or `'2'`, never a
+         * release version, so it is comparable with {@link clientVersion} on both paths. Reported
+         * by the server when `fatal`, and `'unknown'` if it refused this client without saying
+         * what it speaks. When not `fatal` it is **inferred**: a server that never announced
+         * itself predates 2.0.0, and every release before that speaks `'1'`.
+         */
         public readonly serverVersion: string,
+        /** Protocol version this client announced in its handshake. */
         public readonly clientVersion: string,
         /** Whether the connection is gone. See the class doc - a suspicion is not fatal. */
         public readonly fatal: boolean = true

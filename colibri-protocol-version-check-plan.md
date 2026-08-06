@@ -103,3 +103,59 @@ log plus the Unity-side heuristic in step 9 is the whole answer.
 - Manual: run the server, open the admin UI, confirm it still connects after the `version: '2'`
   bump, and confirm a deliberately mis-versioned Unity client shows the red line in
   `Window → Colibri Status` instead of retrying forever.
+
+---
+
+# Follow-up: detecting an out-of-date server
+
+> **Status: done.** Same branch; documented under
+> `colibri-server/docs/protocol.md#detecting-an-out-of-date-server`.
+
+Everything above is server-side, which leaves the mirror image uncovered. A server predating the
+check has no check to run: it never refuses anyone and never says what it speaks, so *old server,
+new client* stays silent. On the web side that is invisible — the Socket.IO envelope did not change
+between v1 and v2, so the connection genuinely works and simply never gets the newer behaviour.
+
+### What was built
+
+14. `colibri-server` — `protocol.ts` exports `PROTOCOL_ACCEPTED_COMMAND` and
+    `protocolAcceptance()`; `socket-io-server.ts` emits `colibri`/`protocol::accepted` with
+    `{ serverVersion }` immediately after the version check passes, before the client is indexed.
+15. `colibri-web` — `Colibri.ts` arms a 5 s timer on connect, cleared by that announcement; on
+    expiry it emits a **non-fatal** `ProtocolMismatchError` and **stays connected**. Guards against
+    the two false positives that matter: a socket that is no longer connected, and a hidden browser
+    tab (re-arm rather than report — a frozen tab stops draining the socket while timers keep their
+    own schedule).
+16. `colibri-web` — `ProtocolMismatchError.fatal` separates a refusal (connection gone) from this
+    suspicion (connection live). A behavioural change to an API added earlier on this same branch.
+17. `colibri-unity` — the step-9 heuristic already fires against a v1 server, so the work was in
+    *reporting* it: a separate `SuspectedProtocolMismatch` string rather than `Status`, which the
+    retry loop overwrites on the next iteration, plus a `ColibriStatusWindow` warning. Also closed
+    the EOF hole, where a session that ended without a frame *reset* the counter.
+
+### The design that was wrong, and why it is worth remembering
+
+The first approach inferred the server's age from the 100 ms `colibri`/`latency` broadcast, on the
+basis that v1 has no such hook — true of the `v1.1.2` tag in this repo, which is what was read.
+
+It is false of the servers people actually run. Docker Hub carries `hcikn/colibri` **1.2.0, 1.3.0
+and 1.3.1**, all newer than that tag, and `measure-latency` landed in **1.2.0**. So every 1.2.x and
+1.3.x server sends the beat while still speaking the old protocol, and the check quietly passed
+them as current. Caught only by running against the published images.
+
+No zero-server-change discriminator exists — the envelope and the `client::connected` payload both
+carry `version`, and the relay behaviour is identical — so an explicit announcement was the only
+way to cover the 1.1.1+ range that was asked for.
+
+**Read tags against what is deployed, not what is in the repo.**
+
+### Verification
+
+- Unit and e2e as above, plus web cases pinning the false positives: a beat inside the window, a
+  disconnected socket, a hidden tab, a refusal followed by no second report, and — the case that
+  makes the check worth anything — a busy server sending `broadcast::*`, `model::update` *and*
+  `latency` with no announcement must still report.
+- Unity `ProtocolMismatchDetectionTests.cs`: a fake v1 listener writing `'\0\0\0h\0'` every 100 ms
+  must set `SuspectedProtocolMismatch`; a closed port must not, since that is "server not running".
+- Live against `hcikn/colibri:1.1.1`, `1.2.0` and `1.3.1`: all three warn, and traffic relays in
+  both directions on all three — which is the evidence for warning rather than disconnecting.

@@ -126,11 +126,18 @@ any application traffic - it sends:
 
 | | how it notices | how long it takes | what it does |
 | --- | --- | --- | --- |
-| `colibri-web` | no `colibri`/`protocol::accepted` within 5s of connecting | 5s | warns, emits a **non-fatal** `ProtocolMismatchError` (`fatal: false`, `serverVersion: '<2.0.0'`), **stays connected** |
+| `colibri-web` | no `colibri`/`protocol::accepted` within 5s of connecting | 5s | warns, emits a **non-fatal** `ProtocolMismatchError` (`fatal: false`, `serverVersion: '1'`), **stays connected** |
 | `colibri-unity` | 3 consecutive sessions accepted but ended before a frame decoded | ~4s (500/1000/2000ms backoff) | warns, sets `SuspectedProtocolMismatch`, keeps retrying |
 
 TCP clients are sent no announcement and need none: the framing itself changed incompatibly in
 2.0.0, so a pre-2.0.0 server is already unmistakable to them.
+
+`serverVersion` is a **protocol** version wherever it appears - in the payloads above, in
+`ProtocolMismatchError` and in `ProtocolMismatchException` - so it is always comparable with the
+client version beside it, and never carries a release version like `1.3.1`. On the old-server path
+it is `'1'`: nothing said so, but the announcement is sent by every 2.0.0+ server and every release
+before that speaks v1. `'unknown'` appears only when a server refused a client without saying what
+it speaks.
 
 **Why an explicit message rather than an inference from existing traffic.** The 100ms `latency`
 broadcast is the obvious candidate and is wrong: it was added in colibri-server 1.2.0, so keying on

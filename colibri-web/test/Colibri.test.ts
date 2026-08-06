@@ -427,7 +427,7 @@ describe('detecting a server that predates the version check', () => {
         warnSpy.mockRestore();
     });
 
-    it('reports a suspected old server when no latency beat arrives', async () => {
+    it('reports a suspected old server when it never announces itself', async () => {
         const client = new Colibri('app', 'localhost', 9011);
         const mismatch = firstValueFrom(client.protocolMismatch);
 
@@ -436,7 +436,8 @@ describe('detecting a server that predates the version check', () => {
 
         const error = await mismatch;
         expect(error).toBeInstanceOf(ProtocolMismatchError);
-        expect(error.serverVersion).toBe('<2.0.0');
+        // A protocol version on both paths, so the two are comparable - not a release range.
+        expect(error.serverVersion).toBe('1');
         expect(error.clientVersion).toBe(PROTOCOL_VERSION);
         // The Socket.IO envelope did not change between v1 and v2, so this connection works.
         // Reporting it as fatal, or hanging up, would turn a warning into an outage.
