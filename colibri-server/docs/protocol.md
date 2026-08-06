@@ -84,10 +84,40 @@ console is worse than the mismatch it detects.
 - The `app === 'colibri'` exemption is by app name, so any Socket.IO client naming itself `colibri`
   opts out of the check entirely. That app name is reserved for the admin UI and also collides with
   the `colibri` control channel; it is not a name an application should be using.
+- It says nothing about a server that is *itself* out of date, since the check only runs on the
+  server. Clients infer that separately and can only ever suspect it - see
+  [Detecting an out-of-date server](#detecting-an-out-of-date-server).
 
 Clients must keep their announced version in step with this constant:
 `CLIENT_VERSION` in `colibri-unity`'s `WebServerConnection.cs`, `PROTOCOL_VERSION` in
 `colibri-web`'s `Colibri.ts`, and the `version` query in the admin UI's `socketio.service.ts`.
+
+### Detecting an out-of-date server
+
+Everything above is server-side, which leaves the mirror image uncovered: a server predating the
+check has no check to run, so it never refuses anyone and never says what it speaks. A client
+facing one has only inference from absence to work with, and both clients use the same signal -
+**a current server sends unprompted traffic every 100ms and an old one sends none.**
+
+| | how it notices | how long it takes | what it does |
+| --- | --- | --- | --- |
+| `colibri-web` | no `colibri`/`latency` event within 5s of connecting | 5s | warns, emits a **non-fatal** `ProtocolMismatchError` (`fatal: false`, `serverVersion: '<2.0.0'`), **stays connected** |
+| `colibri-unity` | 3 consecutive sessions accepted but ended before a frame decoded | ~4s (500/1000/2000ms backoff) | warns, sets `SuspectedProtocolMismatch`, keeps retrying |
+
+Two things follow from this being a guess rather than something the server said, and both are
+deliberate:
+
+- **Neither is terminal.** `colibri-web` does not disconnect, because the Socket.IO envelope did
+  not change between v1 and v2 - a current web client against a 1.x server genuinely works, and
+  tearing that down over a version suspicion would turn a warning into an outage. `colibri-unity`
+  keeps retrying and leaves `Status` alone; `ConnectionStatus.ProtocolMismatch` and
+  `ProtocolMismatchReason` stay reserved for a refusal that was actually received and decoded.
+- **Neither can be certain.** `colibri-unity`'s symptom reads identically if the address points at
+  a TCP port that is not Colibri at all, which is why it is scoped to sessions that got past the
+  handshake - "connection refused" is a server that is switched off, not a version problem, and
+  must never be reported as one. `colibri-web`'s can in principle be tripped by a server whose
+  event loop stalls for five seconds; it re-arms rather than reporting while the browser tab is
+  hidden, since a frozen tab is the likeliest way to see that without a real stall.
 
 ### Heartbeat / latency
 
@@ -98,6 +128,16 @@ synthetic `colibri`/`latency` message so `MeasureLatency`'s round-trip accountin
 same way it handles a web client's latency ping - this is the only place a `heartbeat` frame
 travels client→server. Merging the heartbeat and the latency ping into one frame halves the idle
 per-client packet rate compared to running them as two independent 100ms timers.
+
+Socket.IO clients are not sent that frame - they get a `colibri`/`latency` event directly, also
+every 100ms, from the same `MeasureLatency` timer.
+
+**Both of these are contractual, not an implementation detail, and neither may become optional.**
+They are the only unprompted traffic a server sends, which makes their *absence* the sole way a
+client can tell it is talking to a server predating the version check - see
+[Detecting an out-of-date server](#detecting-an-out-of-date-server). `MeasureLatency` is
+constructed unconditionally in `main.ts` with no configuration gate, and must stay that way:
+making it opt-in would silently turn both clients' checks into false positives.
 
 ### Message
 
