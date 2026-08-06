@@ -210,6 +210,15 @@ namespace HCIKonstanz.Colibri.Setup
         {
             EditorGUILayout.LabelField("Recent messages", EditorStyles.boldLabel);
 
+            // Entries outlive Play mode when domain reload is disabled. Showing the last
+            // session's messages here, with ages still counting up against a clock that never
+            // stops, reads as if something were still being sent.
+            if (!EditorApplication.isPlaying)
+            {
+                EditorGUILayout.LabelField("(nothing sent or received yet)");
+                return;
+            }
+
             var traffic = Sync.RecentTraffic.ToArray();
             if (traffic.Length == 0)
             {
