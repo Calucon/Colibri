@@ -29,6 +29,39 @@ export const MAX_FIELD_LENGTH = 0xffff;
 // FrameReader limit so the server can never emit a frame its own parser would reject.
 export const MAX_FRAME_LENGTH = 1024 * 1024 * 5;
 
+// The wire protocol this server speaks, and the version string every client is required
+// to announce in its handshake. Single source of truth for both transports: the TCP
+// handshake body's `version` field and the Socket.IO `version` handshake query.
+//
+// This is deliberately not a negotiation. There is one supported version at a time, and a
+// client announcing anything else is refused rather than downgraded - the framing changed
+// incompatibly between v1 and the current protocol, and there is no subset both can speak.
+// The point of the check is that the refusal is *legible*: without it a mismatched client
+// reconnects forever against a server that logs nothing unusual.
+export const PROTOCOL_VERSION = '2';
+
+// The channel and command a refusal is delivered on. A plain message frame rather than a
+// server->client handshake frame, so the same notification works over Socket.IO, and so it
+// can carry a reason. Safe against older clients: Unity's Sync command switch has no
+// default case and ignores unknown commands, and the web client surfaces it as an ordinary
+// message.
+export const COLIBRI_CHANNEL = 'colibri';
+export const PROTOCOL_REJECTED_COMMAND = 'protocol::rejected';
+
+export interface ProtocolRejection {
+    reason: string;
+    serverVersion: string;
+    clientVersion: string;
+}
+
+export const protocolRejection = function (clientVersion: string): ProtocolRejection {
+    return {
+        reason: `Unsupported protocol version '${clientVersion || '(none)'}'. This server speaks v${PROTOCOL_VERSION}.`,
+        serverVersion: PROTOCOL_VERSION,
+        clientVersion,
+    };
+};
+
 export class FrameError extends Error {}
 
 export type DecodedFrame =

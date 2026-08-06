@@ -15,7 +15,11 @@ export class SocketIOService {
     private readonly changeTrigger$ = new Subject<void>();
 
     constructor() {
-        this.socket = io.connect('', { query: { app: 'colibri', version: '1' } });
+        // Must match PROTOCOL_VERSION in src/server/modules/networking/protocol.ts. The admin
+        // UI is exempt from the disconnect-on-mismatch check (it ships with the server, so it
+        // can only ever be out of step by mistake), but a stale value here still logs a
+        // warning on every page load.
+        this.socket = io.connect('', { query: { app: 'colibri', version: '2' } });
 
         this.changeTrigger$
             .pipe(throttleTime(50, undefined, { leading: true, trailing: true }))

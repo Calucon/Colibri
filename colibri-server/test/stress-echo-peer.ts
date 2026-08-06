@@ -16,6 +16,7 @@ import { Config } from '../src/server/configuration.js';
 import {
     FrameReader,
     FrameType,
+    PROTOCOL_VERSION,
     encodeHandshakeFrame,
     encodeHeartbeatFrame,
     encodeMessageFrame,
@@ -91,7 +92,7 @@ client.on('close', () => console.log(`done: echoed ${echoed} probe(s), ${heartbe
 
 client.connect(Config.TCP_PORT, '127.0.0.1', () => {
     console.log(`connected, handshaking as app "${app}" - echoing ${PROBE_CHANNEL}`);
-    client.write(encodeHandshakeFrame('2', app, `stress-echo-${process.pid}`), onError);
+    client.write(encodeHandshakeFrame(PROTOCOL_VERSION, app, `stress-echo-${process.pid}`), onError);
 
     if (runSeconds > 0) setTimeout(() => client.end(), runSeconds * 1000);
 });

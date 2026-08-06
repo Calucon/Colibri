@@ -4,6 +4,7 @@ import { Observable, Subject } from 'rxjs';
 
 import { Payload, Service } from '../core/index.js';
 import { NetworkClient, NetworkMessage, NetworkServer } from '../command-hooks/index.js';
+import { COLIBRI_CHANNEL, PROTOCOL_REJECTED_COMMAND, PROTOCOL_VERSION, protocolRejection } from './protocol.js';
 
 export interface SocketIoClient extends NetworkClient {
     socket: SocketIoSocket;
@@ -140,7 +141,27 @@ export class SocketIOServer extends Service implements NetworkServer {
             this.logError('Websocket connection has no app specified; aborting connection', false);
             socket.disconnect();
             return;
-        } else if (client.app !== 'colibri') { // ignore colibri web interface clients
+        }
+
+        // The admin UI is served by this same process and therefore can never be out of step
+        // with it, so it is warned about rather than refused - a version check that can lock
+        // you out of your own console is worse than the mismatch it detects.
+        if (client.version !== PROTOCOL_VERSION) {
+            const rejection = protocolRejection(client.version);
+            if (client.app === COLIBRI_CHANNEL) {
+                this.logWarning(`Admin UI client ${client.id} announced protocol v${client.version}; expected v${PROTOCOL_VERSION}`);
+            } else {
+                this.logError(`Refusing client ${client.id} from ${socket.handshake.address}: ${rejection.reason}`, false);
+                socket.emit(COLIBRI_CHANNEL, { command: PROTOCOL_REJECTED_COMMAND, payload: rejection });
+                // Not disconnect(true): forcing the transport shut can truncate the rejection
+                // that was just queued. The unforced form writes the namespace disconnect
+                // behind it on the same transport, so the client sees both, in order.
+                socket.disconnect();
+                return;
+            }
+        }
+
+        if (client.app !== 'colibri') { // ignore colibri web interface clients
             this.logDebug(`New client (${client.id}) connected from ${socket.handshake.address}, waiting for app name`);
             this.logDebug(`Setting app of new colibri client '${client.name}' (${client.id}, v${client.version}) to "${client.app}"`, {
                 clientApp: client.app,
