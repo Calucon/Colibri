@@ -14,17 +14,32 @@ Each component has its own changelog with the full detail:
 ## Read this first: the server and Unity move together
 
 colibri-unity 2.0.0 speaks a [new binary TCP protocol](colibri-server/docs/protocol.md) and
-**requires colibri-server ≥ 2.0.0**. There is no version negotiation — both sides have to agree on
-the framing out of band, which means matching versions. A 1.x Unity client cannot talk to a 2.0.0
-server, and a 2.0.0 Unity client cannot talk to a 1.x server. In both directions the failure is a
-dropped connection, not a helpful message.
+**requires colibri-server ≥ 2.0.0**. There is no version negotiation — both sides have to be
+upgraded together. A 1.x Unity client cannot talk to a 2.0.0 server, and a 2.0.0 Unity client
+cannot talk to a 1.x server.
 
-Web clients are **not** affected by that: they connect over Socket.IO, which did not change.
-`colibri-web` 2.0.0 and 1.x both work against either server. The handshake `version` field went from
-`'1'` to `'2'`, but the server only displays it.
+The failure is at least diagnosable now. The server checks the handshake's version field and
+refuses anything it does not speak, naming both versions in its log and telling the client why on
+the `colibri` channel; the Unity client logs that, shows it in `Window → Colibri Status`, and stops
+reconnecting. Where the framing itself differs the refusal cannot be decoded, so the client falls
+back to reporting a likely protocol mismatch after three sessions that fail before a single frame
+is read. See [Version checking](colibri-server/docs/protocol.md#version-checking).
 
-So the safe order is: **upgrade the server first**, then Unity, then the web clients whenever it
-suits you.
+**Web clients are covered by the same check**, even though Socket.IO itself did not change.
+`colibri-web` 1.x announces `version: '1'` in its handshake query, so a 2.0.0 server refuses it —
+this is the one place the version check is a breaking change for web, which was previously told
+its version field was only ever displayed.
+
+The symptom on a stale web client is quiet, because `colibri-web` only learned to recognize
+`protocol::rejected` after 2.0.0 was published. An older client receives the rejection as an
+ordinary message on `Colibri.messages`, which nothing is listening for, and is then disconnected;
+Socket.IO does not reconnect after a server-side disconnect, so **it connects once and then stops,
+with no error on the client at all**. The server's log line — which names the client, its address
+and both versions — is the diagnostic. A client built against a `colibri-web` that has the check
+logs the mismatch itself and exposes it on `Colibri.protocolMismatch`.
+
+So the safe order is: **upgrade the server first**, then Unity, then the web clients — but do
+upgrade the web clients, rather than leaving 1.x ones running against a 2.0.0 server.
 
 ---
 

@@ -5,8 +5,10 @@
 - Unity 2022.3 LTS or higher
 - **colibri-server 2.0.0 or higher.** Colibri Unity 2.0.0 speaks the [v3 binary TCP
   protocol](../colibri-server/docs/protocol.md) and **cannot talk to a 1.x server** — there is no
-  version negotiation, both sides have to agree on the framing out of band. Colibri Unity 1.x
-  likewise cannot talk to a 2.0.0 server.
+  version negotiation, both sides have to be upgraded together. Colibri Unity 1.x likewise cannot
+  talk to a 2.0.0 server. A mismatch is not silent: the server refuses the connection and says
+  so, `Window → Colibri Status` shows the mismatch in red, and the client stops reconnecting
+  instead of retrying forever.
 
 ## Installation
 

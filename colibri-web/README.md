@@ -77,12 +77,36 @@ Sync.receiveJson('myChannel', json => {
 });
 ```
 
+Vectors, quaternions and colours are plain arrays here, where Unity uses its own structs:
+`Sync.sendVector2('myChannel', [1, 2])`, `Sync.sendVector3('myChannel', [1, 2, 3])`,
+`Sync.sendColor('myChannel', [1, 0, 0, 1])` with each colour component 0-1.
+
+**A colour arrives in either of two forms.** A Unity client sends the HTML string
+`"#RRGGBBAA"`; a colibri-web client sends `[r, g, b, a]`. Both reach your callback, so normalize
+rather than assuming one:
+
+```ts
+import { Sync, toHexColor, toRgbaColor } from '@hcikn/colibri';
+
+Sync.receiveColor('myChannel', color => {
+    element.style.background = toHexColor(color); // "#ff0000ff", whoever sent it
+    const [r, g, b, a] = toRgbaColor(color); // ...or 0-1 components
+});
+```
+
+Both normalizers warn and fall back to opaque black on a payload that is not a colour, rather
+than throwing. The full wire format is in
+[the protocol docs](../colibri-server/docs/protocol.md#payload-shapes).
+
 See also [the broadcast sample](samples/broadcast.ts) (run sample with `npm run samples/broadcast`).
 
 Limitations:
 
 - You have to register the listener _before_ sending out data
-- Type and channel _must_ match between Listener and Sender (`number` will be converted to float for Unity clients, i.e., use `float` listener on Unity clients for sending numbers!)
+- Type and channel _must_ match between Listener and Sender. JavaScript has one number type, so
+  everything this library sends is tagged `float` — including `sendInt`, which exists only for API
+  symmetry with Unity. **Unity clients must receive numbers sent from web with `Sync.Receive<float>`,
+  never `Sync.Receive<int>`.** The other direction is handled: `receiveNumber` accepts both.
 - Remember to unregister your listener where necessary!
 
 ### SyncModel

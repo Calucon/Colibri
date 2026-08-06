@@ -12,6 +12,48 @@ fixes (noted inline).
 
 ---
 
+## Unreleased
+
+- **Protocol version checking.** `PROTOCOL_VERSION` in
+  [`protocol.ts`](../src/server/modules/networking/protocol.ts) is now the single source of truth
+  for both transports, and both check it. Until now the version was parsed off the TCP handshake
+  and the Socket.IO query, stored, logged, shown in the admin UI — and compared against nothing,
+  so a client built against the wrong protocol reconnected forever against a server that said
+  nothing unusual.
+
+  A mismatched client is refused: it is told why with a `colibri` / `protocol::rejected` message
+  (`{ reason, serverVersion, clientVersion }`) and then disconnected, and it never enters the app
+  index or `clientConnected$`, so no half-connected ghost reaches the admin UI. The admin UI
+  itself is exempt — it ships with the server, and a check that can lock you out of your own
+  console is worse than the mismatch it detects — and its own query was bumped from the stale
+  `'1'` to `'2'`. Documented under
+  [Version checking](./protocol.md#version-checking).
+
+  This is a check, not a negotiation, and it cannot reach a client whose *framing* differs: a real
+  v1 client cannot decode the refusal. For that case the server-side error naming the peer and
+  both versions is the diagnostic, and the clients cover the rest heuristically.
+
+- `npm run test:tcpclient` now takes an optional version argument (`-- 1`) so the refusal can be
+  driven by hand against a live server.
+
+- **Fixed: a web client's log lines reached the admin UI with JSON quotes around them.**
+  `ClientLogger` read the payload with `asString()`, which for a Socket.IO message is
+  `JSON.stringify` — so `console.log('hello')` in a browser showed up as `[client] "hello"`, and a
+  stack trace's newlines were flattened to literal `\n`. colibri-unity had already worked around
+  this by shipping the `log` channel as raw utf8; the server now unwraps a JSON string value
+  instead, which fixes both transports and every colibri-web version already published, without
+  needing a client release. Covered by the new `test/unit/client-logger.test.ts` — that hook had
+  no tests at all.
+
+- **Documented the payload shape of every `broadcast::` command**, under
+  [Payload shapes](./protocol.md#payload-shapes). The server never inspects these payloads, so
+  their shape is an agreement between the clients — one that had never been written down, which is
+  how colour ended up with two incompatible forms. Also recorded there: that `broadcast::int` is
+  send-side Unity-only, that `log` is the one channel that is not JSON, and that no client
+  re-requests model state after a reconnect.
+
+---
+
 ## Runtime, build & tooling
 
 - Migrated `src/server` to native ESM (`"type": "module"`, explicit `.js` import extensions,
