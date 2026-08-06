@@ -64,7 +64,10 @@ namespace HCIKonstanz.Colibri.Networking
 
         // Instance, not static: static state survives Enter Play Mode with domain reload
         // disabled and would leave a second play session talking to a dead socket.
-        private Socket _socket;
+        //
+        // volatile: written by the connection loop off the main thread, read by Update()'s
+        // heartbeat watchdog and by the send path.
+        private volatile Socket _socket;
         private CancellationTokenSource _lifetime;
         private string _hostname = "";
 
@@ -79,7 +82,12 @@ namespace HCIKonstanz.Colibri.Networking
 
         private readonly LockFreeQueue<InPacket> _queuedCommands = new LockFreeQueue<InPacket>();
         private long _lastHeartbeatTime;
+
+        // Both touched from the connection loop and from Update() via the Status setter, so
+        // every access to them is under _statusLock.
         private int _connectAttempts;
+
+        // Connection loop only.
         private bool _hasReportedMissingConfig;
 
         // ColibriConfig.Load() goes through Resources.Load, which is main-thread only, so the
@@ -93,7 +101,10 @@ namespace HCIKonstanz.Colibri.Networking
         // UniTaskCompletionSource: several SendCommandAsync calls routinely wait on this at once
         // (a SyncBehaviour pushes one update per synced attribute at startup), and a
         // UniTaskCompletionSource throws "can not await twice" on the second pending awaiter.
-        private TaskCompletionSource<bool> _connectedGate = NewGate();
+        //
+        // volatile because the gate is re-armed on the connection loop's thread while a sender
+        // on any other thread may be reading it to await.
+        private volatile TaskCompletionSource<bool> _connectedGate = NewGate();
         private volatile bool _isGateOpen;
         public Task Connected => _connectedGate.Task;
 
@@ -104,34 +115,68 @@ namespace HCIKonstanz.Colibri.Networking
         private volatile bool _fireOnConnected;
         private volatile bool _fireOnDisconnected;
 
-        private ConnectionStatus _status = ConnectionStatus.Disconnected;
+        /// <summary>
+        /// Smoothed rate at which <see cref="Update"/> runs, which is the rate at which received
+        /// messages are handed to user code. Zero until the first few frames have been measured.
+        /// </summary>
+        /// <remarks>
+        /// Not a diagnostic of the network. Once the socket is off the main thread the remaining
+        /// delivery delay is entirely the local frame time, and an Editor in the background is
+        /// throttled hard enough for that to be the dominant term - which looks exactly like a
+        /// slow connection unless something says otherwise.
+        /// </remarks>
+        public float DeliveryFramesPerSecond => _smoothedDeltaTime > 0f ? 1f / _smoothedDeltaTime : 0f;
+
+        private float _smoothedDeltaTime;
+
+        /// <summary>
+        /// Thread the receive loop last ran on, or 0 before the first receive. Exists so the test
+        /// suite can assert the loop is not on the main thread; nothing in the library reads it.
+        /// </summary>
+        internal int ReceiveThreadId => _receiveThreadId;
+        private volatile int _receiveThreadId;
+
+        private volatile ConnectionStatus _status = ConnectionStatus.Disconnected;
+
+        // The setter is a read-modify-write over four fields, and the connection loop and
+        // Update()'s heartbeat watchdog can both reach it at the same time. Interleaved, the two
+        // can lose a transition - the watchdog's Disconnected landing between the loop's compare
+        // and its assignment leaves the gate open on a socket that is already closed.
+        private readonly object _statusLock = new object();
+
         public ConnectionStatus Status
         {
             get { return _status; }
             private set
             {
-                if (_status == value)
-                    return;
-
-                _status = value;
-
-                if (_status == ConnectionStatus.Connected)
+                lock (_statusLock)
                 {
-                    _connectAttempts = 0;
-                    _fireOnConnected = true;
-                    _isGateOpen = true;
-                    _connectedGate.TrySetResult(true);
-                }
-                else if (_isGateOpen)
-                {
-                    // Re-arm the gate so a send issued while disconnected waits for the next
-                    // successful connection instead of racing straight onto a dead socket.
-                    _isGateOpen = false;
-                    _connectedGate = NewGate();
-                }
+                    if (_status == value)
+                        return;
 
-                if (_status == ConnectionStatus.Disconnected)
-                    _fireOnDisconnected = true;
+                    _status = value;
+
+                    if (_status == ConnectionStatus.Connected)
+                    {
+                        _connectAttempts = 0;
+                        _fireOnConnected = true;
+                        _isGateOpen = true;
+
+                        // The gate is created with RunContinuationsAsynchronously, so no waiting
+                        // sender resumes inline here and none of them runs while holding the lock.
+                        _connectedGate.TrySetResult(true);
+                    }
+                    else if (_isGateOpen)
+                    {
+                        // Re-arm the gate so a send issued while disconnected waits for the next
+                        // successful connection instead of racing straight onto a dead socket.
+                        _isGateOpen = false;
+                        _connectedGate = NewGate();
+                    }
+
+                    if (_status == ConnectionStatus.Disconnected)
+                        _fireOnDisconnected = true;
+                }
             }
         }
 
@@ -185,6 +230,7 @@ namespace HCIKonstanz.Colibri.Networking
         private void Update()
         {
             RefreshConfig();
+            TrackDeliveryRate();
 
             if (_fireOnConnected)
             {
@@ -212,9 +258,44 @@ namespace HCIKonstanz.Colibri.Networking
             }
         }
 
+        /// <summary>
+        /// Measured here rather than anywhere else because this is the very method that drains
+        /// <c>_queuedCommands</c>: it reports the rate messages are actually delivered at, not
+        /// something adjacent to it.
+        /// </summary>
+        private void TrackDeliveryRate()
+        {
+            // unscaledDeltaTime, so a paused or slowed timeScale is not read as a stalled client.
+            var delta = Time.unscaledDeltaTime;
+
+            // Exponential moving average: a single long frame should show up, but not make the
+            // readout jump around so much that it cannot be read.
+            _smoothedDeltaTime = _smoothedDeltaTime <= 0f
+                ? delta
+                : Mathf.Lerp(_smoothedDeltaTime, delta, 0.1f);
+        }
+
 
         /*
          *  Connection lifecycle
+         */
+
+        /*
+         *  ConfigureAwait(false) on every await from here down, without exception.
+         *
+         *  This loop is started from OnEnable, i.e. on the main thread, so without it the first
+         *  await captures Unity's SynchronizationContext and every continuation in the chain -
+         *  connect, receive, heartbeat echo, send - is posted back to the main thread and pumped
+         *  once per frame. Inbound bytes then sit in the kernel buffer until the next frame, the
+         *  heartbeat echo costs two more frame-pumps *inside* the receive loop, and StampLiveness
+         *  only runs when the main thread runs.
+         *
+         *  An unfocused Editor throttles its player loop, so that one cause produced both halves
+         *  of the reported symptom: sync that visibly lagged between two editors side by side,
+         *  and missed heartbeats on whichever one was in the background.
+         *
+         *  The main-thread handoff that user code needs is elsewhere and stays where it is:
+         *  received messages go through _queuedCommands and are delivered from Update().
          */
 
         // One long-lived task per component lifetime, instead of Update() re-entering
@@ -236,7 +317,7 @@ namespace HCIKonstanz.Colibri.Networking
                         Debug.LogError(ColibriConfig.NOT_CONFIGURED_MESSAGE);
                     }
 
-                    if (!await Delay(RECONNECT_DELAY_MIN_MS, token))
+                    if (!await Delay(RECONNECT_DELAY_MIN_MS, token).ConfigureAwait(false))
                         break;
                     continue;
                 }
@@ -245,7 +326,8 @@ namespace HCIKonstanz.Colibri.Networking
 
                 try
                 {
-                    await RunSession(address, _tcpPort, SanitizeHandshakeField(app), token);
+                    await RunSession(address, _tcpPort, SanitizeHandshakeField(app), token)
+                        .ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
                 {
@@ -279,14 +361,18 @@ namespace HCIKonstanz.Colibri.Networking
                 if (token.IsCancellationRequested)
                     break;
 
-                if (!await Delay(NextBackoffDelay(), token))
+                if (!await Delay(NextBackoffDelay(), token).ConfigureAwait(false))
                     break;
             }
         }
 
         private async Task RunSession(string host, int port, string app, CancellationToken token)
         {
-            Status = _connectAttempts == 0 ? ConnectionStatus.Connecting : ConnectionStatus.Reconnecting;
+            bool firstAttempt;
+            lock (_statusLock)
+                firstAttempt = _connectAttempts == 0;
+
+            Status = firstAttempt ? ConnectionStatus.Connecting : ConnectionStatus.Reconnecting;
             Debug.Log($"Colibri: connecting to {host}:{port}");
 
             var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
@@ -296,11 +382,12 @@ namespace HCIKonstanz.Colibri.Networking
             // no cancellation token overload for either on this API surface.
             using (token.Register(() => CloseSocket(socket)))
             {
-                await socket.ConnectAsync(host, port);
+                await socket.ConnectAsync(host, port).ConfigureAwait(false);
                 token.ThrowIfCancellationRequested();
 
                 StampLiveness();
-                await SendFrame(socket, FrameCodec.EncodeHandshake(CLIENT_VERSION, app, _hostname), token);
+                await SendFrame(socket, FrameCodec.EncodeHandshake(CLIENT_VERSION, app, _hostname), token)
+                    .ConfigureAwait(false);
 
                 // The app name is named explicitly: a typo in it produces a perfectly healthy
                 // connection on which no other client is ever seen.
@@ -308,10 +395,10 @@ namespace HCIKonstanz.Colibri.Networking
 
                 // Drain anything queued during the outage before opening the gate, so retried
                 // messages stay ahead of new ones.
-                await FlushQueue(socket, token);
+                await FlushQueue(socket, token).ConfigureAwait(false);
                 Status = ConnectionStatus.Connected;
 
-                await ReceiveLoop(socket, token);
+                await ReceiveLoop(socket, token).ConfigureAwait(false);
             }
         }
 
@@ -322,12 +409,15 @@ namespace HCIKonstanz.Colibri.Networking
 
             while (!token.IsCancellationRequested)
             {
-                var received = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), SocketFlags.None);
+                var received = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), SocketFlags.None)
+                    .ConfigureAwait(false);
                 if (received <= 0)
                 {
                     Debug.Log("Colibri: server closed the connection");
                     return;
                 }
+
+                _receiveThreadId = Thread.CurrentThread.ManagedThreadId;
 
                 // The server heartbeats every 100 ms whether or not there is traffic, so any
                 // received byte is proof of life.
@@ -345,7 +435,8 @@ namespace HCIKonstanz.Colibri.Networking
                             // sole source of the server's TCP latency measurements; the old
                             // `colibri`/`latency` message echo is Socket.IO-only and nothing
                             // sends it to a TCP client any more.
-                            await SendFrame(socket, FrameCodec.EncodeHeartbeat(frame.PingTimestamp), token);
+                            await SendFrame(socket, FrameCodec.EncodeHeartbeat(frame.PingTimestamp), token)
+                                .ConfigureAwait(false);
                             break;
 
                         case FrameType.Message:
@@ -375,9 +466,13 @@ namespace HCIKonstanz.Colibri.Networking
 
         private int NextBackoffDelay()
         {
-            var shift = Math.Min(_connectAttempts, 5);
-            _connectAttempts++;
-            return Math.Min(RECONNECT_DELAY_MAX_MS, RECONNECT_DELAY_MIN_MS << shift);
+            // Same lock as the Status setter, which resets the counter on a successful connect.
+            lock (_statusLock)
+            {
+                var shift = Math.Min(_connectAttempts, 5);
+                _connectAttempts++;
+                return Math.Min(RECONNECT_DELAY_MAX_MS, RECONNECT_DELAY_MIN_MS << shift);
+            }
         }
 
         /// <returns><c>false</c> if the wait was cancelled - i.e. the caller should stop looping.</returns>
@@ -385,7 +480,7 @@ namespace HCIKonstanz.Colibri.Networking
         {
             try
             {
-                await Task.Delay(delayMs, token);
+                await Task.Delay(delayMs, token).ConfigureAwait(false);
                 return true;
             }
             catch (OperationCanceledException)
@@ -445,13 +540,15 @@ namespace HCIKonstanz.Colibri.Networking
         // truncating the frame.
         private async Task SendFrame(Socket socket, byte[] frame, CancellationToken token)
         {
-            await _sendLock.WaitAsync(token);
+            await _sendLock.WaitAsync(token).ConfigureAwait(false);
             try
             {
                 var offset = 0;
                 while (offset < frame.Length)
                 {
-                    var sent = await socket.SendAsync(new ArraySegment<byte>(frame, offset, frame.Length - offset), SocketFlags.None);
+                    var sent = await socket
+                        .SendAsync(new ArraySegment<byte>(frame, offset, frame.Length - offset), SocketFlags.None)
+                        .ConfigureAwait(false);
                     if (sent <= 0)
                         throw new SocketException((int)SocketError.ConnectionReset);
 
@@ -472,7 +569,8 @@ namespace HCIKonstanz.Colibri.Networking
 
             try
             {
-                await SendFrame(socket, frame, _lifetime?.Token ?? CancellationToken.None);
+                await SendFrame(socket, frame, _lifetime?.Token ?? CancellationToken.None)
+                    .ConfigureAwait(false);
                 return true;
             }
             catch (Exception e)
@@ -494,7 +592,7 @@ namespace HCIKonstanz.Colibri.Networking
                     frame = _msgQueue[0];
                 }
 
-                await SendFrame(socket, frame, token);
+                await SendFrame(socket, frame, token).ConfigureAwait(false);
 
                 lock (_msgQueueLock)
                 {
@@ -532,14 +630,17 @@ namespace HCIKonstanz.Colibri.Networking
 
             try
             {
-                await Connected;
+                // ConfigureAwait(false) here governs only the rest of *this* method - a caller
+                // awaiting SendCommandAsync still resumes on whatever context it awaited from,
+                // so user code is unaffected.
+                await Connected.ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
                 return false;
             }
 
-            if (await TrySendFrame(frame))
+            if (await TrySendFrame(frame).ConfigureAwait(false))
                 return true;
 
             EnqueueForRetry(frame);
