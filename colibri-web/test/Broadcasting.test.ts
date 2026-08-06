@@ -11,6 +11,8 @@ type SyncSender = (channel: string, value: unknown) => void;
 type SyncReceiver = (channel: string, callback: (value: unknown) => void) => void;
 
 let Sync: (typeof import('../src/Broadcasting'))['Sync'];
+let toHexColor: (typeof import('../src/Broadcasting'))['toHexColor'];
+let toRgbaColor: (typeof import('../src/Broadcasting'))['toRgbaColor'];
 let sendMessage: Mock<(channel: string, command: string, payload?: unknown) => void>;
 let registerChannel: Mock<(channel: string, handler: (payload: Message) => void) => void>;
 let unregisterChannel: Mock<(channel: string, handler: (payload: Message) => void) => void>;
@@ -30,7 +32,7 @@ beforeEach(async () => {
     sendMessage.mockClear();
     registerChannel.mockClear();
     unregisterChannel.mockClear();
-    ({ Sync } = await import('../src/Broadcasting'));
+    ({ Sync, toHexColor, toRgbaColor } = await import('../src/Broadcasting'));
 });
 
 describe('Sync senders', () => {
@@ -41,6 +43,8 @@ describe('Sync senders', () => {
         ['sendNumberArray', [1, 2, 3], 'broadcast::float[]'],
         ['sendString', 'hi', 'broadcast::string'],
         ['sendStringArray', ['a', 'b'], 'broadcast::string[]'],
+        ['sendVector2', [1, 2], 'broadcast::vector2'],
+        ['sendVector2Array', [[1, 2]], 'broadcast::vector2[]'],
         ['sendVector3', [1, 2, 3], 'broadcast::vector3'],
         ['sendVector3Array', [[1, 2, 3]], 'broadcast::vector3[]'],
         ['sendQuaternion', [0, 0, 0, 1], 'broadcast::quaternion'],
@@ -76,6 +80,8 @@ describe('Sync receivers', () => {
         ['receiveNumberArray', 'broadcast::float[]', [1, 2, 3]],
         ['receiveString', 'broadcast::string', 'hi'],
         ['receiveStringArray', 'broadcast::string[]', ['a', 'b']],
+        ['receiveVector2', 'broadcast::vector2', [1, 2]],
+        ['receiveVector2Array', 'broadcast::vector2[]', [[1, 2]]],
         ['receiveVector3', 'broadcast::vector3', [1, 2, 3]],
         ['receiveVector3Array', 'broadcast::vector3[]', [[1, 2, 3]]],
         ['receiveQuaternion', 'broadcast::quaternion', [0, 0, 0, 1]],
@@ -128,6 +134,32 @@ describe('Sync receivers', () => {
         handler({ channel: 'ch', command: 'broadcast::int', payload: 2 });
 
         expect(cb).not.toHaveBeenCalled();
+    });
+
+    // colibri-unity sends "#RRGGBBAA", colibri-web sends [r,g,b,a], and both reach the same
+    // callback - so receiveColor has to hand over whichever arrived rather than declaring one.
+    it.each([
+        ['a Unity peer', '#ff0000ff'],
+        ['a colibri-web peer', [1, 0, 0, 1]]
+    ] as const)('receiveColor delivers the colour %s sent, verbatim', (_peer, payload) => {
+        const cb = vi.fn();
+        Sync.receiveColor('ch', cb);
+
+        const handler = registerChannel.mock.calls[0][1];
+        handler({ channel: 'ch', command: 'broadcast::color', payload });
+
+        expect(cb).toHaveBeenCalledWith(payload);
+    });
+
+    it('receiveColorArray delivers a mix of both colour forms verbatim', () => {
+        const cb = vi.fn();
+        Sync.receiveColorArray('ch', cb);
+
+        const payload = ['#ff0000ff', [0, 1, 0, 1]];
+        const handler = registerChannel.mock.calls[0][1];
+        handler({ channel: 'ch', command: 'broadcast::color[]', payload });
+
+        expect(cb).toHaveBeenCalledWith(payload);
     });
 
     it('registers exactly one channel listener no matter how many types are received on it', () => {
@@ -225,5 +257,71 @@ describe('Sync receivers', () => {
         const handler = registerChannel.mock.calls[1][1];
         handler({ channel: 'ch', command: 'broadcast::string', payload: 'hi' });
         expect(cb2).toHaveBeenCalledWith('hi');
+    });
+});
+
+describe('colour normalization', () => {
+    it.each([
+        // The four forms Unity's ColorUtility.TryParseHtmlString accepts, so anything a Unity
+        // client can put on the wire has to come back as a colour here.
+        ['#f00', [1, 0, 0, 1]],
+        ['#f00f', [1, 0, 0, 1]],
+        ['#ff0000', [1, 0, 0, 1]],
+        ['#ff0000ff', [1, 0, 0, 1]],
+        ['#00ff0080', [0, 1, 0, 128 / 255]],
+        // Unprefixed, which is what a hand-written payload tends to look like.
+        ['ff0000', [1, 0, 0, 1]]
+    ] as const)('toRgbaColor reads %s as an [r,g,b,a]', (hex, expected) => {
+        expect(toRgbaColor(hex)).toEqual(expected);
+    });
+
+    it('toRgbaColor passes an [r,g,b,a] through, clamped', () => {
+        expect(toRgbaColor([0.25, 0.5, 0.75, 1])).toEqual([0.25, 0.5, 0.75, 1]);
+        expect(toRgbaColor([2, -1, 0.5, 1])).toEqual([1, 0, 0.5, 1]);
+    });
+
+    it('toRgbaColor defaults a missing alpha to opaque', () => {
+        expect(toRgbaColor([1, 0, 0] as unknown as [number, number, number, number])).toEqual([1, 0, 0, 1]);
+    });
+
+    it('toHexColor renders both forms as #RRGGBBAA', () => {
+        expect(toHexColor([1, 0, 0, 1])).toBe('#ff0000ff');
+        // Shorthand and RGB-only strings are normalized rather than passed through, so a caller
+        // can rely on the result always being 9 characters.
+        expect(toHexColor('#f00')).toBe('#ff0000ff');
+        expect(toHexColor('#ff0000')).toBe('#ff0000ff');
+    });
+
+    it.each([
+        ['#ff0000ff'],
+        ['#00ff00ff'],
+        ['#0000ffff']
+    ])('%s survives a hex -> rgba -> hex round trip', hex => {
+        expect(toHexColor(toRgbaColor(hex))).toBe(hex);
+    });
+
+    it('an [r,g,b,a] survives an rgba -> hex -> rgba round trip', () => {
+        const rgba: [number, number, number, number] = [1, 0, 0.5, 0];
+        const returned = toRgbaColor(toHexColor(rgba));
+        expect(returned[0]).toBeCloseTo(rgba[0], 2);
+        expect(returned[1]).toBeCloseTo(rgba[1], 2);
+        expect(returned[2]).toBeCloseTo(rgba[2], 2);
+        expect(returned[3]).toBeCloseTo(rgba[3], 2);
+    });
+
+    it.each([
+        ['not a colour'],
+        ['#gg0000'],
+        ['#ff00000'],
+        [[1, 0] as unknown as [number, number, number, number]],
+        [['a', 'b', 'c'] as unknown as [number, number, number, number]]
+    ])('warns and falls back to opaque black for %s instead of throwing', bad => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+        expect(toRgbaColor(bad)).toEqual([0, 0, 0, 1]);
+        expect(toHexColor(bad)).toBe('#000000ff');
+        expect(warn).toHaveBeenCalled();
+
+        warn.mockRestore();
     });
 });
