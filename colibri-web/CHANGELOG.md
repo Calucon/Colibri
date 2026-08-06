@@ -15,7 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only buries the diagnostic), logs what both sides speak, and emits a `ProtocolMismatchError`
   on the new `Colibri.protocolMismatch` observable. The rejection is deliberately kept off
   `Colibri.messages` — it is Colibri's own plumbing, not an application message.
-- `ProtocolMismatchError` (exported), carrying `serverVersion` and `clientVersion`.
+- `ProtocolMismatchError` (exported), carrying `serverVersion` and `clientVersion`. Both are
+  **protocol** versions (`'1'`, `'2'`), never release versions, so the two are always comparable.
 - `PROTOCOL_VERSION` (exported) — the version announced in the handshake query, previously an
   inline `'2'`. Requires a `colibri-server` that speaks the same version.
 - **`Sync.sendVector2` / `sendVector2Array` / `receiveVector2` / `receiveVector2Array`.** The
@@ -27,7 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A warning when the server predates the version check.** That check is server-side, so a server
   too old to have it can neither refuse this client nor announce itself. A 2.0.0+ server now says
   `colibri`/`protocol::accepted` on connect; five seconds without it emits a
-  `ProtocolMismatchError` on `Colibri.protocolMismatch` with `serverVersion: '<2.0.0'`. **Requires
+  `ProtocolMismatchError` on `Colibri.protocolMismatch` with `serverVersion: '1'` — inferred rather
+  than received, since every release before 2.0.0 speaks protocol v1. **Requires
   colibri-server 2.0.0 or newer** to stay quiet, which is the point. It **stays connected** — the
   Socket.IO envelope did not change between v1 and v2, so the connection genuinely works and
   hanging up over this would turn a warning into an outage. Ordinary traffic deliberately does not

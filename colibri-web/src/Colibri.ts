@@ -29,6 +29,9 @@ const LATENCY_COMMAND = 'latency';
  */
 const OLD_SERVER_TIMEOUT_MS = 5000;
 
+/** What a server that never announced itself is speaking, since every release before 2.0.0 did. */
+const OLD_SERVER_PROTOCOL_VERSION = '1';
+
 interface ProtocolRejection {
     reason?: string;
     serverVersion?: string;
@@ -156,8 +159,11 @@ export class Colibri {
 
         const error = new ProtocolMismatchError(
             `The server did not identify itself within ${OLD_SERVER_TIMEOUT_MS / 1000}s, so it predates ` +
-                `colibri-server 2.0.0; this client speaks protocol v${PROTOCOL_VERSION}.`,
-            '<2.0.0',
+                `colibri-server 2.0.0 and speaks protocol v1; this client speaks v${PROTOCOL_VERSION}.`,
+            // A protocol version, like the refusal path reports - not the '<2.0.0' release range
+            // the message describes. Inferred rather than received, but not a guess: the
+            // announcement is sent by every 2.0.0+ server, and everything older speaks v1.
+            OLD_SERVER_PROTOCOL_VERSION,
             PROTOCOL_VERSION,
             false
         );
