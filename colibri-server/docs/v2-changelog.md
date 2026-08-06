@@ -45,6 +45,13 @@ fixes (noted inline).
   needing a client release. Covered by the new `test/unit/client-logger.test.ts` — that hook had
   no tests at all.
 
+- **The 100 ms latency broadcast is now contractual**, documented under
+  [Heartbeat / latency](./protocol.md#heartbeat--latency). It is the only unprompted traffic a
+  server sends, which makes its absence the sole way a client can tell it is talking to a server
+  predating the version check — so `MeasureLatency` must stay unconditional, and making it opt-in
+  would silently turn both clients' checks into false positives. The inference itself is written up
+  under [Detecting an out-of-date server](./protocol.md#detecting-an-out-of-date-server).
+
 - **Documented the payload shape of every `broadcast::` command**, under
   [Payload shapes](./protocol.md#payload-shapes). The server never inspects these payloads, so
   their shape is an agreement between the clients — one that had never been written down, which is

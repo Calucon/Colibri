@@ -15,6 +15,25 @@ rationale, migration steps, and what the Editor verification did and did not cov
 
 ### Added
 
+- `WebServerConnection.SuspectedProtocolMismatch`, and a *Window → Colibri Status* warning to go
+  with it. When several connections in a row are accepted but end before a single frame can be
+  read — the symptom of a server too old to decode this client's framing, and therefore too old to
+  send the refusal that would explain it — the panel now says so instead of advising you to check
+  that colibri-server is running, which is the wrong advice when something is plainly answering on
+  that port. It stays a suspicion: the client keeps retrying, and `Status` /
+  `ProtocolMismatchReason` remain reserved for a refusal actually received from the server.
+
+### Fixed
+
+- The mismatch hint could not fire for a server that accepted the connection and then closed it
+  without sending anything: `ReceiveLoop` returns normally on a clean EOF, and the retry loop
+  treated that as a successful session and reset the counter. Such a session now counts. It is
+  scoped to connections that got as far as sending the handshake, so "connection refused" from a
+  server that is simply not running is still reported as what it is rather than as a version
+  problem.
+
+### Added
+
 - **Protocol version mismatches are reported instead of retried forever.** The server now checks
   the handshake's version field and refuses anything it does not speak, telling the client why on
   the `colibri` channel. `WebServerConnection` intercepts that before the message queue — it is

@@ -38,6 +38,15 @@ with no error on the client at all**. The server's log line — which names the 
 and both versions — is the diagnostic. A client built against a `colibri-web` that has the check
 logs the mismatch itself and exposes it on `Colibri.protocolMismatch`.
 
+Upgrading in the other order — clients first, server later — is now noticed too, though only ever
+as a suspicion. Neither client can be *told* it is talking to a 1.x server, because the version
+check lives on the server and a 1.x server has none; both infer it from the absence of the
+unprompted traffic every 2.0.0+ server sends. A current web client warns after five seconds without
+a latency beat and **stays connected** (it works — the Socket.IO envelope did not change), and a
+current Unity client warns after three connections that were accepted and then died before a frame
+could be read. Details in
+[Detecting an out-of-date server](colibri-server/docs/protocol.md#detecting-an-out-of-date-server).
+
 So the safe order is: **upgrade the server first**, then Unity, then the web clients — but do
 upgrade the web clients, rather than leaving 1.x ones running against a 2.0.0 server.
 
