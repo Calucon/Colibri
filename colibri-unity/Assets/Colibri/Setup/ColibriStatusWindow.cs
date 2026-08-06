@@ -149,6 +149,15 @@ namespace HCIKonstanz.Colibri.Setup
 
                 DrawDeliveryRate(connection);
             }
+            else if (!string.IsNullOrEmpty(connection.SuspectedProtocolMismatch))
+            {
+                // "Check that colibri-server is running" is the wrong advice here: something is
+                // answering on that port, it just is not speaking this protocol.
+                EditorGUILayout.HelpBox(
+                    $"{connection.SuspectedProtocolMismatch}\n\n" +
+                    "Still retrying, because this cannot tell an out-of-date server apart from an address that points at something other than colibri-server.",
+                    MessageType.Warning);
+            }
             else
             {
                 EditorGUILayout.HelpBox("Not connected. Check that colibri-server is running and that the server address above is reachable.", MessageType.Warning);
