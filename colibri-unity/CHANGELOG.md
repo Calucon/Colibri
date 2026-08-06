@@ -73,6 +73,17 @@ rationale, migration steps, and what the Editor verification did and did not cov
 
 ## Correctness
 
+- **The second Play session connects again.** With *Enter Play Mode Options* enabled and domain
+  reload disabled — which this release recommends, so it is the configuration most projects run —
+  ending a Play session destroyed the connection's GameObject but left `SingletonBehaviour<T>`'s
+  "already created one" flag latched in a static that the session did not reset. Every later press
+  of Play was handed back the *destroyed* connection: no object in the scene, no `Update`, no
+  socket, and — because reading a destroyed reference throws nothing — not one line in the console
+  to say so. The Colibri Status window's "No Colibri connection in the scene yet" was the only
+  visible symptom, and it reads like an explanation rather than a fault. Liveness is now decided by
+  the instance itself rather than by a flag, so a destroyed one is replaced; creation is still
+  suppressed while the application is quitting, so nothing is resurrected during teardown. Affects
+  `WebServerConnection` and `VoiceServerConnection` alike.
 - **String payloads now round-trip.** `SendCommandAsync` used to special-case `JTokenType.String`
   and write the string *unquoted*, which is not valid JSON. Against a 2.0 server that reaches web
   clients via `Payload.asValue()`, which threw and fell back to `asString()` — so a Unity
@@ -233,6 +244,12 @@ an hour they do not spend on their prototype, so:
   once-only mismatch warning, the Store over REST, and the ticker invariants behind the "one
   `Update` for the whole application" claim. Without a reachable server it skips with instructions
   rather than failing.
+- `LifecycleTests` additionally pins what a singleton does once the previous Play session's instance
+  has been destroyed — it must be rebuilt, not handed back. The bug this replaces produced no
+  exception and no log line of any kind, so nothing short of asserting the invariant directly would
+  have caught it. The assertions run against a singleton declared for the test rather than against
+  `WebServerConnection`, since the statics are per-type and destroying the real connection would
+  pull it out from under the rest of the suite.
 - `node colibri-unity/run-tests.mjs` runs both suites, starting and stopping a server with
   `docker compose` — unless one is already listening, which it uses as it stands. See
   [README.md](README.md#for-maintainers).

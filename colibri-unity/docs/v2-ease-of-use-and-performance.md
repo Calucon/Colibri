@@ -273,6 +273,17 @@ removed — removing entries during iteration would otherwise shift indices unde
 Statics are reset from a `[RuntimeInitializeOnLoadMethod(SubsystemRegistration)]` hook, so entering
 Play mode with domain reload disabled does not inherit destroyed components from the last session.
 
+`SingletonBehaviour<T>` needed the same treatment and could not use the same mechanism: Unity only
+scans **non-generic** types for `[RuntimeInitializeOnLoadMethod]`, so a hook written on the generic
+base would compile, look right, and never run. It kept a `_createdInstance` flag instead, latched
+`true` forever, which meant the second Play session was handed back the previous session's
+destroyed connection — a client with no socket and no console output, whose only symptom was the
+Status window reporting no connection in the scene. The flag is gone: liveness is read off the
+instance itself, where Unity's `==` already distinguishes "destroyed, rebuild it" from "alive". The
+one thing the flag was genuinely doing — refusing to resurrect a singleton during teardown — moved
+to a `SingletonLifetime.IsQuitting` guard in a non-generic helper, which *is* scanned for the
+reset hook and so starts each session false.
+
 **Typed change detection.** `SyncedAttribute` went from a struct holding `Func<T, object>` to an
 abstract class with a generic subclass, so the comparison happens on the concrete type:
 
