@@ -25,6 +25,14 @@ namespace HCIKonstanz.Colibri.Setup
         /// </summary>
         private const long HeartbeatConcernMillis = 500;
 
+        /// <summary>
+        /// Below this, the frame rate is the reason messages feel late. Received messages are
+        /// handed to user code from <c>Update</c>, so 20 fps already puts up to 50 ms between a
+        /// message arriving on the socket and anything acting on it - and an Editor left in the
+        /// background falls a long way below that.
+        /// </summary>
+        private const float DeliveryRateConcernFps = 20f;
+
         private Vector2 _scroll;
         private double _nextRepaint;
 
@@ -125,10 +133,41 @@ namespace HCIKonstanz.Colibri.Setup
                     gap < HeartbeatConcernMillis
                         ? "OK"
                         : $"missing for {gap / 1000f:0.0} s - dropping the connection soon");
+
+                DrawDeliveryRate(connection);
             }
             else
             {
                 EditorGUILayout.HelpBox("Not connected. Check that colibri-server is running and that the server address above is reachable.", MessageType.Warning);
+            }
+        }
+
+        /// <summary>
+        /// The socket runs off the main thread, so what is left between a message arriving and
+        /// user code seeing it is one frame of this client's own. That is worth stating outright:
+        /// a background Editor delivering at 4 fps looks exactly like a slow server otherwise,
+        /// and the fix is on this side of the wire.
+        /// </summary>
+        private void DrawDeliveryRate(WebServerConnection connection)
+        {
+            var fps = connection.DeliveryFramesPerSecond;
+            if (fps <= 0f)
+                return;
+
+            var delayMillis = 1000f / fps;
+
+            EditorGUILayout.LabelField("Delivery", $"{fps:0} fps  (up to {delayMillis:0} ms per message)");
+
+            if (fps < DeliveryRateConcernFps)
+            {
+                EditorGUILayout.HelpBox(
+                    $"Messages are only handed to your code once per frame, and this client is "
+                    + $"running at {fps:0} fps - so anything arriving waits up to {delayMillis:0} ms "
+                    + "before it is applied. This is local, not the network. An Editor window in "
+                    + "the background is the usual reason: Unity throttles it. Enable "
+                    + "Edit > Project Settings > Player > Run In Background, and click the "
+                    + "unfocused editor's Game view to confirm the number recovers.",
+                    MessageType.Warning);
             }
         }
 
