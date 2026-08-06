@@ -67,6 +67,11 @@ introduces a v3 framing format that is a breaking change** for any TCP client ol
 version (older clients must be updated to the new framing, see `docs/protocol.md`); the Socket.IO
 envelope is unaffected.
 
+Both transports announce a protocol version in their handshake, and the server refuses any client
+that does not match its own - there is one supported version at a time and no negotiation. A
+refused client is told why on the `colibri` channel and then disconnected, and never appears in
+the admin UI. See [Version checking](docs/protocol.md#version-checking).
+
 ## Development
 
 * `npm run watch`: Run development server with auto-compile and reload on file changes

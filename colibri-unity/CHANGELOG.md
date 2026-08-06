@@ -11,12 +11,31 @@ rationale, migration steps, and what the Editor verification did and did not cov
 
 ---
 
+## Unreleased
+
+### Added
+
+- **Protocol version mismatches are reported instead of retried forever.** The server now checks
+  the handshake's version field and refuses anything it does not speak, telling the client why on
+  the `colibri` channel. `WebServerConnection` intercepts that before the message queue — it is
+  Colibri's own plumbing, not an application message — logs both versions, and **stops the
+  reconnect loop**, since a mismatch cannot resolve itself. New `ConnectionStatus.ProtocolMismatch`
+  is the terminal state; `WebServerConnection.ServerVersion` and `.ProtocolMismatchReason` carry
+  the detail, and `Window → Colibri Status` shows it in red rather than the usual (here actively
+  wrong) "check that colibri-server is running" advice.
+- A **framing-mismatch heuristic** for the case the refusal cannot reach: a server on genuinely
+  different framing cannot decode our frames and we cannot decode its, so after three consecutive
+  sessions that fault before a single frame is read, the client says that this usually means a
+  protocol mismatch instead of logging the same decode error forever.
+- `ProtocolMismatchException`, thrown internally to unwind a refused session, and public so
+  a test or an application can identify it.
+
 ## Breaking changes
 
 - **Protocol.** colibri-unity 2.0.0 speaks the [v3 binary TCP
   protocol](../colibri-server/docs/protocol.md) and **requires colibri-server ≥ 2.0.0**. It cannot
   talk to a 1.x server, and a 1.x client cannot talk to a 2.0.0 server. There is no version
-  negotiation — both sides must agree on the framing out of band, i.e. by matching versions.
+  negotiation — both sides must be upgraded together.
 - **Minimum Unity is 2022.3 LTS** (the package manifest previously claimed 2019.4 while using APIs
   that were never available there).
 - **No more third-party runtime dependencies.** UniRx is gone and was not replaced;

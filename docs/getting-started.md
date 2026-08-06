@@ -238,7 +238,9 @@ Same app name, same channel names, same rules. Two differences to watch:
 
 - **Vectors and colours are plain arrays in TypeScript**, not objects: `Sync.sendVector3('pos', [1,
   2, 3])` and `Sync.sendColor('tint', [1, 0, 0, 1])`, where Unity would use a `Vector3` and a
-  `Color`.
+  `Color`. A colour therefore reaches a web listener as `"#RRGGBBAA"` from Unity but as `[r, g, b,
+  a]` from another web client — run it through `toHexColor()` or `toRgbaColor()` and stop caring
+  which. (Unity does the same for you: `ToColor` takes either.)
 - **JavaScript has one number type.** A web client sending `5` reaches Unity as a `float`, so listen
   for it with `Sync.Receive<float>` on the Unity side, not `int`.
 

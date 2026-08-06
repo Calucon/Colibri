@@ -16,8 +16,8 @@ except in a handful of hooks (`ModelSynchronization`, `MeasureLatency`, `WebLog`
 
 > **This is a breaking protocol change.** A `colibri-unity` client built against the old v1
 > flatbuffer framing cannot talk to a v2.0.0+ server, and vice versa. There is no version
-> negotiation - both sides must agree on the framing out of band (i.e. by matching client/server
-> versions).
+> *negotiation* - the server accepts exactly one protocol version and refuses every other one,
+> so both sides must be upgraded together. See [Version checking](#version-checking).
 
 Every frame on the wire has a fixed-size header followed by a type-specific body:
 
@@ -47,6 +47,48 @@ three may themselves contain `::`). The server assigns the connection to `app` a
 including it in that app's broadcasts; any `message` frame received before the handshake is
 rejected and logged.
 
+### Version checking
+
+`version` is checked against `PROTOCOL_VERSION` in
+[`protocol.ts`](../src/server/modules/networking/protocol.ts), currently `2`. This is a check,
+not a negotiation: there is one supported version at a time, and there is no subset a v1 and a
+v3 client could both speak, so a client announcing anything else is **refused**, not downgraded.
+
+A refused client is never added to its app's broadcast set and never reaches
+`clientConnected$`, so it does not appear in the admin UI. The server first sends it a normal
+message frame explaining why, then closes the connection:
+
+| field | value |
+| --- | --- |
+| channel | `colibri` |
+| command | `protocol::rejected` |
+| payload | `{ "reason": string, "serverVersion": string, "clientVersion": string }` |
+
+The same applies to Socket.IO clients, which announce their version in the handshake query
+(`?app=…&version=…`) and receive the identical `colibri` / `protocol::rejected` event before
+being disconnected. The one exception is the admin UI (`app === 'colibri'`), which ships with
+the server and is warned about rather than refused - a check that can lock you out of your own
+console is worse than the mismatch it detects.
+
+**What this cannot do.** Three gaps, all deliberate:
+
+- The refusal only reaches a client whose *framing* the server still speaks. A genuine v1 client
+  cannot decode the frame at all, so for that case the server-side error log - which names the peer
+  and both versions - is the whole diagnostic. Clients cover the remaining gap heuristically:
+  `colibri-unity` reports a likely protocol mismatch after three consecutive sessions that fault
+  before a single frame could be read, instead of reconnecting silently forever.
+- It only reaches a client that *handles* `protocol::rejected`. Any colibri-web published before
+  this check existed surfaces the rejection as an ordinary message and is then disconnected for
+  good - Socket.IO does not reconnect after a server-side `disconnect()` - with nothing logged on
+  the client. See [MIGRATION.md](../../MIGRATION.md).
+- The `app === 'colibri'` exemption is by app name, so any Socket.IO client naming itself `colibri`
+  opts out of the check entirely. That app name is reserved for the admin UI and also collides with
+  the `colibri` control channel; it is not a name an application should be using.
+
+Clients must keep their announced version in step with this constant:
+`CLIENT_VERSION` in `colibri-unity`'s `WebServerConnection.cs`, `PROTOCOL_VERSION` in
+`colibri-web`'s `Colibri.ts`, and the `version` query in the admin UI's `socketio.service.ts`.
+
 ### Heartbeat / latency
 
 The server sends a `heartbeat` frame to every connected client (handshaked or not) every 100ms,
@@ -75,6 +117,46 @@ at Debug level, tagged `metadata.broadcastTraffic = true`. The admin log page's 
 toggle filters on that tag specifically - independent of the Error/Warn/Info/Debug level
 checkboxes - since this traffic is typically continuous and would otherwise drown out everything
 else; see `WebLog.isVisibleToClient` (`src/server/modules/web/web-log.ts`).
+
+#### Payload shapes
+
+The server never inspects a `broadcast::` payload, so the shape is an agreement between the
+clients alone. It went unwritten through v1 and v2, and each implementation duly invented its own
+for colour. This is the agreement:
+
+| command | JSON payload | colibri-unity | colibri-web |
+| --- | --- | --- | --- |
+| `broadcast::bool` | `true` | `Send(ch, bool)` | `sendBool` |
+| `broadcast::int` | `5` | `Send(ch, int)` | – (see below) |
+| `broadcast::float` | `1.5` | `Send(ch, float)` | `sendNumber` / `sendFloat` / `sendInt` |
+| `broadcast::string` | `"text"` | `Send(ch, string)` | `sendString` |
+| `broadcast::vector2` | `[x, y]` | `Send(ch, Vector2)` | `sendVector2` |
+| `broadcast::vector3` | `[x, y, z]` | `Send(ch, Vector3)` | `sendVector3` |
+| `broadcast::quaternion` | `[x, y, z, w]` | `Send(ch, Quaternion)` | `sendQuaternion` |
+| `broadcast::color` | `"#RRGGBBAA"` **or** `[r, g, b, a]` | `Send(ch, Color)` → string | `sendColor` → array |
+| `broadcast::json` | any object | `Send(ch, JToken)` | `sendJson` |
+
+Append `[]` to any command for the array form, whose payload is an array of the above (so
+`broadcast::vector3[]` is `[[x,y,z], …]`). Two commands need more than a row:
+
+**Colour has two forms on the wire, and receivers must accept both.** Unity writes the HTML string
+`ColorUtility.ToHtmlStringRGBA` produces; colibri-web writes `[r, g, b, a]` with each component
+0-1. Neither can be changed now without breaking the peers already sending it, so both clients
+take either form on receive - `JsonExtensions.ToColor` in colibri-unity, `ColorValue` plus the
+exported `toHexColor`/`toRgbaColor` in colibri-web - and a wrong-shaped payload warns and falls
+back to opaque black rather than throwing. A `[Sync] Color` model field is subject to the same
+split, since it serializes through the same conversions.
+
+**`broadcast::int` is send-side Unity-only.** JavaScript has one number type, so colibri-web
+cannot tell `5` from `5.0` and always emits `broadcast::float`; `sendInt` is an alias kept for
+API symmetry with Unity. Unity routes the two commands to separate listener lists, so a Unity
+client must receive web-sent numbers with `Sync.Receive<float>`. The reverse works: colibri-web's
+`receiveNumber` listens for both commands.
+
+**`log` is the one channel that is not JSON.** `ClientLogger` treats a payload on it as human
+readable text, so colibri-unity sends it as raw utf8 (`WebServerConnection.EncodePayload`) and the
+server unwraps a JSON string value before logging it - otherwise a web client's log line reaches
+the admin UI with the JSON quotes still around it.
 
 ### Reading frames off the wire
 
@@ -109,3 +191,12 @@ arrived in - a JSON string (TCP/Socket.IO-as-string), a parsed value (Socket.IO)
 (TCP) - and lazily computes and memoizes the others only if something actually asks for them.
 Relaying TCP→TCP or Socket.IO→Socket.IO therefore does zero JSON/utf8 work; only a genuine
 cross-transport relay (or a hook that inspects the payload) pays for a conversion, and only once.
+
+## Known limits
+
+**No client re-requests model state after a reconnect.** `model::request` is sent once, when a
+model listener is registered - `Sync.AddModelUpdateListener` in colibri-unity, `RegisterModelSync`
+in colibri-web. The server clears an app's store when its last client disconnects
+(`model-sync.ts`), so after a server restart a client that reconnects keeps whatever models it
+had locally and is never told they are gone. Re-registering the listener is the only way to
+resynchronize today.
