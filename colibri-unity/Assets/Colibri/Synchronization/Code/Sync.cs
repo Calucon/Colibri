@@ -221,17 +221,58 @@ namespace HCIKonstanz.Colibri.Synchronization
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
         private const int TrafficLogSize = 20;
+
+        private const float DefaultTrafficRetentionSeconds = 10f;
+
+        /// <summary>
+        /// How long an entry stays in the log. It is a "what is happening right now" list, so an
+        /// idle channel should empty out rather than leave the last twenty messages on screen
+        /// with ages counting up indefinitely.
+        /// </summary>
+        /// <remarks>
+        /// Settable only so the test suite can shorten it - a test that has to sit out the real
+        /// ten seconds to watch an entry expire is one nobody will keep running.
+        /// </remarks>
+        internal static float TrafficRetentionSeconds = DefaultTrafficRetentionSeconds;
+
         private static readonly TrafficEntry[] _traffic = new TrafficEntry[TrafficLogSize];
         private static int _trafficCount;
 
-        /// <summary>The most recent messages sent and received, newest first.</summary>
+        /// <summary>
+        /// Entries survive Play mode with domain reload disabled, and their timestamps are
+        /// <c>realtimeSinceStartup</c> - which keeps running in edit mode. Without this the next
+        /// session opened showing the last one's messages, dated from before it started.
+        /// </summary>
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void ResetTraffic()
+        {
+            Array.Clear(_traffic, 0, _traffic.Length);
+            _trafficCount = 0;
+            TrafficRetentionSeconds = DefaultTrafficRetentionSeconds;
+        }
+
+        /// <summary>
+        /// The most recent messages sent and received, newest first, dropping anything older
+        /// than <see cref="TrafficRetentionSeconds"/>.
+        /// </summary>
         public static IEnumerable<TrafficEntry> RecentTraffic
         {
             get
             {
+                var oldest = Time.realtimeSinceStartup - TrafficRetentionSeconds;
                 var count = Math.Min(_trafficCount, TrafficLogSize);
+
                 for (var i = 1; i <= count; i++)
-                    yield return _traffic[(_trafficCount - i) % TrafficLogSize];
+                {
+                    var entry = _traffic[(_trafficCount - i) % TrafficLogSize];
+
+                    // Newest first, so the first entry past the window means every entry after it
+                    // is older still.
+                    if (entry.Time < oldest)
+                        yield break;
+
+                    yield return entry;
+                }
             }
         }
 #else
