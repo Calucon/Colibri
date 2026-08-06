@@ -73,6 +73,28 @@ rationale, migration steps, and what the Editor verification did and did not cov
 
 ## Correctness
 
+- **The socket no longer waits for the frame.** `RunConnectionLoop` is started from `OnEnable`, so
+  its first `await` captured Unity's `SynchronizationContext` — and with no `ConfigureAwait(false)`
+  anywhere in the file, so did every continuation after it. Connect, receive, heartbeat echo and
+  send were all posted back to the main thread and pumped once per frame: inbound bytes sat in the
+  kernel buffer until the next frame, echoing a heartbeat cost two further frame-pumps *inside* the
+  receive loop, and `StampLiveness` — the watchdog's proof of life — only ran when the main thread
+  ran. Two editors side by side on one machine showed it plainly: Unity throttles whichever one is
+  in the background, so a cube moved in the focused editor arrived in the other visibly late and its
+  Status window reported missed heartbeats, all of it over localhost. Every await on the connection
+  path now carries `ConfigureAwait(false)`. The `volatile` fields, `Interlocked`, `LockFreeQueue`
+  and `_msgQueueLock` this file already had were written for exactly this threading; the missing
+  `ConfigureAwait` had quietly been preventing it. `_socket`, `_status` and the connected gate join
+  them, and the `Status` setter — a read-modify-write over four fields now genuinely reachable from
+  the connection loop and `Update`'s watchdog at once — is serialized. The main-thread handoff user
+  code depends on is unchanged: received messages still arrive via `_queuedCommands` and are
+  delivered from `Update`.
+- **"Recent messages" stops counting up forever.** The Status window's traffic log was a static
+  buffer with no expiry and no reset, timestamped with `realtimeSinceStartup` — a clock that keeps
+  running after Play stops. Entries therefore aged indefinitely on screen, and with domain reload
+  disabled the next session opened showing the last one's messages, dated from before it started.
+  The log is cleared at `SubsystemRegistration`, entries older than ten seconds are dropped, and the
+  window shows "(nothing sent or received yet)" outside Play mode.
 - **The second Play session connects again.** With *Enter Play Mode Options* enabled and domain
   reload disabled — which this release recommends, so it is the configuration most projects run —
   ending a Play session destroyed the connection's GameObject but left `SingletonBehaviour<T>`'s
@@ -161,6 +183,12 @@ an hour they do not spend on their prototype, so:
   the last server heartbeat (not a latency: the heartbeat carries the *server's* clock), the
   channels with listeners and the type each expects, and the last 20 messages in and out. It uses
   `FindFirstObjectByType`, never `WebServerConnection.Instance`, which *creates* a GameObject.
+- **Status reports the delivery rate, not just the connection.** With the socket off the main
+  thread, what is left between a message arriving and user code seeing it is one frame of *this*
+  client's. So the window states it: the rate `Update` is running at, the delay that implies per
+  message, and below 20 fps a warning naming the usual cause — an Editor in the background, which
+  Unity throttles. Without it, a client delivering at 4 fps is indistinguishable from a slow server,
+  and the search goes looking on the wrong side of the wire.
 - **`[Sync]` members are validated at startup** — an unsupported type, a property missing an
   accessor, or two members whose lowercased names collide are reported when the model type is first
   initialized instead of failing on the first message.
@@ -181,8 +209,11 @@ an hour they do not spend on their prototype, so:
 - Poll (`Update`) and flush (`LateUpdate`) are separate phases, which keeps the existing
   one-message-per-frame coalescing while removing the `async void` + `UniTask.Yield(PostLateUpdate)`
   state machine that used to allocate once per change.
-- Nothing on the network path changed: `WebServerConnection` never used either library — raw
-  `Socket`, `Task`, `SemaphoreSlim`, `FrameCodec` — so latency and throughput are untouched.
+- Neither library was ever on the network path: `WebServerConnection` used raw `Socket`, `Task`,
+  `SemaphoreSlim` and `FrameCodec` throughout, so removing them changed nothing there. What did
+  change latency is the `ConfigureAwait(false)` work above — the socket no longer waits for the
+  player loop, which is worth far more than anything on this list to a client that is not running
+  at full frame rate.
 
 ## Dependencies and API modernization
 
@@ -250,6 +281,13 @@ an hour they do not spend on their prototype, so:
   have caught it. The assertions run against a singleton declared for the test rather than against
   `WebServerConnection`, since the statics are per-type and destroying the real connection would
   pull it out from under the rest of the suite.
+- `ConnectionTests` pins the threading. The one that matters blocks the main thread outright for a
+  second and then asserts the last heartbeat is still under half a second old — proof the socket is
+  being serviced by something other than the player loop. It is deliberately the symptom the bug
+  report described rather than a check for `ConfigureAwait` in the source, so it stays honest if the
+  mechanism ever changes; a companion asserts the receive loop's thread is not the main one, which
+  is the same fact stated the other way round. A third covers traffic entries ageing out of the
+  Status window's log.
 - `node colibri-unity/run-tests.mjs` runs both suites, starting and stopping a server with
   `docker compose` — unless one is already listening, which it uses as it stands. See
   [README.md](README.md#for-maintainers).
@@ -369,6 +407,11 @@ The fixes it produced:
 - `SyncBehaviourManager` must unsubscribe from `SyncBehaviour<T>.ModelCreated` / `ModelDestroyed` in
   `OnDestroy`, since static events do not do it themselves. It does; anything else subscribing to
   them has to as well, or it leaks across Play sessions when domain reload is disabled.
+- A `static` listener, or one owned by a plain C# object, stays registered into the next Play session
+  when domain reload is disabled — `Sync`'s listener dictionaries are statics, and neither of those
+  has a Unity lifetime to be dropped by. Listeners belonging to a Unity object clean themselves up,
+  which covers the ordinary case. Clearing the dictionaries at startup would fix it and break a
+  listener registered from a `[RuntimeInitializeOnLoadMethod]` hook, so it is left as it is.
 - `Expression.Compile()` is still used to build the `[Sync]` accessors, so the model layer depends
   on Unity's expression-tree support on AOT platforms. Attribute construction dispatches through an
   explicit per-type `if` chain rather than `MakeGenericMethod`, which keeps every instantiation

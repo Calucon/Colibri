@@ -365,6 +365,79 @@ thread in `Update`; send → `SemaphoreSlim` → `Socket.SendAsync`. Not one R3 
 whole file. Latency and throughput are therefore untouched by everything above — this work moved
 per-frame CPU and allocation, not wire time.
 
+Which is not to say the network path was fine. It was not, and the next section is about that.
+
+### The socket, and the frame it was waiting for
+
+Reported during the Editor pass: two editors side by side on one machine, both on the SyncTransform
+sample, both talking to a `colibri-server` in Docker on localhost. Moving the cube in one took a
+visibly long moment to reach the other, and the Status window showed missed heartbeats. Everything
+was local, so the wire was not the explanation.
+
+`RunConnectionLoop` is started from `OnEnable` — the main thread. The file contained **no
+`ConfigureAwait(false)` anywhere**, so the first `await` captured Unity's `SynchronizationContext`
+and every continuation in the chain inherited it. `UnitySynchronizationContext.Post` queues work
+that is executed once per frame by the player loop. Which means:
+
+| Await | What resuming on the main thread cost |
+|---|---|
+| `socket.ReceiveAsync(...)` | inbound bytes sit in the kernel buffer until the next frame |
+| `SendFrame(...)` for the heartbeat echo | two further frame-pumps, *inside* the receive loop |
+| `StampLiveness()` after a receive | the watchdog's proof of life only advances when the main thread runs |
+
+An Editor in the background is throttled by Unity, hard. One of two editors always is. So the
+unfocused one received late, echoed later, and then reported the heartbeat gap it had itself
+created — a client that looks like it is on a bad network while the network is a loopback socket
+with `NoDelay` set on both ends.
+
+The fix is `.ConfigureAwait(false)` on every await from `RunConnectionLoop` down: `RunSession`,
+`ReceiveLoop`, `SendFrame`, `TrySendFrame`, `FlushQueue`, `Delay`, `SendCommandAsync`. Nothing about
+the design changed — this is the threading the file was already written for. The comment on
+`_msgQueue` says *"written from the send path, drained from the connect path — both off the main
+thread"*, and the `volatile` fields, the `Interlocked` stamp, the `LockFreeQueue` and the
+`SemaphoreSlim` are all there for concurrency the missing `ConfigureAwait` had been quietly
+preventing. The mechanism existed; only its precondition was absent.
+
+Because that precondition is now met, the remaining shared state had to be audited rather than
+assumed:
+
+| State | Before | Now |
+|---|---|---|
+| `_lastHeartbeatTime` | `Interlocked` | unchanged |
+| `_queuedCommands` | `LockFreeQueue` | unchanged |
+| `_msgQueue` | `lock (_msgQueueLock)` | unchanged |
+| `_sendLock` | `SemaphoreSlim` | unchanged |
+| `_fireOnConnected` / `_fireOnDisconnected` | `volatile` | unchanged |
+| `_socket` | plain field | `volatile` |
+| `_status` | plain field | `volatile` |
+| `_connectedGate` | plain field | `volatile` |
+| `_connectAttempts` | plain field | under `_statusLock` |
+| `Status` **setter** | unsynchronized read-modify-write | serialized on `_statusLock` |
+
+The `Status` setter is the one that genuinely needed a lock rather than a keyword: it compares,
+assigns, re-arms the connected gate and raises two flags, and the connection loop and `Update`'s
+heartbeat watchdog can now reach it at the same time. Interleaved, the watchdog's `Disconnected`
+landing between the loop's compare and its assignment would leave the gate open on a socket that is
+already closed. The gate is created with `RunContinuationsAsynchronously`, so `TrySetResult` inside
+the lock schedules waiting senders rather than running them there.
+
+**What did not move: the main-thread handoff user code depends on.** Received messages still go
+receive loop → `_queuedCommands` → drained in `Update()`, so handlers, `SyncBehaviour` fields and
+anything touching `transform` still run on the main thread. No user code changes.
+
+**What is left after the fix is the frame rate, and it is now visible.** A message still reaches
+user code from `Update`, so a client running at 4 fps still applies it up to 250 ms late — a real
+delay, but a local one, and nothing on the server can fix it. The Status window therefore reports
+the rate `Update` is running at and the delay that implies, and warns below 20 fps that a
+backgrounded Editor is the usual cause (§5). Distinguishing "the network is slow" from "this client
+is slow" is most of the diagnosis.
+
+Two tests pin it, in `ConnectionTests`. The first blocks the main thread with `Thread.Sleep(1000)`
+and then — before yielding, since yielding would flush anything queued on the main thread and
+destroy the evidence — asserts the last heartbeat is under 500 ms old. It fails on the old code and
+describes the reported symptom rather than the implementation, so it stays honest if the mechanism
+changes. The second asserts the receive loop's managed thread id is not the main thread's.
+
 ---
 
 ## 3. Removing UniTask
@@ -556,8 +629,15 @@ members whose lowercased names collide are each reported by name with the fix.
   carries the *server's* clock, so the client genuinely cannot derive a round trip from it; real
   latency figures live on the server's admin UI. What it does tell you is whether the server is
   still talking to you.
+- **the delivery rate** — how fast `Update` is running, and therefore the longest a received message
+  can wait before user code sees it. Below 20 fps it warns, and names the usual cause: an Editor in
+  the background, which Unity throttles. This is the number that separates "the network is slow"
+  from "this client is slow", and until it existed the two were indistinguishable from here (§2).
 - every channel with listeners, and the type each one expects, from the registry above
-- the last 20 messages in and out
+- the last 20 messages in and out, dropping anything older than ten seconds. The list is meant to
+  answer "what is happening right now"; entries had no expiry at first, so a burst from a minute ago
+  sat there with its ages counting up, and — because the buffer is a static and `realtimeSinceStartup`
+  keeps running after Play stops — the next session opened showing the previous one's messages.
 - buttons for the configuration window and the server's web UI
 
 Two constraints shaped the implementation:
@@ -590,6 +670,7 @@ Repaints are throttled to 10 Hz and only while playing.
 | `WebServerConnection.MillisSinceLastHeartbeat()` | Was private |
 | `WebServerConnection.ServerAddress` / `.TcpPort` / `.AppName` | Read-only, snapshot of the live config |
 | `WebServerConnection.ClientVersion` | Static; the handshake's protocol version |
+| `WebServerConnection.DeliveryFramesPerSecond` | Smoothed rate `Update` runs at — how fast messages reach user code |
 
 ### Changed
 
@@ -680,10 +761,15 @@ than defects, and both are worth knowing before teaching with this:
   `http://localhost:9011` worked anyway, because Unity exempts loopback. It only bites when the
   server is remote and not on HTTPS.
 - Unity's `Run In Background` also defaults to off, and with it off the Editor suspends the player
-  loop as soon as its window loses focus. The socket stays up and heartbeats keep being echoed,
-  because that happens off the main thread, so the client looks perfectly healthy — but `Update`
-  never runs, so nothing is sent and nothing the receive thread queued is ever delivered. It lands
-  squarely on the two-client recipe: the unfocused instance goes silent while looking connected.
+  loop as soon as its window loses focus. `Update` never runs, so nothing is sent and nothing the
+  receive thread queued is ever delivered. It lands squarely on the two-client recipe: the unfocused
+  instance goes silent while looking connected.
+
+  This entry originally went on to say that the socket stays up and heartbeats keep being echoed
+  *because that happens off the main thread*. That was an assumption, and it was wrong — nothing in
+  `WebServerConnection` was off the main thread, because no await on the connection path carried
+  `ConfigureAwait(false)`. The correction and the fix are in §2; the sentence is left here, marked,
+  because the assumption is exactly what let the bug hide through a full verification pass.
 
 1. **Done, with a narrower claim than the item asks for.** `ColibriTest` resolved
    `de.uni.kn.colibri` 2.0.0 with **zero compile errors** and with no R3 and no UniTask anywhere in
@@ -925,6 +1011,16 @@ warning. Introducing `OnEnable`/`OnDisable` as *new* virtuals would create a fre
 writing `private void OnEnable()` would silently take over the Unity message and the object would
 never register. Polling is instead gated on `isActiveAndEnabled` inside the tick.
 
+**Only the traffic log is reset at `SubsystemRegistration`, not `Sync`'s listener dictionaries.**
+Those are statics too, and they survive Play mode with domain reload disabled just as readily. A
+listener belonging to a Unity object is already dropped when that object is destroyed, and ending a
+Play session destroys every one of them — so in practice the dictionaries empty themselves. What
+does leak into the next session is a `static` listener, or one owned by a plain C# object, since
+neither has a Unity lifetime to follow. Clearing them wholesale at startup would be the obvious fix
+and is the wrong one: a listener registered from a `[RuntimeInitializeOnLoadMethod]` hook of a
+student's own would be silently unregistered by it, depending on which ran first. Left as a known
+edge rather than traded for a subtler one.
+
 **Known limitation, unchanged from before:** a `[Sync]` array mutated **in place** is not detected.
 `EqualityComparer<float[]>.Default` falls back to reference equality, exactly as `object.Equals` on
 a boxed array did. Assign a new array to trigger a sync.
@@ -946,7 +1042,9 @@ a boxed array did. Assign a new array to trigger a sync.
 
 `Synchronization/Code/SyncBehaviour.cs` (typed attributes, ticker, static events),
 `SyncBehaviourManager.cs` (event handlers + unsubscribe), `Sync.cs` (generics, mismatch reporting,
-traffic log), `Networking/WebServerConnection.cs` (config reporting, status accessors),
+traffic log, log reset and retention), `Networking/WebServerConnection.cs` (config reporting, status
+accessors, `ConfigureAwait(false)` across the connection path and the concurrency audit that
+follows from it, delivery-rate readout),
 `Networking/RemoteLogging.cs` (timer instead of throttle), `Store/Store.cs` (awaiter, error
 reporting), `Setup/ColibriConfig.cs` (non-null defaults), `Setup/SetupWindow.cs`,
 `Samples/SendMessages/SendMessages.cs`, `Samples/VoiceChat/VoiceManager.cs`, `Colibri.asmdef`,
