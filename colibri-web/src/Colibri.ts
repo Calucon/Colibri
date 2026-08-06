@@ -1,6 +1,22 @@
 import { Subject } from 'rxjs';
 import { Socket, connect } from 'socket.io-client';
-import { ColibriError } from './ColibriError';
+import { ColibriError, ProtocolMismatchError } from './ColibriError';
+
+/**
+ * The wire protocol this client speaks, announced in the Socket.IO handshake query. Must
+ * match `PROTOCOL_VERSION` in the server's `src/server/modules/networking/protocol.ts`; a
+ * server speaking anything else refuses the connection rather than downgrading.
+ */
+export const PROTOCOL_VERSION = '2';
+
+const COLIBRI_CHANNEL = 'colibri';
+const PROTOCOL_REJECTED_COMMAND = 'protocol::rejected';
+
+interface ProtocolRejection {
+    reason?: string;
+    serverVersion?: string;
+    clientVersion?: string;
+}
 
 // `window` is declared globally as non-optional by the "dom" lib, but colibri-web
 // also runs under plain Node (samples, e2e); shadow it here so the type reflects
@@ -19,6 +35,13 @@ export class Colibri {
     private readonly socket: Socket;
     private readonly messageSubject = new Subject<Message>();
     public readonly messages = this.messageSubject.asObservable();
+    private readonly protocolMismatchSubject = new Subject<ProtocolMismatchError>();
+    /**
+     * Emits once if the server refuses this client over a protocol version mismatch. The
+     * connection is dead at that point and will not be retried, so this is the only
+     * notification an application gets; without subscribing, the error is still logged.
+     */
+    public readonly protocolMismatch = this.protocolMismatchSubject.asObservable();
     public readonly uri: string;
     public readonly uriRestApi: string;
 
@@ -47,7 +70,7 @@ export class Colibri {
         else Colibri.instance = this;
 
         this.socket = connect(this.uri, {
-            query: { app, version: '2' },
+            query: { app, version: PROTOCOL_VERSION },
             transports: ['websocket']
         });
         this.socket.on('connect', this.onSocketConnect.bind(this));
@@ -67,7 +90,38 @@ export class Colibri {
 
     private onSocketAny(channel: string, msg: unknown) {
         const { command, payload } = msg as Pick<Message, 'command' | 'payload'>;
+
+        if (channel === COLIBRI_CHANNEL && command === PROTOCOL_REJECTED_COMMAND) {
+            this.onProtocolRejected(payload as ProtocolRejection | undefined);
+            return;
+        }
+
         this.messageSubject.next({ channel, command, payload });
+    }
+
+    // Kept off `messages` deliberately: this is Colibri's own plumbing, and surfacing it as
+    // an ordinary message would leave every application to recognize it for itself.
+    // Typed optional on purpose: the rejection comes off the wire, so a server that sends a
+    // bare `protocol::rejected` with no body must still produce a usable error rather than a
+    // TypeError that hides the real problem.
+    private onProtocolRejected(rejection: ProtocolRejection | undefined) {
+        // A mismatch cannot resolve itself, so retrying only produces a reconnect loop that
+        // buries the one log line explaining what is wrong.
+        this.socket.io.reconnection(false);
+        this.socket.disconnect();
+
+        const serverVersion = rejection?.serverVersion ?? 'unknown';
+        const error = new ProtocolMismatchError(
+            rejection?.reason ??
+                `Server refused the connection: it speaks protocol v${serverVersion}, this client speaks v${PROTOCOL_VERSION}.`,
+            serverVersion,
+            rejection?.clientVersion ?? PROTOCOL_VERSION
+        );
+
+        console.error(
+            `Colibri: ${error.message} Update colibri-web and colibri-server to matching versions. Not reconnecting.`
+        );
+        this.protocolMismatchSubject.next(error);
     }
 
     /**

@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { connect } from 'socket.io-client';
+import { PROTOCOL_VERSION } from '../src/Colibri';
 
 const execFileAsync = promisify(execFile);
 
@@ -37,7 +38,9 @@ async function waitForPort(host: string, port: number, timeoutMs: number): Promi
 async function waitForSocketIoHandshake(host: string, port: number, timeoutMs: number): Promise<void> {
     await new Promise<void>((resolve, reject) => {
         const socket = connect(`ws://${host}:${port}`, {
-            query: { app: 'e2e-globalsetup-probe', version: '2' },
+            // The server refuses any other version outright, so this probe must track the
+            // client's own constant or the whole e2e suite fails at setup.
+            query: { app: 'e2e-globalsetup-probe', version: PROTOCOL_VERSION },
             transports: ['websocket'],
             reconnectionDelay: 250,
             reconnectionDelayMax: 250
