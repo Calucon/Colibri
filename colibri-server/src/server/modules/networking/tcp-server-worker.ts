@@ -3,7 +3,18 @@ import { WorkerMessage, WorkerService } from '../core/index.js';
 import * as threads from 'worker_threads';
 import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
-import { FrameError, FrameReader, FrameType, MAX_FRAME_LENGTH, encodeHeartbeatFrame, encodeMessageFrame } from './protocol.js';
+import {
+    COLIBRI_CHANNEL,
+    FrameError,
+    FrameReader,
+    FrameType,
+    MAX_FRAME_LENGTH,
+    PROTOCOL_REJECTED_COMMAND,
+    PROTOCOL_VERSION,
+    encodeHeartbeatFrame,
+    encodeMessageFrame,
+    protocolRejection,
+} from './protocol.js';
 
 export const TCP_SERVER_WORKER = fileURLToPath(import.meta.url);
 
@@ -317,6 +328,14 @@ export class TCPServerWorker extends WorkerService {
     }
 
     private assignApp(client: TcpClient, app: string, name: string, version: string): void {
+        // Refuse before the client is indexed, so a mismatched client never reaches an app's
+        // broadcast set, never posts clientConnected$, and never shows up in the admin UI as
+        // a half-connected ghost.
+        if (version !== PROTOCOL_VERSION) {
+            this.rejectProtocolVersion(client, name, version);
+            return;
+        }
+
         // A second handshake frame with a different app would otherwise leave the client in
         // its previous app's Set forever - removeFromAppIndex only ever looks at the
         // client's *current* app - so a disconnected socket would keep receiving
@@ -340,6 +359,34 @@ export class TCPServerWorker extends WorkerService {
         this.clients.set(client.id, client);
         this.addToAppIndex(client);
         this.postMessage('clientConnected$', { id: client.id, app, name, version });
+    }
+
+    // Tells the client why it was refused and closes the connection. This is best-effort by
+    // nature: it only reaches a client whose *framing* this server still speaks. A genuine
+    // v1 client cannot decode the frame at all, so for that case the log line below - naming
+    // both versions and the peer - is the whole diagnostic, and it is the one an integrator
+    // will actually look at.
+    //
+    // end(packet) rather than write-then-end: it queues the rejection and the FIN together,
+    // so the frame cannot be lost to a close that races the write callback.
+    private rejectProtocolVersion(client: TcpClient, name: string, version: string): void {
+        const rejection = protocolRejection(version);
+        this.logError(
+            `Refusing client '${name}' (${client.id}, ${client.address}): ${rejection.reason}`,
+            false
+        );
+
+        try {
+            client.socket.end(encodeMessageFrame({
+                channel: COLIBRI_CHANNEL,
+                command: PROTOCOL_REJECTED_COMMAND,
+                payload: Buffer.from(JSON.stringify(rejection), 'utf8'),
+            }, maxBufferSize));
+        } catch {
+            // Nothing useful to say if even the refusal cannot be encoded or written - the
+            // socket is going away either way.
+            client.socket.end();
+        }
     }
 
     // A client echoes a server-sent heartbeat frame's timestamp back verbatim; relay it

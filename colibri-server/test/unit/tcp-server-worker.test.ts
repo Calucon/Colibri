@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import type * as net from 'net';
 import { TCPServerWorker, WireNetworkMessage } from '../../src/server/modules/networking/tcp-server-worker.js';
-import { encodeHandshakeFrame, encodeHeartbeatFrame, encodeMessageFrame } from '../../src/server/modules/networking/protocol.js';
+import { FrameReader, FrameType, PROTOCOL_VERSION, encodeHandshakeFrame, encodeHeartbeatFrame, encodeMessageFrame } from '../../src/server/modules/networking/protocol.js';
 
 // Vitest runs suites inside worker threads, so the real `parentPort` here is the test
 // runner's own channel: WorkerService would subscribe to it and the module bootstrap would
@@ -32,7 +32,10 @@ class FakeSocket extends EventEmitter {
         return true;
     }
 
-    public end(): this {
+    // end(data) is how the worker sends a protocol rejection: the frame and the FIN are
+    // queued together so the refusal cannot be lost to a close racing the write callback.
+    public end(data?: Buffer): this {
+        if (data) this.written.push(data);
         this.ended = true;
         return this;
     }
@@ -96,7 +99,7 @@ describe('TCPServerWorker', () => {
     describe('handshake and the per-app index', () => {
         it('moves a client from waiting to connected and indexes it by app', () => {
             const { socket, id } = connect();
-            socket.emit('data', encodeHandshakeFrame('1', 'appA', 'client-a'));
+            socket.emit('data', encodeHandshakeFrame(PROTOCOL_VERSION, 'appA', 'client-a'));
 
             expect(internals.waitingClients.has(id)).toBe(false);
             expect(internals.clients.has(id)).toBe(true);
@@ -109,8 +112,8 @@ describe('TCPServerWorker', () => {
         // app - so the stale entry survived even the client's disconnect.
         it('does not leave a stale index entry when a client re-handshakes with another app', () => {
             const { socket, id } = connect();
-            socket.emit('data', encodeHandshakeFrame('1', 'appA', 'client-a'));
-            socket.emit('data', encodeHandshakeFrame('1', 'appB', 'client-a'));
+            socket.emit('data', encodeHandshakeFrame(PROTOCOL_VERSION, 'appA', 'client-a'));
+            socket.emit('data', encodeHandshakeFrame(PROTOCOL_VERSION, 'appB', 'client-a'));
 
             expect(internals.clientsByApp.has('appA')).toBe(false);
             expect(Array.from(internals.clientsByApp.get('appB') ?? []).map(c => c.id)).toEqual([id]);
@@ -118,7 +121,7 @@ describe('TCPServerWorker', () => {
 
         it('drops the client from every index on disconnect', () => {
             const { socket, id } = connect();
-            socket.emit('data', encodeHandshakeFrame('1', 'appA', 'client-a'));
+            socket.emit('data', encodeHandshakeFrame(PROTOCOL_VERSION, 'appA', 'client-a'));
             socket.emit('close');
 
             expect(internals.clients.has(id)).toBe(false);
@@ -137,12 +140,70 @@ describe('TCPServerWorker', () => {
         });
     });
 
+    describe('protocol version check', () => {
+        // Decodes whatever the worker wrote back, so the assertions are about the bytes a
+        // real client would receive rather than about an internal call.
+        const framesWrittenTo = function (socket: FakeSocket) {
+            const reader = new FrameReader();
+            return socket.written.flatMap(chunk => reader.append(chunk));
+        };
+
+        it('refuses a client announcing a different protocol version', () => {
+            const { socket, id } = connect();
+            socket.emit('data', encodeHandshakeFrame('1', 'appA', 'old-client'));
+
+            expect(socket.ended).toBe(true);
+            expect(internals.clients.has(id)).toBe(false);
+            expect(internals.clientsByApp.has('appA')).toBe(false);
+            // A refused client must never look connected to anything downstream - the admin
+            // UI would otherwise list a client that is already gone.
+            expect(posted.filter(p => p.channel === 'clientConnected$')).toHaveLength(0);
+            expect(logs().some(l => l.includes('old-client') && l.includes(`v${PROTOCOL_VERSION}`))).toBe(true);
+        });
+
+        it('tells the refused client why, on the colibri channel', () => {
+            const { socket } = connect();
+            socket.emit('data', encodeHandshakeFrame('1', 'appA', 'old-client'));
+
+            const frame = framesWrittenTo(socket).find(
+                f => f.type === FrameType.Message && f.command === 'protocol::rejected'
+            );
+            expect(frame).toBeDefined();
+            if (frame?.type !== FrameType.Message) throw new Error('expected a message frame');
+
+            expect(frame.channel).toBe('colibri');
+            expect(JSON.parse(frame.payload.toString('utf8'))).toMatchObject({
+                serverVersion: PROTOCOL_VERSION,
+                clientVersion: '1',
+            });
+        });
+
+        it('accepts a client announcing the supported version', () => {
+            const { socket, id } = connect();
+            socket.emit('data', encodeHandshakeFrame(PROTOCOL_VERSION, 'appA', 'current-client'));
+
+            expect(socket.ended).toBe(false);
+            expect(internals.clients.has(id)).toBe(true);
+            expect(posted.filter(p => p.channel === 'clientConnected$')).toHaveLength(1);
+        });
+
+        it('ignores messages from a client refused for its version', () => {
+            const { socket } = connect();
+            socket.emit('data', encodeHandshakeFrame('1', 'appA', 'old-client'));
+            posted.length = 0;
+
+            socket.emit('data', encodeMessageFrame(wireMessage('chan', 'broadcast::json', '{}')));
+
+            expect(posted.filter(p => p.channel === 'clientMessage$')).toHaveLength(0);
+        });
+    });
+
     // Item 28: 'error' is always followed by the socket's own 'close', so without the
     // disconnected flag both paths would report the same client as gone.
     describe('disconnect deduplication', () => {
         it('reports clientDisconnected$ once when an error is followed by close', () => {
             const { socket } = connect();
-            socket.emit('data', encodeHandshakeFrame('1', 'appA', 'client-a'));
+            socket.emit('data', encodeHandshakeFrame(PROTOCOL_VERSION, 'appA', 'client-a'));
 
             socket.emit('error', new Error('ECONNRESET while reading'));
             socket.emit('close');
@@ -157,9 +218,9 @@ describe('TCPServerWorker', () => {
             const a = connect();
             const b = connect();
             const other = connect();
-            a.socket.emit('data', encodeHandshakeFrame('1', 'appA', 'a'));
-            b.socket.emit('data', encodeHandshakeFrame('1', 'appA', 'b'));
-            other.socket.emit('data', encodeHandshakeFrame('1', 'appB', 'o'));
+            a.socket.emit('data', encodeHandshakeFrame(PROTOCOL_VERSION, 'appA', 'a'));
+            b.socket.emit('data', encodeHandshakeFrame(PROTOCOL_VERSION, 'appA', 'b'));
+            other.socket.emit('data', encodeHandshakeFrame(PROTOCOL_VERSION, 'appB', 'o'));
 
             a.socket.written.length = 0;
             b.socket.written.length = 0;
@@ -179,7 +240,7 @@ describe('TCPServerWorker', () => {
 
         it('does nothing for an app with no clients', () => {
             const { socket } = connect();
-            socket.emit('data', encodeHandshakeFrame('1', 'appA', 'a'));
+            socket.emit('data', encodeHandshakeFrame(PROTOCOL_VERSION, 'appA', 'a'));
             socket.written.length = 0;
 
             internals.handleParentMessage({
@@ -196,7 +257,7 @@ describe('TCPServerWorker', () => {
     describe('unencodable messages', () => {
         it('drops the message and keeps serving instead of throwing', () => {
             const { socket } = connect();
-            socket.emit('data', encodeHandshakeFrame('1', 'appA', 'a'));
+            socket.emit('data', encodeHandshakeFrame(PROTOCOL_VERSION, 'appA', 'a'));
             socket.written.length = 0;
 
             expect(() => internals.handleParentMessage({
@@ -222,7 +283,7 @@ describe('TCPServerWorker', () => {
     describe('backpressure', () => {
         it('drops writes past the high-water mark and logs only the transitions', () => {
             const { socket } = connect();
-            socket.emit('data', encodeHandshakeFrame('1', 'appA', 'a'));
+            socket.emit('data', encodeHandshakeFrame(PROTOCOL_VERSION, 'appA', 'a'));
             socket.written.length = 0;
             posted = [];
 
@@ -251,7 +312,7 @@ describe('TCPServerWorker', () => {
     describe('heartbeat replies', () => {
         it('relays an echoed ping timestamp as a colibri/latency message', () => {
             const { socket } = connect();
-            socket.emit('data', encodeHandshakeFrame('1', 'appA', 'a'));
+            socket.emit('data', encodeHandshakeFrame(PROTOCOL_VERSION, 'appA', 'a'));
             posted = [];
 
             socket.emit('data', encodeHeartbeatFrame(123456789n));
@@ -276,7 +337,7 @@ describe('TCPServerWorker', () => {
         it('destroys live sockets and clears every index', () => {
             const connected = connect();
             const waiting = connect();
-            connected.socket.emit('data', encodeHandshakeFrame('1', 'appA', 'a'));
+            connected.socket.emit('data', encodeHandshakeFrame(PROTOCOL_VERSION, 'appA', 'a'));
 
             internals.stop();
 

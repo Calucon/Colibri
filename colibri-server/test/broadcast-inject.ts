@@ -7,6 +7,7 @@ import { Config } from '../src/server/configuration.js';
 import {
     FrameReader,
     FrameType,
+    PROTOCOL_VERSION,
     encodeHandshakeFrame,
     encodeHeartbeatFrame,
     encodeMessageFrame,
@@ -29,7 +30,7 @@ client.on('data', data => {
 client.on('error', err => console.error(err));
 
 client.connect(Config.TCP_PORT, '127.0.0.1', () => {
-    client.write(encodeHandshakeFrame('2', app, `broadcast-inject-${process.pid}`), onError);
+    client.write(encodeHandshakeFrame(PROTOCOL_VERSION, app, `broadcast-inject-${process.pid}`), onError);
 
     setTimeout(() => {
         for (let i = 0; i < repeats; i++) {

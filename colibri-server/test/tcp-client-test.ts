@@ -11,6 +11,7 @@ import { Config } from '../src/server/configuration.js';
 import {
     FrameReader,
     FrameType,
+    PROTOCOL_VERSION,
     encodeHandshakeFrame,
     encodeHeartbeatFrame,
     encodeMessageFrame,
@@ -19,7 +20,10 @@ import {
 const address = '127.0.0.1';
 const port = Config.TCP_PORT;
 const app = 'TEST';
-const version = '1';
+// Overridable so this doubles as the manual probe for the version check:
+// `npm run test:tcpclient -- 1` should be refused with a colibri/protocol::rejected frame
+// and an immediate close, instead of connecting.
+const version = process.argv[2] || PROTOCOL_VERSION;
 const hostname = `tcp-client-test-${process.pid}`;
 const runMillis = 3000;
 
