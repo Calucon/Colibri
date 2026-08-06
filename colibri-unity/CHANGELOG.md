@@ -189,6 +189,23 @@ an hour they do not spend on their prototype, so:
   message, and below 20 fps a warning naming the usual cause — an Editor in the background, which
   Unity throttles. Without it, a client delivering at 4 fps is indistinguishable from a slow server,
   and the search goes looking on the wrong side of the wire.
+- **A `Network Stress` sample, for the question the Status window cannot answer.** Status says
+  whether messages are flowing; it says nothing about how many this scene can carry before it stops
+  keeping up. The sample spawns up to 500 synchronized objects, moves as many of them per frame as
+  you ask it to, and reports throughput, round-trip latency percentiles, dropped messages, frame
+  cost and reconnects — on screen, live, with sliders. Run it in two editors side by side and turn
+  the count up until the numbers stop being acceptable.
+
+  It carries two separate instruments on purpose. The **load** is synchronized objects, which is how
+  a real scene generates traffic — but state sync is last-write-wins and coalesces per frame, so a
+  value that never went out is the design working and cannot be counted as loss. The panel calls
+  that figure *coalesced*, not *lost*. **Latency and loss** ride on a separate low-rate probe
+  channel where every message is meant to arrive exactly once, measured as a round trip so no clock
+  is shared between the two ends. That channel is the only thing here that can honestly report a
+  dropped message — and it is what makes the server's own backpressure discard visible from inside
+  Unity, since a client whose socket falls more than 1 MB behind has writes dropped without being
+  told (`tcp-server-worker.ts`). `colibri-server`'s `npm run test:stressecho` is a raw v3 client
+  that answers probes, so the round trip can be measured with one editor instead of two.
 - **`[Sync]` members are validated at startup** — an unsupported type, a property missing an
   accessor, or two members whose lowercased names collide are reported when the model type is first
   initialized instead of failing on the first message.
