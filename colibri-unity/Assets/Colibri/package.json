@@ -40,6 +40,11 @@
             "displayName": "Voice Chat",
             "description": "Example for Colibri's (spatial) voice chat",
             "path": "Samples~/VoiceChat"
+        },
+        {
+            "displayName": "Network Stress",
+            "description": "Puts Colibri under load and reports what happened: throughput, round-trip latency percentiles, dropped messages and frame cost. Run it in two editors side by side and turn the object count up until the numbers stop being acceptable.",
+            "path": "Samples~/NetworkStress"
         }
     ]
 }
