@@ -57,11 +57,20 @@ namespace HCIKonstanz.Colibri.Synchronization
         private static readonly Dictionary<string, List<Listener<JObject>>> _modelUpdateListeners = new Dictionary<string, List<Listener<JObject>>>();
         private static readonly Dictionary<string, List<Listener<JObject>>> _modelDeleteListeners = new Dictionary<string, List<Listener<JObject>>>();
 
+        /// <summary>
+        /// The live connection, creating it on first use. Null only while the application is
+        /// shutting down, when there is nothing left to send to.
+        /// </summary>
         private static WebServerConnection Connection()
         {
+            // Unity's ==, so the previous Play session's destroyed connection is replaced rather
+            // than reused - see SingletonBehaviour.
             if (_connection == null)
             {
                 _connection = WebServerConnection.Instance;
+                if (_connection == null)
+                    return null;
+
                 _connection.OnMessageReceived += OnServerMessage;
             }
             return _connection;
@@ -246,8 +255,12 @@ namespace HCIKonstanz.Colibri.Synchronization
 
         private static void SendCommand(string channel, string command, JToken data)
         {
+            var connection = Connection();
+            if (connection == null)
+                return;
+
             RecordTraffic(false, channel, command);
-            Connection().SendCommand(channel, command, data);
+            connection.SendCommand(channel, command, data);
         }
 
 
