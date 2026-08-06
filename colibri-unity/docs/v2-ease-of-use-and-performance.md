@@ -653,6 +653,49 @@ Two constraints shaped the implementation:
 
 Repaints are throttled to 10 Hz and only while playing.
 
+### The question Status cannot answer: the `Network Stress` sample
+
+Status tells you whether messages are flowing. It says nothing about *how many* — and "how many
+synchronized objects can this carry before it stops keeping up" is the question that decides whether
+a prototype works in the room it was built for. Before this sample there was no way to ask it. The
+main-thread bug in §2 was found by eye, from a cube that looked late; the numbers that would have
+settled it in a minute did not exist anywhere.
+
+The sample spawns up to 500 synchronized objects, moves as many of them per frame as you ask, and
+puts throughput, round-trip latency percentiles, dropped messages, frame cost and reconnects on
+screen behind sliders. Run it in two editors side by side — that is the configuration it exists for
+— and turn the count up until the numbers stop being acceptable.
+
+**Two instruments, deliberately separate.** The *load* is synchronized objects, because that is how
+a real scene generates traffic. But state sync is last-write-wins and coalesces per frame: if a
+value changes three times between two flushes, two of those never go on the wire, and that is the
+design working rather than the network failing. So the load cannot measure loss, and the panel calls
+its gap figure **coalesced**, not lost.
+
+*Latency and loss* therefore ride on a separate low-rate probe channel, where every message is meant
+to arrive exactly once. It is a round trip, so no clock is shared between the two ends and the
+figure stays honest across machines, and it is kept at a low rate on purpose — it measures the delay
+*under* the load rather than adding to it. That channel is the only thing in the sample that can
+report a genuinely dropped message, and it is what makes the server's own backpressure visible from
+inside Unity: `tcp-server-worker.ts` discards writes to a client whose socket has fallen more than
+1 MB behind, logs the fact on its own side, and never tells the client.
+
+Two things that follow from the design rather than from the harness:
+
+- **`colibri-server`'s `npm run test:stressecho`** is a raw v3 client that does nothing but answer
+  probes. The server excludes a sender from its own broadcasts, so one editor alone can never
+  measure a round trip; this closes the loop without starting a second Unity. Measured against it
+  through a local Docker server, the wire itself round-trips in **3.5 ms p50, 4.2 ms p95, 5.1 ms
+  p99** at 20 Hz with nothing lost — the floor everything else is read against.
+- **Inbound model dispatch is O(N) per message**, so the object-count slider is walking into an
+  O(N²) frame cost. Every `SyncBehaviour<T>` registers its own listener on one channel per *type*
+  (`SyncBehaviour.cs:235`) and each instance compares `id == Id` and returns on a miss
+  (`SyncBehaviour.cs:309`) — one inbound update is offered to all N models, and
+  `SyncBehaviourManager` adds a second linear scan. At 100 objects each sending once a frame that
+  is 10,000 comparisons a frame; at 500 it is 250,000. Nothing here fixes that. The point of the
+  sample is that it can now be measured rather than argued about, and an index from `Id` to model is
+  the obvious fix when the measurement says it is worth making.
+
 ---
 
 ## 6. API changes
