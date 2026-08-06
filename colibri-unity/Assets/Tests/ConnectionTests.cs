@@ -3,6 +3,7 @@ using System.Collections;
 using System.Linq;
 using HCIKonstanz.Colibri.Networking;
 using HCIKonstanz.Colibri.Synchronization;
+using Newtonsoft.Json.Linq;
 using NUnit.Framework;
 using UnityEngine;
 using UnityEngine.TestTools;
@@ -24,9 +25,10 @@ namespace HCIKonstanz.Colibri.E2E
             Assert.That(Connection.ServerAddress, Is.EqualTo(E2EServer.Host));
             Assert.That(Connection.TcpPort, Is.EqualTo(E2EServer.TcpPort));
 
-            // The handshake's version field. colibri-web sends the same '2', and the server shows
-            // it on the admin UI's Clients page.
+            // The handshake's version field. colibri-web sends the same '2', and the server
+            // refuses any client announcing anything else.
             Assert.That(WebServerConnection.ClientVersion, Is.EqualTo("2"));
+            Assert.That(Connection.ServerVersion, Is.Null, "A connection that was accepted has nothing to report");
 
             yield break;
         }
@@ -75,6 +77,72 @@ namespace HCIKonstanz.Colibri.E2E
 
             yield return Peer.Expect(channel, "broadcast::string",
                 frame => Assert.That(TcpPeer.Text(frame), Is.EqualTo("\"ping\"")));
+        }
+
+        /// <summary>
+        /// The server accepts exactly one protocol version and refuses every other one, which is
+        /// the only reason a mismatch is diagnosable at all: before this, a client built against
+        /// the wrong protocol reconnected forever against a server that said nothing unusual.
+        ///
+        /// Driven through the raw peer rather than the Unity client, because
+        /// <see cref="WebServerConnection"/> only ever announces its own version - what is under
+        /// test here is what the *server* does with one it does not support.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator TheServerRefusesAClientOnAnotherProtocolVersion()
+        {
+            using (var stranger = new TcpPeer())
+            {
+                yield return stranger.Connect("wrong-version-peer", version: "1");
+
+                yield return stranger.Expect("colibri", "protocol::rejected", frame =>
+                {
+                    var body = TcpPeer.Json(frame);
+                    Assert.That((string)body["serverVersion"], Is.EqualTo(WebServerConnection.ClientVersion));
+                    Assert.That((string)body["clientVersion"], Is.EqualTo("1"));
+                    Assert.That((string)body["reason"], Does.Contain("Unsupported protocol version"));
+                });
+
+                // Refused, not merely warned: the server must not leave a client it will never
+                // talk to sitting on the connection.
+                yield return stranger.ExpectClosed();
+            }
+        }
+
+        /// <summary>
+        /// A refusal is addressed to the client being refused. It must not be broadcast to the
+        /// app, and it must not disturb anyone else's connection - one stale client joining is
+        /// otherwise a way to make every other client log an error it cannot act on.
+        ///
+        /// This does not cover the receiving half of the client's own refusal path (intercepting
+        /// it before the queue and stopping the reconnect loop): <c>CLIENT_VERSION</c> is a
+        /// constant, so the Unity client under test cannot be made to announce a wrong version.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator ARefusalReachesOnlyTheClientBeingRefused()
+        {
+            var seen = 0;
+            Action<JToken> handler = _ => seen++;
+
+            Sync.Receive("colibri", handler);
+            try
+            {
+                using (var stranger = new TcpPeer())
+                {
+                    yield return stranger.Connect("wrong-version-peer-2", version: "1");
+                    yield return stranger.Expect("colibri", "protocol::rejected");
+                }
+
+                yield return E2EServer.Settle(0.5f);
+
+                Assert.That(seen, Is.Zero, "Another client's protocol rejection was broadcast to the app");
+                Assert.That(Connection.Status, Is.EqualTo(ConnectionStatus.Connected),
+                    "Refusing one client disturbed another client's connection");
+            }
+            finally
+            {
+                Sync.Unregister("colibri", handler);
+            }
         }
 
         /// <summary>

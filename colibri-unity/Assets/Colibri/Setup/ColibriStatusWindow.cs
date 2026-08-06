@@ -122,7 +122,20 @@ namespace HCIKonstanz.Colibri.Setup
 
             EditorGUILayout.LabelField("Server", $"{connection.ServerAddress}:{connection.TcpPort}");
             EditorGUILayout.LabelField("App Name", string.IsNullOrEmpty(connection.AppName) ? "(not set)" : connection.AppName);
-            EditorGUILayout.LabelField("Protocol", $"v{WebServerConnection.ClientVersion} (binary TCP)");
+            EditorGUILayout.LabelField("Protocol", status == ConnectionStatus.ProtocolMismatch
+                ? $"v{WebServerConnection.ClientVersion} (binary TCP) - server speaks v{connection.ServerVersion ?? "unknown"}"
+                : $"v{WebServerConnection.ClientVersion} (binary TCP)");
+
+            if (status == ConnectionStatus.ProtocolMismatch)
+            {
+                // Terminal, and the one connection state the usual "is the server running?"
+                // advice is actively wrong for - the server is running, and it said no.
+                EditorGUILayout.HelpBox(
+                    $"The server refused this client: {connection.ProtocolMismatchReason}\n\n" +
+                    "This is not retried. Update colibri-unity and colibri-server to matching versions.",
+                    MessageType.Error);
+                return;
+            }
 
             if (status == ConnectionStatus.Connected)
             {

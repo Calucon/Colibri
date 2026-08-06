@@ -7,6 +7,7 @@ using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using HCIKonstanz.Colibri.Networking;
 using HCIKonstanz.Colibri.Networking.Protocol;
 using Newtonsoft.Json.Linq;
 using NUnit.Framework;
@@ -57,12 +58,20 @@ namespace HCIKonstanz.Colibri.E2E
         }
 
 
-        public IEnumerator Connect(string name = "e2e-peer")
+        /// <summary>True once the server has closed this peer's connection.</summary>
+        public bool Closed => Volatile.Read(ref _closed);
+        private bool _closed;
+
+        /// <param name="version">
+        /// Handshake protocol version. Defaults to the client library's own, so the peer is
+        /// accepted; a test can pass something else to exercise the server's refusal.
+        /// </param>
+        public IEnumerator Connect(string name = "e2e-peer", string version = null)
         {
-            yield return E2EServer.Await(ConnectAsync(name), "the raw peer never reached the server");
+            yield return E2EServer.Await(ConnectAsync(name, version), "the raw peer never reached the server");
         }
 
-        private async Task ConnectAsync(string name)
+        private async Task ConnectAsync(string name, string version)
         {
             await _client.ConnectAsync(E2EServer.Host, E2EServer.TcpPort);
             _stream = _client.GetStream();
@@ -70,7 +79,23 @@ namespace HCIKonstanz.Colibri.E2E
             // Started before the handshake so the server's first heartbeat is never missed.
             _ = ReadLoop(_lifetime.Token);
 
-            await WriteAsync(FrameCodec.EncodeHandshake("2", E2EServer.App, name), _lifetime.Token);
+            await WriteAsync(
+                FrameCodec.EncodeHandshake(version ?? WebServerConnection.ClientVersion, E2EServer.App, name),
+                _lifetime.Token);
+        }
+
+        /// <summary>Waits for the server to hang up, and fails if it does not.</summary>
+        public IEnumerator ExpectClosed(float timeoutSeconds = 8f)
+        {
+            var deadline = Time.realtimeSinceStartup + timeoutSeconds;
+
+            while (!Closed)
+            {
+                if (Time.realtimeSinceStartup > deadline)
+                    Assert.Fail($"The server never closed the peer's connection within {timeoutSeconds:0.#} s.");
+
+                yield return null;
+            }
         }
 
         public void Send(string channel, string command, JToken payload)
@@ -179,11 +204,15 @@ namespace HCIKonstanz.Colibri.E2E
                 catch (Exception)
                 {
                     // Disposed or reset - either way there is nothing left to read.
+                    Volatile.Write(ref _closed, true);
                     return;
                 }
 
                 if (read <= 0)
+                {
+                    Volatile.Write(ref _closed, true);
                     return;
+                }
 
                 foreach (var frame in Decode(buffer, read))
                 {

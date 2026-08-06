@@ -13,24 +13,46 @@ using UnityEngine;
 
 namespace HCIKonstanz.Colibri.Networking
 {
-    public enum ConnectionStatus { Connected, Disconnected, Connecting, Reconnecting };
+    /// <summary>
+    /// <see cref="ConnectionStatus.ProtocolMismatch"/> is terminal: unlike
+    /// <see cref="ConnectionStatus.Disconnected"/> it is never followed by another attempt,
+    /// because a version mismatch cannot resolve itself.
+    /// </summary>
+    public enum ConnectionStatus { Connected, Disconnected, Connecting, Reconnecting, ProtocolMismatch };
 
     /// <summary>
     /// TCP connection to a colibri-server, speaking the v3 binary protocol
     /// (see <see cref="Protocol.FrameCodec"/> and <c>colibri-server/docs/protocol.md</c>).
     ///
-    /// Requires colibri-server >= 2.0.0; there is no version negotiation, so a 1.x server
-    /// cannot be talked to at all.
+    /// Requires colibri-server >= 2.0.0. There is no version negotiation: the server accepts
+    /// exactly one protocol version and refuses anything else, so both sides have to be
+    /// upgraded together.
     /// </summary>
     [DefaultExecutionOrder(-100)]
     public class WebServerConnection : SingletonBehaviour<WebServerConnection>
     {
         /// <summary>
-        /// Client library version announced in the handshake. Matches colibri-web's
-        /// <c>query: { app, version: '2' }</c>. The server does not validate it - it is
-        /// metadata shown on the admin UI's Clients page.
+        /// Protocol version announced in the handshake. Matches colibri-web's
+        /// <c>query: { app, version: '2' }</c> and <c>PROTOCOL_VERSION</c> in the server's
+        /// <c>src/server/modules/networking/protocol.ts</c>. A server speaking anything else
+        /// refuses the connection with a <see cref="PROTOCOL_REJECTED_COMMAND"/> message.
         /// </summary>
         private const string CLIENT_VERSION = "2";
+
+        /// <summary>
+        /// Channel and command the server refuses a mismatched client on. Handled here rather
+        /// than in <c>Sync</c>: it is Colibri's own plumbing, not an application message.
+        /// </summary>
+        private const string COLIBRI_CHANNEL = "colibri";
+        private const string PROTOCOL_REJECTED_COMMAND = "protocol::rejected";
+
+        /// <summary>
+        /// A server on a genuinely different framing cannot be told anything - it cannot decode
+        /// our frames and we cannot decode its. What that looks like from here is a session that
+        /// faults before a single frame is read, over and over. After this many in a row, say so:
+        /// the alternative is an infinite reconnect loop whose log gives no hint of the cause.
+        /// </summary>
+        private const int EARLY_FRAME_FAILURES_BEFORE_HINT = 3;
 
         /// <summary>
         /// The server heartbeats every 100 ms, so silence for this long means the connection
@@ -137,6 +159,16 @@ namespace HCIKonstanz.Colibri.Networking
         private volatile int _receiveThreadId;
 
         private volatile ConnectionStatus _status = ConnectionStatus.Disconnected;
+
+        // Written by the receive loop off the main thread, read by the Editor status window and
+        // by user code on the main thread.
+        private volatile string _serverVersion;
+        private volatile string _protocolMismatchReason;
+
+        // Session-scoped: reset when a session starts, set once it has decoded anything at all.
+        // Only a session that fails *before* this is set counts towards the framing hint.
+        private volatile bool _decodedAnyFrame;
+        private int _consecutiveEarlyFrameFailures;
 
         // The setter is a read-modify-write over four fields, and the connection loop and
         // Update()'s heartbeat watchdog can both reach it at the same time. Interleaved, the two
@@ -324,20 +356,32 @@ namespace HCIKonstanz.Colibri.Networking
 
                 _hasReportedMissingConfig = false;
 
+                var mismatched = false;
+
                 try
                 {
+                    _decodedAnyFrame = false;
                     await RunSession(address, _tcpPort, SanitizeHandshakeField(app), token)
                         .ConfigureAwait(false);
+                    _consecutiveEarlyFrameFailures = 0;
                 }
                 catch (OperationCanceledException)
                 {
                     break;
+                }
+                catch (ProtocolMismatchException e)
+                {
+                    mismatched = true;
+                    Debug.LogError(
+                        $"Colibri: the server refused this client - {e.Message}. " +
+                        $"Update colibri-unity and colibri-server to matching versions. Not reconnecting.");
                 }
                 catch (FrameException e)
                 {
                     // A desynchronized stream cannot be recovered from - there is no delimiter
                     // to resynchronize on - so the connection is dropped and rebuilt.
                     Debug.LogError($"Colibri: invalid frame from server, dropping connection: {e.Message}");
+                    ReportRepeatedEarlyFrameFailures();
                 }
                 catch (SocketException e)
                 {
@@ -355,8 +399,13 @@ namespace HCIKonstanz.Colibri.Networking
                 {
                     CloseSocket(_socket);
                     _socket = null;
-                    Status = ConnectionStatus.Disconnected;
+                    Status = mismatched ? ConnectionStatus.ProtocolMismatch : ConnectionStatus.Disconnected;
                 }
+
+                // Terminal. Retrying cannot make the two sides agree, and a reconnect loop would
+                // only bury the one log line that explains what is wrong.
+                if (mismatched)
+                    break;
 
                 if (token.IsCancellationRequested)
                     break;
@@ -364,6 +413,30 @@ namespace HCIKonstanz.Colibri.Networking
                 if (!await Delay(NextBackoffDelay(), token).ConfigureAwait(false))
                     break;
             }
+        }
+
+        /// <summary>
+        /// A server whose framing this client cannot decode also cannot decode ours, so it has
+        /// no way to send the explicit refusal. Repeated failures before a single frame is read
+        /// are the only symptom that case has, so name the likely cause instead of logging the
+        /// same decode error forever.
+        /// </summary>
+        private void ReportRepeatedEarlyFrameFailures()
+        {
+            if (_decodedAnyFrame)
+            {
+                _consecutiveEarlyFrameFailures = 0;
+                return;
+            }
+
+            _consecutiveEarlyFrameFailures++;
+            if (_consecutiveEarlyFrameFailures != EARLY_FRAME_FAILURES_BEFORE_HINT)
+                return;
+
+            Debug.LogError(
+                $"Colibri: {_consecutiveEarlyFrameFailures} connections in a row failed before a single frame could be read. " +
+                $"This usually means a protocol mismatch: this client speaks v{CLIENT_VERSION} and needs colibri-server >= 2.0.0. " +
+                "Check the server's version.");
         }
 
         private async Task RunSession(string host, int port, string app, CancellationToken token)
@@ -424,6 +497,9 @@ namespace HCIKonstanz.Colibri.Networking
                 StampLiveness();
 
                 var frames = ReadFrames(reader, buffer, received);
+                if (frames.Count > 0)
+                    _decodedAnyFrame = true;
+
                 for (var i = 0; i < frames.Count; i++)
                 {
                     var frame = frames[i];
@@ -440,6 +516,13 @@ namespace HCIKonstanz.Colibri.Networking
                             break;
 
                         case FrameType.Message:
+                            // Intercepted before the queue: a refusal is Colibri's own plumbing,
+                            // and delivering it as an ordinary message would leave every
+                            // application to recognize it for itself. Throws, so the session
+                            // unwinds through the one place that decides whether to retry.
+                            if (frame.Channel == COLIBRI_CHANNEL && frame.Command == PROTOCOL_REJECTED_COMMAND)
+                                throw BuildProtocolMismatch(frame.Payload);
+
                             _queuedCommands.Enqueue(new InPacket
                             {
                                 Channel = frame.Channel,
@@ -457,6 +540,38 @@ namespace HCIKonstanz.Colibri.Networking
             }
 
             token.ThrowIfCancellationRequested();
+        }
+
+        /// <summary>
+        /// Reads the server's refusal payload. Deliberately forgiving about its shape: the whole
+        /// point of this path is to explain a mismatch, so a payload that is missing or is not
+        /// the JSON we expect must still produce a usable message rather than a parse error that
+        /// buries the real problem.
+        /// </summary>
+        private ProtocolMismatchException BuildProtocolMismatch(byte[] payload)
+        {
+            var serverVersion = "unknown";
+            string reason = null;
+
+            try
+            {
+                if (ParsePayload(payload) is JObject body)
+                {
+                    serverVersion = (string)body["serverVersion"] ?? serverVersion;
+                    reason = (string)body["reason"];
+                }
+            }
+            catch (Exception)
+            {
+                // Fall through to the generic wording below.
+            }
+
+            reason ??= $"the server speaks protocol v{serverVersion}, this client speaks v{CLIENT_VERSION}";
+
+            _serverVersion = serverVersion;
+            _protocolMismatchReason = reason;
+
+            return new ProtocolMismatchException(reason, serverVersion, CLIENT_VERSION);
         }
 
         // Kept out of the async method above: a ReadOnlySpan<byte> local may not live inside
@@ -529,6 +644,21 @@ namespace HCIKonstanz.Colibri.Networking
 
         /// <summary>Client-library protocol version sent in the handshake.</summary>
         public static string ClientVersion => CLIENT_VERSION;
+
+        /// <summary>
+        /// Protocol version the server reported when it refused this client, or null while no
+        /// refusal has been received. Only ever set alongside
+        /// <see cref="ConnectionStatus.ProtocolMismatch"/>: a server that accepts the connection
+        /// never sends its version, because there is nothing to report.
+        /// </summary>
+        public string ServerVersion => _serverVersion;
+
+        /// <summary>
+        /// Why the server refused this client, or null if it has not. Companion to
+        /// <see cref="ConnectionStatus.ProtocolMismatch"/> for anything that wants to show the
+        /// reason rather than just the state.
+        /// </summary>
+        public string ProtocolMismatchReason => _protocolMismatchReason;
 
 
         /*
