@@ -11,17 +11,21 @@ export const PROTOCOL_VERSION = '2';
 
 const COLIBRI_CHANNEL = 'colibri';
 const PROTOCOL_REJECTED_COMMAND = 'protocol::rejected';
+const PROTOCOL_ACCEPTED_COMMAND = 'protocol::accepted';
 const LATENCY_COMMAND = 'latency';
 
 /**
- * How long to wait for the server's first latency beat before concluding it predates the
- * protocol version check.
+ * How long to wait for the server to announce itself before concluding it predates the protocol
+ * version check.
  *
- * A 2.0.0+ server broadcasts `colibri`/`latency` to every Socket.IO client every 100ms, and does
- * so unconditionally - so 50 missed beats is not a slow server, it is a server that has no such
- * broadcast to send. The window is this generous only to survive an event-loop stall on a loaded
- * server; when the answer is "your server is years old", waiting five seconds for it costs
- * nothing.
+ * A 2.0.0+ server sends `colibri`/`protocol::accepted` immediately on connect, before any
+ * application traffic, so this is not a race - it is waiting for something that either comes
+ * straight away or is never coming at all. The window is this generous only to survive an
+ * event-loop stall on a loaded server.
+ *
+ * Deliberately not inferred from the 100ms `latency` broadcast, which looks like the same signal
+ * and is not: that was added in colibri-server 1.2.0, so every 1.2.x and 1.3.x server sends it
+ * while still speaking the old protocol. Verified against the published 1.1.1 and 1.3.1 images.
  */
 const OLD_SERVER_TIMEOUT_MS = 5000;
 
@@ -98,11 +102,6 @@ export class Colibri {
         // latency statistics
         this.registerChannel(COLIBRI_CHANNEL, msg => {
             if (msg.command === LATENCY_COMMAND) {
-                // Proof the server is 2.0.0+, since nothing older has a latency broadcast to
-                // send. Deliberately the *only* thing that clears the timer: ordinary traffic
-                // proves the server is alive, not that it is current, and a pre-2.0.0 server
-                // relays broadcasts and model updates perfectly well.
-                this.stopWaitingForLatency();
                 SendMessage(COLIBRI_CHANNEL, LATENCY_COMMAND, msg.payload);
             }
         });
@@ -110,53 +109,54 @@ export class Colibri {
 
     private onSocketConnect() {
         console.debug(`Connected to colibri server on ${this.server}`);
-        this.waitForLatency();
+        this.waitForServerHello();
     }
 
     /*
      *  Detecting a server that predates the protocol version check.
      *
-     *  The check is server-side, so a server too old to have it cannot refuse this client and
-     *  cannot announce its version - the only thing left to go on is the absence of something
-     *  every current server sends. Nothing here gates message delivery: the timer only observes.
+     *  The check is server-side, so a server too old to have it neither refuses this client nor
+     *  says what it speaks. A current server therefore announces itself unprompted, and the
+     *  absence of that announcement is the signal. Nothing here gates message delivery: the timer
+     *  only observes, and ordinary traffic neither sets nor clears it.
      */
 
-    private waitForLatency() {
+    private waitForServerHello() {
         if (this.hasReportedOldServer) return;
 
         clearTimeout(this.oldServerTimer);
         this.oldServerTimer = setTimeout(() => {
-            this.onLatencyMissing();
+            this.onServerHelloMissing();
         }, OLD_SERVER_TIMEOUT_MS);
     }
 
-    private stopWaitingForLatency() {
+    private stopWaitingForServerHello() {
         clearTimeout(this.oldServerTimer);
         this.oldServerTimer = undefined;
     }
 
-    private onLatencyMissing() {
+    private onServerHelloMissing() {
         // A disconnected socket explains the silence by itself, and a reconnect re-arms this.
         if (!this.socket.connected) return;
 
         // A frozen or backgrounded tab stops draining the socket while timers keep their own
-        // schedule, so on resume this can fire ahead of beats already queued. Waiting another
+        // schedule, so on resume this can fire ahead of anything already queued. Waiting another
         // window costs nothing and removes the likeliest false positive there is.
         //
         // `typeof` rather than `document?.` - optional chaining does not save you from an
         // identifier that was never declared, and under Node (samples, e2e) this would be a
         // ReferenceError rather than undefined.
         if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
-            this.waitForLatency();
+            this.waitForServerHello();
             return;
         }
 
         this.hasReportedOldServer = true;
-        this.stopWaitingForLatency();
+        this.stopWaitingForServerHello();
 
         const error = new ProtocolMismatchError(
-            `No latency heartbeat in ${OLD_SERVER_TIMEOUT_MS / 1000}s: this server appears to predate ` +
-                `colibri-server 2.0.0, which is what this client (protocol v${PROTOCOL_VERSION}) expects.`,
+            `The server did not identify itself within ${OLD_SERVER_TIMEOUT_MS / 1000}s, so it predates ` +
+                `colibri-server 2.0.0; this client speaks protocol v${PROTOCOL_VERSION}.`,
             '<2.0.0',
             PROTOCOL_VERSION,
             false
@@ -177,6 +177,13 @@ export class Colibri {
             return;
         }
 
+        // The server identifying itself, which is the whole point of the old-server check.
+        // Kept off `messages` for the same reason as the rejection: Colibri's own plumbing.
+        if (channel === COLIBRI_CHANNEL && command === PROTOCOL_ACCEPTED_COMMAND) {
+            this.stopWaitingForServerHello();
+            return;
+        }
+
         this.messageSubject.next({ channel, command, payload });
     }
 
@@ -188,7 +195,7 @@ export class Colibri {
     private onProtocolRejected(rejection: ProtocolRejection | undefined) {
         // The server has just told us exactly what is wrong, so the guess that would otherwise
         // land five seconds later would only contradict it.
-        this.stopWaitingForLatency();
+        this.stopWaitingForServerHello();
         this.hasReportedOldServer = true;
 
         // A mismatch cannot resolve itself, so retrying only produces a reconnect loop that

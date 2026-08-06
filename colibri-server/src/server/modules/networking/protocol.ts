@@ -38,6 +38,12 @@ export const MAX_FRAME_LENGTH = 1024 * 1024 * 5;
 // incompatibly between v1 and the current protocol, and there is no subset both can speak.
 // The point of the check is that the refusal is *legible*: without it a mismatched client
 // reconnects forever against a server that logs nothing unusual.
+//
+// THIS IS NOT THE RELEASE VERSION, and must not be bumped alongside one. It identifies the wire
+// format only: 2.0.0, 2.0.1 and 2.1.0 all speak '2' and interoperate freely, in any combination
+// of client and server. Bump it only when a change would make an existing client misread the
+// bytes on the wire - doing so refuses every deployed client at once, which is the entire cost
+// and the entire point.
 export const PROTOCOL_VERSION = '2';
 
 // The channel and command a refusal is delivered on. A plain message frame rather than a
@@ -60,6 +66,32 @@ export const protocolRejection = function (clientVersion: string): ProtocolRejec
         serverVersion: PROTOCOL_VERSION,
         clientVersion,
     };
+};
+
+// Sent to every Socket.IO client whose version was accepted, immediately on connect.
+//
+// This exists so a client can tell an out-of-date *server* apart from a current one, which the
+// version check alone cannot do: the check runs on the server, so a server too old to have it
+// neither refuses anyone nor says what it speaks. Announcing the version unprompted turns that
+// into something a client can wait for, and its absence into a usable signal.
+//
+// It has to be its own message rather than an inference from existing traffic. The obvious
+// candidate - the 100ms `latency` broadcast - was added in colibri-server 1.2.0, so keying on it
+// silently accepts every 1.2.x and 1.3.x server as current. Nothing else a web client can observe
+// distinguishes them: the Socket.IO envelope, the `client::connected` payload and the relay
+// behaviour are all identical.
+//
+// TCP clients get nothing here, and need nothing: the framing itself changed incompatibly in
+// 2.0.0, so a pre-2.0.0 server is already unmistakable to them - for the same reason that a
+// refusal cannot reach a client whose framing differs.
+export const PROTOCOL_ACCEPTED_COMMAND = 'protocol::accepted';
+
+export interface ProtocolAcceptance {
+    serverVersion: string;
+}
+
+export const protocolAcceptance = function (): ProtocolAcceptance {
+    return { serverVersion: PROTOCOL_VERSION };
 };
 
 export class FrameError extends Error {}

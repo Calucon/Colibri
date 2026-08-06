@@ -30,6 +30,35 @@ describe('connecting to a real colibri-server', () => {
         expect(msgB.command).toBe('latency');
     });
 
+    // The signal a client uses to tell this server from one predating the version check. A raw
+    // socket, because the Colibri class consumes this message rather than surfacing it - what
+    // matters here is that the *server* sends it, unprompted, to an accepted client.
+    it('announces its protocol version on connect', async () => {
+        const socket = connect(`ws://${HOST}:${PORT}`, {
+            query: { app: uniqueApp('protocol-hello'), version: PROTOCOL_VERSION },
+            transports: ['websocket'],
+            reconnection: false
+        });
+
+        try {
+            const hello = await new Promise<Record<string, unknown>>((resolve, reject) => {
+                const timer = setTimeout(() => {
+                    reject(new Error('the server never announced itself'));
+                }, 5000);
+                socket.on('colibri', (msg: { command: string; payload: Record<string, unknown> }) => {
+                    if (msg.command !== 'protocol::accepted') return;
+                    clearTimeout(timer);
+                    resolve(msg.payload);
+                });
+            });
+
+            expect(hello.serverVersion).toBe(PROTOCOL_VERSION);
+            expect(socket.connected).toBe(true);
+        } finally {
+            socket.disconnect();
+        }
+    });
+
     // The Colibri class always announces PROTOCOL_VERSION, so a mismatch can only be
     // produced with a raw socket - which is also the honest shape of the test, since what
     // matters is what the *server* does with a version it does not support.

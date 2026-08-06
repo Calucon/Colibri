@@ -445,7 +445,7 @@ describe('detecting a server that predates the version check', () => {
         expect(fakeSocket.io.reconnection).not.toHaveBeenCalled();
     });
 
-    it('stays quiet once a latency beat arrives', () => {
+    it('stays quiet once the server identifies itself', () => {
         const client = new Colibri('app', 'localhost', 9011);
         const seen: ProtocolMismatchError[] = [];
         client.protocolMismatch.subscribe(e => seen.push(e));
@@ -453,16 +453,33 @@ describe('detecting a server that predates the version check', () => {
         connectSocket();
         // Late, but inside the window - a loaded server is not an old one.
         vi.advanceTimersByTime(TIMEOUT_MS - 100);
-        deliver('colibri', { command: 'latency', payload: 1 });
+        deliver('colibri', { command: 'protocol::accepted', payload: { serverVersion: PROTOCOL_VERSION } });
         vi.advanceTimersByTime(TIMEOUT_MS * 2);
 
         expect(seen).toEqual([]);
     });
 
-    // The case that decides whether this check is worth anything: a pre-2.0.0 server relays
-    // broadcasts and model updates perfectly well. If ordinary traffic cleared the timer, the
-    // check would never fire against precisely the servers it exists to find.
-    it('still reports a busy old server that is relaying traffic but sending no beat', async () => {
+    // The signal has to be the server naming itself, not any traffic that happens to look like a
+    // current server. colibri-server 1.2.0 added the 100 ms `latency` broadcast while still
+    // speaking the old protocol, so keying on that silently accepts every 1.2.x and 1.3.x server
+    // as current - confirmed against the published 1.1.1 and 1.3.1 images.
+    it('still reports an old server that sends the latency broadcast', async () => {
+        const client = new Colibri('app', 'localhost', 9011);
+        const mismatch = firstValueFrom(client.protocolMismatch);
+
+        connectSocket();
+        for (let i = 0; i < 50; i++) {
+            deliver('colibri', { command: 'latency', payload: `${i}` });
+            vi.advanceTimersByTime(100);
+        }
+        vi.advanceTimersByTime(TIMEOUT_MS);
+
+        await expect(mismatch).resolves.toBeInstanceOf(ProtocolMismatchError);
+    });
+
+    // A pre-2.0.0 server relays broadcasts and model updates perfectly well, so if ordinary
+    // traffic cleared the timer the check would never fire against a busy one.
+    it('still reports a busy old server that is relaying traffic', async () => {
         const client = new Colibri('app', 'localhost', 9011);
         const mismatch = firstValueFrom(client.protocolMismatch);
 
@@ -475,6 +492,18 @@ describe('detecting a server that predates the version check', () => {
         vi.advanceTimersByTime(TIMEOUT_MS);
 
         await expect(mismatch).resolves.toBeInstanceOf(ProtocolMismatchError);
+    });
+
+    it('keeps the server hello off the ordinary message stream', () => {
+        const client = new Colibri('app', 'localhost', 9011);
+        const seen: string[] = [];
+        client.messages.subscribe(msg => seen.push(msg.command));
+
+        connectSocket();
+        deliver('colibri', { command: 'protocol::accepted', payload: { serverVersion: PROTOCOL_VERSION } });
+        deliver('colibri', { command: 'latency', payload: 1 });
+
+        expect(seen).toEqual(['latency']);
     });
 
     it('delivers messages untouched while the check is pending', () => {
@@ -533,7 +562,7 @@ describe('detecting a server that predates the version check', () => {
         expect(seen).toEqual([]);
 
         vi.stubGlobal('document', { visibilityState: 'visible' });
-        deliver('colibri', { command: 'latency', payload: 1 });
+        deliver('colibri', { command: 'protocol::accepted', payload: { serverVersion: PROTOCOL_VERSION } });
         vi.advanceTimersByTime(TIMEOUT_MS * 2);
 
         expect(seen).toEqual([]);
