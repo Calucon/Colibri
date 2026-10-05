@@ -184,7 +184,10 @@ const receiveJson = (channel: string, callback: (val: { [key: string]: unknown }
  */
 
 const clamp01 = (n: number) => Math.min(1, Math.max(0, n));
-const hexPair = (n: number) => Math.round(clamp01(n) * 255).toString(16).padStart(2, '0');
+const hexPair = (n: number) =>
+    Math.round(clamp01(n) * 255)
+        .toString(16)
+        .padStart(2, '0');
 
 const warnNotAColor = (val: unknown) => {
     console.warn(`Colibri: '${JSON.stringify(val)}' is not a colour - expected "#RRGGBBAA" or [r,g,b,a]. Using black.`);

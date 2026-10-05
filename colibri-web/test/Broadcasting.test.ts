@@ -292,11 +292,7 @@ describe('colour normalization', () => {
         expect(toHexColor('#ff0000')).toBe('#ff0000ff');
     });
 
-    it.each([
-        ['#ff0000ff'],
-        ['#00ff00ff'],
-        ['#0000ffff']
-    ])('%s survives a hex -> rgba -> hex round trip', hex => {
+    it.each([['#ff0000ff'], ['#00ff00ff'], ['#0000ffff']])('%s survives a hex -> rgba -> hex round trip', hex => {
         expect(toHexColor(toRgbaColor(hex))).toBe(hex);
     });
 

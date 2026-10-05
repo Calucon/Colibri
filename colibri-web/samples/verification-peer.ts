@@ -34,29 +34,32 @@ Sync.receiveVector3Array('myChannel', seen('vector3[]'));
 Sync.receiveQuaternionArray('myChannel', seen('quaternion[]'));
 Sync.receiveColorArray('myChannel', seen('color[]'));
 
-setTimeout(() => {
-    console.log('[peer] OUT sending one value of every type');
+setTimeout(
+    () => {
+        console.log('[peer] OUT sending one value of every type');
 
-    Sync.sendBool('myChannel', true);
-    Sync.sendNumber('myChannel', 42.5);
-    // The bare string is the interesting one: v1 Unity wrote it unquoted, which is not JSON.
-    Sync.sendString('myChannel', 'hello from the web client');
-    Sync.sendJson('myChannel', { attribute1: 'example', attribute2: 5 });
-    // Tuples, not {x,y,z} objects: that is what colibri-web's signatures declare, and it is
-    // what Unity's JsonExtensions.ToJson emits.
-    Sync.sendVector3('myChannel', [1, 2, 3]);
-    Sync.sendQuaternion('myChannel', [0, 0, 0, 1]);
-    Sync.sendColor('myChannel', [1, 0.5, 0.25, 1]);
+        Sync.sendBool('myChannel', true);
+        Sync.sendNumber('myChannel', 42.5);
+        // The bare string is the interesting one: v1 Unity wrote it unquoted, which is not JSON.
+        Sync.sendString('myChannel', 'hello from the web client');
+        Sync.sendJson('myChannel', { attribute1: 'example', attribute2: 5 });
+        // Tuples, not {x,y,z} objects: that is what colibri-web's signatures declare, and it is
+        // what Unity's JsonExtensions.ToJson emits.
+        Sync.sendVector3('myChannel', [1, 2, 3]);
+        Sync.sendQuaternion('myChannel', [0, 0, 0, 1]);
+        Sync.sendColor('myChannel', [1, 0.5, 0.25, 1]);
 
-    Sync.sendBoolArray('myChannel', [true, false, true]);
-    Sync.sendNumberArray('myChannel', [1, 2, 3]);
-    Sync.sendStringArray('myChannel', ['a', 'b', 'c']);
-    Sync.sendVector3Array('myChannel', [
-        [1, 2, 3],
-        [4, 5, 6]
-    ]);
-    Sync.sendQuaternionArray('myChannel', [[0, 0, 0, 1]]);
-    Sync.sendColorArray('myChannel', [[0, 1, 0, 1]]);
+        Sync.sendBoolArray('myChannel', [true, false, true]);
+        Sync.sendNumberArray('myChannel', [1, 2, 3]);
+        Sync.sendStringArray('myChannel', ['a', 'b', 'c']);
+        Sync.sendVector3Array('myChannel', [
+            [1, 2, 3],
+            [4, 5, 6]
+        ]);
+        Sync.sendQuaternionArray('myChannel', [[0, 0, 0, 1]]);
+        Sync.sendColorArray('myChannel', [[0, 1, 0, 1]]);
 
-    console.log('[peer] OUT done');
-}, Number(process.env.COLIBRI_PEER_SEND_DELAY_MS ?? 5000));
+        console.log('[peer] OUT done');
+    },
+    Number(process.env.COLIBRI_PEER_SEND_DELAY_MS ?? 5000)
+);

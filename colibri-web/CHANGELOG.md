@@ -71,8 +71,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   JavaScript can fall back on the workaround documented in the repository.
 - **Breaking:** the socket handshake `version` query bumped from `'1'` to `'2'` to mark the
   2.0 client line. This field is informational only on the server side and does not change
-  wire compatibility with existing `colibri-server` deployments. *(No longer true as of
-  Unreleased above: the server validates this field and refuses a mismatch.)*
+  wire compatibility with existing `colibri-server` deployments. _(No longer true as of
+  Unreleased above: the server validates this field and refuses a mismatch.)_
 - `rxjs` moved from a regular dependency to a `peerDependency`, since its types are part of
   this package's public API (`SyncModel`, `RegisterModelSync`, `Colibri.messages`).
 
