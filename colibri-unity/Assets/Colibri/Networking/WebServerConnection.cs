@@ -4,6 +4,7 @@ using HCIKonstanz.Colibri.Setup;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Net.Sockets;
 using System.Text;
@@ -137,7 +138,8 @@ namespace HCIKonstanz.Colibri.Networking
         private bool _isRefused;
         private bool _hasWarnedAboutRefusal;
 
-        private readonly LockFreeQueue<InPacket> _queuedCommands = new LockFreeQueue<InPacket>();
+        // Receive loop in, main thread out.
+        private readonly ConcurrentQueue<InPacket> _queuedCommands = new ConcurrentQueue<InPacket>();
         private long _lastHeartbeatTime;
 
         // Main thread only: the OnMessageReceived delegate last delivered to, and its handlers.
@@ -416,7 +418,7 @@ namespace HCIKonstanz.Colibri.Networking
         /// <remarks>Internal so the EditMode tests can drive it without a player loop.</remarks>
         internal void DeliverReceivedMessages()
         {
-            while (_queuedCommands.Dequeue(out var packet))
+            while (_queuedCommands.TryDequeue(out var packet))
             {
                 var handlers = OnMessageReceived;
                 if (handlers == null)

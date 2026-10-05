@@ -3,6 +3,16 @@ using System.Threading;
 
 /**
  *  See: http://wiki.unity3d.com/index.php/Lock_Free_Queue
+ *
+ *  Only safe with ONE thread enqueueing and ONE thread dequeueing. Dequeued nodes are recycled
+ *  through LockFreeLinkPool, a lock-free stack, and Enqueue pops them back off it. With two
+ *  producers that pop is the textbook ABA case: one producer reads the top node and its Next,
+ *  is preempted, and meanwhile that node is popped, enqueued, dequeued and pushed back; the
+ *  stalled compare-and-swap then succeeds and installs a Next that is already in use, after which
+ *  the queue loses or duplicates items. With a single producer nothing else pops, so it cannot
+ *  happen. Anything fed from more than one thread - Application.logMessageReceivedThreaded, for
+ *  one - should use System.Collections.Concurrent.ConcurrentQueue instead, as RemoteLogging and
+ *  WebServerConnection now do.
  */
 namespace HCIKonstanz.Colibri.Networking
 {

@@ -341,6 +341,42 @@ namespace HCIKonstanz.Colibri.E2E
         }
 
         /// <summary>
+        /// RemoteLogging against a server that refused this client. Its one send in flight used to
+        /// wait forever, and then - once sends failed instead - every line was put back after its
+        /// send failed: either way its queue grew with every line logged, for the rest of the run.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator RemoteLoggingStopsCollectingOnceTheServerHasRefusedThisClient()
+        {
+            IgnoreTheExpectedFailures();
+
+            _scriptedServer = FakeColibriServer.Start(FakeColibriServer.Behaviour.Refuse);
+            yield return PointConnectionAt(_scriptedServer.Port);
+
+            var loggingObject = new GameObject("remote-logging");
+            try
+            {
+                var logging = loggingObject.AddComponent<RemoteLogging>();
+
+                yield return E2EServer.WaitUntil(() => Connection.Status == ConnectionStatus.ProtocolMismatch,
+                    "The client never settled into ProtocolMismatch after the server refused it", 10f);
+
+                for (var i = 0; i < 200; i++)
+                    Debug.Log($"remote logging after a refusal, line {i}");
+
+                // Past RemoteLogging's one-second send interval, twice.
+                yield return E2EServer.Settle(2.5f);
+
+                Assert.That(logging.BufferedLineCount, Is.Zero,
+                    "RemoteLogging is still collecting lines for a server that will never take them");
+            }
+            finally
+            {
+                Object.Destroy(loggingObject);
+            }
+        }
+
+        /// <summary>
         /// OnConnected and OnDisconnected come in pairs. OnDisconnected used to be raised for every
         /// attempt that failed, connected or not - against a server that is down, twice a second.
         /// </summary>

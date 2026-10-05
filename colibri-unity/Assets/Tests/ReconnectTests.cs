@@ -152,9 +152,65 @@ namespace HCIKonstanz.Colibri.E2E
         }
 
 
+        /// <summary>
+        /// RemoteLogging across an outage: every line reaches the server exactly once, in order.
+        /// It used to retry a line whose send had failed, while the connection had also queued that
+        /// same send for retry, so some lines arrived twice. Lines logged during the outage wait in
+        /// RemoteLogging's own buffer and go out once the connection is back.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator RemoteLoggingDeliversEveryLineOnceAcrossAnOutage()
+        {
+            var prefix = $"reconnect-log-{System.Guid.NewGuid():N}";
+            var loggingObject = new GameObject("remote-logging");
+            try
+            {
+                loggingObject.AddComponent<RemoteLogging>();
+                var next = 1;
+
+                for (var i = 0; i < 5; i++)
+                    Debug.Log($"{prefix} {next++}");
+                yield return E2EServer.WaitUntil(() => LoggedLines(prefix).Length == 5,
+                    "The lines logged before the outage never reached the server");
+
+                yield return CutTheConnection();
+
+                for (var i = 0; i < 5; i++)
+                    Debug.Log($"{prefix} {next++}");
+
+                yield return E2EServer.WaitUntil(() => Connection.Status == ConnectionStatus.Connected,
+                    "The client never reconnected after the outage", 20f);
+
+                for (var i = 0; i < 5; i++)
+                    Debug.Log($"{prefix} {next++}");
+
+                var expected = Enumerable.Range(1, next - 1).Select(i => $"{prefix} {i}").ToArray();
+                yield return E2EServer.WaitUntil(() => LoggedLines(prefix).Length >= expected.Length,
+                    $"Only {LoggedLines(prefix).Length} of the {expected.Length} lines reached the server");
+
+                // Past RemoteLogging's one-second send interval, so a duplicate would have shown up.
+                yield return E2EServer.Settle(1.5f);
+
+                Assert.That(LoggedLines(prefix), Is.EqualTo(expected), "Log lines arrived out of order, or more than once");
+            }
+            finally
+            {
+                Object.Destroy(loggingObject);
+            }
+        }
+
+
         /*
          *  Helpers
          */
+
+        /// <summary>The client's log lines with the given prefix, as the server received them, in order.</summary>
+        private string[] LoggedLines(string prefix)
+            => _proxy.FromClient
+                .Where(sent => sent.Frame.Channel == "log")
+                .Select(sent => TcpPeer.Text(sent.Frame))
+                .Where(line => line.StartsWith(prefix))
+                .ToArray();
 
         /// <summary>Cuts the link and waits until the client has noticed, so what follows is sent during the outage.</summary>
         private IEnumerator CutTheConnection()
