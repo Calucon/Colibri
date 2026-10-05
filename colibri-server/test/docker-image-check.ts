@@ -23,6 +23,7 @@ import * as net from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { io } from 'socket.io-client';
 import { PROTOCOL_VERSION, encodeHandshakeFrame } from '../src/server/modules/networking/protocol.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -32,6 +33,9 @@ const PREFIX = process.env.COLIBRI_DOCKER_PREFIX || 'colibri-image-check';
 const BASE_PORT = process.env.COLIBRI_DOCKER_PORT ? Number(process.env.COLIBRI_DOCKER_PORT) : undefined;
 const TMP_ROOT = process.env.COLIBRI_DOCKER_TMPDIR || os.tmpdir();
 const DATA_DIR = '/srv/colibri/data';
+
+// What the admin UI build needs and the server never imports. None of it may reach the runtime.
+const UI_ONLY_PACKAGES = [ '@angular', '@primeng', 'primeng', 'primeicons', 'd3', 'zone.js', 'socket.io-client', '@fontsource' ];
 
 interface Result { stdout: string; stderr: string; code: number }
 
@@ -118,6 +122,25 @@ const tcpAnswers = function (port: number): Promise<boolean> {
     });
 };
 
+// Does what the admin UI's log page does on load: connects over Socket.IO as the `colibri` app
+// and asks for the log history, which by now holds at least the server's own startup lines.
+const adminLogAnswers = function (web: string): Promise<boolean> {
+    return new Promise(resolve => {
+        const socket = io(web, { query: { app: 'colibri', version: PROTOCOL_VERSION }, transports: [ 'websocket' ], reconnection: false });
+        const done = (ok: boolean) => {
+            clearTimeout(timer);
+            socket.close();
+            resolve(ok);
+        };
+        const timer = setTimeout(() => done(false), 5000);
+        socket.on('connect', () => socket.emit('colibri::log', { command: 'requestLog', payload: {} }));
+        socket.on('colibri::log', (msg: { command?: string }) => {
+            if (msg.command === 'message') done(true);
+        });
+        socket.on('connect_error', () => done(false));
+    });
+};
+
 const readStoreFile = async function (container: string): Promise<string> {
     const result = await docker([ 'exec', container, 'cat', `${DATA_DIR}/store.json` ]);
     return result.code === 0 ? result.stdout : '';
@@ -180,10 +203,19 @@ const runDeployment = async function (image: string, deployment: Deployment): Pr
     }
 
     const index = await fetch(`${web}/`);
-    check('serves the admin UI at /', index.status === 200 && (await index.text()).includes('<app-root'), `HTTP ${index.status}`);
+    const indexHtml = await index.text();
+    check('serves the admin UI at /', index.status === 200 && indexHtml.includes('<app-root'), `HTTP ${index.status}`);
+    // The bundles themselves, not only the page that loads them: index.html would be served by
+    // the SPA fallback even if dist/ui were missing everything else.
+    const assets = [ ...indexHtml.matchAll(/(?:src|href)="([^"]+\.(?:js|css))"/g) ].map(match => match[1]!);
+    const missing: string[] = [];
+    for (const asset of new Set(assets)) {
+        const res = await fetch(`${web}/${asset}`);
+        if (res.status !== 200 || (await res.arrayBuffer()).byteLength === 0) missing.push(`${asset} (HTTP ${res.status})`);
+    }
+    check('serves the admin UI\'s scripts and styles', assets.length > 0 && missing.length === 0, missing.join(', ') || 'index.html references none');
 
-    const handshake = await fetch(`${web}/socket.io/?EIO=4&transport=polling`);
-    check('answers a Socket.IO handshake', handshake.status === 200 && (await handshake.text()).startsWith('0{'), `HTTP ${handshake.status}`);
+    check('sends the admin UI its log over Socket.IO', await adminLogAnswers(web));
 
     check('TCP server answers a handshake', await tcpAnswers(await hostPort(container, 9012)));
 
@@ -260,6 +292,9 @@ const main = async function (): Promise<void> {
     console.log(`\nimage ${image}`);
     const env = JSON.parse(await dockerOk([ 'image', 'inspect', '-f', '{{json .Config.Env}}', image ])) as string[];
     check('sets NODE_ENV=production', env.includes('NODE_ENV=production'), env.join(' '));
+    const installed = (await dockerOk([ 'run', '--rm', '--entrypoint', 'ls', image, '-A', 'node_modules' ])).split('\n');
+    const leaked = UI_ONLY_PACKAGES.filter(name => installed.includes(name));
+    check('installs no admin-UI-only packages', leaked.length === 0, leaked.join(', '));
     const size = (await dockerOk([ 'image', 'inspect', '-f', '{{.Size}}', image ])).trim();
     console.log(`  size ${(Number(size) / 1e6).toFixed(1)} MB`);
 
