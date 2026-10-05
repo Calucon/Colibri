@@ -26,8 +26,21 @@ namespace HCIKonstanz.Colibri.E2E
         private readonly List<TcpClient> _open = new List<TcpClient>();
         private readonly List<(int Session, DecodedFrame Frame)> _fromClient = new List<(int, DecodedFrame)>();
         private int _sessions;
+        private volatile bool _isHolding;
 
         public int Port { get; }
+
+        /// <summary>
+        /// While set, a new connection is accepted but not passed on until this is cleared: the
+        /// client's handshake waits in the socket, and nothing reaches it, so it stays reconnecting.
+        /// Lets a test finish something on the server before the client is back - within the 2 s
+        /// the client's watchdog gives a silent server.
+        /// </summary>
+        public bool HoldNewConnections
+        {
+            get => _isHolding;
+            set => _isHolding = value;
+        }
 
         /// <summary>How many connections the client has made through the proxy.</summary>
         public int Sessions => Volatile.Read(ref _sessions);
@@ -117,6 +130,9 @@ namespace HCIKonstanz.Colibri.E2E
 
             try
             {
+                while (_isHolding)
+                    await Task.Delay(10, _lifetime.Token).ConfigureAwait(false);
+
                 await upstream.ConnectAsync(_upstreamHost, _upstreamPort).ConfigureAwait(false);
 
                 var toServer = Pump(downstream.GetStream(), upstream.GetStream(), session);

@@ -20,12 +20,20 @@ namespace HCIKonstanz.Colibri.Synchronization
         {
             public readonly Action<T> Callback;
 
+            /// <summary>
+            /// Model listeners only: the id whose state was requested when the listener was added,
+            /// or null for the listener that asked for every model on the channel. Kept so the
+            /// same request can be made again after a reconnect.
+            /// </summary>
+            public readonly string FetchId;
+
             private readonly UnityEngine.Object _owner;
             private readonly bool _isOwned;
 
-            public Listener(Action<T> callback)
+            public Listener(Action<T> callback, string fetchId = null)
             {
                 Callback = callback;
+                FetchId = fetchId;
                 _owner = ListenerOwner.Of(callback);
                 // Resolved once, here: after the owner is destroyed, `_owner == null` can no
                 // longer tell "belongs to a destroyed object" from "belongs to nothing at all".
@@ -72,8 +80,65 @@ namespace HCIKonstanz.Colibri.Synchronization
                     return null;
 
                 _connection.OnMessageReceived += OnServerMessage;
+                _connection.OnConnected += OnConnected;
             }
             return _connection;
+        }
+
+        /// <summary>
+        /// After a reconnect, every model this client holds may be stale: whatever other clients
+        /// changed - or created - while it was offline never reached it, and nothing used to ask
+        /// again. <c>model::request</c> was sent once, when a listener registered, so a Wi-Fi blip
+        /// left the client showing old state until each object happened to change once more.
+        ///
+        /// So on every reconnect the same requests go out again, from the registry here rather than
+        /// from each SyncBehaviour. They queue behind anything sent during the outage, so the server
+        /// answers with this client's own offline changes already applied. Not on the first
+        /// connection: that is what the requests made at registration were queued for.
+        /// </summary>
+        private static void OnConnected()
+        {
+            var connection = _connection;
+            if (connection == null || connection.ConnectedSessions < 2)
+                return;
+
+            RequestModelsAgain();
+        }
+
+        private static void RequestModelsAgain()
+        {
+            foreach (var entry in _modelUpdateListeners.ToArray())
+            {
+                var channel = entry.Key;
+                var channelListeners = entry.Value;
+
+                Prune(channel, channelListeners, track: false);
+                if (channelListeners.Count == 0)
+                {
+                    _modelUpdateListeners.Remove(channel);
+                    continue;
+                }
+
+                // A listener that asked for every model on the channel (a SyncBehaviourManager)
+                // asks again; one that asked for its own object (a SyncBehaviour) does too - the
+                // server answers an id it does not know with a bare { id }, and only a request for
+                // that id gets that answer.
+                var requestedAll = false;
+                var requestedIds = new HashSet<string>();
+                foreach (var listener in channelListeners)
+                {
+                    if (listener.FetchId == null)
+                    {
+                        if (!requestedAll)
+                            SendCommand(channel, "model::request", null);
+                        requestedAll = true;
+                    }
+                    else if (requestedIds.Add(listener.FetchId))
+                    {
+                        SendCommand(channel, "model::request", new JObject { { "id", listener.FetchId } });
+                    }
+                }
+            }
         }
 
         /*
@@ -425,7 +490,8 @@ namespace HCIKonstanz.Colibri.Synchronization
         // `track` is off for the model channels: they are Colibri's own SyncBehaviour plumbing,
         // they never go through Invoke<T>, and listing them would only bury the channels the
         // student actually wrote.
-        private static void AddListener<T>(string channel, Dictionary<string, List<Listener<T>>> listeners, Action<T> listener, bool track = true)
+        private static void AddListener<T>(string channel, Dictionary<string, List<Listener<T>>> listeners, Action<T> listener,
+            bool track = true, string fetchId = null)
         {
             if (!listeners.TryGetValue(channel, out var channelListeners))
             {
@@ -442,7 +508,7 @@ namespace HCIKonstanz.Colibri.Synchronization
                 Prune(channel, channelListeners, track);
             }
 
-            channelListeners.Add(new Listener<T>(listener));
+            channelListeners.Add(new Listener<T>(listener, fetchId));
 
             if (track)
                 ChannelListenerRegistry.Add(channel, typeof(T));
@@ -530,7 +596,7 @@ namespace HCIKonstanz.Colibri.Synchronization
 
         public static void AddModelUpdateListener(string channel, Action<JObject> listener, string fetchInitialStateId)
         {
-            AddListener(channel, _modelUpdateListeners, listener, track: false);
+            AddListener(channel, _modelUpdateListeners, listener, track: false, fetchId: fetchInitialStateId);
             SendCommand(channel, "model::request", new JObject { { "id", fetchInitialStateId } });
         }
 

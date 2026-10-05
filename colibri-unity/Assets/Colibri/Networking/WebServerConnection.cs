@@ -149,6 +149,20 @@ namespace HCIKonstanz.Colibri.Networking
         // Both touched from the connection loop and from Update() via the Status setter, so
         // every access to them is under _statusLock.
         private int _connectAttempts;
+        private int _connectedSessions;
+
+        /// <summary>
+        /// How many times this connection has become <see cref="ConnectionStatus.Connected"/> -
+        /// so 2 or more in an <see cref="OnConnected"/> handler means it is a reconnect.
+        /// </summary>
+        internal int ConnectedSessions
+        {
+            get
+            {
+                lock (_statusLock)
+                    return _connectedSessions;
+            }
+        }
 
         // Connection loop only.
         private bool _hasReportedMissingConfig;
@@ -256,6 +270,7 @@ namespace HCIKonstanz.Colibri.Networking
                     if (_status == ConnectionStatus.Connected)
                     {
                         _connectAttempts = 0;
+                        _connectedSessions++;
                         _fireOnConnected = true;
                         _isGateOpen = true;
 

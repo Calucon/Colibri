@@ -1,9 +1,11 @@
 using System.Collections;
+using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
 using HCIKonstanz.Colibri.Networking;
 using HCIKonstanz.Colibri.Setup;
 using HCIKonstanz.Colibri.Synchronization;
+using Newtonsoft.Json.Linq;
 using NUnit.Framework;
 using UnityEngine;
 using UnityEngine.TestTools;
@@ -152,6 +154,121 @@ namespace HCIKonstanz.Colibri.E2E
         }
 
 
+        /*
+         *  State that changed while the client was offline
+         */
+
+        /// <summary>
+        /// <c>model::request</c> used to be sent once, when a listener registered, so a client
+        /// coming back from an outage kept whatever it had - for every model another client had
+        /// changed in the meantime - until that model happened to change again. Every reconnect now
+        /// repeats the requests, after the messages queued during the outage, so the server answers
+        /// with this client's own offline changes already applied.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator ModelsThatChangedOfflineAreRequestedAgainOnReconnect()
+        {
+            var modelChannel = E2EServer.Channel("resync-model");
+            var outageChannel = E2EServer.Channel("resync-outage");
+            var id = System.Guid.NewGuid().ToString();
+            var received = new List<JObject>();
+            System.Action<JObject> listener = model => received.Add(model);
+
+            Sync.AddModelUpdateListener(modelChannel, listener, id);
+            var witness = new TcpPeer();
+            try
+            {
+                yield return witness.Connect("resync-witness");
+
+                // The answer to the request made at registration - a bare { id }, since the server
+                // has never seen this model.
+                yield return E2EServer.WaitUntil(() => received.Any(m => (string)m["id"] == id),
+                    "The request made when the listener registered was never answered");
+
+                // The client stays offline until the server has certainly taken the change below.
+                _proxy.HoldNewConnections = true;
+                yield return CutTheConnection();
+
+                Sync.Send(outageChannel, 1);
+                _peer.Send(modelChannel, "model::update", new JObject { { "id", id }, { "label", "changed offline" } });
+                yield return witness.Expect(modelChannel, "model::update");
+
+                _proxy.HoldNewConnections = false;
+                yield return E2EServer.WaitUntil(() => received.Any(m => (string)m["label"] == "changed offline"),
+                    "A model that changed while the client was offline never reached it after reconnecting", 20f);
+
+                var secondSession = _proxy.FromClient.Where(sent => sent.Session == 2).Select(sent => sent.Frame).ToList();
+                var request = secondSession.FindIndex(f => f.Channel == modelChannel && f.Command == "model::request");
+                var queuedDuringOutage = secondSession.FindIndex(f => f.Channel == outageChannel);
+
+                Assert.That(request, Is.GreaterThanOrEqualTo(0), "The client never asked for the model again after reconnecting");
+                Assert.That((string)TcpPeer.Json(secondSession[request])["id"], Is.EqualTo(id));
+                Assert.That(queuedDuringOutage, Is.GreaterThanOrEqualTo(0).And.LessThan(request),
+                    "The request went out ahead of the messages queued during the outage, so the server answered without them");
+            }
+            finally
+            {
+                witness.Dispose();
+                Sync.RemoveModelUpdateListener(modelChannel, listener);
+            }
+        }
+
+        /// <summary>
+        /// The same through SyncBehaviourManager, which builds objects from what the server sends:
+        /// the model asked for again after a reconnect is one this client already has, and it has
+        /// to update that object rather than build a second one.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator AModelResyncedAfterAnOutageUpdatesItsObjectRatherThanSpawningAnother()
+        {
+            const string channel = "e2esyncmodel";
+            var spawned = new List<GameObject>();
+            var id = System.Guid.NewGuid().ToString();
+            var witness = new TcpPeer();
+            try
+            {
+                var template = Spawn<E2ESyncModel>(spawned, "template");
+                var manager = Spawn<E2ESyncModelManager>(spawned, "manager");
+                manager.Template = template;
+
+                // Start is where the manager subscribes; then the template's own state round trip.
+                yield return null;
+                yield return E2EServer.Settle(1.5f);
+
+                _peer.Send(channel, "model::update", new JObject { { "id", id }, { "label", "before the outage" } });
+                yield return E2EServer.WaitUntil(() => Instances(id).Length == 1,
+                    $"The manager never instantiated the model '{id}' it was told about");
+
+                yield return witness.Connect("resync-witness");
+                _proxy.HoldNewConnections = true;
+                yield return CutTheConnection();
+
+                _peer.Send(channel, "model::update", new JObject { { "id", id }, { "label", "changed offline" } });
+                yield return witness.Expect(channel, "model::update");
+                _proxy.HoldNewConnections = false;
+
+                yield return E2EServer.WaitUntil(() => Instances(id).Any(m => m.Label == "changed offline"),
+                    "The model that changed while the client was offline was not updated after reconnecting", 20f);
+
+                // Long enough for a second instance to show up if the manager is going to make one.
+                yield return E2EServer.Settle(1.5f);
+
+                Assert.That(Instances(id).Length, Is.EqualTo(1),
+                    "Asking for the model again after the reconnect built a second object for it");
+            }
+            finally
+            {
+                witness.Dispose();
+                foreach (var instance in Instances(id))
+                    Object.Destroy(instance.gameObject);
+                foreach (var gameObject in spawned)
+                {
+                    if (gameObject)
+                        Object.Destroy(gameObject);
+                }
+            }
+        }
+
         /// <summary>
         /// RemoteLogging across an outage: every line reaches the server exactly once, in order.
         /// It used to retry a line whose send had failed, while the connection had also queued that
@@ -203,6 +320,18 @@ namespace HCIKonstanz.Colibri.E2E
         /*
          *  Helpers
          */
+
+        private static T Spawn<T>(List<GameObject> spawned, string name) where T : Component
+        {
+            var gameObject = new GameObject(name);
+            spawned.Add(gameObject);
+            return gameObject.AddComponent<T>();
+        }
+
+        private static E2ESyncModel[] Instances(string id)
+            => Object.FindObjectsByType<E2ESyncModel>(FindObjectsInactive.Include, FindObjectsSortMode.None)
+                .Where(m => m.Id == id)
+                .ToArray();
 
         /// <summary>The client's log lines with the given prefix, as the server received them, in order.</summary>
         private string[] LoggedLines(string prefix)
