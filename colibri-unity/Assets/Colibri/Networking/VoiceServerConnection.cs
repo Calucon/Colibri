@@ -63,10 +63,11 @@ namespace HCIKonstanz.Colibri.Networking
 
         private void Connect()
         {
-            var ip = Dns.GetHostEntry(ColibriConfig.Load().ServerAddress);
-            if (ip.AddressList.Length > 0)
+            var host = ColibriConfig.Load().ServerAddress;
+            var address = ResolveServerAddress(host);
+            if (address != null)
             {
-                sendIPEndPoint = new IPEndPoint(ip.AddressList[0], ColibriConfig.Load().VoiceServerPort);
+                sendIPEndPoint = new IPEndPoint(address, ColibriConfig.Load().VoiceServerPort);
 
                 udpClient = new UdpClient();
                 // Port 0 lets the OS pick an ephemeral port. The server replies to whatever
@@ -86,9 +87,71 @@ namespace HCIKonstanz.Colibri.Networking
             }
             else
             {
-                Debug.LogError($"Could not resolve {ColibriConfig.Load().ServerAddress}");
                 enabled = false;
             }
+        }
+
+        /// <summary>
+        /// The address to send voice to, or null - having said why - when there is none.
+        /// </summary>
+        /// <remarks>
+        /// GetHostAddresses rather than GetHostEntry: for an IP address it hands the address
+        /// straight back, where GetHostEntry first attempts a reverse lookup, which can fail for
+        /// a LAN address with no DNS name and threw out of OnEnable.
+        /// </remarks>
+        private static IPAddress ResolveServerAddress(string host)
+        {
+            IPAddress[] candidates;
+            try
+            {
+                candidates = Dns.GetHostAddresses(host);
+            }
+            catch (Exception e) when (e is SocketException || e is ArgumentException)
+            {
+                Debug.LogError($"Colibri voice: could not resolve the server address '{host}' ({e.Message}). Voice chat is off. Check the address in Window -> Colibri Configuration.");
+                return null;
+            }
+
+            var address = SelectServerAddress(candidates);
+            if (address == null)
+            {
+                var found = candidates.Length == 0 ? "no addresses at all" : string.Join<IPAddress>(", ", candidates);
+                Debug.LogError($"Colibri voice: the server address '{host}' resolved to {found}, but the voice server only listens on IPv4. Voice chat is off. Enter the server's IPv4 address in Window -> Colibri Configuration.");
+            }
+
+            return address;
+        }
+
+        /// <summary>
+        /// Picks the address the voice socket can actually reach, out of everything a name
+        /// resolved to.
+        /// </summary>
+        /// <remarks>
+        /// The socket is IPv4 (bound to <see cref="IPAddress.Any"/>), and so is the server's
+        /// (voice-server.ts creates a udp4 socket). Taking the first address regardless broke on
+        /// Windows, where "localhost" commonly resolves to ::1 before 127.0.0.1: every send from
+        /// the IPv4 socket to the IPv6 address threw, and no voice ever reached the server. An
+        /// IPv4-mapped IPv6 address is as good as the IPv4 address inside it.
+        /// </remarks>
+        /// <returns>An IPv4 address, or null when there is none.</returns>
+        internal static IPAddress SelectServerAddress(IPAddress[] candidates)
+        {
+            if (candidates == null)
+                return null;
+
+            foreach (var candidate in candidates)
+            {
+                if (candidate.AddressFamily == AddressFamily.InterNetwork)
+                    return candidate;
+            }
+
+            foreach (var candidate in candidates)
+            {
+                if (candidate.AddressFamily == AddressFamily.InterNetworkV6 && candidate.IsIPv4MappedToIPv6)
+                    return candidate.MapToIPv4();
+            }
+
+            return null;
         }
 
         private void Receive()
