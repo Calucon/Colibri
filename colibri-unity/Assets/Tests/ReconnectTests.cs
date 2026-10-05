@@ -154,6 +154,81 @@ namespace HCIKonstanz.Colibri.E2E
         }
 
 
+        /// <summary>
+        /// The bound on an outage's queue must not cost model state, which nothing would repair:
+        /// an object changed once early in the outage, while broadcasts kept coming, used to be
+        /// dropped first - and the re-request after reconnecting then reverted it locally to the
+        /// server's older copy. A dropped request leaves an object waiting for its first state for
+        /// good; a dropped delete leaves it alive on every other client. Instead, an object's
+        /// updates during an outage are folded into one, and only the broadcasts are capped.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator ALongOutageKeepsEveryObjectsLatestStateAndItsRequestsAndDeletes()
+        {
+            const int broadcastsSent = 300;
+            const int broadcastsKept = 256;
+            var channel = E2EServer.Channel("outage-models");
+            var noiseChannel = E2EServer.Channel("outage-noise");
+            var early = System.Guid.NewGuid().ToString();
+            var moving = System.Guid.NewGuid().ToString();
+            var requested = System.Guid.NewGuid().ToString();
+            var deleted = System.Guid.NewGuid().ToString();
+            System.Action<JObject> listener = _ => { };
+
+            yield return CutTheConnection();
+            try
+            {
+                // Changed once, at the very start of the outage...
+                Sync.SendModelUpdate(channel, new JObject { { "id", early }, { "label", "early" } });
+
+                // ...then more broadcasts than the queue holds...
+                for (var i = 1; i <= broadcastsSent; i++)
+                    Sync.Send(noiseChannel, i);
+
+                // ...an object that keeps changing, one member and then another...
+                Sync.SendModelUpdate(channel, new JObject { { "id", moving }, { "label", "first" } });
+                for (var i = 1; i <= 100; i++)
+                    Sync.SendModelUpdate(channel, new JObject { { "id", moving }, { "count", i } });
+
+                // ...a new object asking for its state, and one going away.
+                Sync.AddModelUpdateListener(channel, listener, requested);
+                Sync.SendModelDelete(channel, deleted);
+
+                yield return E2EServer.WaitUntil(() => Connection.Status == ConnectionStatus.Connected,
+                    "The client never reconnected after the outage", 20f);
+
+                // The delete was queued last, so once it is through, so is everything before it.
+                yield return E2EServer.WaitUntil(() => SecondSession().Any(f => f.Channel == channel && f.Command == "model::delete"),
+                    "The messages queued during the outage never went out");
+
+                var sent = SecondSession().Where(f => f.Channel == channel).ToList();
+                var updates = sent.Where(f => f.Command == "model::update").Select(TcpPeer.Json).ToList();
+
+                var earlyUpdates = updates.Where(u => (string)u["id"] == early).ToList();
+                Assert.That(earlyUpdates.Count, Is.EqualTo(1), "The update from the start of the outage was dropped to make room for broadcasts");
+                Assert.That((string)earlyUpdates[0]["label"], Is.EqualTo("early"));
+
+                var movingUpdates = updates.Where(u => (string)u["id"] == moving).ToList();
+                Assert.That(movingUpdates.Count, Is.EqualTo(1), "An object's updates during an outage should travel as one");
+                Assert.That((string)movingUpdates[0]["label"], Is.EqualTo("first"), "The member changed first was lost when the updates were combined");
+                Assert.That((int)movingUpdates[0]["count"], Is.EqualTo(100), "The combined update does not carry the newest value");
+
+                Assert.That(sent.Any(f => f.Command == "model::request" && (string)TcpPeer.Json(f)["id"] == requested), Is.True,
+                    "The request a new object made during the outage was dropped");
+                Assert.That(sent.Any(f => f.Command == "model::delete" && (string)TcpPeer.Json(f)["id"] == deleted), Is.True,
+                    "The delete made during the outage was dropped");
+
+                // The broadcasts are what the bound is for: the newest of them, in order.
+                var noise = SecondSession().Where(f => f.Channel == noiseChannel).Select(f => int.Parse(TcpPeer.Text(f))).ToArray();
+                Assert.That(noise, Is.EqualTo(Enumerable.Range(broadcastsSent - broadcastsKept + 1, broadcastsKept).ToArray()));
+            }
+            finally
+            {
+                Sync.RemoveModelUpdateListener(channel, listener);
+            }
+        }
+
+
         /*
          *  State that changed while the client was offline
          */
@@ -320,6 +395,10 @@ namespace HCIKonstanz.Colibri.E2E
         /*
          *  Helpers
          */
+
+        /// <summary>What the client sent on the connection after the first reconnect, in order.</summary>
+        private List<Networking.Protocol.DecodedFrame> SecondSession()
+            => _proxy.FromClient.Where(sent => sent.Session == 2).Select(sent => sent.Frame).ToList();
 
         private static T Spawn<T>(List<GameObject> spawned, string name) where T : Component
         {

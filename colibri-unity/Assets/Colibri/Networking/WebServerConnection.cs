@@ -364,11 +364,7 @@ namespace HCIKonstanz.Colibri.Networking
             // Nothing will ever send these now, so nobody awaiting one should wait any longer.
             Outgoing[] abandoned;
             lock (_outboxLock)
-            {
-                abandoned = new Outgoing[_outbox.Count];
-                _outbox.CopyTo(abandoned, 0);
-                _outbox.Clear();
-            }
+                abandoned = TakeEverythingQueued();
 
             foreach (var message in abandoned)
                 message.Sent?.TrySetResult(false);
@@ -974,10 +970,26 @@ namespace HCIKonstanz.Colibri.Networking
          *  new ones. On a last-write-wins server that let a stale position overwrite a newer one.
          *
          *  While connected the outbox is just the way to the socket and is normally empty or
-         *  close to it. While not, it is the retry queue: bounded by MAX_QUEUED_MESSAGES, oldest
-         *  dropped first, and sent ahead of anything newer as soon as the next session is
-         *  connected. A message whose write failed stays at the head and goes first next time.
+         *  close to it. While not, it is the retry queue, sent ahead of anything newer as soon as
+         *  the next session is connected. A message whose write failed stays at the head and goes
+         *  first next time.
+         *
+         *  The queue is bounded during an outage, but not by dropping just anything. Broadcasts -
+         *  and anything else that is not model state - are capped at MAX_QUEUED_MESSAGES, oldest
+         *  dropped first. The model commands are not dropped at all, because nothing would repair
+         *  the loss: a dropped model::request leaves its SyncBehaviour waiting for its first state
+         *  and never sending a change, a dropped model::delete leaves the object alive on every
+         *  other client, and a dropped model::update - an object that changed once early in the
+         *  outage while others kept moving - is lost, and the re-request after reconnecting then
+         *  even reverts it locally to the server's older copy. Instead, every model::update queued
+         *  for the same object during an outage is folded into one, newer fields winning, which
+         *  is exactly what a last-write-wins server would have ended up with. That keeps model
+         *  state bounded by the number of objects rather than by how long the outage lasts.
          */
+
+        private const string MODEL_REQUEST_COMMAND = "model::request";
+        private const string MODEL_UPDATE_COMMAND = "model::update";
+        private const string MODEL_DELETE_COMMAND = "model::delete";
 
         private sealed class Outgoing
         {
@@ -985,7 +997,21 @@ namespace HCIKonstanz.Colibri.Networking
 
             // Null for SendCommand, which nobody awaits.
             public TaskCompletionSource<bool> Sent;
+
+            // Whether the outage bound may drop it: not for the model commands.
+            public bool CanDrop;
+
+            // Set for a model::update queued during an outage, which later updates for the same
+            // object are folded into (see _queuedModelUpdates). The payload is a private copy.
+            public JObject ModelUpdate;
+            public (string Channel, string Id) ModelKey;
         }
+
+        // Under _outboxLock: how many droppable messages the outbox holds, and the model::update
+        // that is queued for each object during the current outage.
+        private int _droppableCount;
+        private readonly Dictionary<(string Channel, string Id), LinkedListNode<Outgoing>> _queuedModelUpdates
+            = new Dictionary<(string Channel, string Id), LinkedListNode<Outgoing>>();
 
         /// <summary>Lets the outbox drain into this session. Called once it is Connected.</summary>
         private void OpenOutbox(Socket socket, CancellationToken token)
@@ -1028,16 +1054,43 @@ namespace HCIKonstanz.Colibri.Networking
             lock (_outboxLock)
             {
                 _isRefused = true;
-                dropped = new Outgoing[_outbox.Count];
-                _outbox.CopyTo(dropped, 0);
-                _outbox.Clear();
+                dropped = TakeEverythingQueued();
             }
 
             foreach (var message in dropped)
                 message.Sent?.TrySetResult(false);
         }
 
-        private void Post(string channel, string command, byte[] frame, TaskCompletionSource<bool> sent)
+        // Under _outboxLock.
+        private Outgoing[] TakeEverythingQueued()
+        {
+            var taken = new Outgoing[_outbox.Count];
+            _outbox.CopyTo(taken, 0);
+            _outbox.Clear();
+            _queuedModelUpdates.Clear();
+            _droppableCount = 0;
+            return taken;
+        }
+
+        // Under _outboxLock. Every removal from the outbox goes through here, so the count and the
+        // index of queued model updates stay true to what is in it.
+        private void RemoveFromOutbox(LinkedListNode<Outgoing> node)
+        {
+            _outbox.Remove(node);
+
+            var message = node.Value;
+            if (message.CanDrop)
+                _droppableCount--;
+
+            if (message.ModelUpdate != null
+                && _queuedModelUpdates.TryGetValue(message.ModelKey, out var indexed)
+                && ReferenceEquals(indexed, node))
+            {
+                _queuedModelUpdates.Remove(message.ModelKey);
+            }
+        }
+
+        private void Post(string channel, string command, JToken payload, byte[] frame, TaskCompletionSource<bool> sent)
         {
             List<Outgoing> dropped = null;
             var warnAboutDrops = false;
@@ -1053,25 +1106,33 @@ namespace HCIKonstanz.Colibri.Networking
                     warnAboutRefusal = !_hasWarnedAboutRefusal;
                     _hasWarnedAboutRefusal = true;
                 }
+                else if (_outboxSocket == null)
+                {
+                    Queue(channel, command, payload, frame, sent);
+
+                    while (_droppableCount > MAX_QUEUED_MESSAGES)
+                    {
+                        var oldest = _outbox.First;
+                        while (!oldest.Value.CanDrop)
+                            oldest = oldest.Next;
+
+                        (dropped ??= new List<Outgoing>()).Add(oldest.Value);
+                        RemoveFromOutbox(oldest);
+                    }
+
+                    if (dropped != null && !_hasWarnedAboutDrops)
+                    {
+                        _hasWarnedAboutDrops = true;
+                        warnAboutDrops = true;
+                    }
+                }
                 else
                 {
-                    _outbox.AddLast(new Outgoing { Frame = frame, Sent = sent });
+                    _outbox.AddLast(new Outgoing { Frame = frame, Sent = sent, CanDrop = IsDroppable(command) });
+                    if (IsDroppable(command))
+                        _droppableCount++;
 
-                    if (_outboxSocket == null)
-                    {
-                        while (_outbox.Count > MAX_QUEUED_MESSAGES)
-                        {
-                            (dropped ??= new List<Outgoing>()).Add(_outbox.First.Value);
-                            _outbox.RemoveFirst();
-                        }
-
-                        if (dropped != null && !_hasWarnedAboutDrops)
-                        {
-                            _hasWarnedAboutDrops = true;
-                            warnAboutDrops = true;
-                        }
-                    }
-                    else if (!_isDraining)
+                    if (!_isDraining)
                     {
                         _isDraining = true;
                         startDraining = true;
@@ -1095,7 +1156,8 @@ namespace HCIKonstanz.Colibri.Networking
             if (warnAboutDrops)
             {
                 Debug.LogWarning($"Colibri: more than {MAX_QUEUED_MESSAGES} messages are waiting for the connection to come back, "
-                    + "so the oldest are being dropped. Said once per outage.");
+                    + "so the oldest are being dropped. Synchronized model state is kept: it is folded into one update per object instead. "
+                    + "Said once per outage.");
             }
 
             if (dropped != null)
@@ -1110,6 +1172,58 @@ namespace HCIKonstanz.Colibri.Networking
                 _ = DrainOutbox();
         }
 
+        // Under _outboxLock, while not connected.
+        private void Queue(string channel, string command, JToken payload, byte[] frame, TaskCompletionSource<bool> sent)
+        {
+            // Only what nobody awaits is folded: each awaited task has to complete for its own message.
+            if (sent == null && command == MODEL_UPDATE_COMMAND && TryGetModelId(payload, out var update, out var id))
+            {
+                var key = (channel, id);
+
+                // A copy, because the caller's object may change after it was sent.
+                var latest = (JObject)update.DeepClone();
+
+                if (_queuedModelUpdates.TryGetValue(key, out var queued))
+                {
+                    var merged = (JObject)queued.Value.ModelUpdate.DeepClone();
+                    foreach (var property in latest.Properties())
+                        merged[property.Name] = property.Value;
+
+                    var mergedFrame = TryEncodeFrame(channel, command, merged);
+                    if (mergedFrame != null)
+                    {
+                        // To the back of the queue: it now carries the newest change.
+                        RemoveFromOutbox(queued);
+                        latest = merged;
+                        frame = mergedFrame;
+                    }
+                }
+
+                _queuedModelUpdates[key] = _outbox.AddLast(new Outgoing { Frame = frame, CanDrop = false, ModelUpdate = latest, ModelKey = key });
+                return;
+            }
+
+            var canDrop = IsDroppable(command);
+            _outbox.AddLast(new Outgoing { Frame = frame, Sent = sent, CanDrop = canDrop });
+            if (canDrop)
+                _droppableCount++;
+        }
+
+        private static bool IsDroppable(string command)
+            => command != MODEL_REQUEST_COMMAND && command != MODEL_UPDATE_COMMAND && command != MODEL_DELETE_COMMAND;
+
+        private static bool TryGetModelId(JToken payload, out JObject update, out string id)
+        {
+            update = payload as JObject;
+            id = null;
+
+            if (update == null || !(update["id"] is JValue value) || value.Type != JTokenType.String)
+                return false;
+
+            id = (string)value;
+            return true;
+        }
+
         /// <summary>
         /// Writes the outbox to the current session's socket, head first, until it is empty or
         /// the session is gone. Only ever one running (<c>_isDraining</c>), and it reads the session
@@ -1119,6 +1233,7 @@ namespace HCIKonstanz.Colibri.Networking
         {
             while (true)
             {
+                LinkedListNode<Outgoing> node;
                 Outgoing next;
                 Socket socket;
                 CancellationToken token;
@@ -1130,7 +1245,8 @@ namespace HCIKonstanz.Colibri.Networking
                         return;
                     }
 
-                    next = _outbox.First.Value;
+                    node = _outbox.First;
+                    next = node.Value;
                     socket = _outboxSocket;
                     token = _outboxToken;
                 }
@@ -1162,9 +1278,10 @@ namespace HCIKonstanz.Colibri.Networking
 
                 lock (_outboxLock)
                 {
-                    // Gone already if the outage bound dropped it while it was being written.
-                    if (_outbox.First != null && ReferenceEquals(_outbox.First.Value, next))
-                        _outbox.RemoveFirst();
+                    // Gone already if, while it was being written, the session ended and the
+                    // outage bound dropped it or a newer update for the same object absorbed it.
+                    if (node.List == _outbox)
+                        RemoveFromOutbox(node);
                 }
 
                 next.Sent?.TrySetResult(true);
@@ -1186,14 +1303,27 @@ namespace HCIKonstanz.Colibri.Networking
             }
         }
 
+        private static byte[] TryEncodeFrame(string channel, string command, JToken payload)
+        {
+            try
+            {
+                return FrameCodec.EncodeMessage(channel, command, EncodePayload(channel, payload));
+            }
+            catch (FrameException)
+            {
+                return null;
+            }
+        }
+
         /// <summary>
         /// Sends a message, queueing it while not connected.
         /// </summary>
         /// <returns>
         /// Completes with true once the message has been written to the socket, or with false if
-        /// it never will be: it could not be encoded, the outage bound dropped it, or this
-        /// component was destroyed first. Never false for a message that is still going to be
-        /// sent, so there is nothing to retry. While the connection is down it stays pending.
+        /// it never will be: it could not be encoded, the outage bound dropped it, the server
+        /// refused this client's protocol version, or this component was destroyed first. Never
+        /// false for a message that is still going to be sent, so there is nothing to retry. While
+        /// the connection is down it stays pending.
         /// </returns>
         public Task<bool> SendCommandAsync(string channel, string command, JToken payload)
         {
@@ -1204,7 +1334,7 @@ namespace HCIKonstanz.Colibri.Networking
             // RunContinuationsAsynchronously: it is completed by the drainer and from under the
             // outbox's callers, neither of which should run the awaiting code inline.
             var sent = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            Post(channel, command, frame, sent);
+            Post(channel, command, payload, frame, sent);
             return sent.Task;
         }
 
@@ -1213,7 +1343,7 @@ namespace HCIKonstanz.Colibri.Networking
         {
             var frame = EncodeFrame(channel, command, payload);
             if (frame != null)
-                Post(channel, command, frame, null);
+                Post(channel, command, payload, frame, null);
         }
 
 
