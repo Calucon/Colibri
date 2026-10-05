@@ -65,8 +65,9 @@ namespace HCIKonstanz.Colibri.Networking
         private const int RECONNECT_DELAY_MAX_MS = 10 * 1000;
 
         /// <summary>
-        /// Retry queue bound. This is a last-write-wins sync client: growing the queue without
-        /// limit during a long outage would only buffer updates that are already superseded.
+        /// How many messages may wait for the connection while it is down. This is a
+        /// last-write-wins sync client: growing the queue without limit during a long outage would
+        /// only buffer updates that are already superseded, so past this the oldest are dropped.
         /// </summary>
         private const int MAX_QUEUED_MESSAGES = 256;
 
@@ -100,14 +101,28 @@ namespace HCIKonstanz.Colibri.Networking
         private CancellationTokenSource _lifetime;
         private string _hostname = "";
 
-        // Serializes every write to the socket. Concurrent SendCommandAsync calls used to
-        // interleave their bytes and corrupt the framing for everything that followed.
+        // Serializes every write to the socket - the outbox's messages and the receive loop's
+        // heartbeat echoes. Concurrent writes used to interleave their bytes and corrupt the
+        // framing for everything that followed.
         private readonly SemaphoreSlim _sendLock = new SemaphoreSlim(1, 1);
 
-        // Written from the send path, drained from the connect path - both off the main
-        // thread, so it needs a lock (it had none).
-        private readonly List<byte[]> _msgQueue = new List<byte[]>();
-        private readonly object _msgQueueLock = new object();
+        // Every outgoing message, in the order it was sent, until it has been written to a socket.
+        // See "Sending" below. Everything from here to _hasWarnedAboutDrops is under _outboxLock:
+        // senders on any thread, the drainer on the thread pool and the connection loop all touch it.
+        private readonly LinkedList<Outgoing> _outbox = new LinkedList<Outgoing>();
+        private readonly object _outboxLock = new object();
+
+        // The socket of the session the outbox currently drains into, and that session's token.
+        // Null while not connected, which is what makes a send wait in the outbox.
+        private Socket _outboxSocket;
+        private CancellationToken _outboxToken;
+
+        // True while a DrainOutbox() is running. There is never more than one, which is what keeps
+        // the messages in order.
+        private bool _isDraining;
+
+        // Reset on every connection, so a drop is reported once per outage.
+        private bool _hasWarnedAboutDrops;
 
         private readonly LockFreeQueue<InPacket> _queuedCommands = new LockFreeQueue<InPacket>();
         private long _lastHeartbeatTime;
@@ -130,14 +145,14 @@ namespace HCIKonstanz.Colibri.Networking
         private volatile string _appName;
         private volatile int _tcpPort;
 
-        // Gate that `await Connected` waits on, replacing the UniRx IObservable<bool> awaiter -
-        // no Rx on the send hot path. Deliberately a TaskCompletionSource and not a
-        // UniTaskCompletionSource: several SendCommandAsync calls routinely wait on this at once
-        // (a SyncBehaviour pushes one update per synced attribute at startup), and a
-        // UniTaskCompletionSource throws "can not await twice" on the second pending awaiter.
+        // Gate that `await Connected` waits on, replacing the UniRx IObservable<bool> awaiter.
+        // Only user code awaits it now - the send path queues in the outbox instead of waiting
+        // here. Deliberately a TaskCompletionSource and not a UniTaskCompletionSource: any number
+        // of callers may await it at once, and a UniTaskCompletionSource throws "can not await
+        // twice" on the second pending awaiter.
         //
-        // volatile because the gate is re-armed on the connection loop's thread while a sender
-        // on any other thread may be reading it to await.
+        // volatile because the gate is re-armed on the connection loop's thread while code on
+        // any other thread may be reading it to await.
         private volatile TaskCompletionSource<bool> _connectedGate = NewGate();
         private volatile bool _isGateOpen;
 
@@ -227,14 +242,14 @@ namespace HCIKonstanz.Colibri.Networking
                         _fireOnConnected = true;
                         _isGateOpen = true;
 
-                        // The gate is created with RunContinuationsAsynchronously, so no waiting
-                        // sender resumes inline here and none of them runs while holding the lock.
+                        // The gate is created with RunContinuationsAsynchronously, so no awaiting
+                        // caller resumes inline here and none of them runs while holding the lock.
                         _connectedGate.TrySetResult(true);
                     }
                     else if (_isGateOpen)
                     {
-                        // Re-arm the gate so a send issued while disconnected waits for the next
-                        // successful connection instead of racing straight onto a dead socket.
+                        // Re-arm the gate so that `await Connected` while disconnected waits for
+                        // the next successful connection.
                         _isGateOpen = false;
                         _connectedGate = NewGate();
                     }
@@ -288,8 +303,26 @@ namespace HCIKonstanz.Colibri.Networking
             CloseSocket(_socket);
             _socket = null;
 
+            // Whatever is still queued stays queued: re-enabling the component sends it.
+            CloseOutbox();
+
             _connectedGate.TrySetCanceled();
             Status = ConnectionStatus.Disconnected;
+        }
+
+        private void OnDestroy()
+        {
+            // Nothing will ever send these now, so nobody awaiting one should wait any longer.
+            Outgoing[] abandoned;
+            lock (_outboxLock)
+            {
+                abandoned = new Outgoing[_outbox.Count];
+                _outbox.CopyTo(abandoned, 0);
+                _outbox.Clear();
+            }
+
+            foreach (var message in abandoned)
+                message.Sent?.TrySetResult(false);
         }
 
         private void Update()
@@ -319,6 +352,9 @@ namespace HCIKonstanz.Colibri.Networking
                 if (Status == ConnectionStatus.Connected)
                 {
                     Debug.Log("Colibri: no heartbeat from the server, dropping the connection");
+                    // Anything sent from here on waits for the next connection rather than going
+                    // to a socket that is about to be closed.
+                    CloseOutbox();
                     Status = ConnectionStatus.Disconnected;
                 }
                 else
@@ -495,6 +531,7 @@ namespace HCIKonstanz.Colibri.Networking
                 finally
                 {
                     _isWatchdogArmed = false;
+                    CloseOutbox();
                     CloseSocket(_socket);
                     _socket = null;
 
@@ -619,7 +656,7 @@ namespace HCIKonstanz.Colibri.Networking
         /// dropped by the watchdog in <see cref="Update"/>; the server heartbeats every 100 ms, so
         /// a real one is never kept waiting.
         /// </summary>
-        private async Task BecomeConnected(Socket socket, string host, int port, string app, CancellationToken token)
+        private void BecomeConnected(Socket socket, string host, int port, string app, CancellationToken token)
         {
             StampLiveness();
 
@@ -627,9 +664,9 @@ namespace HCIKonstanz.Colibri.Networking
             // connection on which no other client is ever seen.
             Debug.Log($"Colibri: connected to {host}:{port} as app '{app}'. Only clients using the same App Name can see each other.");
 
-            // Drain anything queued during the outage before opening the gate, so retried
-            // messages stay ahead of new ones.
-            await FlushQueue(socket, token).ConfigureAwait(false);
+            // Starts sending whatever queued up during the outage, in order. Opened before Status
+            // says Connected, so anything sent by code that reacts to Connected lines up behind it.
+            OpenOutbox(socket, token);
             Status = ConnectionStatus.Connected;
         }
 
@@ -675,7 +712,7 @@ namespace HCIKonstanz.Colibri.Networking
                     if (!isConnected)
                     {
                         isConnected = true;
-                        await BecomeConnected(socket, host, port, app, token).ConfigureAwait(false);
+                        BecomeConnected(socket, host, port, app, token);
                     }
 
                     switch (frame.Type)
@@ -872,95 +909,212 @@ namespace HCIKonstanz.Colibri.Networking
             }
         }
 
-        private async Task<bool> TrySendFrame(byte[] frame)
-        {
-            var socket = _socket;
-            if (socket == null || Status != ConnectionStatus.Connected)
-                return false;
+        /*
+         *  The outbox.
+         *
+         *  Every message goes into one FIFO and is written to the socket by one drainer, so they
+         *  leave in exactly the order they were sent - across an outage too. Sends used to wait
+         *  on the Connected gate instead: each one issued while disconnected parked a task (no
+         *  bound), and on reconnect the parked continuations resumed together on the thread pool
+         *  and raced for the socket, so outage messages went out in any order and interleaved with
+         *  new ones. On a last-write-wins server that let a stale position overwrite a newer one.
+         *
+         *  While connected the outbox is just the way to the socket and is normally empty or
+         *  close to it. While not, it is the retry queue: bounded by MAX_QUEUED_MESSAGES, oldest
+         *  dropped first, and sent ahead of anything newer as soon as the next session is
+         *  connected. A message whose write failed stays at the head and goes first next time.
+         */
 
-            try
+        private sealed class Outgoing
+        {
+            public byte[] Frame;
+
+            // Null for SendCommand, which nobody awaits.
+            public TaskCompletionSource<bool> Sent;
+        }
+
+        /// <summary>Lets the outbox drain into this session. Called once it is Connected.</summary>
+        private void OpenOutbox(Socket socket, CancellationToken token)
+        {
+            bool startDraining;
+            lock (_outboxLock)
             {
-                await SendFrame(socket, frame, _lifetime?.Token ?? CancellationToken.None)
-                    .ConfigureAwait(false);
-                return true;
+                _outboxSocket = socket;
+                _outboxToken = token;
+                _hasWarnedAboutDrops = false;
+
+                startDraining = !_isDraining && _outbox.Count > 0;
+                if (startDraining)
+                    _isDraining = true;
             }
-            catch (Exception e)
+
+            if (startDraining)
+                _ = DrainOutbox();
+        }
+
+        /// <summary>Makes every send from now on wait in the outbox for the next connection.</summary>
+        private void CloseOutbox()
+        {
+            lock (_outboxLock)
             {
-                Debug.LogWarning($"Colibri: failed to send frame: {e.Message}");
-                return false;
+                _outboxSocket = null;
+                _outboxToken = CancellationToken.None;
             }
         }
 
-        private async Task FlushQueue(Socket socket, CancellationToken token)
+        private void Post(byte[] frame, TaskCompletionSource<bool> sent)
+        {
+            List<Outgoing> dropped = null;
+            var warnAboutDrops = false;
+            var startDraining = false;
+
+            lock (_outboxLock)
+            {
+                _outbox.AddLast(new Outgoing { Frame = frame, Sent = sent });
+
+                if (_outboxSocket == null)
+                {
+                    while (_outbox.Count > MAX_QUEUED_MESSAGES)
+                    {
+                        (dropped ??= new List<Outgoing>()).Add(_outbox.First.Value);
+                        _outbox.RemoveFirst();
+                    }
+
+                    if (dropped != null && !_hasWarnedAboutDrops)
+                    {
+                        _hasWarnedAboutDrops = true;
+                        warnAboutDrops = true;
+                    }
+                }
+                else if (!_isDraining)
+                {
+                    _isDraining = true;
+                    startDraining = true;
+                }
+            }
+
+            if (warnAboutDrops)
+            {
+                Debug.LogWarning($"Colibri: more than {MAX_QUEUED_MESSAGES} messages are waiting for the connection to come back, "
+                    + "so the oldest are being dropped. Said once per outage.");
+            }
+
+            if (dropped != null)
+            {
+                foreach (var message in dropped)
+                    message.Sent?.TrySetResult(false);
+            }
+
+            // Outside the lock: the drain runs synchronously up to its first write that does not
+            // complete at once.
+            if (startDraining)
+                _ = DrainOutbox();
+        }
+
+        /// <summary>
+        /// Writes the outbox to the current session's socket, head first, until it is empty or
+        /// the session is gone. Only ever one running (<c>_isDraining</c>), and it reads the session
+        /// afresh for every message, so a drainer that outlives one session carries on into the next.
+        /// </summary>
+        private async Task DrainOutbox()
         {
             while (true)
             {
-                byte[] frame;
-                lock (_msgQueueLock)
+                Outgoing next;
+                Socket socket;
+                CancellationToken token;
+                lock (_outboxLock)
                 {
-                    if (_msgQueue.Count == 0)
+                    if (_outboxSocket == null || _outbox.Count == 0)
+                    {
+                        _isDraining = false;
                         return;
-                    frame = _msgQueue[0];
+                    }
+
+                    next = _outbox.First.Value;
+                    socket = _outboxSocket;
+                    token = _outboxToken;
                 }
 
-                await SendFrame(socket, frame, token).ConfigureAwait(false);
-
-                lock (_msgQueueLock)
+                try
                 {
-                    // The frame may already be gone if the queue was trimmed meanwhile.
-                    if (_msgQueue.Count > 0 && ReferenceEquals(_msgQueue[0], frame))
-                        _msgQueue.RemoveAt(0);
+                    await SendFrame(socket, next.Frame, token).ConfigureAwait(false);
                 }
+                catch (Exception e)
+                {
+                    // The message stays at the head of the outbox and is the first thing the
+                    // next session sends. This session is finished: close it, so the receive loop
+                    // notices now rather than at the next heartbeat.
+                    lock (_outboxLock)
+                    {
+                        if (ReferenceEquals(_outboxSocket, socket))
+                        {
+                            _outboxSocket = null;
+                            _outboxToken = CancellationToken.None;
+                        }
+                    }
+
+                    if (!token.IsCancellationRequested)
+                        Debug.Log($"Colibri: sending failed ({e.GetType().Name}: {e.Message}); queued messages will be sent after reconnecting");
+
+                    CloseSocket(socket);
+                    continue;
+                }
+
+                lock (_outboxLock)
+                {
+                    // Gone already if the outage bound dropped it while it was being written.
+                    if (_outbox.First != null && ReferenceEquals(_outbox.First.Value, next))
+                        _outbox.RemoveFirst();
+                }
+
+                next.Sent?.TrySetResult(true);
             }
         }
 
-        private void EnqueueForRetry(byte[] frame)
+        private static byte[] EncodeFrame(string channel, string command, JToken payload)
         {
-            lock (_msgQueueLock)
-            {
-                _msgQueue.Add(frame);
-                if (_msgQueue.Count > MAX_QUEUED_MESSAGES)
-                    _msgQueue.RemoveRange(0, _msgQueue.Count - MAX_QUEUED_MESSAGES);
-            }
-        }
-
-        public async Task<bool> SendCommandAsync(string channel, string command, JToken payload)
-        {
-            byte[] frame;
             try
             {
-                frame = FrameCodec.EncodeMessage(channel, command, EncodePayload(channel, payload));
+                return FrameCodec.EncodeMessage(channel, command, EncodePayload(channel, payload));
             }
             catch (FrameException e)
             {
                 // One unrepresentable message is dropped as one bad message, exactly as the
                 // server does on its own egress path.
                 Debug.LogError($"Colibri: dropping unencodable message ({channel} / {command}): {e.Message}");
-                return false;
+                return null;
             }
-
-            try
-            {
-                // ConfigureAwait(false) here governs only the rest of *this* method - a caller
-                // awaiting SendCommandAsync still resumes on whatever context it awaited from,
-                // so user code is unaffected.
-                await Connected.ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                return false;
-            }
-
-            if (await TrySendFrame(frame).ConfigureAwait(false))
-                return true;
-
-            EnqueueForRetry(frame);
-            return false;
         }
 
+        /// <summary>
+        /// Sends a message, queueing it while not connected.
+        /// </summary>
+        /// <returns>
+        /// Completes with true once the message has been written to the socket, or with false if
+        /// it never will be: it could not be encoded, the outage bound dropped it, or this
+        /// component was destroyed first. Never false for a message that is still going to be
+        /// sent, so there is nothing to retry. While the connection is down it stays pending.
+        /// </returns>
+        public Task<bool> SendCommandAsync(string channel, string command, JToken payload)
+        {
+            var frame = EncodeFrame(channel, command, payload);
+            if (frame == null)
+                return Task.FromResult(false);
+
+            // RunContinuationsAsynchronously: it is completed by the drainer and from under the
+            // outbox's callers, neither of which should run the awaiting code inline.
+            var sent = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            Post(frame, sent);
+            return sent.Task;
+        }
+
+        /// <summary>Sends a message, queueing it while not connected. See <see cref="SendCommandAsync"/>.</summary>
         public void SendCommand(string channel, string command, JToken payload)
         {
-            _ = SendCommandAsync(channel, command, payload);
+            var frame = EncodeFrame(channel, command, payload);
+            if (frame != null)
+                Post(frame, null);
         }
 
 
