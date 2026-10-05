@@ -10,23 +10,52 @@
  * going to do that, which made the one file guarding wire compatibility the one file that would
  * quietly go stale.
  *
- *   npm run test:vectors            check the C# file against these encoders
+ * It also checks that every other hard-coded copy of the protocol version agrees with this
+ * server's PROTOCOL_VERSION - see `versionLiterals` below.
+ *
+ *   npm run test:vectors            check the C# file and the version literals
  *   npm run test:vectors -- --emit  print the C# table, ready to paste
  */
 import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+    PROTOCOL_VERSION,
     encodeHandshakeFrame,
     encodeHeartbeatFrame,
     encodeMessageFrame,
 } from '../src/server/modules/networking/protocol.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = path.resolve(__dirname, '../..');
 const CSHARP_VECTORS = path.resolve(
-    __dirname,
-    '../../colibri-unity/Assets/Colibri/Tests/Editor/ProtocolVectorTests.cs'
+    REPO_ROOT,
+    'colibri-unity/Assets/Colibri/Tests/Editor/ProtocolVectorTests.cs'
 );
+
+interface VersionLiteral {
+    /** Repository-relative. */
+    readonly file: string;
+    /** Must match exactly once; the first capture group is the version. */
+    readonly pattern: RegExp;
+}
+
+// Every other place the protocol version is spelled out. Each has to hard-code it - the web
+// client and the Unity package ship separately from this server, and the admin UI is built by a
+// different compiler - so a version bumped in one of them alone was noticed by nothing short of
+// every client being refused. Each pattern must match exactly once, so moving or renaming a
+// literal fails here until this list is updated, rather than passing because nothing matched.
+const versionLiterals: VersionLiteral[] = [
+    { file: 'colibri-web/src/Colibri.ts', pattern: /export const PROTOCOL_VERSION\s*=\s*'([^']*)'/g },
+    {
+        file: 'colibri-unity/Assets/Colibri/Networking/WebServerConnection.cs',
+        pattern: /const string CLIENT_VERSION\s*=\s*"([^"]*)"/g,
+    },
+    {
+        file: 'colibri-server/src/ui/app/services/socketio.service.ts',
+        pattern: /query:\s*\{\s*app:\s*'colibri',\s*version:\s*'([^']*)'\s*\}/g,
+    },
+];
 
 interface Vector {
     /** How the C# case reads, for the failure message and the --emit table. */
@@ -40,11 +69,16 @@ const vectors: Vector[] = [
     { description: 'Heartbeat(123456789012345)', bytes: encodeHeartbeatFrame(123456789012345n) },
     { description: 'Heartbeat(ulong.MaxValue)', bytes: encodeHeartbeatFrame(18446744073709551615n) },
 
-    { description: 'Handshake("2", "myApp", "myClient")', bytes: encodeHandshakeFrame('2', 'myApp', 'myClient') },
+    // The current version, so bumping PROTOCOL_VERSION fails this check until the C# vectors
+    // (which hard-code it) are regenerated too.
+    {
+        description: `Handshake("${PROTOCOL_VERSION}", "myApp", "myClient")`,
+        bytes: encodeHandshakeFrame(PROTOCOL_VERSION, 'myApp', 'myClient'),
+    },
     {
         // Non-ASCII in the client name is ordinary: it comes from the device name.
-        description: 'Handshake("2", "app", "Bjorn-ü中")',
-        bytes: encodeHandshakeFrame('2', 'app', 'Bjorn-ü中'),
+        description: `Handshake("${PROTOCOL_VERSION}", "app", "Bjorn-ü中")`,
+        bytes: encodeHandshakeFrame(PROTOCOL_VERSION, 'app', 'Bjorn-ü中'),
     },
 
     {
@@ -129,8 +163,49 @@ const check = function (): number {
     return 0;
 };
 
+const checkVersions = function (): number {
+    let failures = 0;
+
+    for (const literal of versionLiterals) {
+        let source: string;
+        try {
+            source = readFileSync(path.resolve(REPO_ROOT, literal.file), 'utf8');
+        } catch {
+            console.error(`VERSION  cannot read ${literal.file}`);
+            failures += 1;
+            continue;
+        }
+
+        const matches = [...source.matchAll(literal.pattern)];
+        const found = matches[0]?.[1];
+        if (matches.length !== 1 || found === undefined) {
+            console.error(`VERSION  ${literal.file}: expected exactly one match for ${literal.pattern}, found ${matches.length}`);
+            console.error('         If the literal moved, update versionLiterals in test/emit-protocol-vectors.ts.');
+            failures += 1;
+        } else if (found !== PROTOCOL_VERSION) {
+            console.error(`VERSION  ${literal.file} announces protocol version '${found}',`);
+            console.error(`         but PROTOCOL_VERSION in colibri-server's protocol.ts is '${PROTOCOL_VERSION}'`);
+            failures += 1;
+        }
+    }
+
+    if (failures > 0) {
+        console.error(
+            `\n${failures} protocol version mismatch(es). Every client announcing another version is refused, ` +
+                'so they have to change together.'
+        );
+        return 1;
+    }
+
+    console.log(`All ${versionLiterals.length} other copies of the protocol version say '${PROTOCOL_VERSION}'.`);
+    return 0;
+};
+
 if (process.argv.includes('--emit')) {
     emit();
 } else {
-    process.exit(check());
+    // Both run either way, so one failure does not hide the other.
+    const vectorsFailed = check() !== 0;
+    const versionsFailed = checkVersions() !== 0;
+    process.exit(vectorsFailed || versionsFailed ? 1 : 0);
 }
