@@ -151,6 +151,54 @@ namespace HCIKonstanz.Colibri.E2E
             Object.DestroyImmediate(second.gameObject);
         }
 
+        private class ChannelListener : MonoBehaviour
+        {
+            public int Received;
+
+            public void Listen(string channel) => Sync.Receive<int>(channel, OnValue);
+
+            private void OnValue(int value) => Received++;
+        }
+
+        /// <summary>
+        /// The second press of Play, for a client that only listens. Its listeners from the first
+        /// session were dropped along with their objects, but with domain reload disabled the
+        /// channel's entry in Sync outlives them - and registering on a channel that already had
+        /// an entry never asked for the connection. So nothing rebuilt it or subscribed to it: no
+        /// connection in the scene, nothing received, and nothing in the console.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator AListenerRegisteredAfterTheConnectionWasRebuiltStillHearsTheServer()
+        {
+            var channel = E2EServer.Channel("next-session");
+
+            var previous = Spawn<ChannelListener>("previous-session");
+            previous.Listen(channel);
+
+            // What ending a Play session does: the scene and the connection go, Sync's statics stay.
+            Object.DestroyImmediate(previous.gameObject);
+            Object.DestroyImmediate(Connection.gameObject);
+            yield return null;
+
+            var next = Spawn<ChannelListener>("next-session");
+            next.Listen(channel);
+
+            var connection = Object.FindFirstObjectByType<Networking.WebServerConnection>();
+            Assert.That(connection != null, Is.True,
+                "Registering a listener did not bring the connection back, so this client will never hear anything");
+
+            yield return E2EServer.WaitUntil(() => connection.Status == Networking.ConnectionStatus.Connected,
+                "The rebuilt connection never connected", 20f);
+
+            // The server puts the client on its app when it reads the handshake; give that a
+            // moment, as the fixture does for its own connection.
+            yield return E2EServer.Settle(0.3f);
+
+            Peer.Send(channel, "broadcast::int", "1");
+            yield return E2EServer.WaitUntil(() => next.Received == 1,
+                "A listener registered after the connection was rebuilt never heard the server");
+        }
+
         [UnityTest]
         public IEnumerator ASingletonAdoptsAnInstanceAlreadyInTheSceneInsteadOfAddingAnother()
         {

@@ -493,12 +493,17 @@ namespace HCIKonstanz.Colibri.Synchronization
         private static void AddListener<T>(string channel, Dictionary<string, List<Listener<T>>> listeners, Action<T> listener,
             bool track = true, string fetchId = null)
         {
+            // Ensures the connection is in the scene and that this class is subscribed to it - on
+            // every registration, not only a channel's first. With domain reload disabled, a
+            // channel from the previous Play session keeps its entry below after its listeners'
+            // objects are gone, while the connection it was subscribed to has been destroyed; a
+            // client that only listens then never got a connection again.
+            Connection();
+
             if (!listeners.TryGetValue(channel, out var channelListeners))
             {
                 channelListeners = new List<Listener<T>>();
                 listeners.Add(channel, channelListeners);
-                // ensure that networkconnection prefab is added to the scene
-                Connection();
             }
             else
             {
