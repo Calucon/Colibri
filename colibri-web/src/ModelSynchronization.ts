@@ -9,6 +9,11 @@ interface ModelSyncMsg<T extends SyncModel<T>> extends Message {
 }
 
 interface ModelSyncRegistration<T> {
+    /**
+     * The channel to sync on. **Recommended.** Defaults to the class name lowercased, which a
+     * minifying production build changes - so without this, two builds of the same app, or a
+     * minified web build and Unity, can silently stop syncing with each other.
+     */
     name?: string;
     type: { new (id: string): T };
 }
@@ -25,8 +30,27 @@ const withColibri = (action: (colibri: Colibri) => void) => {
     else whenColibriCreated(action);
 };
 
+// Channels already warned about, so that registering the same type again (on every render of a
+// component, say) does not repeat it.
+const warnedMinifiedNames = new Set<string>();
+
+// A production bundler renames classes - typically to one or two letters, or to something with a
+// `$` in it - so a channel derived from the class name differs between two builds of the same
+// app, and between a minified web build and Unity, and they silently stop syncing.
+const warnIfMinified = (className: string, channel: string) => {
+    if ((channel.length > 2 && !channel.includes('$')) || warnedMinifiedNames.has(channel)) return;
+    warnedMinifiedNames.add(channel);
+    console.warn(
+        `Colibri: RegisterModelSync is syncing on channel '${channel}', derived from the class name ` +
+            `'${className}', which looks minified. A minified build renames classes, so this will not ` +
+            `sync with another build or with Unity. Pass the channel explicitly: ` +
+            `RegisterModelSync({ name: '...', type: ${className || 'YourModel'} }).`
+    );
+};
+
 export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyncRegistration<T>): ModelSync<T> => {
     const name = registration.name || registration.type.name.toLowerCase();
+    if (!registration.name) warnIfMinified(registration.type.name, name);
 
     // initial data fetch
     withColibri(colibri => {

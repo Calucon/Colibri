@@ -110,6 +110,52 @@ describe('ModelSynchronization', () => {
         });
     });
 
+    // A minifier renames classes, so a derived channel quietly differs between two builds, or
+    // between a production web build and Unity. Nothing fails; the two sides just never meet.
+    describe('channel names derived from a minified class name', () => {
+        let warnSpy: ReturnType<typeof vi.spyOn>;
+
+        beforeEach(() => {
+            warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+        });
+
+        afterEach(() => {
+            warnSpy.mockRestore();
+        });
+
+        /** A Widget subclass under the name a minifier might have given it. */
+        const minified = (name: string) => {
+            const type = class extends Widget {};
+            Object.defineProperty(type, 'name', { value: name });
+            return type;
+        };
+
+        it.each(['e', 'Qt', 'a$', '$b$c', 'Widget$'])('warns once for the class name %j', className => {
+            const type = minified(className);
+
+            RegisterModelSync({ type });
+            RegisterModelSync({ type });
+
+            expect(warnSpy).toHaveBeenCalledTimes(1);
+            expect(warnSpy.mock.calls[0][0]).toContain(`'${className.toLowerCase()}'`);
+            expect(warnSpy.mock.calls[0][0]).toContain('name');
+            // Still the documented default: warning about it must not change where it syncs.
+            expect(registerChannelMock.mock.calls[0][0]).toBe(className.toLowerCase());
+        });
+
+        it('stays quiet when the channel is named explicitly, however short', () => {
+            RegisterModelSync({ name: 'e', type: minified('f') });
+
+            expect(warnSpy).not.toHaveBeenCalled();
+        });
+
+        it('stays quiet for an ordinary class name', () => {
+            RegisterModelSync({ type: Gadget });
+
+            expect(warnSpy).not.toHaveBeenCalled();
+        });
+    });
+
     describe('registerModel (locally created models)', () => {
         it('sends the full toJson() as an initial model::update and lists the model', () => {
             const [models, registerModel] = RegisterModelSync({
