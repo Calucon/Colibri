@@ -18,6 +18,7 @@ namespace HCIKonstanz.Colibri.Setup
         private static bool _portSettings = false;
 
         private ColibriConfig Config;
+        private Vector2 _scroll;
 
         [DidReloadScripts]
         static void OnReload()
@@ -99,6 +100,9 @@ namespace HCIKonstanz.Colibri.Setup
 
         private void OnGUI()
         {
+            // The Android section at the bottom can run past the edge of the window.
+            _scroll = EditorGUILayout.BeginScrollView(_scroll);
+
             GUILayout.Label("Colibri Setup", new GUIStyle(EditorStyles.largeLabel)
             {
                 fontSize = 22,
@@ -167,6 +171,31 @@ namespace HCIKonstanz.Colibri.Setup
 
             foreach (var error in errors)
                 EditorGUILayout.HelpBox(error, MessageType.Error);
+
+            DrawAndroidIssues();
+
+            EditorGUILayout.EndScrollView();
+        }
+
+        /// <summary>
+        /// Settings that break a Meta Quest / Android build silently - see <see cref="AndroidSettingsCheck"/>.
+        /// Checked against the configuration as edited here, so turning SSL on clears the HTTP one.
+        /// </summary>
+        private void DrawAndroidIssues()
+        {
+            var issues = AndroidSettingsCheck.FindIssues(Config);
+            if (issues.Count == 0)
+                return;
+
+            GUILayout.Space(15f);
+            EditorGUILayout.LabelField("Android / Meta Quest", EditorStyles.boldLabel);
+
+            foreach (var issue in issues)
+            {
+                EditorGUILayout.HelpBox(issue.Message, MessageType.Warning);
+                if (GUILayout.Button(issue.FixLabel))
+                    issue.Fix();
+            }
         }
     }
 }
