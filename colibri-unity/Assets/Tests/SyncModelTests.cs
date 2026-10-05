@@ -135,6 +135,42 @@ namespace HCIKonstanz.Colibri.E2E
         }
 
         /// <summary>
+        /// A value from another client must not cost this client its next change of the same
+        /// member. Echo suppression used to be a "swallow the next change" flag per member, set
+        /// whenever an update changed the value. When the poll then saw no change - two updates
+        /// that ended where they started before it ran - the flag stayed set and ate the next
+        /// genuine local change: never sent, nothing logged.
+        /// </summary>
+        /// <remarks>
+        /// Turning the component off stops the poll, which stands in for the two updates being
+        /// handled in the same frame - a timing a test cannot arrange on purpose.
+        /// </remarks>
+        [UnityTest]
+        public IEnumerator AValueFromAnotherClientDoesNotSwallowTheNextLocalChange()
+        {
+            var model = SpawnConfigured<E2ESyncModel>("model", _ => { });
+            yield return LetInitialStateArrive();
+
+            model.enabled = false;
+
+            Peer.Send(Channel, "model::update", new JObject { { "id", model.Id }, { "label", "theirs" } });
+            yield return E2EServer.WaitUntil(() => model.Label == "theirs", "The update from the peer never arrived");
+
+            Peer.Send(Channel, "model::update", new JObject { { "id", model.Id }, { "label", "" } });
+            yield return E2EServer.WaitUntil(() => model.Label == "", "The second update from the peer never arrived");
+
+            model.enabled = true;
+
+            // Neither value is this client's own, so neither may be echoed back.
+            yield return Peer.ExpectNothing(Channel);
+
+            model.Label = "mine";
+
+            yield return Peer.Expect(Channel, "model::update",
+                frame => Assert.That(TcpPeer.Json(frame)["label"].Value<string>(), Is.EqualTo("mine")));
+        }
+
+        /// <summary>
         /// A model this client has never seen arrives from someone else, and the manager builds it
         /// from the template - exactly once. Instantiating it twice is the classic failure here,
         /// and it is invisible until two clients start fighting over the same id.

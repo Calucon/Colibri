@@ -29,6 +29,12 @@ namespace HCIKonstanz.Colibri.Synchronization
             /// previously latched one.
             /// </summary>
             bool CaptureChange(T target);
+
+            /// <summary>
+            /// Latches the attribute's current value without reporting it - for a value that came
+            /// from the server, which must not be sent straight back as if it were a local change.
+            /// </summary>
+            void Latch(T target);
         }
 
         private abstract class SyncedAttribute
@@ -75,6 +81,11 @@ namespace HCIKonstanz.Colibri.Synchronization
 
                 _lastValue = current;
                 return true;
+            }
+
+            public void Latch(T target)
+            {
+                _lastValue = _getter(target);
             }
         }
 
@@ -292,9 +303,7 @@ namespace HCIKonstanz.Colibri.Synchronization
         private readonly string ChannelPrefix = ToWireName(typeof(T).Name);
         internal string Channel { get => ChannelPrefix + (String.IsNullOrEmpty(ModelId) ? "" : $"_{ModelId}"); }
 
-        // Parallel to _attributeList: true while an incoming server value is still waiting to be
-        // observed by the change poll, so that it is not immediately echoed back to the server.
-        private bool[] _hasReceivedUpdate;
+        // Parallel to _attributeList.
         private IChangeTracker[] _trackers;
 
         private JObject _nextUpdate;
@@ -319,7 +328,6 @@ namespace HCIKonstanz.Colibri.Synchronization
                 Id = Guid.NewGuid().ToString();
 
             var self = this as T;
-            _hasReceivedUpdate = new bool[_attributeList.Count];
             _trackers = new IChangeTracker[_attributeList.Count];
             for (var i = 0; i < _attributeList.Count; i++)
                 _trackers[i] = _attributeList[i].CreateTracker(self);
@@ -450,12 +458,6 @@ namespace HCIKonstanz.Colibri.Synchronization
 
         private void AddUpdate(SyncedAttribute attribute, object value)
         {
-            if (_hasReceivedUpdate[attribute.Index])
-            {
-                _hasReceivedUpdate[attribute.Index] = false;
-                return;
-            }
-
             if (_nextUpdate == null)
                 _nextUpdate = new JObject { { "id", Id } };
 
@@ -478,7 +480,6 @@ namespace HCIKonstanz.Colibri.Synchronization
 
             var self = this as T;
             var attribute = _syncedAttributes[name];
-            var oldValue = attribute.GetBoxed(self);
 
             if (attribute.PropertyType == typeof(bool))
                 attribute.SetBoxed(self, value.Value<bool>());
@@ -517,11 +518,16 @@ namespace HCIKonstanz.Colibri.Synchronization
             else
                 Debug.LogError($"Unable to update attribute {name}: Unsupported type {attribute.PropertyType}");
 
-            var newValue = attribute.GetBoxed(self);
-            if (newValue != null)
-                _hasReceivedUpdate[attribute.Index] = !newValue.Equals(oldValue);
-            else
-                _hasReceivedUpdate[attribute.Index] = newValue != oldValue;
+            // What the server sent is now the known state, not a change for the poll to report.
+            // This used to be a per-attribute "received, swallow the next change" flag instead,
+            // which went stale whenever the poll saw no change afterwards - two updates between
+            // polls that ended where they started, or any update while the component was off -
+            // and then silently swallowed the next genuine local change.
+            //
+            // Null only before Awake, when OnModelUpdate reaches an object that was instantiated
+            // inactive; Awake then latches every current value anyway.
+            if (_trackers != null)
+                _trackers[attribute.Index].Latch(self);
         }
     }
 }
