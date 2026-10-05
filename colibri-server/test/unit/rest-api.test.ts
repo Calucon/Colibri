@@ -1,12 +1,20 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, readFile, rm, writeFile } from 'fs/promises';
+import { copyFile, mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import * as path from 'path';
+import { fileURLToPath } from 'url';
 import type { Router, Request, RequestHandler, Response } from 'express';
 import { RestAPI } from '../../src/server/modules/web/rest-api.js';
 import type { WebServer } from '../../src/server/modules/web/web-server.js';
 
 const SAVE_DEBOUNCE_MILLIS = 250;
+
+// A store.json in the format every earlier version wrote, including a value name
+// ('constructor') that the old object-backed store could persist as an own key.
+const FIXTURE_STORE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'store.json');
+
+// Names that are also members of Object.prototype (or, for '__proto__', its accessor).
+const PROTOTYPE_NAMES = [ '__proto__', 'constructor', 'prototype', 'hasOwnProperty', 'toString', 'valueOf', '__defineGetter__' ];
 
 // Captures the router RestAPI registers, so the routes can be driven without binding a port.
 class FakeWebServer {
@@ -109,6 +117,34 @@ describe('RestAPI', () => {
 
             await expect(get('/')).resolves.toEqual({ status: 200, body: [] });
         });
+
+        it('loads an existing store.json and writes it back unchanged', async () => {
+            await copyFile(FIXTURE_STORE, storePath);
+            const fixture = await readFile(FIXTURE_STORE, 'utf8');
+            await api.init();
+
+            await expect(get('/')).resolves.toEqual({ status: 200, body: [ 'ExampleUnityApp', 'web-demo' ] });
+            await expect(get('/ExampleUnityApp')).resolves.toEqual({ status: 200, body: [ 'exampleObject', 'highscores', 'constructor' ] });
+            await expect(get('/ExampleUnityApp/exampleObject')).resolves.toEqual({ status: 200, body: { Id: 1234, Name: 'Charly Sharp' } });
+            await expect(get('/ExampleUnityApp/constructor')).resolves.toEqual({
+                status: 200,
+                body: { note: 'stored as an own value name by the old object-backed store' },
+            });
+            await expect(get('/web-demo/sampleKey')).resolves.toMatchObject({ status: 200, body: { tags: [ 'a', 'b' ], nothing: null } });
+
+            await api.flush();
+            await expect(readFile(storePath, 'utf8')).resolves.toBe(JSON.stringify(JSON.parse(fixture)));
+        });
+
+        it('loads app and value names that only a hand-edited store.json can contain', async () => {
+            await writeFile(storePath, '{"__proto__":{"__proto__":1,"toString":2}}', 'utf8');
+            await api.init();
+
+            await expect(get('/')).resolves.toEqual({ status: 200, body: [ '__proto__' ] });
+            await expect(get('/__proto__')).resolves.toEqual({ status: 200, body: [ '__proto__', 'toString' ] });
+            await expect(get('/__proto__/__proto__')).resolves.toEqual({ status: 200, body: 1 });
+            await expect(get('/__proto__/toString')).resolves.toEqual({ status: 200, body: 2 });
+        });
     });
 
     describe('routes', () => {
@@ -143,6 +179,105 @@ describe('RestAPI', () => {
             await expect(del('/appA')).resolves.toMatchObject({ status: 200 });
             await expect(get('/appA')).resolves.toMatchObject({ status: 404 });
             await expect(del('/appA')).resolves.toMatchObject({ status: 404 });
+        });
+    });
+
+    // Every name used to be looked up on a plain object, so a name Object.prototype also has
+    // resolved to that member: DELETE /constructor/keys deleted Object.keys process-wide, and
+    // PUT /__proto__/x wrote onto Object.prototype.
+    describe('names that are also Object.prototype members', () => {
+        const originalKeys = Object.keys;
+        const originalPrototypeNames = Object.getOwnPropertyNames(Object.prototype);
+
+        beforeEach(async () => {
+            await api.init();
+        });
+
+        afterEach(() => {
+            // Undo what a regression would have done, so it fails only these tests.
+            Object.keys = originalKeys;
+            for (const name of Object.getOwnPropertyNames(Object.prototype)) {
+                if (!originalPrototypeNames.includes(name)) delete (Object.prototype as Record<string, unknown>)[name];
+            }
+        });
+
+        const expectPrototypesUntouched = () => {
+            expect(Object.keys).toBe(originalKeys);
+            expect(Object.getOwnPropertyNames(Object.prototype)).toEqual(originalPrototypeNames);
+            expect(Object.getPrototypeOf({})).toBe(Object.prototype);
+        };
+
+        it('404s for them while nothing is stored, instead of reaching into Object', async () => {
+            await expect(get('/constructor')).resolves.toMatchObject({ status: 404 });
+            await expect(get('/constructor/keys')).resolves.toMatchObject({ status: 404 });
+            await expect(del('/constructor/keys')).resolves.toMatchObject({ status: 404 });
+            await expect(del('/constructor')).resolves.toMatchObject({ status: 404 });
+            await expect(get('/__proto__')).resolves.toMatchObject({ status: 404 });
+
+            await put('/appA/key', 1);
+            for (const name of PROTOTYPE_NAMES) {
+                await expect(get(`/appA/${name}`)).resolves.toMatchObject({ status: 404 });
+                await expect(del(`/appA/${name}`)).resolves.toMatchObject({ status: 404 });
+            }
+
+            expect(typeof Object.keys).toBe('function');
+            expectPrototypesUntouched();
+        });
+
+        it('round-trips each of them through PUT, GET and DELETE as an ordinary app and value name', async () => {
+            for (const name of PROTOTYPE_NAMES) {
+                await expect(put(`/${name}/${name}`, { name })).resolves.toMatchObject({ status: 201 });
+                await expect(put(`/${name}/${name}`, { name, again: true })).resolves.toMatchObject({ status: 200 });
+            }
+            for (const name of PROTOTYPE_NAMES) {
+                await expect(put(`/appA/${name}`, name)).resolves.toMatchObject({ status: 201 });
+            }
+
+            await expect(get('/')).resolves.toEqual({ status: 200, body: [ ...PROTOTYPE_NAMES, 'appA' ] });
+            await expect(get('/appA')).resolves.toEqual({ status: 200, body: PROTOTYPE_NAMES });
+            for (const name of PROTOTYPE_NAMES) {
+                await expect(get(`/${name}`)).resolves.toEqual({ status: 200, body: [ name ] });
+                await expect(get(`/${name}/${name}`)).resolves.toEqual({ status: 200, body: { name, again: true } });
+                await expect(get(`/appA/${name}`)).resolves.toEqual({ status: 200, body: name });
+            }
+            expectPrototypesUntouched();
+
+            for (const name of PROTOTYPE_NAMES) {
+                await expect(del(`/${name}/${name}`)).resolves.toMatchObject({ status: 200 });
+                await expect(get(`/${name}/${name}`)).resolves.toMatchObject({ status: 404 });
+                await expect(del(`/${name}`)).resolves.toMatchObject({ status: 200 });
+                await expect(get(`/${name}`)).resolves.toMatchObject({ status: 404 });
+            }
+            await expect(get('/')).resolves.toEqual({ status: 200, body: [ 'appA' ] });
+            expectPrototypesUntouched();
+        });
+
+        it('does not pollute Object.prototype through __proto__', async () => {
+            await expect(put('/__proto__/polluted', { yes: true })).resolves.toMatchObject({ status: 201 });
+
+            expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+            expectPrototypesUntouched();
+            await expect(get('/__proto__/polluted')).resolves.toEqual({ status: 200, body: { yes: true } });
+        });
+
+        it('persists them as ordinary keys and reads them back', async () => {
+            await put('/__proto__/constructor', 1);
+            await put('/constructor/__proto__', { toString: 2 });
+            await api.flush();
+
+            const raw = await readFile(storePath, 'utf8');
+            const parsed = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+            expect(Object.keys(parsed)).toEqual([ '__proto__', 'constructor' ]);
+            expect(Object.keys(parsed['__proto__']!)).toEqual([ 'constructor' ]);
+            expect(Object.keys(parsed['constructor']!)).toEqual([ '__proto__' ]);
+
+            const second = new FakeWebServer();
+            const reloaded = new RestAPI(dataPath, second.asWebServer());
+            await reloaded.init();
+
+            await expect(call(second.router!, 'GET', '/__proto__/constructor')).resolves.toEqual({ status: 200, body: 1 });
+            await expect(call(second.router!, 'GET', '/constructor/__proto__')).resolves.toEqual({ status: 200, body: { toString: 2 } });
+            expectPrototypesUntouched();
         });
     });
 

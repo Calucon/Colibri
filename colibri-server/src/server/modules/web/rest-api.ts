@@ -7,11 +7,19 @@ import * as path from 'path';
 const STORE_FILENAME = 'store.json';
 const SAVE_DEBOUNCE_MILLIS = 250;
 
+// App name -> value name -> value, both names straight from the URL. Maps rather than plain
+// objects: `this.data[req.params.app]` resolved any name that is also an Object.prototype
+// member to that member, so DELETE /api/store/constructor/keys deleted Object.keys from the
+// whole process (every later request answered 500 until a restart) and
+// PUT /api/store/__proto__/x wrote onto Object.prototype. A Map has no inherited keys, so
+// '__proto__', 'constructor' and the like are ordinary names.
+type StoreData = Map<string, Map<string, unknown>>;
+
 export class RestAPI extends Service {
     public serviceName = 'RestAPI';
     public groupName = 'web';
 
-    private data: { [key: string]: { [key: string]: unknown } } = {};
+    private data: StoreData = new Map();
     private readonly storeFilePath: string;
     private readonly storeTempFilePath: string;
 
@@ -27,27 +35,27 @@ export class RestAPI extends Service {
         webserver.addApi('/store', Router()
             .get('/', (req, res) => {
                 // Return all available apps
-                const keys = Object.keys(this.data);
+                const keys = Array.from(this.data.keys());
                 res.status(200).json(keys);
             })
             .get('/:app', (req, res) => {
-                const app = this.data[req.params.app];
+                const app = this.data.get(req.params.app);
                 // If app not exist return an error
                 if (!app) {
                     res.status(404).json({ error: 'App with name ' + req.params.app + ' not found' });
                 } else {
                     // Return all available values of the app
-                    const keys = Object.keys(app);
+                    const keys = Array.from(app.keys());
                     res.status(200).json(keys);
                 }
             })
             .get('/:app/:value', (req, res) => {
-                const app = this.data[req.params.app];
+                const app = this.data.get(req.params.app);
                 // If app not exist return an error
                 if (!app) {
                     res.status(404).json({ error: 'App with name ' + req.params.app + ' not found' });
                 } else {
-                    const value = app[req.params.value];
+                    const value = app.get(req.params.value);
                     // If value not exist return an error
                     if (value === undefined) {
                         res.status(404).json({ error: 'Value with name ' + req.params.value + ' not found' });
@@ -60,28 +68,29 @@ export class RestAPI extends Service {
             .put('/:app/:value', (req, res) => {
                 let statusCode = 200;
                 // If app name not exist create app name
-                let app = this.data[req.params.app];
+                let app = this.data.get(req.params.app);
                 if (!app) {
-                    app = this.data[req.params.app] = {};
+                    app = new Map();
+                    this.data.set(req.params.app, app);
                     statusCode = 201;
-                } else if (!app[req.params.value]) {
+                } else if (!app.has(req.params.value)) {
                     statusCode = 201;
                 }
                 // Set data to the corresponding value
-                app[req.params.value] = req.body;
+                app.set(req.params.value, req.body);
                 // Return successful result with the sended data
-                res.status(statusCode).json({ result: 'Value with name ' + req.params.value + ' saved successfully', data: app[req.params.value] });
+                res.status(statusCode).json({ result: 'Value with name ' + req.params.value + ' saved successfully', data: req.body });
                 // Save data in data store file
                 this.scheduleSave();
             })
             .delete('/:app', (req, res) => {
-                const app = this.data[req.params.app];
+                const app = this.data.get(req.params.app);
                 // If app not exist return an error
                 if (!app) {
                     res.status(404).json({ error: 'App with name ' + req.params.app + ' not found' });
                 } else {
                     // Delete the app
-                    delete this.data[req.params.app];
+                    this.data.delete(req.params.app);
                     // Return successful result
                     res.status(200).json({ result: 'App with name ' + req.params.app + ' deleted successfully' });
                     // Save data in data store file
@@ -89,18 +98,18 @@ export class RestAPI extends Service {
                 }
             })
             .delete('/:app/:value', (req, res) => {
-                const app = this.data[req.params.app];
+                const app = this.data.get(req.params.app);
                 // If app not exist return an error
                 if (!app) {
                     res.status(404).json({ error: 'App with name ' + req.params.app + ' not found' });
                 } else {
-                    const value = app[req.params.value];
+                    const value = app.get(req.params.value);
                     // If value not exist return an error
                     if (value === undefined) {
                         res.status(404).json({ error: 'Value with name ' + req.params.value + ' not found' });
                     } else {
                         // Delete the value
-                        delete app[req.params.value];
+                        app.delete(req.params.value);
                         // Return successful result
                         res.status(200).json({ result: 'Value with name ' + req.params.value + ' deleted successfully' });
                         // Save data in data store file
@@ -123,25 +132,35 @@ export class RestAPI extends Service {
         }
     }
 
-    // The routes below assume `data` is an object of objects. A store file that parses to
-    // null, an array, or a scalar (hand-edited, truncated by an older version, restored
-    // from the wrong place) would otherwise make every GET throw instead of 404.
-    private parseStore(raw: string): { [key: string]: { [key: string]: unknown } } {
+    // store.json is an object of objects. A store file that parses to null, an array, or a
+    // scalar (hand-edited, truncated by an older version, restored from the wrong place) is
+    // ignored instead of becoming a store the routes can't serve. JSON.parse defines every
+    // key as an own property, '__proto__' included, so Object.entries sees all of them.
+    private parseStore(raw: string): StoreData {
         const parsed: unknown = JSON.parse(raw);
+        const store: StoreData = new Map();
         if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
             this.logError(`Ignoring ${STORE_FILENAME}: expected a JSON object at the top level`, false);
-            return {};
+            return store;
         }
 
-        const store: { [key: string]: { [key: string]: unknown } } = {};
         for (const [app, values] of Object.entries(parsed)) {
             if (values === null || typeof values !== 'object' || Array.isArray(values)) {
                 this.logError(`Ignoring app '${app}' in ${STORE_FILENAME}: expected an object of values`, false);
                 continue;
             }
-            store[app] = values as { [key: string]: unknown };
+            store.set(app, new Map(Object.entries(values)));
         }
         return store;
+    }
+
+    // The inverse of parseStore, in the `{ app: { value: ... } }` shape store.json has always
+    // had. Object.fromEntries defines own properties (it never runs the __proto__ setter), so
+    // even a name like '__proto__' is written out as an ordinary key.
+    private serializeStore(): string {
+        return JSON.stringify(Object.fromEntries(
+            Array.from(this.data, ([app, values]) => [app, Object.fromEntries(values)])
+        ));
     }
 
     // Cancels any pending debounce and writes the current data immediately - used at
@@ -175,7 +194,7 @@ export class RestAPI extends Service {
     private async writeStoreFile(): Promise<void> {
         try {
             await mkdir(path.dirname(this.storeFilePath), { recursive: true });
-            await writeFile(this.storeTempFilePath, JSON.stringify(this.data), 'utf8');
+            await writeFile(this.storeTempFilePath, this.serializeStore(), 'utf8');
             await rename(this.storeTempFilePath, this.storeFilePath);
         } catch (err) {
             this.logError(err instanceof Error ? err.message : String(err), false);
