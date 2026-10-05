@@ -22,6 +22,7 @@
     "test:tcpclient": "tsx test/tcp-client-test.ts",
     "test:stressecho": "tsx test/stress-echo-peer.ts",
     "test:vectors": "tsx test/emit-protocol-vectors.ts",
+    "test:docker": "tsx test/docker-image-check.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "gui:test": "ng test --watch=false",
