@@ -40,14 +40,18 @@ export const Config = {
 
     WEBSERVER_HOST: process.env.WEBSERVER_HOST || '0.0.0.0',
     WEBSERVER_PORT: parsePort('WEBSERVER_PORT', process.env.WEBSERVER_PORT, 9011),
-    WEBSERVER_ROOT: path.join(
+    // WEBSERVER_ROOT and DATA_ROOT use path.resolve, not path.join: join glued even an
+    // absolute path onto __dirname, so DATA_ROOT=/var/lib/colibri ended up at
+    // dist/server/var/lib/colibri. A relative path still resolves against __dirname
+    // (dist/server) to the same place as before.
+    WEBSERVER_ROOT: path.resolve(
         __dirname,
         process.env.WEBSERVER_ROOT || '../ui/'
     ),
 
     BASE_URL: process.env.BASE_URL || '',
 
-    DATA_ROOT: path.join(
+    DATA_ROOT: path.resolve(
         __dirname,
         process.env.DATA_ROOT || '../../data/'
     ),
