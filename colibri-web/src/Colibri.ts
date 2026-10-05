@@ -44,6 +44,13 @@ interface ProtocolRejection {
 declare const window: Window | undefined;
 declare const document: Document | undefined;
 
+// The default server: the host that served the page. `typeof` rather than `window?.`, for the
+// reason given in onServerHelloMissing - under Node, `window` was never declared at all, so
+// reading it is a ReferenceError rather than undefined, and that escaped the constructor instead
+// of the ColibriError that says what is actually missing.
+const pageHostname = (): string =>
+    typeof window !== 'undefined' ? ((window.location as Location | undefined)?.hostname ?? '') : '';
+
 export interface Message {
     channel: string;
     command: string;
@@ -73,15 +80,21 @@ export class Colibri {
 
     public constructor(
         public readonly app: string,
-        public readonly server: string = window?.location.hostname ?? '',
+        public readonly server: string = pageHostname(),
         public readonly port: number = 9011
     ) {
         if (server.trim().length <= 0) {
-            throw new ColibriError('Server Address missing or empty!');
+            throw new ColibriError(
+                typeof window === 'undefined'
+                    ? 'Server Address missing or empty! Outside a browser there is no page to take it from, so pass it as the second argument.'
+                    : 'Server Address missing or empty!'
+            );
         }
 
-        if (port < 1 || port > 65535) {
-            throw new ColibriError('Port out of allowed range (0 - 65535)');
+        // Number.isInteger also rejects NaN, which every comparison below lets through - and
+        // `Number(process.argv[3])` is exactly how a sample ends up passing one.
+        if (!Number.isInteger(port) || port < 1 || port > 65535) {
+            throw new ColibriError(`Port out of allowed range (1 - 65535): ${port}`);
         }
 
         this.uri = `${server}:${port}`;

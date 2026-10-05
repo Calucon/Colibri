@@ -17,7 +17,7 @@ import {
     SendMessage,
     UnregisterChannel
 } from '../src/Colibri';
-import { ProtocolMismatchError } from '../src/ColibriError';
+import { ColibriError, ProtocolMismatchError } from '../src/ColibriError';
 
 const connectMock = connect as unknown as Mock;
 
@@ -76,7 +76,35 @@ describe('Colibri constructor', () => {
     });
 
     it.each([0, -1, 65536, 100000])('throws when the port %d is out of range', port => {
-        expect(() => new Colibri('app', 'localhost', port)).toThrow('Port out of allowed range (0 - 65535)');
+        expect(() => new Colibri('app', 'localhost', port)).toThrow('Port out of allowed range (1 - 65535)');
+    });
+
+    // NaN fails every range comparison, so it used to sail through and connect to "host:NaN".
+    it.each([NaN, 9011.5])('throws a ColibriError for the port %d, which is not a whole number', port => {
+        expect(() => new Colibri('app', 'localhost', port)).toThrow(ColibriError);
+    });
+
+    it('accepts the ends of the port range', () => {
+        expect(new Colibri('app', 'localhost', 1).uri).toBe('ws://localhost:1');
+        (Colibri as unknown as { instance: Colibri | null }).instance = null;
+        expect(new Colibri('app', 'localhost', 65535).uri).toBe('ws://localhost:65535');
+    });
+
+    // Under Node there is no `window` at all, so the default used to be a ReferenceError that
+    // escaped the constructor instead of a ColibriError saying what was missing.
+    it('throws a ColibriError, not a ReferenceError, when no server is given outside a browser', () => {
+        expect(typeof window).toBe('undefined');
+        expect(() => new Colibri('app')).toThrow(ColibriError);
+        expect(() => new Colibri('app')).toThrow('pass it as the second argument');
+    });
+
+    it('defaults the server to the host that served the page in a browser', () => {
+        vi.stubGlobal('window', { location: { hostname: 'colibri.example.org' } });
+
+        const c = new Colibri('app');
+
+        expect(c.server).toBe('colibri.example.org');
+        expect(c.uri).toBe('ws://colibri.example.org:9011');
     });
 
     it('builds a ws:// uri when the server has no scheme', () => {
