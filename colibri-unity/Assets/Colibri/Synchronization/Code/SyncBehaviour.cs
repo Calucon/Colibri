@@ -2,7 +2,9 @@ using UnityEngine;
 using System.Reflection;
 using System.Collections.Generic;
 using System;
+#if !ENABLE_IL2CPP
 using System.Linq.Expressions;
+#endif
 using Newtonsoft.Json.Linq;
 using System.Linq;
 using System.Threading.Tasks;
@@ -142,9 +144,11 @@ namespace HCIKonstanz.Colibri.Synchronization
             _syncedAttributes.Add(name, attribute);
         }
 
-        // Explicit per-type dispatch rather than MakeGenericMethod: it keeps every instantiation
-        // visible to the AOT compiler, and it is the one place that can tell a student up front
-        // that their [Sync] member has a type Colibri cannot put on the wire.
+        // Explicit per-type dispatch rather than MakeGenericMethod: every BuildAttribute<TValue>,
+        // and with it SyncedAttribute<TValue>, ChangeTracker<TValue> and the Func/Action delegate
+        // types, is a closed instantiation IL2CPP can see and compile ahead of time. It is also the
+        // one place that can tell a student up front that their [Sync] member has a type Colibri
+        // cannot put on the wire.
         private static SyncedAttribute BuildAttribute(string name, Type valueType, MemberInfo member)
         {
             if (valueType == typeof(bool)) return BuildAttribute<bool>(name, member);
@@ -171,6 +175,92 @@ namespace HCIKonstanz.Colibri.Synchronization
 
         private static SyncedAttribute BuildAttribute<TValue>(string name, MemberInfo member)
         {
+            if (member is PropertyInfo property)
+            {
+                if (property.GetGetMethod(true) == null || property.GetSetMethod(true) == null)
+                {
+                    Debug.LogError($"Colibri: cannot synchronize '{typeof(T).Name}.{member.Name}' - a [Sync] property needs both a getter and a setter.");
+                    return null;
+                }
+            }
+            else if (((FieldInfo)member).IsInitOnly)
+            {
+                Debug.LogError($"Colibri: cannot synchronize '{typeof(T).Name}.{member.Name}' - a [Sync] field cannot be readonly.");
+                return null;
+            }
+
+            Func<T, TValue> getter;
+            Action<T, TValue> setter;
+            try
+            {
+#if ENABLE_IL2CPP
+                CreateReflectionAccessors<TValue>(member, out getter, out setter);
+#else
+                CreateCompiledAccessors<TValue>(member, out getter, out setter);
+#endif
+            }
+            catch (Exception e)
+            {
+                // Once per member and type, at startup - but an exception here would escape from
+                // the first Awake and leave that object half set up, so it is reported instead.
+                Debug.LogError($"Colibri: cannot synchronize '{typeof(T).Name}.{member.Name}' - {e.GetType().Name}: {e.Message}");
+                return null;
+            }
+
+            return new SyncedAttribute<TValue>
+            {
+                Name = name,
+                PropertyType = typeof(TValue),
+                Getter = getter,
+                Setter = setter
+            };
+        }
+
+        /// <summary>
+        /// Accessors for IL2CPP, which has no JIT: no expression trees, nothing compiled at runtime.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Under IL2CPP, <c>LambdaExpression.Compile()</c> does not fail - it quietly falls back to
+        /// the System.Linq.Expressions interpreter, which builds its delegate through
+        /// <c>MakeGenericMethod</c> at runtime. That is slow on every call, and for value types it
+        /// depends on generic code IL2CPP may not have generated. So under ENABLE_IL2CPP:
+        /// </para>
+        /// <para>
+        /// A property gets open-instance delegates bound straight to its get and set methods - the
+        /// same typed call a compiled lambda makes, so the per-frame poll stays free of allocation.
+        /// </para>
+        /// <para>
+        /// A field goes through <c>FieldInfo.GetValue</c>/<c>SetValue</c>, as it did in 1.x. That
+        /// boxes a value-type field on every poll; there is no allocation-free way to read a field
+        /// through reflection without a JIT. A hot value-type member is cheaper as a property.
+        /// </para>
+        /// <para>
+        /// Compiled on every backend so the test suite can run it in the Editor, which is always
+        /// Mono. The member must already have been validated by <see cref="BuildAttribute{TValue}"/>.
+        /// </para>
+        /// </remarks>
+        internal static void CreateReflectionAccessors<TValue>(MemberInfo member, out Func<T, TValue> getter, out Action<T, TValue> setter)
+        {
+            if (member is PropertyInfo property)
+            {
+                getter = (Func<T, TValue>)Delegate.CreateDelegate(typeof(Func<T, TValue>), property.GetGetMethod(true));
+                setter = (Action<T, TValue>)Delegate.CreateDelegate(typeof(Action<T, TValue>), property.GetSetMethod(true));
+                return;
+            }
+
+            var field = (FieldInfo)member;
+            getter = target => (TValue)field.GetValue(target);
+            setter = (target, value) => field.SetValue(target, value);
+        }
+
+#if !ENABLE_IL2CPP
+        /// <summary>
+        /// Accessors for Mono, compiled from expression trees: typed for properties and fields
+        /// alike, so nothing boxes.
+        /// </summary>
+        private static void CreateCompiledAccessors<TValue>(MemberInfo member, out Func<T, TValue> getter, out Action<T, TValue> setter)
+        {
             var exTarget = Expression.Parameter(typeof(T), "target");
             var exValue = Expression.Parameter(typeof(TValue), "value");
 
@@ -180,38 +270,20 @@ namespace HCIKonstanz.Colibri.Synchronization
             if (member is PropertyInfo property)
             {
                 // see: https://stackoverflow.com/a/17669142/4090817
-                var getMethod = property.GetGetMethod(true);
-                var setMethod = property.GetSetMethod(true);
-                if (getMethod == null || setMethod == null)
-                {
-                    Debug.LogError($"Colibri: cannot synchronize '{typeof(T).Name}.{member.Name}' - a [Sync] property needs both a getter and a setter.");
-                    return null;
-                }
-
-                exGet = Expression.Call(exTarget, getMethod);
-                exSet = Expression.Call(exTarget, setMethod, exValue);
+                exGet = Expression.Call(exTarget, property.GetGetMethod(true));
+                exSet = Expression.Call(exTarget, property.GetSetMethod(true), exValue);
             }
             else
             {
                 var field = (FieldInfo)member;
-                if (field.IsInitOnly)
-                {
-                    Debug.LogError($"Colibri: cannot synchronize '{typeof(T).Name}.{member.Name}' - a [Sync] field cannot be readonly.");
-                    return null;
-                }
-
                 exGet = Expression.Field(exTarget, field);
                 exSet = Expression.Assign(Expression.Field(exTarget, field), exValue);
             }
 
-            return new SyncedAttribute<TValue>
-            {
-                Name = name,
-                PropertyType = typeof(TValue),
-                Getter = Expression.Lambda<Func<T, TValue>>(exGet, exTarget).Compile(),
-                Setter = Expression.Lambda<Action<T, TValue>>(exSet, exTarget, exValue).Compile()
-            };
+            getter = Expression.Lambda<Func<T, TValue>>(exGet, exTarget).Compile();
+            setter = Expression.Lambda<Action<T, TValue>>(exSet, exTarget, exValue).Compile();
         }
+#endif
 
 
         public string Id;
