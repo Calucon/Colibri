@@ -56,6 +56,14 @@ export class WebServer extends Service {
             res.sendFile(path.join(this.webRoot, 'index.html'));
         });
 
+        // Last, so it handles the errors of every route and middleware above. Express's
+        // default handler writes the stack trace, absolute paths into this install included,
+        // into the response whenever NODE_ENV isn't "production" - and the Docker image
+        // doesn't set it.
+        this.app.use((err: unknown, req: express.Request, res: express.Response, next: express.NextFunction) => {
+            this.handleError(err, req, res, next);
+        });
+
         // lock server so no more route changes are allowed
         this.isRunning = true;
 
@@ -75,6 +83,31 @@ export class WebServer extends Service {
             this.server.close();
             this.isRunning = false;
         }
+    }
+
+    private handleError(err: unknown, req: express.Request, res: express.Response, next: express.NextFunction): void {
+        // Too late to answer with anything else; express's own handler closes the connection.
+        if (res.headersSent) {
+            next(err);
+            return;
+        }
+
+        // Client errors arrive as http-errors with a 4xx status: malformed JSON (400), a body
+        // over the limit (413), an undecodable URL (400), a missing file (404). `expose` marks
+        // the ones whose message is meant for the client; send's file errors, which name the
+        // path on disk, are not.
+        const { status, statusCode, expose, message } = (err ?? {}) as { status?: unknown; statusCode?: unknown; expose?: unknown; message?: unknown };
+        const clientStatus = status ?? statusCode;
+        if (typeof clientStatus === 'number' && clientStatus >= 400 && clientStatus < 500) {
+            this.logWarning(`${req.method} ${req.originalUrl} answered ${clientStatus}: ${typeof message === 'string' ? message : String(err)}`);
+            res.status(clientStatus).json({
+                error: expose === true && typeof message === 'string' ? message : (http.STATUS_CODES[clientStatus] ?? 'Bad request')
+            });
+            return;
+        }
+
+        this.logError(`${req.method} ${req.originalUrl} failed: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`, false);
+        res.status(500).json({ error: 'Internal server error' });
     }
 
     public addRoute(

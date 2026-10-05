@@ -5,6 +5,8 @@ import * as http from 'http';
 import { AddressInfo } from 'net';
 import { tmpdir } from 'os';
 import * as path from 'path';
+import { Subscription } from 'rxjs';
+import { LogLevel, LogMessage, Service } from '../../src/server/modules/core/index.js';
 import { WebServer } from '../../src/server/modules/web/web-server.js';
 import { RestAPI } from '../../src/server/modules/web/rest-api.js';
 import { MAX_FRAME_LENGTH } from '../../src/server/modules/networking/protocol.js';
@@ -18,8 +20,13 @@ describe('WebServer over HTTP', () => {
     let restApi: RestAPI;
     let httpServer: http.Server;
     let baseUrl: string;
+    let logs: LogMessage[];
+    let logSubscription: Subscription;
 
     beforeEach(async () => {
+        logs = [];
+        logSubscription = Service.output$.subscribe(log => logs.push(log));
+
         dataPath = await mkdtemp(path.join(tmpdir(), 'colibri-web-server-data-'));
         webRoot = await mkdtemp(path.join(tmpdir(), 'colibri-web-server-root-'));
         await writeFile(path.join(webRoot, 'index.html'), '<!doctype html><title>Colibri</title>', 'utf8');
@@ -27,6 +34,10 @@ describe('WebServer over HTTP', () => {
         webServer = new WebServer('127.0.0.1', 0, webRoot, '');
         restApi = new RestAPI(dataPath, webServer);
         await restApi.init();
+        // A route with a bug in it, for the error handling tests.
+        webServer.addApi('/fails', () => {
+            throw new Error(`secret detail in ${webRoot}`);
+        });
 
         httpServer = webServer.start();
         await once(httpServer, 'listening');
@@ -34,6 +45,7 @@ describe('WebServer over HTTP', () => {
     });
 
     afterEach(async () => {
+        logSubscription.unsubscribe();
         const closed = once(httpServer, 'close');
         webServer.stop();
         httpServer.closeAllConnections();
@@ -127,6 +139,72 @@ describe('WebServer over HTTP', () => {
 
             await expect(unityGet('huge')).resolves.toMatchObject({ status: 404 });
             expect((await unityPut('small', '1')).status).toBe(201);
+        });
+    });
+
+    // Express's default error handler wrote the stack trace, with absolute paths into the
+    // install, into the response whenever NODE_ENV wasn't "production" - as in the image.
+    describe('error responses', () => {
+        const expectNoInternals = (text: string) => {
+            expect(text).not.toMatch(/\n\s+at /);
+            expect(text).not.toContain(webRoot);
+            expect(text).not.toContain(process.cwd());
+            expect(text).not.toContain('node_modules');
+        };
+
+        const read = async (response: Response) => {
+            const text = await response.text();
+            expect(response.headers.get('content-type')).toMatch(/^application\/json/);
+            return { status: response.status, text, body: JSON.parse(text) as unknown };
+        };
+
+        it('answers an error thrown by a route with a generic JSON 500, and logs it', async () => {
+            const { status, text, body } = await read(await fetch(`${baseUrl}/api/fails`));
+
+            expect(status).toBe(500);
+            expect(body).toEqual({ error: 'Internal server error' });
+            expect(text).not.toContain('secret detail');
+            expectNoInternals(text);
+
+            const logged = logs.filter(l => l.origin === 'WebServer' && l.level === LogLevel.Error);
+            expect(logged).toHaveLength(1);
+            expect(logged[0]!.message).toContain('GET /api/fails');
+            expect(logged[0]!.message).toContain('secret detail');
+        });
+
+        it('keeps the status of a client error, with only the message meant for the client', async () => {
+            const malformed = await read(await fetch(storeUrl('UnityApp', 'x'), {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: '{not json',
+            }));
+            expect(malformed.status).toBe(400);
+            expect(malformed.body).toEqual({ error: expect.stringMatching(/JSON/) });
+            expectNoInternals(malformed.text);
+
+            const tooLarge = await read(await fetch(storeUrl('UnityApp', 'x'), {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify('x'.repeat(MAX_FRAME_LENGTH)),
+            }));
+            expect(tooLarge.status).toBe(413);
+            expect(tooLarge.body).toEqual({ error: 'request entity too large' });
+
+            const undecodable = await read(await fetch(`${baseUrl}/api/store/%E0%A4%A/x`));
+            expect(undecodable.status).toBe(400);
+            expectNoInternals(undecodable.text);
+
+            expect(logs.filter(l => l.origin === 'WebServer' && l.level === LogLevel.Warn)).toHaveLength(3);
+        });
+
+        it('does not name the path on disk when the admin UI files are missing', async () => {
+            await rm(path.join(webRoot, 'index.html'));
+
+            const { status, text, body } = await read(await fetch(`${baseUrl}/log`));
+
+            expect(status).toBe(404);
+            expect(body).toEqual({ error: 'Not Found' });
+            expectNoInternals(text);
         });
     });
 });
