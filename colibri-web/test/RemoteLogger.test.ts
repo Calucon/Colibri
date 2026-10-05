@@ -149,6 +149,52 @@ describe('RemoteLogger message stringification', () => {
             JSON.parse(message());
         }).not.toThrow();
     });
+
+    // JSON.stringify throws on a BigInt, and that used to come straight out of console.log: an
+    // application crashed for logging a value the console itself prints without complaint.
+    it('forwards a BigInt instead of throwing out of console.log', () => {
+        const original = console.log;
+        new RemoteLogger();
+
+        expect(() => {
+            console.log({ id: 12345678901234567890n });
+        }).not.toThrow();
+
+        expect(original).toHaveBeenCalled();
+        expect(JSON.parse(message())).toEqual({ id: '12345678901234567890' });
+    });
+
+    it('falls back to String() for a value JSON cannot encode at all', () => {
+        new RemoteLogger();
+        const unencodable = {
+            toJSON() {
+                throw new Error('not today');
+            },
+            toString() {
+                return 'the unencodable thing';
+            }
+        };
+
+        expect(() => {
+            console.warn('before', unencodable);
+        }).not.toThrow();
+
+        expect(message()).toBe('before,the unencodable thing');
+    });
+
+    it('never throws out of console.* even when forwarding fails outright', () => {
+        const originalError = console.error;
+        new RemoteLogger();
+        emit.mockImplementation(() => {
+            throw new Error('socket is broken');
+        });
+
+        expect(() => {
+            console.info('still printed');
+        }).not.toThrow();
+
+        expect(originalError).toHaveBeenCalledWith('RemoteLogger: could not forward a log line.', expect.any(Error));
+    });
 });
 
 describe('RemoteLogger before new Colibri()', () => {

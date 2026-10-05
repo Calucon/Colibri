@@ -74,6 +74,10 @@ export class RemoteLogger {
             const colibri = Colibri.getInstance(false);
             if (colibri) colibri.sendMessage('log', level, message);
             else this.keepUntilColibriExists(level, message);
+        } catch (error) {
+            // Forwarding is a side effect of logging. It must never be the reason a console.log
+            // throws into the code that called it - the line itself has already been printed.
+            this.consoleError('RemoteLogger: could not forward a log line.', error);
         } finally {
             this.forwarding = false;
         }
@@ -130,20 +134,28 @@ const stringify = (obj: unknown): string => {
     if (typeof obj === 'string') return obj;
 
     const cache: unknown[] = [];
-    const str = JSON.stringify(
-        obj,
-        (_, value: unknown) => {
-            if (typeof value === 'object' && value !== null) {
-                if (cache.indexOf(value) !== -1) {
-                    // Circular reference found, discard key
-                    return;
+    let str: string;
+    try {
+        str = JSON.stringify(
+            obj,
+            (_, value: unknown) => {
+                // JSON has no BigInt, and JSON.stringify throws on one rather than skipping it.
+                if (typeof value === 'bigint') return value.toString();
+                if (typeof value === 'object' && value !== null) {
+                    if (cache.indexOf(value) !== -1) {
+                        // Circular reference found, discard key
+                        return;
+                    }
+                    // Store value in our collection
+                    cache.push(value);
                 }
-                // Store value in our collection
-                cache.push(value);
-            }
-            return value;
-        },
-        2
-    );
+                return value;
+            },
+            2
+        );
+    } catch {
+        // Whatever else JSON cannot encode, such as a toJSON() that throws: say what it is.
+        str = String(obj);
+    }
     return str;
 };
