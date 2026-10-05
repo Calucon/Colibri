@@ -94,10 +94,11 @@ export class WebServer extends Service {
             return;
         }
 
-        // Client errors arrive as http-errors with a 4xx status: malformed JSON (400), a body
-        // over the limit (413), an undecodable URL (400), a missing file (404). `expose` marks
-        // the ones whose message is meant for the client; send's file errors, which name the
-        // path on disk, are not.
+        // Client errors carry a 4xx status: malformed JSON (400) and a body over the limit
+        // (413) from body-parser, a missing file (404) from send, an undecodable URL (400)
+        // from the router. http-errors' `expose` marks the ones whose message is meant for
+        // the client; send's file errors, which name the path on disk, are not, and neither
+        // is the router's URIError, so those get the plain status text.
         const { status, statusCode, expose, message } = (err ?? {}) as { status?: unknown; statusCode?: unknown; expose?: unknown; message?: unknown };
         const clientStatus = status ?? statusCode;
         if (typeof clientStatus === 'number' && clientStatus >= 400 && clientStatus < 500) {
