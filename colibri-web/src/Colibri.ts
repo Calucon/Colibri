@@ -95,9 +95,20 @@ export class Colibri {
     public readonly messages = this.messageSubject.asObservable();
     private readonly protocolMismatchSubject = new Subject<ProtocolMismatchError>();
     /**
-     * Emits once if the server refuses this client over a protocol version mismatch. The
-     * connection is dead at that point and will not be retried, so this is the only
-     * notification an application gets; without subscribing, the error is still logged.
+     * Reports that this client and the server do not speak the same wire protocol. There are two
+     * kinds, told apart by {@link ProtocolMismatchError.fatal `fatal`}, and each is emitted **at
+     * most once per instance**:
+     *
+     * - `fatal: true` - the server **refused** this client. The connection is dead and will not
+     *   be retried, so this is the only notification an application gets.
+     * - `fatal: false` - the server did not announce itself within 5s of connecting, so it is
+     *   **suspected** to predate colibri-server 2.0.0. The connection stays up and keeps working;
+     *   this is a warning to upgrade the server, not a reason to tear anything down.
+     *
+     * A suspicion can be followed by a refusal (say, the server is replaced by a newer one while
+     * this client is connected), but never the other way round. Nothing is replayed to a late
+     * subscriber, so subscribe right after construction; either kind is also logged, so the
+     * error is not lost without a subscriber.
      */
     public readonly protocolMismatch = this.protocolMismatchSubject.asObservable();
     public readonly uri: string;
@@ -107,6 +118,8 @@ export class Colibri {
     // Once per instance, not once per connection: a server does not get newer between two
     // reconnects, and repeating the warning on every one would bury it in its own noise.
     private hasReportedOldServer = false;
+    // Likewise for a refusal, which is otherwise reported once per `protocol::rejected` received.
+    private hasReportedRefusal = false;
 
     public constructor(
         public readonly app: string,
@@ -249,6 +262,10 @@ export class Colibri {
         // buries the one log line explaining what is wrong.
         this.socket.io.reconnection(false);
         this.socket.disconnect();
+
+        // A second refusal can only repeat the first, so it still hangs up but says nothing.
+        if (this.hasReportedRefusal) return;
+        this.hasReportedRefusal = true;
 
         const serverVersion = rejection?.serverVersion ?? 'unknown';
         const error = new ProtocolMismatchError(

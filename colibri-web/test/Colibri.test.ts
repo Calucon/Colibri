@@ -442,6 +442,24 @@ describe('protocol version handshake', () => {
         errorSpy.mockRestore();
     });
 
+    it('reports a refusal once, however many times the server sends it', () => {
+        const client = new Colibri('app', 'localhost', 9011);
+        const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+        const seen: ProtocolMismatchError[] = [];
+        client.protocolMismatch.subscribe(e => seen.push(e));
+
+        const onAny = getAnyHandler(fakeSocket.onAny);
+        for (let i = 0; i < 3; i++) {
+            onAny('colibri', { command: 'protocol::rejected', payload: { serverVersion: '9' } });
+        }
+
+        expect(seen).toHaveLength(1);
+        expect(seen[0].fatal).toBe(true);
+        expect(errorSpy).toHaveBeenCalledTimes(1);
+
+        errorSpy.mockRestore();
+    });
+
     it('survives a rejection payload with nothing useful in it', async () => {
         const client = new Colibri('app', 'localhost', 9011);
         const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
@@ -625,6 +643,30 @@ describe('detecting a server that predates the version check', () => {
         vi.advanceTimersByTime(TIMEOUT_MS * 2);
 
         expect(seen).toEqual([]);
+    });
+
+    // Each kind at most once, but the two are independent: a suspicion says nothing about whether
+    // a refusal can follow, e.g. once the old server is replaced by one speaking another version.
+    it('reports a suspicion and a later refusal once each', () => {
+        const client = new Colibri('app', 'localhost', 9011);
+        const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+        const seen: ProtocolMismatchError[] = [];
+        client.protocolMismatch.subscribe(e => seen.push(e));
+
+        for (let i = 0; i < 2; i++) {
+            connectSocket();
+            vi.advanceTimersByTime(TIMEOUT_MS);
+        }
+        for (let i = 0; i < 2; i++) {
+            getAnyHandler(fakeSocket.onAny)('colibri', {
+                command: 'protocol::rejected',
+                payload: { serverVersion: '9', clientVersion: PROTOCOL_VERSION }
+            });
+        }
+
+        expect(seen.map(e => e.fatal)).toEqual([false, true]);
+
+        errorSpy.mockRestore();
     });
 
     it('does not follow an explicit refusal with a contradictory old-server guess', () => {
