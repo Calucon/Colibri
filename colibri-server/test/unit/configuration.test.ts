@@ -1,4 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
+import { mkdtemp, rm, writeFile } from 'fs/promises';
+import { tmpdir } from 'os';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -46,5 +48,25 @@ describe('Config', () => {
             expect(config.DATA_ROOT).toBe(path.resolve(CONFIG_DIR, '../../data'));
             expect(config.WEBSERVER_ROOT).toBe(path.resolve(CONFIG_DIR, '../ui'));
         });
+    });
+
+    it('loads .env without printing dotenv\'s banner and tip', async () => {
+        // dotenv reads .env from the working directory.
+        const cwd = await mkdtemp(path.join(tmpdir(), 'colibri-config-'));
+        try {
+            await writeFile(path.join(cwd, '.env'), 'VOICE_SAMPLING_RATE=44100\n', 'utf8');
+            vi.spyOn(process, 'cwd').mockReturnValue(cwd);
+            const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+            const config = await loadConfig({ DOTENV_CONFIG_QUIET: undefined, VOICE_SAMPLING_RATE: undefined });
+
+            expect(config.VOICE_SAMPLING_RATE).toBe(44100);
+            const printed = log.mock.calls.map(args => args.map(String).join(' '));
+            expect(printed.filter(line => /dotenv|injected env|tip:/i.test(line))).toEqual([]);
+        } finally {
+            // dotenv wrote the value into process.env itself, outside of stubEnv
+            delete process.env.VOICE_SAMPLING_RATE;
+            await rm(cwd, { recursive: true, force: true });
+        }
     });
 });

@@ -2,8 +2,9 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 
-// automatically load .env file
-dotenv.config();
+// automatically load .env file. Quietly: dotenv 17 otherwise prints an "injected env"
+// line with a rotating advertising tip on every start, docker logs included.
+dotenv.config({ quiet: true });
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
