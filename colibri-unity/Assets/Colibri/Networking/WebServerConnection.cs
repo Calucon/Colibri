@@ -81,7 +81,14 @@ namespace HCIKonstanz.Colibri.Networking
 
         public delegate void MessageAction(string channel, string command, JToken payload);
         public event MessageAction OnMessageReceived;
+
+        /// <summary>
+        /// Raised on the main thread once the server has started talking to this client - its
+        /// first frame, not merely an accepted TCP connection. Something that accepts and then
+        /// says nothing, or speaks a framing this client cannot read, never raises it.
+        /// </summary>
         public event Action OnConnected;
+
         public event Action OnDisconnected;
 
         // Instance, not static: static state survives Enter Play Mode with domain reload
@@ -133,6 +140,12 @@ namespace HCIKonstanz.Colibri.Networking
         // on any other thread may be reading it to await.
         private volatile TaskCompletionSource<bool> _connectedGate = NewGate();
         private volatile bool _isGateOpen;
+
+        /// <summary>
+        /// Completes when <see cref="Status"/> becomes <see cref="ConnectionStatus.Connected"/>,
+        /// i.e. once the server has sent its first frame. While disconnected it is a fresh, pending
+        /// task again. Cancelled when this component is disabled.
+        /// </summary>
         public Task Connected => _connectedGate.Task;
 
         private static TaskCompletionSource<bool> NewGate()
@@ -181,6 +194,12 @@ namespace HCIKonstanz.Colibri.Networking
         // the server simply is not running - would count towards the framing hint and have this
         // client blaming a version mismatch for a server that is switched off.
         private volatile bool _reachedHandshake;
+
+        // Session-scoped: set as soon as the TCP connection is accepted, cleared when the session
+        // ends or the watchdog in Update() fires. Covers the stretch before the first frame too:
+        // something that accepts the connection and then never says a word would otherwise hold a
+        // session in Connecting forever, now that Connected waits for the server to speak.
+        private volatile bool _isWatchdogArmed;
 
         // The setter is a read-modify-write over four fields, and the connection loop and
         // Update()'s heartbeat watchdog can both reach it at the same time. Interleaved, the two
@@ -290,12 +309,23 @@ namespace HCIKonstanz.Colibri.Networking
 
             DeliverReceivedMessages();
 
-            if (Status == ConnectionStatus.Connected && MillisSinceLastHeartbeat() > HEARTBEAT_TIMEOUT_THRESHOLD_MS)
+            if (_isWatchdogArmed && MillisSinceLastHeartbeat() > HEARTBEAT_TIMEOUT_THRESHOLD_MS)
             {
-                Debug.Log("Colibri: no heartbeat from the server, dropping the connection");
-                // Flip the status first so this does not re-fire every frame while the session
-                // unwinds, then fault the receive loop into the reconnect backoff below.
-                Status = ConnectionStatus.Disconnected;
+                // Disarmed first so this does not re-fire every frame while the session unwinds.
+                _isWatchdogArmed = false;
+
+                if (Status == ConnectionStatus.Connected)
+                {
+                    Debug.Log("Colibri: no heartbeat from the server, dropping the connection");
+                    Status = ConnectionStatus.Disconnected;
+                }
+                else
+                {
+                    Debug.Log($"Colibri: {_serverAddress}:{_tcpPort} accepted the connection but has not sent anything in "
+                        + $"{HEARTBEAT_TIMEOUT_THRESHOLD_MS / 1000f:0.#} s, dropping it");
+                }
+
+                // Faults the receive loop into the reconnect backoff.
                 CloseSocket(_socket);
             }
         }
@@ -469,6 +499,7 @@ namespace HCIKonstanz.Colibri.Networking
                 }
                 finally
                 {
+                    _isWatchdogArmed = false;
                     CloseSocket(_socket);
                     _socket = null;
                     Status = mismatched ? ConnectionStatus.ProtocolMismatch : ConnectionStatus.Disconnected;
@@ -542,30 +573,50 @@ namespace HCIKonstanz.Colibri.Networking
                 await socket.ConnectAsync(host, port).ConfigureAwait(false);
                 token.ThrowIfCancellationRequested();
 
+                // Accepted, but nothing is known about what accepted it yet. The watchdog gives
+                // it as long to say something as a connected server gets between heartbeats.
                 StampLiveness();
+                _isWatchdogArmed = true;
+
                 await SendFrame(socket, FrameCodec.EncodeHandshake(CLIENT_VERSION, app, _hostname), token)
                     .ConfigureAwait(false);
                 // Past this point the connection was accepted and this client has spoken, so a
                 // session that now ends without a frame is a statement about the server.
                 _reachedHandshake = true;
 
-                // The app name is named explicitly: a typo in it produces a perfectly healthy
-                // connection on which no other client is ever seen.
-                Debug.Log($"Colibri: connected to {host}:{port} as app '{app}'. Only clients using the same App Name can see each other.");
-
-                // Drain anything queued during the outage before opening the gate, so retried
-                // messages stay ahead of new ones.
-                await FlushQueue(socket, token).ConfigureAwait(false);
-                Status = ConnectionStatus.Connected;
-
-                await ReceiveLoop(socket, token).ConfigureAwait(false);
+                await ReceiveLoop(socket, host, port, app, token).ConfigureAwait(false);
             }
         }
 
-        private async Task ReceiveLoop(Socket socket, CancellationToken token)
+        /// <summary>
+        /// The session is <see cref="ConnectionStatus.Connected"/> from the first frame the server
+        /// sends, not from the moment the TCP connection opened. Anything can accept a connection:
+        /// a 1.x server does, and then speaks a framing this client cannot read; so does a port
+        /// that is not Colibri at all. Counting those as connections reset the reconnect backoff on
+        /// every attempt - it never grew past 500 ms - and fired OnConnected, and flushed the queued
+        /// messages, into a session that was about to fail. A server that says nothing at all is
+        /// dropped by the watchdog in <see cref="Update"/>; the server heartbeats every 100 ms, so
+        /// a real one is never kept waiting.
+        /// </summary>
+        private async Task BecomeConnected(Socket socket, string host, int port, string app, CancellationToken token)
+        {
+            StampLiveness();
+
+            // The app name is named explicitly: a typo in it produces a perfectly healthy
+            // connection on which no other client is ever seen.
+            Debug.Log($"Colibri: connected to {host}:{port} as app '{app}'. Only clients using the same App Name can see each other.");
+
+            // Drain anything queued during the outage before opening the gate, so retried
+            // messages stay ahead of new ones.
+            await FlushQueue(socket, token).ConfigureAwait(false);
+            Status = ConnectionStatus.Connected;
+        }
+
+        private async Task ReceiveLoop(Socket socket, string host, int port, string app, CancellationToken token)
         {
             var reader = new FrameReader();
             var buffer = new byte[RECEIVE_BUFFER_SIZE];
+            var isConnected = false;
 
             while (!token.IsCancellationRequested)
             {
@@ -579,9 +630,12 @@ namespace HCIKonstanz.Colibri.Networking
 
                 _receiveThreadId = Thread.CurrentThread.ManagedThreadId;
 
-                // The server heartbeats every 100 ms whether or not there is traffic, so any
-                // received byte is proof of life.
-                StampLiveness();
+                // Once the server has proven itself, any received byte is proof of life: it
+                // heartbeats every 100 ms whether or not there is traffic, and a large message can
+                // take longer than that to arrive. Before then only a decoded frame counts, or
+                // something trickling bytes that never form one would hold the session open.
+                if (isConnected)
+                    StampLiveness();
 
                 var frames = ReadFrames(reader, buffer, received);
                 if (frames.Count > 0)
@@ -590,6 +644,19 @@ namespace HCIKonstanz.Colibri.Networking
                 for (var i = 0; i < frames.Count; i++)
                 {
                     var frame = frames[i];
+
+                    // Checked before the session counts as connected: a server that refuses this
+                    // client says so in its very first frame, and that must not first be reported
+                    // as a connection.
+                    if (frame.Type == FrameType.Message && frame.Channel == COLIBRI_CHANNEL && frame.Command == PROTOCOL_REJECTED_COMMAND)
+                        throw BuildProtocolMismatch(frame.Payload);
+
+                    if (!isConnected)
+                    {
+                        isConnected = true;
+                        await BecomeConnected(socket, host, port, app, token).ConfigureAwait(false);
+                    }
+
                     switch (frame.Type)
                     {
                         case FrameType.Heartbeat:
@@ -603,13 +670,11 @@ namespace HCIKonstanz.Colibri.Networking
                             break;
 
                         case FrameType.Message:
-                            // Intercepted before the queue: a refusal is Colibri's own plumbing,
-                            // and delivering it as an ordinary message would leave every
-                            // application to recognize it for itself. Throws, so the session
-                            // unwinds through the one place that decides whether to retry.
-                            if (frame.Channel == COLIBRI_CHANNEL && frame.Command == PROTOCOL_REJECTED_COMMAND)
-                                throw BuildProtocolMismatch(frame.Payload);
-
+                            // A refusal never gets here - it is intercepted above, before the
+                            // queue: it is Colibri's own plumbing, and delivering it as an ordinary
+                            // message would leave every application to recognize it for itself.
+                            // It throws, so the session unwinds through the one place that decides
+                            // whether to retry.
                             EnqueueReceived(frame.Channel, frame.Command, ParsePayload(frame.Payload));
                             break;
 

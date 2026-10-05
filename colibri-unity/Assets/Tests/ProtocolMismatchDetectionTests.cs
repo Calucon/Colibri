@@ -28,6 +28,7 @@ namespace HCIKonstanz.Colibri.E2E
     public class ProtocolMismatchDetectionTests
     {
         private FakeV1Server _fakeServer;
+        private FakeColibriServer _scriptedServer;
 
         [UnitySetUp]
         public IEnumerator ReplaceTheConnection()
@@ -41,6 +42,8 @@ namespace HCIKonstanz.Colibri.E2E
         {
             _fakeServer?.Dispose();
             _fakeServer = null;
+            _scriptedServer?.Dispose();
+            _scriptedServer = null;
 
             // Put the singleton back the way the rest of the suite expects to find it: pointed at
             // the real server and freshly built, so the next fixture's Instance does not hand back
@@ -68,8 +71,9 @@ namespace HCIKonstanz.Colibri.E2E
             _fakeServer = FakeV1Server.Start();
             yield return PointConnectionAt(_fakeServer.Port);
 
-            // Three attempts at 500/1000/2000 ms of backoff, plus room for a loaded batchmode
-            // editor to get round to them.
+            // Three attempts, 500 ms and then 1000 ms apart - about 1.5 s - plus room for a loaded
+            // batchmode editor to get round to them. The backoff only grows because none of these
+            // sessions counts as a connection; see TheBackoffGrowsAgainstAServerThatAcceptsAndHangsUp.
             yield return E2EServer.WaitUntil(
                 () => Connection.SuspectedProtocolMismatch != null,
                 "The client never suspected a protocol mismatch against a server speaking v1 framing",
@@ -105,6 +109,114 @@ namespace HCIKonstanz.Colibri.E2E
             Assert.That(Connection.SuspectedProtocolMismatch, Is.Null,
                 "'Connection refused' is a server that is switched off, not a version problem");
             Assert.That(Connection.Status, Is.Not.EqualTo(ConnectionStatus.Connected));
+        }
+
+
+        /*
+         *  What counts as a connection.
+         *
+         *  Connected used to mean "the TCP connection opened and the handshake went out". Anything
+         *  accepts a connection - a 1.x server, a port that is not Colibri at all - so every doomed
+         *  attempt counted as a success: it reset the backoff, which therefore never grew past
+         *  500 ms, fired OnConnected and flushed the queued messages into a session about to fail.
+         *  Against a 1.x server the client flapped between Connected and Disconnected about 1.6
+         *  times a second. It now means the server has sent a frame.
+         */
+
+        /// <summary>
+        /// A server that takes the connection, reads the handshake and hangs up without a word.
+        /// None of those sessions is a connection, so the backoff keeps doubling and the third one
+        /// in a row is enough to suspect a mismatch.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator TheBackoffGrowsAgainstAServerThatAcceptsAndHangsUp()
+        {
+            IgnoreTheExpectedFailures();
+
+            _scriptedServer = FakeColibriServer.Start(FakeColibriServer.Behaviour.HangUpAfterHandshake);
+            yield return PointConnectionAt(_scriptedServer.Port);
+
+            var onConnected = 0;
+            var everConnected = false;
+            Connection.OnConnected += () => onConnected++;
+
+            var sessionsWhenSuspected = -1;
+            yield return E2EServer.WaitUntil(() =>
+                {
+                    everConnected |= Connection.Status == ConnectionStatus.Connected;
+                    if (sessionsWhenSuspected < 0 && Connection.SuspectedProtocolMismatch != null)
+                        sessionsWhenSuspected = _scriptedServer.Accepted;
+                    return _scriptedServer.Accepted >= 4;
+                },
+                "The client stopped retrying a server that hangs up",
+                20f);
+
+            Assert.That(sessionsWhenSuspected, Is.EqualTo(3),
+                "The mismatch should be suspected after the third session in a row ended without a frame, and not before");
+
+            // Lower bounds only: a delay never fires early, but a loaded editor can make it late.
+            // The 50 ms of slack is for timer granularity, not for scheduling.
+            var accepted = _scriptedServer.AcceptTimes;
+            Assert.That(accepted[1] - accepted[0], Is.GreaterThanOrEqualTo(450), "first backoff");
+            Assert.That(accepted[2] - accepted[1], Is.GreaterThanOrEqualTo(950),
+                "The backoff did not grow: a session the server never spoke on was counted as a connection and reset it");
+            Assert.That(accepted[3] - accepted[2], Is.GreaterThanOrEqualTo(1950), "third backoff");
+
+            Assert.That(onConnected, Is.Zero, "OnConnected fired for a session on which the server never said a word");
+            Assert.That(everConnected, Is.False, "Status reported Connected for a session on which the server never said a word");
+        }
+
+        /// <summary>
+        /// The other way to never say a word: accept and then stay silent. Nothing would ever end
+        /// such a session once Connected waits for the server to speak, so the heartbeat watchdog
+        /// covers the time before the first frame as well.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator AServerThatAcceptsButNeverSpeaksIsDroppedWithoutCountingAsConnected()
+        {
+            IgnoreTheExpectedFailures();
+
+            _scriptedServer = FakeColibriServer.Start(FakeColibriServer.Behaviour.Silent);
+            yield return PointConnectionAt(_scriptedServer.Port);
+
+            var onConnected = 0;
+            var everConnected = false;
+            Connection.OnConnected += () => onConnected++;
+
+            // The watchdog's 2 s, the 500 ms backoff, and room for a loaded editor.
+            yield return E2EServer.WaitUntil(() =>
+                {
+                    everConnected |= Connection.Status == ConnectionStatus.Connected;
+                    return _scriptedServer.Accepted >= 2;
+                },
+                "The client never gave up on a server that accepted the connection and then said nothing",
+                15f);
+
+            var accepted = _scriptedServer.AcceptTimes;
+            Assert.That(accepted[1] - accepted[0], Is.GreaterThanOrEqualTo(2000 + 450),
+                "The silent session should last the watchdog's 2 s, followed by the 500 ms backoff");
+            Assert.That(onConnected, Is.Zero, "OnConnected fired for a server that never said a word");
+            Assert.That(everConnected, Is.False, "Status reported Connected for a server that never said a word");
+        }
+
+        /// <summary>The counterpart: a server that heartbeats is connected, once, and stays so.</summary>
+        [UnityTest]
+        public IEnumerator AServerThatSpeaksCountsAsConnected()
+        {
+            _scriptedServer = FakeColibriServer.Start(FakeColibriServer.Behaviour.Heartbeat);
+            yield return PointConnectionAt(_scriptedServer.Port);
+
+            var onConnected = 0;
+            Connection.OnConnected += () => onConnected++;
+
+            yield return E2EServer.WaitUntil(() => Connection.Status == ConnectionStatus.Connected && onConnected == 1,
+                "The client never counted a server sending heartbeats as connected", 10f);
+
+            yield return E2EServer.Settle(0.5f);
+
+            Assert.That(Connection.Status, Is.EqualTo(ConnectionStatus.Connected), "A heartbeating server was dropped");
+            Assert.That(_scriptedServer.Accepted, Is.EqualTo(1));
+            Assert.That(onConnected, Is.EqualTo(1));
         }
 
 
