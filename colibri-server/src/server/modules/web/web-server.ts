@@ -4,6 +4,7 @@ import express from 'express';
 import cors from 'cors';
 
 import { Service } from '../core/index.js';
+import { MAX_FRAME_LENGTH } from '../networking/protocol.js';
 
 export class WebServer extends Service {
     public get serviceName(): string {
@@ -32,7 +33,12 @@ export class WebServer extends Service {
 
         // handle POST data
         this.app.use(express.urlencoded({ extended: false }));
-        this.app.use(express.json());
+        // Any JSON value, not just an object or array: both clients send a bare value as its
+        // JSON text (Unity's Store.Put(name, 42) sends `42`, web's setRestObject(key, 'text')
+        // sends `"text"`), and the store hands it back the same way. The defaults (strict,
+        // 100 kB) answered those with 400 and anything larger with 413, though the same data
+        // fits through the TCP transport - hence its frame limit here too.
+        this.app.use(express.json({ strict: false, limit: MAX_FRAME_LENGTH }));
 
         // enable CORS
         this.app.use(cors());
