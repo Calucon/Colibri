@@ -5,7 +5,8 @@
  *
  * Broadcasts exclude the sender, so this has to be running for the Unity side to see anything.
  *
- * Usage: npx tsx samples/verification-peer.ts [host] [port]
+ * Usage: npm run samples/verification-peer -- [host] [port]
+ *    or: npx tsx samples/verification-peer.ts [host] [port]
  */
 import { Colibri, Sync } from '../src/index';
 
@@ -23,6 +24,7 @@ Sync.receiveBool('myChannel', seen('bool'));
 Sync.receiveNumber('myChannel', seen('number'));
 Sync.receiveString('myChannel', seen('string'));
 Sync.receiveJson('myChannel', seen('json'));
+Sync.receiveVector2('myChannel', seen('vector2'));
 Sync.receiveVector3('myChannel', seen('vector3'));
 Sync.receiveQuaternion('myChannel', seen('quaternion'));
 Sync.receiveColor('myChannel', seen('color'));
@@ -30,6 +32,7 @@ Sync.receiveColor('myChannel', seen('color'));
 Sync.receiveBoolArray('myChannel', seen('bool[]'));
 Sync.receiveNumberArray('myChannel', seen('number[]'));
 Sync.receiveStringArray('myChannel', seen('string[]'));
+Sync.receiveVector2Array('myChannel', seen('vector2[]'));
 Sync.receiveVector3Array('myChannel', seen('vector3[]'));
 Sync.receiveQuaternionArray('myChannel', seen('quaternion[]'));
 Sync.receiveColorArray('myChannel', seen('color[]'));
@@ -45,6 +48,7 @@ setTimeout(
         Sync.sendJson('myChannel', { attribute1: 'example', attribute2: 5 });
         // Tuples, not {x,y,z} objects: that is what colibri-web's signatures declare, and it is
         // what Unity's JsonExtensions.ToJson emits.
+        Sync.sendVector2('myChannel', [1, 2]);
         Sync.sendVector3('myChannel', [1, 2, 3]);
         Sync.sendQuaternion('myChannel', [0, 0, 0, 1]);
         Sync.sendColor('myChannel', [1, 0.5, 0.25, 1]);
@@ -52,6 +56,10 @@ setTimeout(
         Sync.sendBoolArray('myChannel', [true, false, true]);
         Sync.sendNumberArray('myChannel', [1, 2, 3]);
         Sync.sendStringArray('myChannel', ['a', 'b', 'c']);
+        Sync.sendVector2Array('myChannel', [
+            [1, 2],
+            [3, 4]
+        ]);
         Sync.sendVector3Array('myChannel', [
             [1, 2, 3],
             [4, 5, 6]
