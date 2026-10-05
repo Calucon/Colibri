@@ -29,7 +29,7 @@
         "format:check": "prettier --check .",
         "prepare": "cd .. && husky colibri-web/.husky",
         "prepublishOnly": "npm run build",
-        "publish": "npm run build && npm publish --access public",
+        "release": "npm run build && npm publish --access public",
         "samples/broadcast": "tsx samples/broadcast.ts",
         "samples/model-sync": "tsx samples/model-sync.ts",
         "samples/remote-logging": "tsx samples/remote-logging.ts",
