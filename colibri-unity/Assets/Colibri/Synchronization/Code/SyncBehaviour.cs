@@ -103,9 +103,30 @@ namespace HCIKonstanz.Colibri.Synchronization
                     RegisterAttribute(field.Name, field.FieldType, field);
         }
 
+        /// <summary>
+        /// How a C# name - a model type or a [Sync] member - becomes its name on the wire.
+        /// </summary>
+        /// <remarks>
+        /// Invariant on purpose. Culture-sensitive <c>ToLower()</c> turns 'I' into a dotless i
+        /// (U+0131) on Turkish and Azerbaijani systems, so on such a machine "PhysicsId" went out
+        /// with a character in it that neither colibri-web's <c>toLowerCase()</c> nor any other
+        /// client produces, and the member silently stopped syncing.
+        /// </remarks>
+        internal static string ToWireName(string name) => name.ToLowerInvariant();
+
+        /// <summary>The wire names of this model type's [Sync] members. Exists for the test suite.</summary>
+        internal static IEnumerable<string> SyncedNames
+        {
+            get
+            {
+                Initialize();
+                return _syncedAttributes.Keys;
+            }
+        }
+
         private static void RegisterAttribute(string memberName, Type valueType, MemberInfo member)
         {
-            var name = memberName.ToLower();
+            var name = ToWireName(memberName);
             if (_syncedAttributes.ContainsKey(name))
             {
                 Debug.LogError($"Colibri: '{typeof(T).Name}' has more than one [Sync] member named '{memberName}' (names are matched case-insensitively). Rename one of them.");
@@ -196,8 +217,8 @@ namespace HCIKonstanz.Colibri.Synchronization
         public string Id;
 
         public string ModelId = "";
-        private readonly string ChannelPrefix = typeof(T).Name.ToLower();
-        private string Channel { get => ChannelPrefix + (String.IsNullOrEmpty(ModelId) ? "" : $"_{ModelId}"); }
+        private readonly string ChannelPrefix = ToWireName(typeof(T).Name);
+        internal string Channel { get => ChannelPrefix + (String.IsNullOrEmpty(ModelId) ? "" : $"_{ModelId}"); }
 
         // Parallel to _attributeList: true while an incoming server value is still waiting to be
         // observed by the change poll, so that it is not immediately echoed back to the server.
