@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { Subject } from 'rxjs';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { config, Subject } from 'rxjs';
 import { WebLog } from '../../src/server/modules/web/web-log.js';
 import { SocketIoClient, SocketIOServer } from '../../src/server/modules/networking/socket-io-server.js';
 import { NetworkMessage } from '../../src/server/modules/command-hooks/connection-pool.js';
@@ -35,7 +35,7 @@ const makeClient = function (id: string, app: string): SocketIoClient {
     return { id, app, name: id, version: '1', metadata: {}, socket: {} as never };
 };
 
-const requestLog = function (server: FakeSocketIOServer, origin: SocketIoClient, body: Record<string, unknown>): void {
+const requestLog = function (server: FakeSocketIOServer, origin: SocketIoClient, body: unknown): void {
     server.messagesSource.next({
         channel: 'colibri::log',
         command: 'requestLog',
@@ -261,5 +261,97 @@ describe('WebLog', () => {
         emitter.emitDebug('sync', { broadcastTraffic: true });
 
         expect(server.broadcasts.map(b => b.message.payload!.asValue<{ message: string }>().message)).toEqual(['debug']);
+    });
+
+    // requestLog is accepted from any client of any app, so its payload can be anything.
+    describe('with a malformed requestLog payload', () => {
+        // RxJS rethrows a subscriber's exception asynchronously - in the real server that is
+        // an uncaught exception, and fatal - so it is collected here instead of expected to
+        // throw from next().
+        let unhandled: unknown[];
+
+        beforeEach(() => {
+            unhandled = [];
+            config.onUnhandledError = (err) => unhandled.push(err);
+        });
+
+        afterEach(() => {
+            config.onUnhandledError = null;
+        });
+
+        const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+
+        const setUp = async () => {
+            const server = new FakeSocketIOServer();
+            const webLog = new WebLog(server as unknown as SocketIOServer);
+            await webLog.init();
+
+            const admin = makeClient('admin1', 'colibri');
+            server.connectClient(admin);
+            return { server, admin };
+        };
+
+        const delivered = function (server: FakeSocketIOServer): string[] {
+            return server.broadcasts.map(b => b.message.payload!.asValue<{ message: string }>().message);
+        };
+
+        it.each([
+            [ 'levels: 1', { levels: 1 } ],
+            [ 'levels: \'x\'', { levels: 'x' } ],
+            [ 'levels: {}', { levels: {} } ],
+            [ 'filter: 5', { filter: 5 } ],
+            [ 'filter: {}', { filter: {} } ],
+            [ 'showBroadcastTraffic: \'yes\'', { showBroadcastTraffic: 'yes' } ],
+            [ 'a null payload', null ],
+            [ 'a number payload', 5 ],
+            [ 'a string payload', 'levels' ],
+            [ 'an array payload', [ 0 ] ],
+        ])('ignores %s, survives, and keeps the defaults', async (_, body) => {
+            const { server, admin } = await setUp();
+
+            requestLog(server, admin, body);
+            await settle();
+            expect(unhandled).toEqual([]);
+
+            const emitter = new Emitter();
+            emitter.emitError('err');
+            emitter.emitDebug('debug');
+            emitter.emitDebug('sync', { broadcastTraffic: true });
+
+            // all levels, no filter, broadcast traffic hidden
+            expect(delivered(server)).toEqual([ 'err', 'debug' ]);
+        });
+
+        it('keeps only the known levels out of a mixed array', async () => {
+            const { server, admin } = await setUp();
+
+            requestLog(server, admin, { levels: [ 0, 'x', 7, null, 1.5, '3' ] });
+            await settle();
+            expect(unhandled).toEqual([]);
+
+            const emitter = new Emitter();
+            emitter.emitError('err');
+            emitter.emitWarning('warn');
+            emitter.emitDebug('debug');
+
+            expect(delivered(server)).toEqual([ 'err' ]);
+        });
+
+        it('survives a payload that is not JSON at all', async () => {
+            const { server, admin } = await setUp();
+
+            server.messagesSource.next({
+                channel: 'colibri::log',
+                command: 'requestLog',
+                origin: admin,
+                payload: Payload.fromString('{not json')
+            });
+            await settle();
+            expect(unhandled).toEqual([]);
+
+            const emitter = new Emitter();
+            emitter.emitInfo('still alive');
+            expect(delivered(server)).toContain('still alive');
+        });
     });
 });

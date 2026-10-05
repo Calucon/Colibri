@@ -1,4 +1,5 @@
-import { LogMessage, Metadata, Payload, RingBuffer, Service } from '../core/index.js';
+import { LogLevel, LogMessage, Metadata, Payload, RingBuffer, Service } from '../core/index.js';
+import { NetworkMessage } from '../command-hooks/index.js';
 import { SocketIoClient, SocketIOServer } from '../networking/socket-io-server.js';
 import { filter } from 'rxjs';
 import { randomUUID } from 'crypto';
@@ -17,11 +18,29 @@ interface WebMessage {
     metadata: Metadata;
 }
 
-interface RequestLogPayload {
-    filter?: string;
-    levels?: number[];
-    showBroadcastTraffic?: boolean;
+interface LogPreferences {
+    filter: string;
+    levels: Set<number> | undefined;
+    showBroadcastTraffic: boolean;
 }
+
+const KNOWN_LEVELS: ReadonlySet<number> = new Set([ LogLevel.Error, LogLevel.Warn, LogLevel.Info, LogLevel.Debug ]);
+
+// requestLog is accepted from any Socket.IO client of any app, so its payload is whatever
+// that client chose to send. Each field is taken only if it has the expected type and is
+// otherwise left at its default (no filter, all levels, no broadcast traffic): `levels: 1`
+// used to reach `new Set(1)` and throw, `levels: 'x'` became Set {'x'} and silently hid
+// every level, and a non-string `filter` silently hid every message.
+const parseLogPreferences = function (body: unknown): LogPreferences {
+    const fields = (body !== null && typeof body === 'object' && !Array.isArray(body) ? body : {}) as Record<string, unknown>;
+    return {
+        filter: typeof fields.filter === 'string' ? fields.filter : '',
+        levels: Array.isArray(fields.levels)
+            ? new Set(fields.levels.filter((level): level is number => typeof level === 'number' && KNOWN_LEVELS.has(level)))
+            : undefined,
+        showBroadcastTraffic: fields.showBroadcastTraffic === true
+    };
+};
 
 export class WebLog extends Service {
     public serviceName = 'WebLog';
@@ -46,38 +65,46 @@ export class WebLog extends Service {
         this.socketio.messages$
             .pipe(filter(msg => msg.channel === 'colibri::log' && msg.command === 'requestLog'))
             .subscribe(networkMsg => {
-                const socketClient = networkMsg.origin && this.socketio.getClient(networkMsg.origin.id);
-                if (!socketClient) {
-                    this.logError('Unkown origin requested log messages', false);
-                    return;
+                // RxJS rethrows an exception from a subscriber asynchronously, where it is an
+                // uncaught exception and main.ts shuts the server down - so nothing a client
+                // sends may escape from here.
+                try {
+                    this.handleRequestLog(networkMsg);
+                } catch (err) {
+                    this.logError(`Ignoring requestLog from client ${networkMsg.origin?.id}: ${err instanceof Error ? err.message : String(err)}`, false);
                 }
-
-                const body = networkMsg.payload?.asValue<RequestLogPayload>() ?? {};
-                const filter = body.filter || '';
-                const levels = body.levels ? new Set(body.levels) : undefined;
-                const showBroadcastTraffic = body.showBroadcastTraffic === true;
-
-                socketClient.metadata['log::filter'] = filter;
-                socketClient.metadata['log::levels'] = levels;
-                socketClient.metadata['log::broadcast'] = showBroadcastTraffic;
-
-                // client can't handle too many messages at once
-                const clientLimit = 10000;
-
-                this.logMessages
-                    .toArray()
-                    .filter(msg => !filter || msg.metadata.clientApp === filter)
-                    .filter(msg => this.isVisibleToClient(msg.level, msg.metadata, levels, showBroadcastTraffic))
-                    .slice(-clientLimit)
-                    .map(msg => ({
-                        channel: 'colibri::log',
-                        command: 'message',
-                        payload: Payload.fromValue({ ...msg })
-                    }))
-                    .forEach(msg => this.socketio.broadcast(msg, [ socketClient ]));
             });
 
         Service.output$.subscribe(this.redirectLogMessage.bind(this));
+    }
+
+    private handleRequestLog(networkMsg: NetworkMessage): void {
+        const socketClient = networkMsg.origin && this.socketio.getClient(networkMsg.origin.id);
+        if (!socketClient) {
+            this.logError('Unkown origin requested log messages', false);
+            return;
+        }
+
+        const { filter, levels, showBroadcastTraffic } = parseLogPreferences(networkMsg.payload?.asValue());
+
+        socketClient.metadata['log::filter'] = filter;
+        socketClient.metadata['log::levels'] = levels;
+        socketClient.metadata['log::broadcast'] = showBroadcastTraffic;
+
+        // client can't handle too many messages at once
+        const clientLimit = 10000;
+
+        this.logMessages
+            .toArray()
+            .filter(msg => !filter || msg.metadata.clientApp === filter)
+            .filter(msg => this.isVisibleToClient(msg.level, msg.metadata, levels, showBroadcastTraffic))
+            .slice(-clientLimit)
+            .map(msg => ({
+                channel: 'colibri::log',
+                command: 'message',
+                payload: Payload.fromValue({ ...msg })
+            }))
+            .forEach(msg => this.socketio.broadcast(msg, [ socketClient ]));
     }
 
     private redirectLogMessage(log: LogMessage): void {
