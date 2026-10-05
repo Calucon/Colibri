@@ -132,6 +132,36 @@ describe('Colibri constructor', () => {
         expect(c.uriRestApi).toBe('https://example.com:443/api/store/myapp/');
     });
 
+    // http(s):// is what an address bar shows for the same server, and used to be glued behind a
+    // second scheme: 'ws://https://example.com:9011' and 'http://https://example.com:9011'.
+    it.each([
+        ['example.com', 'ws://example.com:9011', 'http://example.com:9011/api/store/app/'],
+        ['ws://example.com', 'ws://example.com:9011', 'http://example.com:9011/api/store/app/'],
+        ['wss://example.com', 'wss://example.com:9011', 'https://example.com:9011/api/store/app/'],
+        ['http://example.com', 'ws://example.com:9011', 'http://example.com:9011/api/store/app/'],
+        ['https://example.com', 'wss://example.com:9011', 'https://example.com:9011/api/store/app/'],
+        ['HTTPS://example.com', 'wss://example.com:9011', 'https://example.com:9011/api/store/app/'],
+        // A trailing slash, as copied out of an address bar, used to land in front of the port.
+        ['example.com/', 'ws://example.com:9011', 'http://example.com:9011/api/store/app/'],
+        ['https://example.com/', 'wss://example.com:9011', 'https://example.com:9011/api/store/app/'],
+        ['  wss://example.com//  ', 'wss://example.com:9011', 'https://example.com:9011/api/store/app/']
+    ])('maps the server %j to the socket %s and the REST API %s', (server, uri, rest) => {
+        const c = new Colibri('app', server, 9011);
+
+        expect(c.uri).toBe(uri);
+        expect(c.uriRestApi).toBe(rest);
+        expect(connectMock).toHaveBeenCalledWith(uri, expect.anything());
+    });
+
+    it('rejects a scheme that is neither ws(s) nor http(s)', () => {
+        expect(() => new Colibri('app', 'ftp://example.com', 9011)).toThrow(ColibriError);
+        expect(connectMock).not.toHaveBeenCalled();
+    });
+
+    it('rejects a server address that is nothing but a scheme', () => {
+        expect(() => new Colibri('app', 'https://', 9011)).toThrow('Server Address missing or empty!');
+    });
+
     it('connects with the app/version query and websocket transport', () => {
         new Colibri('myapp', 'localhost', 9011);
         expect(connectMock).toHaveBeenCalledWith('ws://localhost:9011', {

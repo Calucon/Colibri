@@ -51,6 +51,36 @@ declare const document: Document | undefined;
 const pageHostname = (): string =>
     typeof window !== 'undefined' ? ((window.location as Location | undefined)?.hostname ?? '') : '';
 
+// Every scheme a server address may be written with, mapped to the pair this client needs: the
+// socket and the REST API have to agree on whether the connection is encrypted. http(s) is here
+// because it is what a browser's address bar shows for the very same server.
+const SCHEMES: Partial<Record<string, { socket: string; rest: string }>> = {
+    ws: { socket: 'ws', rest: 'http' },
+    http: { socket: 'ws', rest: 'http' },
+    wss: { socket: 'wss', rest: 'https' },
+    https: { socket: 'wss', rest: 'https' }
+};
+
+const parseServerAddress = (server: string) => {
+    const address = server.trim();
+    const match = /^([a-z][a-z0-9+.-]*):\/\/(.*)$/i.exec(address);
+    const schemes = match ? SCHEMES[match[1].toLowerCase()] : SCHEMES.ws;
+    if (!schemes) {
+        throw new ColibriError(
+            `Unsupported scheme in server address '${server}' - use ws://, wss://, http://, https:// or none.`
+        );
+    }
+
+    // A trailing slash is what copying a URL out of an address bar gives you; left in, it put
+    // the port after the slash.
+    const host = (match ? match[2] : address).replace(/\/+$/, '');
+    if (host.length === 0) {
+        throw new ColibriError('Server Address missing or empty!');
+    }
+
+    return { ...schemes, host };
+};
+
 export interface Message {
     channel: string;
     command: string;
@@ -97,12 +127,10 @@ export class Colibri {
             throw new ColibriError(`Port out of allowed range (1 - 65535): ${port}`);
         }
 
-        this.uri = `${server}:${port}`;
-        if (!new RegExp('wss?://', 'i').test(this.uri)) {
-            this.uri = `ws://${this.uri}`;
-        }
-        // replace ws(s) with http(s) for the REST API
-        this.uriRestApi = `${this.uri.replace(/^ws/i, 'http')}/api/store/${app}/`;
+        // Only ws(s):// used to be recognised, so 'https://host' became 'ws://https://host:9011'.
+        const address = parseServerAddress(server);
+        this.uri = `${address.socket}://${address.host}:${port}`;
+        this.uriRestApi = `${address.rest}://${address.host}:${port}/api/store/${app}/`;
 
         // there is already an instance running
         if (Colibri.instance) throw new ColibriError('A Colibri instance already exists!');
