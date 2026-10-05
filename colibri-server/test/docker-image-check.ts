@@ -187,6 +187,14 @@ const runDeployment = async function (image: string, deployment: Deployment): Pr
 
     check('TCP server answers a handshake', await tcpAnswers(await hostPort(container, 9012)));
 
+    const malformed = await fetch(`${web}/api/store/image-check/malformed`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: '{"unterminated',
+    });
+    const malformedBody = await malformed.text();
+    check('answers malformed JSON without a stack trace', malformed.status === 400 && !malformedBody.includes('node_modules'), malformedBody.slice(0, 300));
+
     if (deployment.legacy) {
         const { app, key, value } = deployment.legacy;
         const res = await fetch(`${web}/api/store/${app}/${key}`);
@@ -250,6 +258,8 @@ const main = async function (): Promise<void> {
     }
 
     console.log(`\nimage ${image}`);
+    const env = JSON.parse(await dockerOk([ 'image', 'inspect', '-f', '{{json .Config.Env}}', image ])) as string[];
+    check('sets NODE_ENV=production', env.includes('NODE_ENV=production'), env.join(' '));
     const size = (await dockerOk([ 'image', 'inspect', '-f', '{{.Size}}', image ])).trim();
     console.log(`  size ${(Number(size) / 1e6).toFixed(1)} MB`);
 

@@ -12,6 +12,11 @@ RUN npm run build
 # ---- Runtime: production dependencies and build output only ----
 FROM node:24-alpine AS runtime
 
+# Express (and finalhandler under it) then answers an error with its status text instead of the
+# stack trace, paths under /srv/colibri/node_modules included. Runtime stage only: the builder's
+# npm ci needs the devDependencies this would leave out.
+ENV NODE_ENV=production
+
 # su-exec is how the entrypoint drops from root to the node user once the data directory is
 # node's; see docker-entrypoint.sh.
 RUN apk add --no-cache su-exec
