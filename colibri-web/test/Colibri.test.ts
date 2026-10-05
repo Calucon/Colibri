@@ -4,8 +4,9 @@ vi.mock('socket.io-client', () => ({
     connect: vi.fn()
 }));
 
-import { firstValueFrom } from 'rxjs';
+import { firstValueFrom, type Observable } from 'rxjs';
 import { connect } from 'socket.io-client';
+import { Sync } from '../src/Broadcasting';
 import {
     Colibri,
     GetRestApi,
@@ -18,6 +19,9 @@ import {
     UnregisterChannel
 } from '../src/Colibri';
 import { ColibriError, ProtocolMismatchError } from '../src/ColibriError';
+import { RegisterModelSync } from '../src/ModelSynchronization';
+import { SyncModel } from '../src/SyncModel';
+import { Synced } from '../src/Synced';
 
 const connectMock = connect as unknown as Mock;
 
@@ -361,13 +365,12 @@ describe('Colibri REST API', () => {
 });
 
 describe('wrapper functions', () => {
+    // RegisterChannel, UnregisterChannel and RegisterOnce are covered under "registering before
+    // new Colibri()": they no longer do nothing without an instance.
     it('return undefined when Colibri is not initialized', () => {
         const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
         expect(SendMessage('ch', 'cmd')).toBeUndefined();
-        expect(RegisterChannel('ch', () => undefined)).toBeUndefined();
-        expect(UnregisterChannel('ch', () => undefined)).toBeUndefined();
-        expect(RegisterOnce('ch', () => undefined)).toBeUndefined();
         expect(GetRestApi('key')).toBeUndefined();
         expect(PutRestApi('key', {})).toBeUndefined();
 
@@ -392,6 +395,121 @@ describe('wrapper functions', () => {
 
         RegisterOnce('ch', handler);
         expect(fakeSocket.once).toHaveBeenCalledWith('ch', handler);
+    });
+});
+
+// Registering first and constructing Colibri second is the natural order for module-level code
+// (`const [players$] = RegisterModelSync(...)` at the top of a file), and it used to leave every
+// one of those registrations listening to nothing, silently.
+describe('registering before new Colibri()', () => {
+    class Widget extends SyncModel<Widget> {
+        @Synced() accessor label = '';
+    }
+
+    // Mirrors socket.io: a message reaches every handler registered for its channel.
+    const deliver = (channel: string, msg: { command: string; payload?: unknown }) => {
+        for (const [event, handler] of [...fakeSocket.on.mock.calls, ...fakeSocket.once.mock.calls]) {
+            if (event === channel) handler({ channel, ...msg });
+        }
+    };
+
+    const latest = <T>(models$: Observable<T[]>): T[] => {
+        let current: T[] = [];
+        models$.subscribe(m => (current = m)).unsubscribe();
+        return current;
+    };
+
+    let warnSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+        warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    });
+
+    afterEach(() => {
+        warnSpy.mockRestore();
+    });
+
+    it('attaches RegisterChannel and RegisterOnce handlers once Colibri is constructed', () => {
+        const handler = vi.fn();
+        const onceHandler = vi.fn();
+        RegisterChannel('early', handler);
+        RegisterOnce('early-once', onceHandler);
+        expect(connectMock).not.toHaveBeenCalled();
+
+        new Colibri('app', 'localhost', 9011);
+
+        expect(fakeSocket.on).toHaveBeenCalledWith('early', handler);
+        expect(fakeSocket.once).toHaveBeenCalledWith('early-once', onceHandler);
+        // Registering early is supported now, so it is no longer worth a warning.
+        expect(warnSpy).not.toHaveBeenCalled();
+    });
+
+    it('lets UnregisterChannel take back a handler that is still waiting', () => {
+        const handler = vi.fn();
+        RegisterChannel('early', handler);
+        RegisterOnce('early', handler);
+        UnregisterChannel('early', handler);
+        UnregisterChannel('early', handler);
+
+        new Colibri('app', 'localhost', 9011);
+
+        expect(fakeSocket.on).not.toHaveBeenCalledWith('early', handler);
+        expect(fakeSocket.once).not.toHaveBeenCalledWith('early', handler);
+    });
+
+    it('delivers to a Sync.receive* listener registered before Colibri existed', () => {
+        const received = vi.fn();
+        Sync.receiveString('early-sync', received);
+
+        new Colibri('app', 'localhost', 9011);
+        deliver('early-sync', { command: 'broadcast::string', payload: 'hello' });
+
+        expect(received).toHaveBeenCalledWith('hello');
+    });
+
+    it('does not attach a Sync listener that was unregistered before Colibri existed', () => {
+        const received = vi.fn();
+        Sync.receiveBool('early-unregistered', received);
+        Sync.unregister('early-unregistered', received);
+
+        new Colibri('app', 'localhost', 9011);
+
+        expect(fakeSocket.on.mock.calls.map(([event]) => event)).not.toContain('early-unregistered');
+    });
+
+    it('requests the current state, and receives models, for a RegisterModelSync made first', () => {
+        const [models$] = RegisterModelSync({ name: 'early-widget', type: Widget });
+        expect(warnSpy).not.toHaveBeenCalled();
+
+        new Colibri('app', 'localhost', 9011);
+
+        expect(fakeSocket.emit).toHaveBeenCalledWith('early-widget', { command: 'model::request', payload: {} });
+
+        deliver('early-widget', { command: 'model::update', payload: { id: 'w1', label: 'from the server' } });
+
+        const models = latest(models$);
+        expect(models).toHaveLength(1);
+        expect(models[0].label).toBe('from the server');
+    });
+
+    it('sends a model registered before Colibri existed as it is once Colibri does', () => {
+        vi.useFakeTimers();
+        const [, registerModel] = RegisterModelSync({ name: 'early-local', type: Widget });
+        const widget = new Widget('w1');
+        try {
+            registerModel(widget);
+            widget.label = 'changed before connecting';
+
+            new Colibri('app', 'localhost', 9011);
+
+            expect(fakeSocket.emit).toHaveBeenCalledWith('early-local', {
+                command: 'model::update',
+                payload: { id: 'w1', label: 'changed before connecting' }
+            });
+        } finally {
+            widget.delete();
+            vi.useRealTimers();
+        }
     });
 });
 

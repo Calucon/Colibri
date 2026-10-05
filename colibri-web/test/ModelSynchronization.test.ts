@@ -3,10 +3,17 @@ import type { Observable } from 'rxjs';
 
 // Mock the Colibri wire layer so the real socket.io implementation never runs.
 // SendMessage / RegisterChannel come back as vi.fn() mocks we can inspect.
-vi.mock('../src/Colibri', () => ({
-    SendMessage: vi.fn(),
-    RegisterChannel: vi.fn()
-}));
+vi.mock('../src/Colibri', () => {
+    const SendMessage = vi.fn();
+    return {
+        SendMessage,
+        RegisterChannel: vi.fn(),
+        // RegisterModelSync holds its first messages until there is an instance to send them
+        // through (covered against the real Colibri in Colibri.test.ts). These tests are about
+        // what it sends once there is one, so there always is, and it sends into SendMessage.
+        Colibri: { getInstance: () => ({ sendMessage: SendMessage }) }
+    };
+});
 
 import { SendMessage, RegisterChannel } from '../src/Colibri';
 import type { Message } from '../src/Colibri';

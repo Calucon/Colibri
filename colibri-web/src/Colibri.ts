@@ -1,6 +1,7 @@
 import { Subject } from 'rxjs';
 import { Socket, connect } from 'socket.io-client';
 import { ColibriError, ProtocolMismatchError } from './ColibriError';
+import { colibriCreated } from './lifecycle';
 
 /**
  * The wire protocol this client speaks, announced in the Socket.IO handshake query. Must
@@ -87,6 +88,10 @@ export interface Message {
     payload: unknown;
 }
 
+// Handlers given to RegisterChannel/RegisterOnce before `new Colibri()`, attached by the
+// constructor. Module-level rather than static, since there is no instance to hang them on yet.
+const pendingRegistrations: { channel: string; handler: (payload: Message) => void; once: boolean }[] = [];
+
 export class Colibri {
     private static instance: Colibri | null = null;
 
@@ -162,6 +167,14 @@ export class Colibri {
                 SendMessage(COLIBRI_CHANNEL, LATENCY_COMMAND, msg.payload);
             }
         });
+
+        // Everything registered before this instance existed - through the wrappers below, and so
+        // through Sync and RegisterModelSync - in the order it was registered.
+        for (const { channel, handler, once } of pendingRegistrations.splice(0)) {
+            if (once) this.registerOnce(channel, handler);
+            else this.registerChannel(channel, handler);
+        }
+        colibriCreated(this);
     }
 
     private onSocketConnect() {
@@ -405,24 +418,45 @@ export const SendMessage = (channel: string, command: string, payload: unknown =
 
 /**
  * @see {@link Colibri.registerChannel `Colibri.registerChannel()`}
- * @returns undefined if {@link Colibri `Colibri`} has not been initialized yet
+ *
+ * Works before `new Colibri()` too: the handler is then attached as soon as the instance is
+ * constructed. This used to do nothing at all in that case, which also left every `Sync.receive*`
+ * made before `new Colibri()` listening to nothing.
  */
-export const RegisterChannel = (channel: string, handler: (payload: Message) => void) =>
-    Colibri.getInstance()?.registerChannel(channel, handler);
+export const RegisterChannel = (channel: string, handler: (payload: Message) => void): void => {
+    const colibri = Colibri.getInstance(false);
+    if (colibri) colibri.registerChannel(channel, handler);
+    else pendingRegistrations.push({ channel, handler, once: false });
+};
 
 /**
  * @see {@link Colibri.unregisterChannel `Colibri.unregisterChannel()`}
- * @returns undefined if {@link Colibri `Colibri`} has not been initialized yet
+ *
+ * Before `new Colibri()`, takes back a handler that {@link RegisterChannel} or
+ * {@link RegisterOnce} was still holding on to.
  */
-export const UnregisterChannel = (channel: string, handler: (payload: Message) => void) =>
-    Colibri.getInstance()?.unregisterChannel(channel, handler);
+export const UnregisterChannel = (channel: string, handler: (payload: Message) => void): void => {
+    const colibri = Colibri.getInstance(false);
+    if (colibri) {
+        colibri.unregisterChannel(channel, handler);
+        return;
+    }
+
+    // One per call, like Socket.IO's own off(): a handler registered twice is unregistered twice.
+    const index = pendingRegistrations.findIndex(p => p.channel === channel && p.handler === handler);
+    if (index >= 0) pendingRegistrations.splice(index, 1);
+};
 
 /**
  * @see {@link Colibri.registerOnce `Colibri.registerOnce()`}
- * @returns undefined if {@link Colibri `Colibri`} has not been initialized yet
+ *
+ * Works before `new Colibri()` too, like {@link RegisterChannel}.
  */
-export const RegisterOnce = (channel: string, handler: (payload: Message) => void) =>
-    Colibri.getInstance()?.registerOnce(channel, handler);
+export const RegisterOnce = (channel: string, handler: (payload: Message) => void): void => {
+    const colibri = Colibri.getInstance(false);
+    if (colibri) colibri.registerOnce(channel, handler);
+    else pendingRegistrations.push({ channel, handler, once: true });
+};
 
 /**
  * @see {@link Colibri.getRestObject `Colibri.getRestObject()`}
