@@ -18,15 +18,33 @@ vi.mock('worker_threads', async (importOriginal) => {
 class FakeSocket extends EventEmitter {
     public writableLength = 0;
     public readonly written: Buffer[] = [];
+    // Writes attempted after end() or destroy(), which a real socket fails.
+    public readonly writtenAfterEnd: Buffer[] = [];
     public destroyed = false;
     public ended = false;
     public remoteAddress = '127.0.0.1';
+
+    public get writableEnded(): boolean {
+        return this.ended;
+    }
 
     public setNoDelay(): this {
         return this;
     }
 
+    // Modelled on what a real net.Socket does with a write after end(): the write fails, the
+    // socket emits 'error' and destroys itself - which is how a heartbeat to a refused client
+    // used to log twice and could cut off the refusal frame still being flushed.
     public write(data: Buffer, callback?: (err?: Error) => void): boolean {
+        if (this.ended || this.destroyed) {
+            const err = new Error('write after end');
+            this.writtenAfterEnd.push(data);
+            callback?.(err);
+            this.emit('error', err);
+            this.destroy();
+            return false;
+        }
+
         this.written.push(data);
         callback?.();
         return true;
@@ -55,6 +73,7 @@ class FakeSocket extends EventEmitter {
 interface WorkerInternals {
     handleConnection(socket: net.Socket): void;
     handleParentMessage(msg: { channel: string; content: Record<string, unknown> }): void;
+    handleHeartbeat(): void;
     postMessage(channel: string, content: Record<string, unknown>): void;
     clients: Map<string, { id: string; app: string; socket: net.Socket }>;
     waitingClients: Map<string, { id: string; socket: net.Socket }>;
@@ -195,6 +214,148 @@ describe('TCPServerWorker', () => {
             socket.emit('data', encodeMessageFrame(wireMessage('chan', 'broadcast::json', '{}')));
 
             expect(posted.filter(p => p.channel === 'clientMessage$')).toHaveLength(0);
+        });
+    });
+
+    // A refused or cut-off client used to stay in waitingClients/clients until its 'close'
+    // event, so the next 100ms heartbeat wrote to the ended socket: a "Failed to send" warning,
+    // a "write after end" error, and a destroy racing the refusal frame still being flushed.
+    describe('a connection this server ends', () => {
+        const badLength = function (): Buffer {
+            const bad = Buffer.alloc(5);
+            bad.writeUInt32LE(1, 0);
+            bad.writeUInt8(0xff, 4); // unknown frame type
+            return bad;
+        };
+
+        const writeErrors = (): string[] =>
+            logs().filter(l => l.includes('write after end') || l.includes('Failed to send'));
+
+        it('is no longer heartbeated after a protocol refusal', () => {
+            const { socket } = connect();
+            socket.emit('data', encodeHandshakeFrame('1', 'appA', 'old-client'));
+            const writtenBeforeHeartbeat = socket.written.length;
+
+            internals.handleHeartbeat();
+
+            expect(socket.writtenAfterEnd).toHaveLength(0);
+            expect(socket.written).toHaveLength(writtenBeforeHeartbeat);
+            expect(socket.destroyed).toBe(false);
+            expect(writeErrors()).toEqual([]);
+        });
+
+        it('is no longer heartbeated after a framing error', () => {
+            const { socket } = connect();
+            socket.emit('data', badLength());
+
+            internals.handleHeartbeat();
+
+            expect(socket.ended).toBe(true);
+            expect(socket.writtenAfterEnd).toHaveLength(0);
+            expect(writeErrors()).toEqual([]);
+        });
+
+        it('leaves the refusal frame as the last thing written before the FIN', () => {
+            const { socket } = connect();
+            socket.emit('data', encodeHandshakeFrame('1', 'appA', 'old-client'));
+            internals.handleHeartbeat();
+
+            const reader = new FrameReader();
+            const frames = socket.written.flatMap(chunk => reader.append(chunk));
+            const last = frames[frames.length - 1];
+            expect(last?.type === FrameType.Message && last.command).toBe('protocol::rejected');
+            expect(socket.ended).toBe(true);
+        });
+
+        it('drops a refused client from every index immediately, not on close', () => {
+            const { socket, id } = connect();
+            socket.emit('data', encodeHandshakeFrame('1', 'appA', 'old-client'));
+
+            expect(internals.waitingClients.has(id)).toBe(false);
+            expect(internals.clients.has(id)).toBe(false);
+        });
+
+        it('drops a connected client that sends a bad frame and reports it gone once', () => {
+            const { socket, id } = connect();
+            socket.emit('data', encodeHandshakeFrame(PROTOCOL_VERSION, 'appA', 'client-a'));
+
+            socket.emit('data', badLength());
+
+            expect(internals.clients.has(id)).toBe(false);
+            expect(internals.clientsByApp.has('appA')).toBe(false);
+            expect(posted.filter(p => p.channel === 'clientDisconnected$')).toHaveLength(1);
+
+            socket.emit('close');
+            expect(posted.filter(p => p.channel === 'clientDisconnected$')).toHaveLength(1);
+        });
+
+        it('ignores frames queued behind a refused handshake in the same chunk', () => {
+            const { socket } = connect();
+            socket.emit('data', Buffer.concat([
+                encodeHandshakeFrame('1', 'appA', 'old-client'),
+                encodeMessageFrame(wireMessage('chan', 'broadcast::json', '{}')),
+                encodeHeartbeatFrame(1n),
+            ]));
+
+            expect(posted.filter(p => p.channel === 'clientMessage$')).toHaveLength(0);
+            expect(logs().filter(l => l.includes('without app'))).toEqual([]);
+        });
+
+        it('ignores anything the peer sends after being refused', () => {
+            const { socket } = connect();
+            socket.emit('data', encodeHandshakeFrame('1', 'appA', 'old-client'));
+            posted.length = 0;
+
+            socket.emit('data', encodeHandshakeFrame(PROTOCOL_VERSION, 'appA', 'old-client'));
+            socket.emit('data', encodeMessageFrame(wireMessage('chan', 'broadcast::json', '{}')));
+
+            expect(posted.filter(p => p.channel === 'clientConnected$' || p.channel === 'clientMessage$')).toHaveLength(0);
+            expect(logs().filter(l => l.includes('without app'))).toEqual([]);
+        });
+
+        // With allowHalfOpen off, a peer's FIN ends our side too, a little before 'close'.
+        it('skips a socket whose writable side has already ended', () => {
+            const { socket } = connect();
+            socket.emit('data', encodeHandshakeFrame(PROTOCOL_VERSION, 'appA', 'client-a'));
+            socket.ended = true;
+
+            internals.handleHeartbeat();
+            internals.handleParentMessage({
+                channel: 'm:broadcastToApp',
+                content: { msg: wireMessage('c', 'model::update'), app: 'appA' },
+            });
+
+            expect(socket.writtenAfterEnd).toHaveLength(0);
+            expect(writeErrors()).toEqual([]);
+        });
+
+        it('destroys the socket if the peer never closes its side', () => {
+            vi.useFakeTimers();
+            try {
+                const { socket } = connect();
+                socket.emit('data', encodeHandshakeFrame('1', 'appA', 'old-client'));
+
+                vi.advanceTimersByTime(4999);
+                expect(socket.destroyed).toBe(false);
+                vi.advanceTimersByTime(1);
+                expect(socket.destroyed).toBe(true);
+            } finally {
+                vi.useRealTimers();
+            }
+        });
+
+        it('leaves a socket alone once the peer has closed it', () => {
+            vi.useFakeTimers();
+            try {
+                const { socket } = connect();
+                socket.emit('data', encodeHandshakeFrame('1', 'appA', 'old-client'));
+                socket.emit('close');
+
+                vi.advanceTimersByTime(10_000);
+                expect(socket.destroyed).toBe(false);
+            } finally {
+                vi.useRealTimers();
+            }
         });
     });
 

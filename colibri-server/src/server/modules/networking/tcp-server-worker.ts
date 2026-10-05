@@ -32,6 +32,12 @@ const maxBufferSize = MAX_FRAME_LENGTH;
 // entirely). Dropping a stale update for a slow client is the correct behaviour here.
 const highWaterMark = 1024 * 1024;
 
+// How long a socket this server has ended (a refusal, or a framing error) may stay half-open
+// waiting for the peer's FIN before it is destroyed. Ending first rather than destroying is what
+// lets the refusal frame reach the client; this bounds what a peer that never closes its side
+// can hold on to.
+const CLOSE_GRACE_MILLIS = 5000;
+
 // The worker thread only ever deals in raw payload bytes (straight off the wire, or
 // destined for it) - the Payload memoization abstraction lives at the ConnectionPool
 // layer on the main thread, on the other side of the postMessage boundary. Keeping the
@@ -66,8 +72,12 @@ interface TcpClient {
     name: string;
     // Guards handleSocketDisconnect against running twice for the same client - a socket
     // error is always followed by its own 'close' event, so without this both paths would
-    // post a duplicate clientDisconnected$.
+    // post a duplicate clientDisconnected$. Also set the moment this server ends a client
+    // (closeClient), which is what stops it reading anything further from that socket.
     disconnected: boolean;
+    // Destroys a socket closeClient ended if the peer never closes its side; see
+    // CLOSE_GRACE_MILLIS.
+    closeTimer: NodeJS.Timeout | undefined;
     // Set while writes to this client are being dropped for backpressure. Only the
     // transitions in and out of that state are logged: a stalled client drops at least ten
     // heartbeats a second, and each dropped-packet warning is postMessage'd to the main
@@ -202,6 +212,13 @@ export class TCPServerWorker extends WorkerService {
     }
 
     private writeToClient(client: TcpClient, packet: Buffer): void {
+        // Writing after end() is an error that destroys the socket - logged twice, and able to
+        // cut off a refusal frame that was still being flushed. A socket gets here ended
+        // between the peer's FIN (which ends our side too) and its 'close' event.
+        if (client.socket.writableEnded || client.socket.destroyed) {
+            return;
+        }
+
         if (client.socket.writableLength > highWaterMark) {
             client.droppedSinceWarning += 1;
             if (!client.dropping) {
@@ -246,6 +263,7 @@ export class TCPServerWorker extends WorkerService {
             name: '',
             version: '0',
             disconnected: false,
+            closeTimer: undefined,
             dropping: false,
             droppedSinceWarning: 0,
         };
@@ -264,11 +282,16 @@ export class TCPServerWorker extends WorkerService {
         // disconnect (e.g. a client that vanishes without sending FIN), which used to leak
         // that client in `clients`/`clientsByApp` forever.
         socket.on('close', () => {
+            clearTimeout(tcpClient.closeTimer);
             this.handleSocketDisconnect(tcpClient);
         });
     }
 
     private handleSocketData(client: TcpClient, data: Buffer): void {
+        // A client this server has already refused or cut off: the peer can keep sending
+        // until it notices our FIN, and none of it is meant to be acted on.
+        if (client.disconnected) return;
+
         let frames;
         try {
             frames = client.reader.append(data);
@@ -279,11 +302,15 @@ export class TCPServerWorker extends WorkerService {
                 false
             );
             client.reader.reset();
-            client.socket.end();
+            this.closeClient(client);
             return;
         }
 
         for (const frame of frames) {
+            // A handshake earlier in this same chunk may have refused the client; the frames
+            // queued behind it must not be relayed or logged as orphans.
+            if (client.disconnected) return;
+
             switch (frame.type) {
                 case FrameType.Handshake:
                     try {
@@ -376,17 +403,41 @@ export class TCPServerWorker extends WorkerService {
             false
         );
 
+        let packet: Buffer | undefined;
         try {
-            client.socket.end(encodeMessageFrame({
+            packet = encodeMessageFrame({
                 channel: COLIBRI_CHANNEL,
                 command: PROTOCOL_REJECTED_COMMAND,
                 payload: Buffer.from(JSON.stringify(rejection), 'utf8'),
-            }, maxBufferSize));
+            }, maxBufferSize);
         } catch {
-            // Nothing useful to say if even the refusal cannot be encoded or written - the
-            // socket is going away either way.
+            // Nothing useful to say if even the refusal cannot be encoded - the socket is
+            // going away either way.
+        }
+        this.closeClient(client, packet);
+    }
+
+    // Ends a connection from this side: drops the client from every index *now*, rather than
+    // when its 'close' event eventually arrives. Until then it used to stay listed, so the next
+    // 100ms heartbeat wrote to the ended socket - "write after end", logged twice, and a destroy
+    // that could truncate the refusal frame still being flushed.
+    //
+    // end(finalPacket) queues that frame ahead of the FIN, so it is still delivered. The timer
+    // only matters for a peer that never closes its side; a well-behaved one closes first and
+    // handleSocketDisconnect clears it.
+    private closeClient(client: TcpClient, finalPacket?: Buffer): void {
+        if (client.disconnected) return;
+
+        this.handleSocketDisconnect(client);
+        if (finalPacket) {
+            client.socket.end(finalPacket);
+        } else {
             client.socket.end();
         }
+
+        client.closeTimer = setTimeout(() => client.socket.destroy(), CLOSE_GRACE_MILLIS);
+        // Never the reason a worker thread stays alive.
+        client.closeTimer.unref();
     }
 
     // A client echoes a server-sent heartbeat frame's timestamp back verbatim; relay it
