@@ -31,6 +31,11 @@ export class WebServer extends Service {
         this.app = express();
         this.app.set('port', this.webPort);
 
+        // enable CORS - first, so that every response carries the headers, including the
+        // errors of the body parsers below: a browser hides a cross-origin response without
+        // them, and a web client saw a bare network error instead of the 413 or 400.
+        this.app.use(cors());
+
         // handle POST data
         this.app.use(express.urlencoded({ extended: false }));
         // Any JSON value, not just an object or array: both clients send a bare value as its
@@ -39,9 +44,6 @@ export class WebServer extends Service {
         // 100 kB) answered those with 400 and anything larger with 413, though the same data
         // fits through the TCP transport - hence its frame limit here too.
         this.app.use(express.json({ strict: false, limit: MAX_FRAME_LENGTH }));
-
-        // enable CORS
-        this.app.use(cors());
 
         // set up default routes
         this.app.use(this.baseUrl, express.static(path.join(this.webRoot)));

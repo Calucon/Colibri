@@ -197,6 +197,33 @@ describe('WebServer over HTTP', () => {
             expect(logs.filter(l => l.origin === 'WebServer' && l.level === LogLevel.Warn)).toHaveLength(3);
         });
 
+        // A browser only lets a web client read a cross-origin response that carries
+        // Access-Control-Allow-Origin. Without it, setRestObject's fetch rejects with a bare
+        // network error instead of resolving to false on the 413.
+        it('carries the CORS headers, even for a body the parser refuses', async () => {
+            const origin = 'http://student-laptop.local:5173';
+
+            const tooLarge = await fetch(storeUrl('WebApp', 'x'), {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json', 'Origin': origin },
+                body: JSON.stringify('x'.repeat(MAX_FRAME_LENGTH)),
+            });
+            expect(tooLarge.status).toBe(413);
+            expect(tooLarge.headers.get('access-control-allow-origin')).toBe('*');
+
+            const malformed = await fetch(storeUrl('WebApp', 'x'), {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json', 'Origin': origin },
+                body: '{not json',
+            });
+            expect(malformed.status).toBe(400);
+            expect(malformed.headers.get('access-control-allow-origin')).toBe('*');
+
+            const failed = await fetch(`${baseUrl}/api/fails`, { headers: { 'Origin': origin } });
+            expect(failed.status).toBe(500);
+            expect(failed.headers.get('access-control-allow-origin')).toBe('*');
+        });
+
         it('does not name the path on disk when the admin UI files are missing', async () => {
             await rm(path.join(webRoot, 'index.html'));
 
