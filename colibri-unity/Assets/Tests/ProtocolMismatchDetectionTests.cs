@@ -135,11 +135,10 @@ namespace HCIKonstanz.Colibri.E2E
             IgnoreTheExpectedFailures();
 
             _scriptedServer = FakeColibriServer.Start(FakeColibriServer.Behaviour.HangUpAfterHandshake);
-            yield return PointConnectionAt(_scriptedServer.Port);
 
             var onConnected = 0;
             var everConnected = false;
-            Connection.OnConnected += () => onConnected++;
+            ConnectionTo(_scriptedServer.Port).OnConnected += () => onConnected++;
 
             var sessionsWhenSuspected = -1;
             yield return E2EServer.WaitUntil(() =>
@@ -178,11 +177,10 @@ namespace HCIKonstanz.Colibri.E2E
             IgnoreTheExpectedFailures();
 
             _scriptedServer = FakeColibriServer.Start(FakeColibriServer.Behaviour.Silent);
-            yield return PointConnectionAt(_scriptedServer.Port);
 
             var onConnected = 0;
             var everConnected = false;
-            Connection.OnConnected += () => onConnected++;
+            ConnectionTo(_scriptedServer.Port).OnConnected += () => onConnected++;
 
             // The watchdog's 2 s, the 500 ms backoff, and room for a loaded editor.
             yield return E2EServer.WaitUntil(() =>
@@ -281,13 +279,13 @@ namespace HCIKonstanz.Colibri.E2E
             IgnoreTheExpectedFailures();
 
             _scriptedServer = FakeColibriServer.Start(FakeColibriServer.Behaviour.Refuse);
-            yield return PointConnectionAt(_scriptedServer.Port);
 
             var onConnected = 0;
             var onDisconnected = 0;
             var everConnected = false;
-            Connection.OnConnected += () => onConnected++;
-            Connection.OnDisconnected += () => onDisconnected++;
+            var connection = ConnectionTo(_scriptedServer.Port);
+            connection.OnConnected += () => onConnected++;
+            connection.OnDisconnected += () => onDisconnected++;
 
             var refusalWarnings = 0;
             Application.LogCallback countRefusalWarnings = (message, stackTrace, type) =>
@@ -299,9 +297,10 @@ namespace HCIKonstanz.Colibri.E2E
             Application.logMessageReceivedThreaded += countRefusalWarnings;
             try
             {
-                // Sent before the refusal arrives, so it is waiting in the queue when it does.
-                var queuedBefore = Connection.SendCommandAsync("refusal-test", "broadcast::int", 1);
-                var awaitingConnected = Connection.Connected;
+                // Sent in the frame the connection was created, so it is waiting in the queue
+                // when the refusal arrives.
+                var queuedBefore = connection.SendCommandAsync("refusal-test", "broadcast::int", 1);
+                var awaitingConnected = connection.Connected;
 
                 yield return E2EServer.WaitUntil(() =>
                     {
@@ -386,12 +385,12 @@ namespace HCIKonstanz.Colibri.E2E
             IgnoreTheExpectedFailures();
 
             _scriptedServer = FakeColibriServer.Start(FakeColibriServer.Behaviour.Heartbeat);
-            yield return PointConnectionAt(_scriptedServer.Port);
 
             var onConnected = 0;
             var onDisconnected = 0;
-            Connection.OnConnected += () => onConnected++;
-            Connection.OnDisconnected += () => onDisconnected++;
+            var connection = ConnectionTo(_scriptedServer.Port);
+            connection.OnConnected += () => onConnected++;
+            connection.OnDisconnected += () => onDisconnected++;
 
             yield return E2EServer.WaitUntil(() => onConnected == 1, "The client never connected", 10f);
 
@@ -413,10 +412,9 @@ namespace HCIKonstanz.Colibri.E2E
         public IEnumerator AServerThatSpeaksCountsAsConnected()
         {
             _scriptedServer = FakeColibriServer.Start(FakeColibriServer.Behaviour.Heartbeat);
-            yield return PointConnectionAt(_scriptedServer.Port);
 
             var onConnected = 0;
-            Connection.OnConnected += () => onConnected++;
+            ConnectionTo(_scriptedServer.Port).OnConnected += () => onConnected++;
 
             yield return E2EServer.WaitUntil(() => Connection.Status == ConnectionStatus.Connected && onConnected == 1,
                 "The client never counted a server sending heartbeats as connected", 10f);
@@ -444,14 +442,26 @@ namespace HCIKonstanz.Colibri.E2E
 
         private static IEnumerator PointConnectionAt(int tcpPort)
         {
+            ConnectionTo(tcpPort);
+            yield return null;
+        }
+
+        /// <summary>
+        /// Points a fresh connection at the given port and hands it back without waiting a frame.
+        /// A test that subscribes to its events has to do it here: the connection raises them from
+        /// its Update, and against a local server the first one can be due by the next frame.
+        /// </summary>
+        private static WebServerConnection ConnectionTo(int tcpPort)
+        {
             E2EServer.Configure();
             var config = ColibriConfig.Load();
             config.TcpServerPort = tcpPort;
 
             // OnEnable is what reads the config, so the port only takes effect on a fresh
             // instance - which touching Instance after the teardown above creates.
-            Assert.That(Connection, Is.Not.Null);
-            yield return null;
+            var connection = Connection;
+            Assert.That(connection, Is.Not.Null);
+            return connection;
         }
 
         private static IEnumerator DestroyConnection()
