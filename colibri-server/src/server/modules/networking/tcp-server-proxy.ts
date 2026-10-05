@@ -186,9 +186,22 @@ export class TCPServerProxy
         // A client completing a handshake proves the (possibly restarted) worker is
         // healthy, so the restart budget starts over from here.
         this.restartAttempts = 0;
-        this.clients.set(client.id, client);
-        this.addToAppIndex(client);
 
+        // A TCP client can handshake again on the same connection; the worker then reports it
+        // connected again under the same id, in its new app. Downstream that has to look like
+        // leaving the old app and joining the new one - ConnectionPool's app index,
+        // ModelSynchronization clearing the store of an app whose last client left, and
+        // ClientBroadcast's client::disconnected - or the old app keeps the id, and its store,
+        // forever. The new entry is in `clients` before the old one is reported gone, so a
+        // re-handshake into the *same* app is not mistaken for that app's last client leaving.
+        const previous = this.clients.get(client.id);
+        this.clients.set(client.id, client);
+        if (previous) {
+            this.removeFromAppIndex(previous);
+            this.clientRemovedStream.next(previous);
+        }
+
+        this.addToAppIndex(client);
         this.clientAddedStream.next(client);
         this.clientStream.next(this.currentClients);
     }

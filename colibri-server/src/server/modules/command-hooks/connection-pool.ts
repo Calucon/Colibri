@@ -49,6 +49,10 @@ export class ConnectionPool extends Service {
     // broadcastToApp resolves its recipients from here instead of scanning that
     // transport's entire client list per broadcast.
     private readonly clientsByApp = new Map<string, Set<NetworkClient>>();
+    // The client object each id was last reported connected as. A transport may report the
+    // same id connected again in another app (a TCP re-handshake); the object it replaces has
+    // to leave its app's Set, which only this lookup can find.
+    private readonly clientById = new Map<string, NetworkClient>();
 
     // Every command-hook used to subscribe to the `messages$` getter below independently,
     // each rebuilding its own merge() of every transport's messages$ - N subscribers meant
@@ -77,10 +81,16 @@ export class ConnectionPool extends Service {
 
         for (const connection of servers) {
             connection.clientConnected$.subscribe(client => {
+                const previous = this.clientById.get(client.id);
+                if (previous) {
+                    this.removeFromAppIndex(previous);
+                }
+                this.clientById.set(client.id, client);
                 this.serverByClientId.set(client.id, connection);
                 this.addToAppIndex(client);
             });
             connection.clientDisconnected$.subscribe(client => {
+                this.clientById.delete(client.id);
                 this.serverByClientId.delete(client.id);
                 this.removeFromAppIndex(client);
             });

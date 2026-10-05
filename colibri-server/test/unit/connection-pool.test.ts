@@ -149,6 +149,24 @@ describe('ConnectionPool', () => {
             expect(server.broadcastToAppCalls).toEqual([{ message, app: 'appA', exceptClientId: 'a1' }]);
         });
 
+        // A TCP re-handshake is reported as the same id connecting again in another app. The
+        // object it replaced used to stay in the old app's Set, so the old app's broadcasts
+        // still reached the client on any transport without broadcastToApp.
+        it('drops a client reported connected again in another app from its old app', () => {
+            const server = new FakeServer();
+            const pool = new ConnectionPool(server);
+
+            const sender = makeClient('a2', 'appA');
+            server.connectClient(makeClient('a1', 'appA'));
+            server.connectClient(sender);
+            server.connectClient(makeClient('a1', 'appB'));
+
+            pool.broadcast({ channel: 'c', command: 'model::update', origin: sender });
+            pool.broadcast({ channel: 'c', command: 'model::update', origin: makeClient('b9', 'appB') });
+
+            expect(server.broadcasts.map(b => b.clients.map(c => `${c.id} ${c.app}`))).toEqual([['a1 appB']]);
+        });
+
         it('broadcasts to every client when no app is specified and no origin is set', () => {
             const server = new FakeServer();
             const pool = new ConnectionPool(server);
