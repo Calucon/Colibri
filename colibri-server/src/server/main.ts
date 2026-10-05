@@ -36,6 +36,7 @@ const connectionPool = new colibri.ConnectionPool(tcpServer, socketioServer);
  *    APIs
  */
 const restApi = new colibri.RestAPI(Config.DATA_ROOT, webServer);
+const dataRootCheck = new colibri.DataRootCheck(Config.DATA_ROOT);
 
 /**
  *    Plumbing
@@ -60,6 +61,10 @@ const startup = async () => {
     for (const service of colibri.Service.Current) {
         await service.init();
     }
+
+    // After every init(), so the admin UI's WebLog is listening for it too. Not fatal: the
+    // server is still useful without persistence, it just has to say so.
+    await dataRootCheck.check();
 
     const httpServer = webServer.start();
     socketioServer.start(httpServer);
