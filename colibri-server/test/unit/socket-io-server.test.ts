@@ -1,13 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createServer, Server as HttpServer } from 'http';
 import { AddressInfo } from 'net';
-import { Subscription } from 'rxjs';
+import { Subscription, filter, firstValueFrom } from 'rxjs';
 import { io as connectClient, Socket as ClientSocket } from 'socket.io-client';
 import { SocketIOServer } from '../../src/server/modules/networking/socket-io-server.js';
-import { PROTOCOL_VERSION } from '../../src/server/modules/networking/protocol.js';
+import { MAX_FRAME_LENGTH, PROTOCOL_VERSION, encodeMessageFrame } from '../../src/server/modules/networking/protocol.js';
 import { Service } from '../../src/server/modules/core/service.js';
 import { LogLevel, LogMessage } from '../../src/server/modules/core/log-message.js';
-import { NetworkClient } from '../../src/server/modules/command-hooks/connection-pool.js';
+import { NetworkClient, NetworkMessage } from '../../src/server/modules/command-hooks/connection-pool.js';
 
 interface ColibriEvent {
     command: string;
@@ -49,10 +49,13 @@ describe('SocketIOServer', () => {
         await new Promise(resolve => http.once('close', resolve));
     });
 
-    const connect = function (query: Record<string, string>): { socket: ClientSocket; colibri: ColibriEvent[] } {
+    const connect = function (
+        query: Record<string, string>,
+        transport: 'websocket' | 'polling' = 'websocket'
+    ): { socket: ClientSocket; colibri: ColibriEvent[] } {
         const socket = connectClient(`http://127.0.0.1:${port}`, {
             query,
-            transports: ['websocket'],
+            transports: [transport],
             reconnection: false,
             forceNew: true,
         });
@@ -141,6 +144,48 @@ describe('SocketIOServer', () => {
 
             expect(first).toEqual({ command: 'protocol::accepted', payload: { serverVersion: PROTOCOL_VERSION } });
             expect(socket.connected).toBe(true);
+        });
+
+        // engine.io's default inbound limit (1e6 bytes) disconnected a web client for sending a
+        // fifth of what a TCP client may: a frame of up to MAX_FRAME_LENGTH.
+        describe.each(['websocket', 'polling'] as const)('over %s', (transport) => {
+            const channel = 'appA::big';
+            const command = 'broadcast::string';
+
+            // Whichever comes first: the server receiving the message, or the client being
+            // dropped for it.
+            const send = async function (payloadJsonBytes: number): Promise<{ msg?: NetworkMessage; disconnected?: string }> {
+                const { socket } = connect({ app: 'appA', version: PROTOCOL_VERSION }, transport);
+                await nextColibriEvent(socket);
+
+                const received = firstValueFrom(server.messages$.pipe(filter(m => m.channel === channel)));
+                const dropped = disconnectReason(socket);
+
+                // A JSON string payload: its encoded form is the value plus two quotes.
+                socket.emit(channel, { command, payload: 'x'.repeat(payloadJsonBytes - 2) });
+                return Promise.race([
+                    received.then(msg => ({ msg })),
+                    dropped.then(disconnected => ({ disconnected })),
+                ]);
+            };
+
+            it('accepts a message as large as a TCP client may send', async () => {
+                // The payload that fills a TCP frame with this channel and command exactly.
+                const payloadBytes = MAX_FRAME_LENGTH - 1 - (2 + channel.length) - (2 + command.length);
+                expect(() => encodeMessageFrame({ channel, command, payload: Buffer.alloc(payloadBytes) })).not.toThrow();
+
+                const outcome = await send(payloadBytes);
+
+                expect(outcome.disconnected).toBeUndefined();
+                expect(outcome.msg?.payload?.asString()).toHaveLength(payloadBytes);
+            });
+
+            it('still disconnects a client that sends far more', async () => {
+                const outcome = await send(MAX_FRAME_LENGTH + 512 * 1024);
+
+                expect(outcome.msg).toBeUndefined();
+                expect(outcome.disconnected).toBeDefined();
+            });
         });
 
         it('joins its app', async () => {

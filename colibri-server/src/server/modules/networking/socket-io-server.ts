@@ -4,7 +4,23 @@ import { Observable, Subject } from 'rxjs';
 
 import { Payload, Service } from '../core/index.js';
 import { NetworkClient, NetworkMessage, NetworkServer } from '../command-hooks/index.js';
-import { COLIBRI_CHANNEL, PROTOCOL_ACCEPTED_COMMAND, PROTOCOL_REJECTED_COMMAND, PROTOCOL_VERSION, protocolAcceptance, protocolRejection } from './protocol.js';
+import {
+    COLIBRI_CHANNEL,
+    MAX_FIELD_LENGTH,
+    MAX_FRAME_LENGTH,
+    PROTOCOL_ACCEPTED_COMMAND,
+    PROTOCOL_REJECTED_COMMAND,
+    PROTOCOL_VERSION,
+    protocolAcceptance,
+    protocolRejection,
+} from './protocol.js';
+
+// The largest packet a web client may send. engine.io's default is 1e6 bytes, past which the
+// client is disconnected outright - while a TCP client may send frames of up to MAX_FRAME_LENGTH
+// (5 MiB), so a web client was cut off for sending a fifth of what a Unity client can. This fits a
+// MAX_FRAME_LENGTH payload plus the Socket.IO envelope around it: the event name (the channel)
+// and the command, each at most MAX_FIELD_LENGTH as on TCP, and some JSON punctuation.
+const MAX_SOCKET_IO_PACKET_BYTES = MAX_FRAME_LENGTH + 2 * MAX_FIELD_LENGTH + 1024;
 
 export interface SocketIoClient extends NetworkClient {
     socket: SocketIoSocket;
@@ -33,7 +49,8 @@ export class SocketIOServer extends Service implements NetworkServer {
         this.ioServer = new SocketIoServer(server, {
             cors: {
                 origin: '*'
-            }
+            },
+            maxHttpBufferSize: MAX_SOCKET_IO_PACKET_BYTES,
         });
 
         this.ioServer.on('connection', (socket) => {
