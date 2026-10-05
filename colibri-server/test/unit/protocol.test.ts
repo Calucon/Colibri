@@ -3,6 +3,7 @@ import {
     FrameError,
     FrameReader,
     FrameType,
+    PROTOCOL_VERSION,
     V1FramingError,
     encodeHandshakeFrame,
     encodeHeartbeatFrame,
@@ -38,10 +39,10 @@ describe('protocol v3 framing', () => {
     describe('handshake frames', () => {
         it('round-trips version/app/name', () => {
             const reader = new FrameReader(MAX_FRAME_LENGTH);
-            const frame = encodeHandshakeFrame('1', 'myApp', 'myClient');
+            const frame = encodeHandshakeFrame(PROTOCOL_VERSION, 'myApp', 'myClient');
 
             const [decoded] = readAll(reader, frame);
-            expect(decoded).toEqual({ type: FrameType.Handshake, version: '1', app: 'myApp', name: 'myClient' });
+            expect(decoded).toEqual({ type: FrameType.Handshake, version: PROTOCOL_VERSION, app: 'myApp', name: 'myClient' });
         });
 
         it('throws FrameError on a malformed handshake body', () => {
@@ -112,14 +113,14 @@ describe('protocol v3 framing', () => {
         it('yields multiple frames delivered in a single segment', () => {
             const reader = new FrameReader(MAX_FRAME_LENGTH);
             const a = encodeHeartbeatFrame(1n);
-            const b = encodeHandshakeFrame('1', 'app', 'name');
+            const b = encodeHandshakeFrame(PROTOCOL_VERSION, 'app', 'name');
             const c = encodeMessageFrame({ channel: 'x', command: 'y', payload: Buffer.from('z') });
 
             const decoded = readAll(reader, Buffer.concat([a, b, c]));
 
             expect(decoded).toHaveLength(3);
             expect(decoded[0]).toEqual({ type: FrameType.Heartbeat, pingTimestamp: 1n });
-            expect(decoded[1]).toEqual({ type: FrameType.Handshake, version: '1', app: 'app', name: 'name' });
+            expect(decoded[1]).toEqual({ type: FrameType.Handshake, version: PROTOCOL_VERSION, app: 'app', name: 'name' });
             expect(decoded[2]).toEqual({ type: FrameType.Message, channel: 'x', command: 'y', payload: Buffer.from('z') });
         });
 
@@ -280,7 +281,7 @@ describe('protocol v3 framing', () => {
     describe('handshake field validation', () => {
         it('rejects a handshake with fewer than three fields', () => {
             const reader = new FrameReader(MAX_FRAME_LENGTH);
-            const body = Buffer.from('1::appOnly', 'utf8');
+            const body = Buffer.from(`${PROTOCOL_VERSION}::appOnly`, 'utf8');
             const frame = Buffer.alloc(5 + body.length);
             frame.writeUInt32LE(1 + body.length, 0);
             frame.writeUInt8(FrameType.Handshake, 4);
@@ -293,7 +294,7 @@ describe('protocol v3 framing', () => {
         // parser used to silently keep the first three parts and drop the rest of the name.
         it('rejects a handshake whose name contains the field separator', () => {
             const reader = new FrameReader(MAX_FRAME_LENGTH);
-            const frame = encodeHandshakeFrame('1', 'app', 'na::me');
+            const frame = encodeHandshakeFrame(PROTOCOL_VERSION, 'app', 'na::me');
 
             expect(() => readAll(reader, frame)).toThrow(FrameError);
         });
