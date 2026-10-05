@@ -105,6 +105,16 @@ describe('SocketIOServer', () => {
             expect(colibri[0]?.payload).toMatchObject({ serverVersion: PROTOCOL_VERSION });
             expect(connected).toEqual([]);
         });
+
+        // protocol.md documents clientVersion as a string; an undefined version used to vanish
+        // from the JSON, leaving a client that reads it with nothing to report.
+        it('is sent its version back as an empty string, not left out', async () => {
+            const { socket, colibri } = connect({ app: 'appA' });
+            await disconnectReason(socket);
+
+            expect(colibri[0]?.payload).toHaveProperty('clientVersion', '');
+            expect(String(colibri[0]?.payload.reason)).toContain('(none)');
+        });
     });
 
     // The admin UI ships with the server, so a mismatch there is a bug to be warned about, not a

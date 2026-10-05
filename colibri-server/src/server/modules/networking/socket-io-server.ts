@@ -128,10 +128,15 @@ export class SocketIOServer extends Service implements NetworkServer {
     }
 
     private handleNewClient(socket: SocketIoSocket): void {
+        // engine.io builds the query from the URL's search params, so a value is a string or
+        // absent. An absent version becomes '' rather than undefined: the refusal below
+        // promises a string clientVersion (docs/protocol.md), and JSON drops an undefined
+        // field altogether.
+        const version = socket.handshake.query.version;
         const client: SocketIoClient = {
             id: socket.id,
             app: socket.handshake.query.app as string,
-            version: socket.handshake.query.version as string,
+            version: typeof version === 'string' ? version : '',
             name: socket.handshake.address as string,
             metadata: {},
             socket
@@ -149,7 +154,7 @@ export class SocketIOServer extends Service implements NetworkServer {
         if (client.version !== PROTOCOL_VERSION) {
             const rejection = protocolRejection(client.version);
             if (client.app === COLIBRI_CHANNEL) {
-                this.logWarning(`Admin UI client ${client.id} announced protocol v${client.version}; expected v${PROTOCOL_VERSION}`);
+                this.logWarning(`Admin UI client ${client.id} announced protocol version '${client.version || '(none)'}'; expected v${PROTOCOL_VERSION}`);
             } else {
                 this.logError(`Refusing client ${client.id} from ${socket.handshake.address}: ${rejection.reason}`, false);
                 socket.emit(COLIBRI_CHANNEL, { command: PROTOCOL_REJECTED_COMMAND, payload: rejection });
