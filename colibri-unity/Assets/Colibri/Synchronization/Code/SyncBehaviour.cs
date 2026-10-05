@@ -220,8 +220,9 @@ namespace HCIKonstanz.Colibri.Synchronization
         {
             Initialize();
 
-            var isPrefab = gameObject.scene == null;
-            if (!isPrefab && String.IsNullOrEmpty(Id))
+            // Awake only ever runs on an object in a scene - a placed or an instantiated one,
+            // never a prefab asset - so there is no prefab case to exclude here.
+            if (String.IsNullOrEmpty(Id))
                 Id = Guid.NewGuid().ToString();
 
             var self = this as T;
