@@ -4,6 +4,13 @@ services:
     restart: unless-stopped
     container_name: colibri
     tty: true
+    # The server logs to stdout/stderr, client log lines included, and Docker's default
+    # json-file log never rotates: cap it rather than let a long study fill the disk.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     volumes:
         - ./data/:/srv/colibri/data
     ports:
