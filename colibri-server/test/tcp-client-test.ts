@@ -6,16 +6,25 @@
 // observable at all: the server derives a client's latency purely from the ping timestamp
 // coming back in a 0x00 frame, so without a client that returns it there is nothing to see
 // in the admin UI's latency chart.
+//
+// Exit codes: 0 connected and heartbeated, 1 something is wrong with the server (no heartbeat,
+// or a frame this client cannot decode), 2 the server refused this client's protocol version -
+// the expected outcome of `npm run test:tcpclient -- 1`.
 import * as net from 'net';
 import { Config } from '../src/server/configuration.js';
 import {
+    COLIBRI_CHANNEL,
     FrameReader,
     FrameType,
+    PROTOCOL_REJECTED_COMMAND,
     PROTOCOL_VERSION,
+    ProtocolRejection,
     encodeHandshakeFrame,
     encodeHeartbeatFrame,
     encodeMessageFrame,
 } from '../src/server/modules/networking/protocol.js';
+
+const EXIT_REFUSED = 2;
 
 const address = '127.0.0.1';
 const port = Config.TCP_PORT;
@@ -34,6 +43,19 @@ const onError = (err: Error | undefined) => {
 const reader = new FrameReader();
 let heartbeats = 0;
 let messages = 0;
+// Set once the server says why it is refusing this client; a refused client is never heartbeated,
+// so without this the summary below blamed a missing heartbeat instead.
+let refusal: Partial<ProtocolRejection> | undefined;
+
+const readRefusal = function (payload: Buffer): Partial<ProtocolRejection> {
+    try {
+        const parsed: unknown = JSON.parse(payload.toString('utf8'));
+        if (parsed && typeof parsed === 'object') return parsed as Partial<ProtocolRejection>;
+    } catch {
+        // Reported below as a refusal without a readable reason.
+    }
+    return {};
+};
 
 const client = new net.Socket();
 
@@ -64,6 +86,9 @@ client.on('data', (data) => {
                 console.log(
                     `<- message ${frame.channel} / ${frame.command} (${frame.payload.length} payload bytes)`
                 );
+                if (frame.channel === COLIBRI_CHANNEL && frame.command === PROTOCOL_REJECTED_COMMAND) {
+                    refusal = readRefusal(frame.payload);
+                }
                 break;
 
             case FrameType.Handshake:
@@ -75,9 +100,20 @@ client.on('data', (data) => {
 
 client.on('error', (err) => console.error(err));
 
+let endTimer: NodeJS.Timeout | undefined;
+
 client.on('close', () => {
+    clearTimeout(endTimer);
     console.log(`Disconnected after ${heartbeats} heartbeat(s) and ${messages} message(s)`);
-    if (heartbeats === 0) {
+
+    if (refusal) {
+        console.error(
+            `REFUSED: the server speaks protocol v${refusal.serverVersion ?? '?'}, ` +
+                `and this client announced '${refusal.clientVersion ?? version}'.`
+        );
+        console.error(`         ${refusal.reason ?? '(no reason given)'}`);
+        process.exitCode = EXIT_REFUSED;
+    } else if (heartbeats === 0) {
         console.error('No heartbeat received - the server is not sending v3 heartbeat frames');
         process.exitCode = 1;
     }
@@ -98,5 +134,5 @@ client.connect(port, address, () => {
         onError
     );
 
-    setTimeout(() => client.end(), runMillis);
+    endTimer = setTimeout(() => client.end(), runMillis);
 });
