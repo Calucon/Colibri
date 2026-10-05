@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using HCIKonstanz.Colibri.Networking;
 using HCIKonstanz.Colibri.Setup;
+using HCIKonstanz.Colibri.Synchronization;
 using NUnit.Framework;
 using UnityEngine;
 using UnityEngine.TestTools;
@@ -263,6 +264,112 @@ namespace HCIKonstanz.Colibri.E2E
             Assert.That(_scriptedServer.Accepted, Is.EqualTo(3));
             Assert.That(Connection.Status, Is.Not.EqualTo(ConnectionStatus.ProtocolMismatch),
                 "A guess must not settle into the status reserved for a refusal the server actually sent");
+        }
+
+        /*
+         *  A refusal the server actually sent: final, and it has to look final to user code too.
+         */
+
+        /// <summary>
+        /// A newer server refuses this client in its very first frame. That is never a connection,
+        /// is not retried, and leaves nothing waiting: OnDisconnected used to never fire for it,
+        /// the Connected task stayed pending for good, and every later send awaited it forever.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator ARefusalInTheFirstFrameIsFinalAndLeavesNothingWaiting()
+        {
+            IgnoreTheExpectedFailures();
+
+            _scriptedServer = FakeColibriServer.Start(FakeColibriServer.Behaviour.Refuse);
+            yield return PointConnectionAt(_scriptedServer.Port);
+
+            var onConnected = 0;
+            var onDisconnected = 0;
+            var everConnected = false;
+            Connection.OnConnected += () => onConnected++;
+            Connection.OnDisconnected += () => onDisconnected++;
+
+            var refusalWarnings = 0;
+            Application.LogCallback countRefusalWarnings = (message, stackTrace, type) =>
+            {
+                if (type == LogType.Warning && message.Contains("the server refused this client's protocol version, so nothing is sent any more"))
+                    Interlocked.Increment(ref refusalWarnings);
+            };
+
+            Application.logMessageReceivedThreaded += countRefusalWarnings;
+            try
+            {
+                // Sent before the refusal arrives, so it is waiting in the queue when it does.
+                var queuedBefore = Connection.SendCommandAsync("refusal-test", "broadcast::int", 1);
+                var awaitingConnected = Connection.Connected;
+
+                yield return E2EServer.WaitUntil(() =>
+                    {
+                        everConnected |= Connection.Status == ConnectionStatus.Connected;
+                        return Connection.Status == ConnectionStatus.ProtocolMismatch;
+                    },
+                    "The client never settled into ProtocolMismatch after the server refused it", 10f);
+
+                Assert.That(Connection.ServerVersion, Is.EqualTo("3"));
+                Assert.That(Connection.ProtocolMismatchReason, Does.Contain("Unsupported protocol version"));
+
+                Assert.That(queuedBefore.IsCompleted, Is.True, "A message queued before the refusal is still waiting for a connection that will never come");
+                Assert.That(queuedBefore.Result, Is.False, "A message that was never sent was reported as sent");
+                Assert.That(awaitingConnected.IsCanceled, Is.True, "`await Connected` would wait forever after a refusal");
+                Assert.That(Connection.Connected.IsCanceled, Is.True, "`await Connected` would wait forever after a refusal");
+
+                // Sends after the refusal complete at once, as dropped, and say so once between them.
+                var sentAfter = Connection.SendCommandAsync("refusal-test", "broadcast::int", 2);
+                Assert.That(sentAfter.IsCompleted, Is.True, "A send after the refusal is waiting for a connection that will never come");
+                Assert.That(sentAfter.Result, Is.False);
+                Sync.Send("refusal-test", 3);
+
+                // Long enough for a retry to have happened, if there were going to be one.
+                yield return E2EServer.Settle(1.5f);
+
+                Assert.That(_scriptedServer.Accepted, Is.EqualTo(1), "A refusal is final, but the client tried again");
+                Assert.That(Connection.Status, Is.EqualTo(ConnectionStatus.ProtocolMismatch));
+                Assert.That(onConnected, Is.Zero, "A refusal in the first frame was reported as a connection");
+                Assert.That(everConnected, Is.False, "A refusal in the first frame was reported as a connection");
+                Assert.That(onDisconnected, Is.Zero, "OnDisconnected without an OnConnected before it");
+                Assert.That(refusalWarnings, Is.EqualTo(1), "Dropping sends after a refusal should be said exactly once");
+            }
+            finally
+            {
+                Application.logMessageReceivedThreaded -= countRefusalWarnings;
+            }
+        }
+
+        /// <summary>
+        /// OnConnected and OnDisconnected come in pairs. OnDisconnected used to be raised for every
+        /// attempt that failed, connected or not - against a server that is down, twice a second.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator OnDisconnectedIsRaisedOnceForEveryOnConnected()
+        {
+            IgnoreTheExpectedFailures();
+
+            _scriptedServer = FakeColibriServer.Start(FakeColibriServer.Behaviour.Heartbeat);
+            yield return PointConnectionAt(_scriptedServer.Port);
+
+            var onConnected = 0;
+            var onDisconnected = 0;
+            Connection.OnConnected += () => onConnected++;
+            Connection.OnDisconnected += () => onDisconnected++;
+
+            yield return E2EServer.WaitUntil(() => onConnected == 1, "The client never connected", 10f);
+
+            // The connection drops, and the attempts after it fail.
+            _scriptedServer.Mode = FakeColibriServer.Behaviour.HangUpAfterHandshake;
+            _scriptedServer.ResetConnections();
+
+            yield return E2EServer.WaitUntil(() => _scriptedServer.Accepted >= 3,
+                "The client stopped retrying after its connection dropped", 10f);
+            yield return null;
+
+            Assert.That(onConnected, Is.EqualTo(1));
+            Assert.That(onDisconnected, Is.EqualTo(1),
+                "OnDisconnected should be raised once for the connection that ended, and not for the attempts that failed after it");
         }
 
         /// <summary>The counterpart: a server that heartbeats is connected, once, and stays so.</summary>

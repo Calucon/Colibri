@@ -90,6 +90,14 @@ namespace HCIKonstanz.Colibri.Networking
         /// </summary>
         public event Action OnConnected;
 
+        /// <summary>
+        /// Raised on the main thread once for every <see cref="OnConnected"/>, when that connection
+        /// ends - dropped, timed out, or refused by the server. An attempt that never got as far as
+        /// Connected raises neither event. That includes a server that refuses this client in its
+        /// very first frame: it is reported by <see cref="Status"/> becoming
+        /// <see cref="ConnectionStatus.ProtocolMismatch"/> and by <see cref="Connected"/> being
+        /// cancelled.
+        /// </summary>
         public event Action OnDisconnected;
 
         // Instance, not static: static state survives Enter Play Mode with domain reload
@@ -107,7 +115,7 @@ namespace HCIKonstanz.Colibri.Networking
         private readonly SemaphoreSlim _sendLock = new SemaphoreSlim(1, 1);
 
         // Every outgoing message, in the order it was sent, until it has been written to a socket.
-        // See "Sending" below. Everything from here to _hasWarnedAboutDrops is under _outboxLock:
+        // See "Sending" below. Everything from here to _hasWarnedAboutRefusal is under _outboxLock:
         // senders on any thread, the drainer on the thread pool and the connection loop all touch it.
         private readonly LinkedList<Outgoing> _outbox = new LinkedList<Outgoing>();
         private readonly object _outboxLock = new object();
@@ -123,6 +131,11 @@ namespace HCIKonstanz.Colibri.Networking
 
         // Reset on every connection, so a drop is reported once per outage.
         private bool _hasWarnedAboutDrops;
+
+        // Set when the server refuses this client's protocol version. Nothing will ever be sent
+        // again, so a send completes at once, as dropped, instead of waiting in the outbox.
+        private bool _isRefused;
+        private bool _hasWarnedAboutRefusal;
 
         private readonly LockFreeQueue<InPacket> _queuedCommands = new LockFreeQueue<InPacket>();
         private long _lastHeartbeatTime;
@@ -159,7 +172,8 @@ namespace HCIKonstanz.Colibri.Networking
         /// <summary>
         /// Completes when <see cref="Status"/> becomes <see cref="ConnectionStatus.Connected"/>,
         /// i.e. once the server has sent its first frame. While disconnected it is a fresh, pending
-        /// task again. Cancelled when this component is disabled.
+        /// task again. Cancelled when this component is disabled, and when the server refuses this
+        /// client's protocol version: that is final, so awaiting it would otherwise never return.
         /// </summary>
         public Task Connected => _connectedGate.Task;
 
@@ -234,6 +248,7 @@ namespace HCIKonstanz.Colibri.Networking
                     if (_status == value)
                         return;
 
+                    var wasConnected = _status == ConnectionStatus.Connected;
                     _status = value;
 
                     if (_status == ConnectionStatus.Connected)
@@ -254,7 +269,14 @@ namespace HCIKonstanz.Colibri.Networking
                         _connectedGate = NewGate();
                     }
 
-                    if (_status == ConnectionStatus.Disconnected)
+                    // Final: there will be no next connection to wait for.
+                    if (_status == ConnectionStatus.ProtocolMismatch)
+                        _connectedGate.TrySetCanceled();
+
+                    // One OnDisconnected per OnConnected, whatever ended the connection - a
+                    // refusal included. It used to be raised for every failed attempt, connected
+                    // or not, and never for a refusal at all.
+                    if (wasConnected)
                         _fireOnDisconnected = true;
                 }
             }
@@ -278,6 +300,13 @@ namespace HCIKonstanz.Colibri.Networking
 
             _connectedGate = NewGate();
             _isGateOpen = false;
+
+            // Enabling the component again is a deliberate retry, refusal or not.
+            lock (_outboxLock)
+            {
+                _isRefused = false;
+                _hasWarnedAboutRefusal = false;
+            }
 
             _lifetime = new CancellationTokenSource();
             _ = RunConnectionLoop(_lifetime.Token);
@@ -306,8 +335,11 @@ namespace HCIKonstanz.Colibri.Networking
             // Whatever is still queued stays queued: re-enabling the component sends it.
             CloseOutbox();
 
-            _connectedGate.TrySetCanceled();
+            // In this order: leaving Connected re-arms the gate with a fresh task, and that is
+            // the one an `await Connected` from now on would otherwise wait on forever - OnEnable
+            // replaces it rather than completing it.
             Status = ConnectionStatus.Disconnected;
+            _connectedGate.TrySetCanceled();
         }
 
         private void OnDestroy()
@@ -540,6 +572,11 @@ namespace HCIKonstanz.Colibri.Networking
                     // about the server.
                     if (!token.IsCancellationRequested)
                         CountSessionWithoutAFrame();
+
+                    // Before the status changes, so nothing that reacts to ProtocolMismatch can
+                    // still queue a message that would wait for a connection that never comes.
+                    if (mismatched)
+                        RefuseSends();
 
                     Status = mismatched ? ConnectionStatus.ProtocolMismatch : ConnectionStatus.Disconnected;
                 }
@@ -962,35 +999,80 @@ namespace HCIKonstanz.Colibri.Networking
             }
         }
 
-        private void Post(byte[] frame, TaskCompletionSource<bool> sent)
+        /// <summary>
+        /// The server refused this client: everything still queued is dropped, and every send from
+        /// now on is dropped as it is made. Waiting would be waiting forever - nothing will ever
+        /// connect again - and that is a task leaked per send, plus RemoteLogging's queue growing
+        /// for good behind a send that never returns.
+        /// </summary>
+        private void RefuseSends()
+        {
+            Outgoing[] dropped;
+            lock (_outboxLock)
+            {
+                _isRefused = true;
+                dropped = new Outgoing[_outbox.Count];
+                _outbox.CopyTo(dropped, 0);
+                _outbox.Clear();
+            }
+
+            foreach (var message in dropped)
+                message.Sent?.TrySetResult(false);
+        }
+
+        private void Post(string channel, string command, byte[] frame, TaskCompletionSource<bool> sent)
         {
             List<Outgoing> dropped = null;
             var warnAboutDrops = false;
             var startDraining = false;
+            var refused = false;
+            var warnAboutRefusal = false;
 
             lock (_outboxLock)
             {
-                _outbox.AddLast(new Outgoing { Frame = frame, Sent = sent });
-
-                if (_outboxSocket == null)
+                if (_isRefused)
                 {
-                    while (_outbox.Count > MAX_QUEUED_MESSAGES)
-                    {
-                        (dropped ??= new List<Outgoing>()).Add(_outbox.First.Value);
-                        _outbox.RemoveFirst();
-                    }
+                    refused = true;
+                    warnAboutRefusal = !_hasWarnedAboutRefusal;
+                    _hasWarnedAboutRefusal = true;
+                }
+                else
+                {
+                    _outbox.AddLast(new Outgoing { Frame = frame, Sent = sent });
 
-                    if (dropped != null && !_hasWarnedAboutDrops)
+                    if (_outboxSocket == null)
                     {
-                        _hasWarnedAboutDrops = true;
-                        warnAboutDrops = true;
+                        while (_outbox.Count > MAX_QUEUED_MESSAGES)
+                        {
+                            (dropped ??= new List<Outgoing>()).Add(_outbox.First.Value);
+                            _outbox.RemoveFirst();
+                        }
+
+                        if (dropped != null && !_hasWarnedAboutDrops)
+                        {
+                            _hasWarnedAboutDrops = true;
+                            warnAboutDrops = true;
+                        }
+                    }
+                    else if (!_isDraining)
+                    {
+                        _isDraining = true;
+                        startDraining = true;
                     }
                 }
-                else if (!_isDraining)
+            }
+
+            // Logged, and the dropped tasks completed, outside the lock: both can run other code.
+            if (refused)
+            {
+                if (warnAboutRefusal)
                 {
-                    _isDraining = true;
-                    startDraining = true;
+                    Debug.LogWarning($"Colibri: not sending {command} on channel '{channel}' - the server refused this client's protocol version, "
+                        + "so nothing is sent any more. Every later message is dropped the same way; this is said once.");
                 }
+
+                sent?.TrySetResult(false);
+                return;
             }
 
             if (warnAboutDrops)
@@ -1105,7 +1187,7 @@ namespace HCIKonstanz.Colibri.Networking
             // RunContinuationsAsynchronously: it is completed by the drainer and from under the
             // outbox's callers, neither of which should run the awaiting code inline.
             var sent = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            Post(frame, sent);
+            Post(channel, command, frame, sent);
             return sent.Task;
         }
 
@@ -1114,7 +1196,7 @@ namespace HCIKonstanz.Colibri.Networking
         {
             var frame = EncodeFrame(channel, command, payload);
             if (frame != null)
-                Post(frame, null);
+                Post(channel, command, frame, null);
         }
 
 
