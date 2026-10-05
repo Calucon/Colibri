@@ -474,7 +474,7 @@ export class TCPServerWorker extends WorkerService {
     //
     // end(finalPacket) queues that frame ahead of the FIN, so it is still delivered. The timer
     // only matters for a peer that never closes its side; a well-behaved one closes first and
-    // handleSocketDisconnect clears it.
+    // the socket's 'close' handler clears it.
     private closeClient(client: TcpClient, finalPacket?: Buffer): void {
         if (client.disconnected) return;
 
