@@ -244,6 +244,39 @@ describe('WebLog', () => {
         expect(ticks[0]!.count).toBe(0);
     });
 
+    // The merge index used to keep every key ever logged, each pinning its message after the
+    // history had evicted it: 100k distinct lines left 100k entries behind 20k of history.
+    it('keeps its merge index bounded by the history, and merging still works after evictions', async () => {
+        const server = new FakeSocketIOServer();
+        const webLog = new WebLog(server as unknown as SocketIOServer);
+        await webLog.init();
+        const internals = webLog as unknown as {
+            recentByKey: Map<string, unknown>;
+            logMessages: { length: number; toArray(): unknown[] };
+        };
+
+        const emitter = new Emitter();
+        emitter.emitDebug('tick');
+        for (let i = 0; i < 30000; i++) {
+            emitter.emitDebug(`unique-${i}`);
+        }
+
+        expect(internals.logMessages.length).toBe(20000);
+        expect(internals.recentByKey.size).toBeLessThanOrEqual(20000);
+        // nothing evicted is still reachable through the index
+        const inHistory = new Set(internals.logMessages.toArray());
+        expect([ ...internals.recentByKey.values() ].every(msg => inHistory.has(msg))).toBe(true);
+
+        const admin = makeClient('admin1', 'colibri');
+        server.connectClient(admin);
+        emitter.emitDebug('unique-29999'); // still in history: merged
+        emitter.emitDebug('tick'); // evicted long ago: a new entry
+
+        expect(server.broadcasts.map(b => b.message.payload!.asValue<{ message: string; count: number }>())
+            .map(m => [ m.message, m.count ])).toEqual([ [ 'unique-29999', 1 ], [ 'tick', 0 ] ]);
+        expect(internals.recentByKey.size).toBeLessThanOrEqual(20000);
+    });
+
     it('does not throw on a missing or empty requestLog payload, and defaults to all levels / hidden broadcast', async () => {
         const server = new FakeSocketIOServer();
         const webLog = new WebLog(server as unknown as SocketIOServer);

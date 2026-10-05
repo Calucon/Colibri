@@ -24,6 +24,12 @@ interface LogPreferences {
     showBroadcastTraffic: boolean;
 }
 
+// What makes two log lines "the same" for merging; WebMessage copies all three verbatim
+// from the LogMessage, so an entry's key can be recomputed from either.
+const messageKey = function (msg: { level: number; group: string; message: string }): string {
+    return JSON.stringify([ msg.level, msg.group, msg.message ]);
+};
+
 const KNOWN_LEVELS: ReadonlySet<number> = new Set([ LogLevel.Error, LogLevel.Warn, LogLevel.Info, LogLevel.Debug ]);
 
 // requestLog is accepted from any Socket.IO client of any app, so its payload is whatever
@@ -52,8 +58,11 @@ export class WebLog extends Service {
     // how much unrelated log traffic interleaves between occurrences - a positional lookback over
     // logMessages (the old approach) missed most repeats under any real amount of other traffic,
     // since the previous occurrence would already have scrolled past the lookback window.
-    private readonly recentByKey = new Map<string, { msg: WebMessage; seq: number }>();
-    private totalPushed = 0;
+    //
+    // Holds exactly the entries still in logMessages (see pushMessage), so it is bounded by
+    // MAX_LOG_SIZE too. It used to keep every key ever logged, each pinning its evicted
+    // message: 100k distinct lines left 100k entries behind a 20k-entry history.
+    private readonly recentByKey = new Map<string, WebMessage>();
 
     public constructor(private socketio: SocketIOServer) {
         super();
@@ -108,15 +117,12 @@ export class WebLog extends Service {
     }
 
     private redirectLogMessage(log: LogMessage): void {
-        // group identical messages together, as long as the earlier occurrence hasn't since
-        // been evicted from logMessages (its seq would then be below the oldest surviving one)
-        const key = JSON.stringify([ log.level, log.group, log.message ]);
-        const oldestSurvivingSeq = this.totalPushed - this.logMessages.length;
-        const candidate = this.recentByKey.get(key);
+        // group identical messages together, as long as the earlier occurrence is still in
+        // logMessages (an evicted one has already been dropped from recentByKey)
+        const key = messageKey(log);
+        let webMsg = this.recentByKey.get(key);
 
-        let webMsg: WebMessage;
-        if (candidate && candidate.seq >= oldestSurvivingSeq) {
-            webMsg = candidate.msg;
+        if (webMsg) {
             webMsg.count += 1;
             webMsg.created = log.created.getTime();
         } else {
@@ -130,9 +136,7 @@ export class WebLog extends Service {
                 count: 0,
                 metadata: log.metadata
             };
-            this.logMessages.push(webMsg);
-            this.recentByKey.set(key, { msg: webMsg, seq: this.totalPushed });
-            this.totalPushed += 1;
+            this.pushMessage(key, webMsg);
         }
 
         // History above is kept regardless (a client may request it later), but a single
@@ -163,6 +167,20 @@ export class WebLog extends Service {
             command: 'message',
             payload: Payload.fromValue({ ...webMsg })
         }, clients);
+    }
+
+    private pushMessage(key: string, webMsg: WebMessage): void {
+        // Once full, push() overwrites the oldest entry, so that one leaves recentByKey first.
+        if (this.logMessages.length >= MAX_LOG_SIZE) {
+            const evicted = this.logMessages.at(0);
+            if (evicted) {
+                const evictedKey = messageKey(evicted);
+                if (this.recentByKey.get(evictedKey) === evicted) this.recentByKey.delete(evictedKey);
+            }
+        }
+
+        this.logMessages.push(webMsg);
+        this.recentByKey.set(key, webMsg);
     }
 
     // Broadcast/sync traffic is governed exclusively by showBroadcastTraffic, never by levels,
