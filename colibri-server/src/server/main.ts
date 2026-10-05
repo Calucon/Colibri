@@ -8,6 +8,11 @@ import { Config } from './configuration.js';
 // See Config.STACK_TRACE_LIMIT for why this isn't Infinity.
 Error.stackTraceLimit = Config.STACK_TRACE_LIMIT;
 
+// Attached before any service exists, so nothing logged during construction or init() is missed
+// - the admin UI's WebLog only starts listening once its own init() has run. The options are
+// read here rather than when modules/ is imported, which happens before Config loads .env.
+new colibri.ConsoleLog(colibri.ConsoleLog.optionsFromEnv(process.env)).attach(colibri.Service.output$);
+
 // Print console errors in GUI
 // const redirectConsole = new colibri.RedirectConsole();
 const dataStore = new colibri.DataStore();

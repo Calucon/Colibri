@@ -1,3 +1,4 @@
+export * from './console-log.js';
 export * from './error-handler.js';
 export * from './log-message.js';
 export * from './payload.js';
