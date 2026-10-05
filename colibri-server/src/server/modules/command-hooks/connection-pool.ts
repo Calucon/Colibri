@@ -122,9 +122,28 @@ export class ConnectionPool extends Service {
     private dispatch(message: NetworkMessage): void {
         const handlers = this.handlersByCommand.get(message.command);
         if (handlers) {
-            for (const handler of handlers) handler(message);
+            for (const handler of handlers) this.runHandler(handler, message);
         }
-        for (const handler of this.wildcardHandlers) handler(message);
+        for (const handler of this.wildcardHandlers) this.runHandler(handler, message);
+    }
+
+    // Every handler runs on input straight off the network, and a synchronous throw out of the
+    // merge() subscription above is not contained: RxJS rethrows it asynchronously, it reaches
+    // the process-wide uncaughtException handler, and that shuts the whole server down. Caught
+    // here, one handler failing on one malformed message costs exactly that - the other handlers
+    // still see the message, and the next message is dispatched as normal. The payload is left
+    // out of the log line on purpose: it can be megabytes.
+    private runHandler(handler: MessageHandler, message: NetworkMessage): void {
+        try {
+            handler(message);
+        } catch (err) {
+            const origin = message.origin ? `client ${message.origin.id} ('${message.origin.name}', app '${message.origin.app}')` : 'an unknown client';
+            this.logError(
+                `Dropped a message (${message.channel} / ${message.command}) from ${origin}: a handler threw ` +
+                    (err instanceof Error ? (err.stack ?? err.message) : String(err)),
+                false
+            );
+        }
     }
 
 

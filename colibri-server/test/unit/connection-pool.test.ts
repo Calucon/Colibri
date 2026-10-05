@@ -1,6 +1,8 @@
-import { describe, it, expect, vi } from 'vitest';
-import { Subject } from 'rxjs';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { Subject, Subscription, config as rxjsConfig } from 'rxjs';
 import { ConnectionPool, NetworkClient, NetworkMessage, NetworkServer } from '../../src/server/modules/command-hooks/connection-pool.js';
+import { Service } from '../../src/server/modules/core/service.js';
+import { LogLevel, LogMessage } from '../../src/server/modules/core/log-message.js';
 
 class FakeServer implements NetworkServer {
     public clientConnectedSource = new Subject<NetworkClient>();
@@ -114,6 +116,100 @@ describe('ConnectionPool', () => {
             serverB.messagesSource.next({ channel: 'c', command: 'model::update' });
 
             expect(handler).toHaveBeenCalledTimes(2);
+        });
+    });
+
+    // A synchronous throw out of the pool's message subscription is rethrown by RxJS from a
+    // timer, reaches uncaughtException and shuts the server down - one malformed message from
+    // one client used to be able to take everyone offline.
+    describe('a handler that throws', () => {
+        let unhandled: unknown[];
+        let logs: LogMessage[];
+        let logSubscription: Subscription;
+        const originalOnUnhandledError = rxjsConfig.onUnhandledError;
+
+        beforeEach(() => {
+            unhandled = [];
+            rxjsConfig.onUnhandledError = err => unhandled.push(err);
+            logs = [];
+            logSubscription = Service.output$.subscribe(msg => logs.push(msg));
+        });
+
+        afterEach(() => {
+            rxjsConfig.onUnhandledError = originalOnUnhandledError;
+            logSubscription.unsubscribe();
+        });
+
+        // RxJS reports an unhandled subscriber error on a later timer tick.
+        const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+
+        const throwingHook = function (): never {
+            throw new TypeError('payload.points is not iterable');
+        };
+
+        it('costs only that handler that message', async () => {
+            const server = new FakeServer();
+            const pool = new ConnectionPool(server);
+
+            const sameCommand = vi.fn();
+            const wildcard = vi.fn();
+            pool.onCommand('model::update', throwingHook);
+            pool.onCommand('model::update', sameCommand);
+            pool.onMessage(() => true, wildcard);
+
+            const message: NetworkMessage = { channel: 'appA::chan', command: 'model::update', origin: makeClient('a1', 'appA') };
+            server.messagesSource.next(message);
+            await settle();
+
+            expect(unhandled).toEqual([]);
+            expect(sameCommand).toHaveBeenCalledWith(message);
+            expect(wildcard).toHaveBeenCalledWith(message);
+        });
+
+        it('logs the dropped message, naming the client', async () => {
+            const server = new FakeServer();
+            const pool = new ConnectionPool(server);
+            pool.onCommand('model::update', throwingHook);
+
+            server.messagesSource.next({ channel: 'appA::chan', command: 'model::update', origin: makeClient('a1', 'appA') });
+            await settle();
+
+            const errors = logs.filter(l => l.level === LogLevel.Error).map(l => l.message);
+            expect(errors).toHaveLength(1);
+            expect(errors[0]).toContain('appA::chan / model::update');
+            expect(errors[0]).toContain('a1');
+            expect(errors[0]).toContain('payload.points is not iterable');
+        });
+
+        it('keeps dispatching the messages after it', async () => {
+            const server = new FakeServer();
+            const pool = new ConnectionPool(server);
+
+            const handler = vi.fn((msg: NetworkMessage) => {
+                if (msg.channel === 'bad') throwingHook();
+            });
+            pool.onCommand('model::update', handler);
+
+            server.messagesSource.next({ channel: 'bad', command: 'model::update' });
+            server.messagesSource.next({ channel: 'good', command: 'model::update' });
+            await settle();
+
+            expect(unhandled).toEqual([]);
+            expect(handler).toHaveBeenCalledTimes(2);
+        });
+
+        it('covers a throwing onMessage predicate too', async () => {
+            const server = new FakeServer();
+            const pool = new ConnectionPool(server);
+            const after = vi.fn();
+            pool.onMessage(throwingHook, vi.fn());
+            pool.onMessage(() => true, after);
+
+            server.messagesSource.next({ channel: 'c', command: 'anything' });
+            await settle();
+
+            expect(unhandled).toEqual([]);
+            expect(after).toHaveBeenCalledTimes(1);
         });
     });
 
