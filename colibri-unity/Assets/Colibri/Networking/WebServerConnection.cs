@@ -184,8 +184,10 @@ namespace HCIKonstanz.Colibri.Networking
         private volatile string _protocolMismatchReason;
 
         // Session-scoped: reset when a session starts, set once it has decoded anything at all.
-        // Only a session that fails *before* this is set counts towards the framing hint.
+        // Only a session that ends *before* this is set counts towards the framing hint.
         private volatile bool _decodedAnyFrame;
+
+        // Connection loop only (the receive loop is part of it), except for the test accessor.
         private int _consecutiveEarlyFrameFailures;
         private volatile string _suspectedProtocolMismatch;
 
@@ -460,12 +462,6 @@ namespace HCIKonstanz.Colibri.Networking
                     _reachedHandshake = false;
                     await RunSession(address, _tcpPort, handshakeApp, token)
                         .ConfigureAwait(false);
-
-                    // Reached only when ReceiveLoop returned, which it does on a clean EOF. A
-                    // server that took the connection, said nothing and hung up looks exactly
-                    // like a success here, so this cannot simply reset the counter - that is the
-                    // other half of the symptom the hint exists to name.
-                    ReportRepeatedEarlyFrameFailures();
                 }
                 catch (OperationCanceledException)
                 {
@@ -483,7 +479,6 @@ namespace HCIKonstanz.Colibri.Networking
                     // A desynchronized stream cannot be recovered from - there is no delimiter
                     // to resynchronize on - so the connection is dropped and rebuilt.
                     Debug.LogError($"Colibri: invalid frame from server, dropping connection: {e.Message}");
-                    ReportRepeatedEarlyFrameFailures();
                 }
                 catch (SocketException e)
                 {
@@ -502,6 +497,13 @@ namespace HCIKonstanz.Colibri.Networking
                     _isWatchdogArmed = false;
                     CloseSocket(_socket);
                     _socket = null;
+
+                    // However the session ended - a clean hang-up, an undecodable frame, a reset,
+                    // the watchdog - except for this component being disabled, which says nothing
+                    // about the server.
+                    if (!token.IsCancellationRequested)
+                        CountSessionWithoutAFrame();
+
                     Status = mismatched ? ConnectionStatus.ProtocolMismatch : ConnectionStatus.Disconnected;
                 }
 
@@ -528,8 +530,13 @@ namespace HCIKonstanz.Colibri.Networking
         /// TCP port that is not Colibri at all. So it stays a warning, the connection keeps being
         /// retried, and <see cref="Status"/> is left alone - only a refusal this client actually
         /// decoded is terminal.
+        ///
+        /// Called once for every session that ends, whatever ended it. The count is reset by the
+        /// first frame a session decodes (<see cref="OnFrameDecoded"/>), not here, so "consecutive"
+        /// means what it says: it used to be updated only on a clean hang-up or an undecodable
+        /// frame, and a session ended by a reset or the watchdog neither counted nor cleared it.
         /// </summary>
-        private void ReportRepeatedEarlyFrameFailures()
+        private void CountSessionWithoutAFrame()
         {
             // Never got as far as a connected socket: that is a server that is down, a wrong
             // address or a closed port, and has nothing to say about protocol versions.
@@ -537,11 +544,7 @@ namespace HCIKonstanz.Colibri.Networking
                 return;
 
             if (_decodedAnyFrame)
-            {
-                _consecutiveEarlyFrameFailures = 0;
-                _suspectedProtocolMismatch = null;
                 return;
-            }
 
             _consecutiveEarlyFrameFailures++;
             if (_consecutiveEarlyFrameFailures != EARLY_FRAME_FAILURES_BEFORE_HINT)
@@ -553,6 +556,24 @@ namespace HCIKonstanz.Colibri.Networking
 
             Debug.LogError($"Colibri: {_suspectedProtocolMismatch} Check the server's version.");
         }
+
+        /// <summary>
+        /// The first frame of a session, of any kind - a refusal included - settles that this
+        /// server speaks our framing, so it clears the count and the suspicion at once rather than
+        /// whenever the session happens to end.
+        /// </summary>
+        private void OnFrameDecoded()
+        {
+            _decodedAnyFrame = true;
+            _consecutiveEarlyFrameFailures = 0;
+            _suspectedProtocolMismatch = null;
+        }
+
+        /// <summary>
+        /// How many sessions in a row got past the handshake and then ended without a frame.
+        /// Exists for the test suite; nothing in the library reads it.
+        /// </summary>
+        internal int ConsecutiveEarlyFrameFailures => Volatile.Read(ref _consecutiveEarlyFrameFailures);
 
         private async Task RunSession(string host, int port, string app, CancellationToken token)
         {
@@ -638,8 +659,8 @@ namespace HCIKonstanz.Colibri.Networking
                     StampLiveness();
 
                 var frames = ReadFrames(reader, buffer, received);
-                if (frames.Count > 0)
-                    _decodedAnyFrame = true;
+                if (frames.Count > 0 && !_decodedAnyFrame)
+                    OnFrameDecoded();
 
                 for (var i = 0; i < frames.Count; i++)
                 {

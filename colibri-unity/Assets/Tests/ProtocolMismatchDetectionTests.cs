@@ -199,6 +199,72 @@ namespace HCIKonstanz.Colibri.E2E
             Assert.That(everConnected, Is.False, "Status reported Connected for a server that never said a word");
         }
 
+        /// <summary>
+        /// "Consecutive" has to mean what it says. The count used to be updated only when a session
+        /// ended cleanly or on an undecodable frame, so a session ended by a reset or by the
+        /// watchdog neither counted nor cleared anything, and the suspicion outlived the server
+        /// that caused it. Now the first decoded frame clears both at once, and every session that
+        /// ends without one counts, however it ends.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator AnyDecodedFrameClearsTheSuspicionAndTheCountAtOnce()
+        {
+            IgnoreTheExpectedFailures();
+
+            _scriptedServer = FakeColibriServer.Start(FakeColibriServer.Behaviour.HangUpAfterHandshake);
+            yield return PointConnectionAt(_scriptedServer.Port);
+
+            yield return E2EServer.WaitUntil(() => Connection.SuspectedProtocolMismatch != null,
+                "Three sessions that ended without a frame were not enough to suspect a mismatch", 20f);
+
+            // The server comes good before the next attempt, which is 2 s of backoff away.
+            _scriptedServer.Mode = FakeColibriServer.Behaviour.Heartbeat;
+            yield return E2EServer.WaitUntil(() => Connection.Status == ConnectionStatus.Connected,
+                "The client never connected once the server started heartbeating", 10f);
+
+            // Cleared by the frame itself, while the session is still open.
+            Assert.That(Connection.SuspectedProtocolMismatch, Is.Null,
+                "The suspicion outlived the first frame the server sent");
+            Assert.That(Connection.ConsecutiveEarlyFrameFailures, Is.Zero);
+
+            // Then the session ends the hard way - a reset, which the client sees as a
+            // SocketException - and the server goes back to hanging up.
+            _scriptedServer.Mode = FakeColibriServer.Behaviour.HangUpAfterHandshake;
+            _scriptedServer.ResetConnections();
+
+            // Counted from zero again: two in a row is not yet a suspicion...
+            yield return E2EServer.WaitUntil(() => Connection.ConsecutiveEarlyFrameFailures == 2,
+                "The sessions after the reset were not counted", 10f);
+            Assert.That(Connection.SuspectedProtocolMismatch, Is.Null,
+                "Two failures after a session that decoded frames were counted as more than two");
+
+            // ...and the third is.
+            yield return E2EServer.WaitUntil(() => Connection.SuspectedProtocolMismatch != null,
+                "The third session in a row without a frame did not raise the suspicion again", 10f);
+            Assert.That(Connection.ConsecutiveEarlyFrameFailures, Is.EqualTo(3));
+        }
+
+        /// <summary>
+        /// A port that accepts and never says anything is exactly what the hint is for, and the only
+        /// thing that ends such a session is the watchdog. That exit used to count for nothing.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator SessionsTheWatchdogEndsBeforeAnyFrameCountTowardsTheSuspicion()
+        {
+            IgnoreTheExpectedFailures();
+
+            _scriptedServer = FakeColibriServer.Start(FakeColibriServer.Behaviour.Silent);
+            yield return PointConnectionAt(_scriptedServer.Port);
+
+            // Three silent sessions of 2 s each, 500 ms and 1000 ms apart.
+            yield return E2EServer.WaitUntil(() => Connection.SuspectedProtocolMismatch != null,
+                "Sessions dropped by the watchdog before a single frame never raised the suspicion", 20f);
+
+            Assert.That(_scriptedServer.Accepted, Is.EqualTo(3));
+            Assert.That(Connection.Status, Is.Not.EqualTo(ConnectionStatus.ProtocolMismatch),
+                "A guess must not settle into the status reserved for a refusal the server actually sent");
+        }
+
         /// <summary>The counterpart: a server that heartbeats is connected, once, and stays so.</summary>
         [UnityTest]
         public IEnumerator AServerThatSpeaksCountsAsConnected()
