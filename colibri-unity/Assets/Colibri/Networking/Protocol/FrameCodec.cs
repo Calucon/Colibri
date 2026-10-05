@@ -60,7 +60,9 @@ namespace HCIKonstanz.Colibri.Networking.Protocol
         /// </summary>
         /// <exception cref="FrameException">
         /// If any field contains the <c>::</c> separator (the server's reader rejects such a body
-        /// outright and drops the connection), or if the frame exceeds <see cref="MaxFrameLength"/>.
+        /// outright and drops the connection), if any field starts or ends with <c>:</c> (which
+        /// would merge with a separator and move the colon into the neighbouring field), or if the
+        /// frame exceeds <see cref="MaxFrameLength"/>.
         /// </exception>
         public static byte[] EncodeHandshake(string version, string app, string name)
         {
@@ -131,8 +133,18 @@ namespace HCIKonstanz.Colibri.Networking.Protocol
 
         private static void RejectSeparator(string field, string value)
         {
-            if (value != null && value.Contains(FieldSeparator))
+            if (string.IsNullOrEmpty(value))
+                return;
+
+            if (value.Contains(FieldSeparator))
                 throw new FrameException($"Handshake {field} may not contain '{FieldSeparator}': \"{value}\"");
+
+            // A lone ':' at either end is just as bad, only quieter. Next to a separator it makes
+            // ':::', which both readers split as '::' + ':' - so app "app:" with name "name" is
+            // read as app "app", name ":name", and the client joins a different app without any
+            // error at all.
+            if (value[0] == ':' || value[value.Length - 1] == ':')
+                throw new FrameException($"Handshake {field} may not start or end with ':': \"{value}\"");
         }
     }
 }

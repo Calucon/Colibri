@@ -111,6 +111,7 @@ namespace HCIKonstanz.Colibri.Networking
 
         // Connection loop only.
         private bool _hasReportedMissingConfig;
+        private string _reportedSanitizedApp;
 
         // ColibriConfig.Load() goes through Resources.Load, which is main-thread only, so the
         // connection loop reads this snapshot instead of the ScriptableObject.
@@ -363,13 +364,24 @@ namespace HCIKonstanz.Colibri.Networking
 
                 _hasReportedMissingConfig = false;
 
+                var handshakeApp = SanitizeHandshakeField(app);
+                if (handshakeApp != app && handshakeApp != _reportedSanitizedApp)
+                {
+                    // Said rather than done quietly: only clients announcing the same app name
+                    // see each other, and a web client configured with the original name will not.
+                    _reportedSanitizedApp = handshakeApp;
+                    Debug.LogWarning(
+                        $"Colibri: the App Name '{app}' cannot be sent as it is - it may not contain '::' or start or end with ':'. " +
+                        $"Connecting as '{handshakeApp}' instead; change the App Name if other clients use the original.");
+                }
+
                 var mismatched = false;
 
                 try
                 {
                     _decodedAnyFrame = false;
                     _reachedHandshake = false;
-                    await RunSession(address, _tcpPort, SanitizeHandshakeField(app), token)
+                    await RunSession(address, _tcpPort, handshakeApp, token)
                         .ConfigureAwait(false);
 
                     // Reached only when ReceiveLoop returned, which it does on a clean EOF. A
@@ -860,9 +872,28 @@ namespace HCIKonstanz.Colibri.Networking
             }
         }
 
-        // '::' is the handshake field separator; a device or app name containing one would
-        // produce a frame the server rejects outright.
-        private static string SanitizeHandshakeField(string value)
-            => string.IsNullOrEmpty(value) ? value : value.Replace(FrameCodec.FieldSeparator, "_");
+        /// <summary>
+        /// Makes a device or app name safe to put in the handshake. '::' is the field separator,
+        /// so a name containing one produces a frame the server rejects outright. A single ':' at
+        /// either end is worse, because nothing rejects it: it merges with the separator next to
+        /// it into ':::', which the server splits as '::' + ':', so app "app:" arrives as app
+        /// "app" with the colon moved onto the client name - another app, silently.
+        /// </summary>
+        /// <remarks>Internal for the EditMode tests.</remarks>
+        internal static string SanitizeHandshakeField(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+                return value;
+
+            // After this there is no '::' left, so at most one ':' can remain at each end.
+            var sanitized = value.Replace(FrameCodec.FieldSeparator, "_");
+
+            if (sanitized[0] == ':')
+                sanitized = "_" + sanitized.Substring(1);
+            if (sanitized[sanitized.Length - 1] == ':')
+                sanitized = sanitized.Substring(0, sanitized.Length - 1) + "_";
+
+            return sanitized;
+        }
     }
 }
