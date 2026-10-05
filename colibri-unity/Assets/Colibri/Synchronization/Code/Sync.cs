@@ -76,64 +76,77 @@ namespace HCIKonstanz.Colibri.Synchronization
             return _connection;
         }
 
-        private static void OnServerMessage(string channel, string command, JToken data)
+        /*
+         *  Every message that arrives goes through here, so nothing in it may throw: an exception
+         *  leaving this method skips every other handler of the message, and every message still
+         *  queued behind it that frame. A payload that cannot be read as the type its command
+         *  names is reported and dropped; a listener that throws is reported and the rest are
+         *  still called.
+         *
+         *  The conversions below keep exactly the leniency they always had (JToken.Value<T>() and
+         *  the explicit casts accept "5" for an int, 1 for a bool, ...). Only what used to throw
+         *  is new: that is now one warning instead of an exception.
+         */
+
+        /// <remarks>Internal so the EditMode tests can deliver a message without a socket.</remarks>
+        internal static void OnServerMessage(string channel, string command, JToken data)
         {
             RecordTraffic(true, channel, command);
 
             switch (command)
             {
                 case "broadcast::bool":
-                    Invoke(channel, _boolListeners, data.Value<bool>());
+                    Deliver(channel, command, data, _boolListeners, token => token.Value<bool>());
                     break;
                 case "broadcast::int":
-                    Invoke(channel, _intListeners, data.Value<int>());
+                    Deliver(channel, command, data, _intListeners, token => token.Value<int>());
                     break;
                 case "broadcast::float":
-                    Invoke(channel, _floatListeners, data.Value<float>());
+                    Deliver(channel, command, data, _floatListeners, token => token.Value<float>());
                     break;
                 case "broadcast::string":
-                    Invoke(channel, _stringListeners, data.Value<string>());
+                    Deliver(channel, command, data, _stringListeners, token => token.Value<string>());
                     break;
                 case "broadcast::vector2":
-                    Invoke(channel, _vector2Listeners, data.ToVector2());
+                    Deliver(channel, command, data, _vector2Listeners, token => token.ToVector2());
                     break;
                 case "broadcast::vector3":
-                    Invoke(channel, _vector3Listeners, data.ToVector3());
+                    Deliver(channel, command, data, _vector3Listeners, token => token.ToVector3());
                     break;
                 case "broadcast::quaternion":
-                    Invoke(channel, _quaternionListeners, data.ToQuaternion());
+                    Deliver(channel, command, data, _quaternionListeners, token => token.ToQuaternion());
                     break;
                 case "broadcast::color":
-                    Invoke(channel, _colorListeners, data.ToColor());
+                    Deliver(channel, command, data, _colorListeners, token => token.ToColor());
                     break;
 
                 case "broadcast::bool[]":
-                    Invoke(channel, _boolArrayListeners, data.Select(x => (bool)x).ToArray());
+                    Deliver(channel, command, data, _boolArrayListeners, token => ToArray(token, x => (bool)x));
                     break;
                 case "broadcast::int[]":
-                    Invoke(channel, _intArrayListeners, data.Select(x => (int)x).ToArray());
+                    Deliver(channel, command, data, _intArrayListeners, token => ToArray(token, x => (int)x));
                     break;
                 case "broadcast::float[]":
-                    Invoke(channel, _floatArrayListeners, data.Select(x => (float)x).ToArray());
+                    Deliver(channel, command, data, _floatArrayListeners, token => ToArray(token, x => (float)x));
                     break;
                 case "broadcast::string[]":
-                    Invoke(channel, _stringArrayListeners, data.Select(x => (string)x).ToArray());
+                    Deliver(channel, command, data, _stringArrayListeners, token => ToArray(token, x => (string)x));
                     break;
                 case "broadcast::vector2[]":
-                    Invoke(channel, _vector2ArrayListeners, data.Select(x => x.ToVector2()).ToArray());
+                    Deliver(channel, command, data, _vector2ArrayListeners, token => ToArray(token, x => x.ToVector2()));
                     break;
                 case "broadcast::vector3[]":
-                    Invoke(channel, _vector3ArrayListeners, data.Select(x => x.ToVector3()).ToArray());
+                    Deliver(channel, command, data, _vector3ArrayListeners, token => ToArray(token, x => x.ToVector3()));
                     break;
                 case "broadcast::quaternion[]":
-                    Invoke(channel, _quaternionArrayListeners, data.Select(x => x.ToQuaternion()).ToArray());
+                    Deliver(channel, command, data, _quaternionArrayListeners, token => ToArray(token, x => x.ToQuaternion()));
                     break;
                 case "broadcast::color[]":
-                    Invoke(channel, _colorArrayListeners, data.Select(x => x.ToColor()).ToArray());
+                    Deliver(channel, command, data, _colorArrayListeners, token => ToArray(token, x => x.ToColor()));
                     break;
 
                 case "broadcast::json":
-                    Invoke(channel, _jsonListeners, data);
+                    Invoke(channel, command, _jsonListeners, data);
                     break;
 
                 case "model::update":
@@ -141,24 +154,85 @@ namespace HCIKonstanz.Colibri.Synchronization
                     // message arriving with nothing listening is not a type mismatch worth
                     // reporting - it is just a model this client does not have.
                     if (data is JObject updated)
-                        Dispatch(channel, _modelUpdateListeners, updated, track: false);
+                        Dispatch(channel, command, _modelUpdateListeners, updated, track: false);
                     break;
 
                 case "model::delete":
                     if (data is JObject deleted)
-                        Dispatch(channel, _modelDeleteListeners, deleted, track: false);
+                        Dispatch(channel, command, _modelDeleteListeners, deleted, track: false);
                     break;
             }
         }
 
-        private static void Invoke<T>(string channel, Dictionary<string, List<Listener<T>>> listeners, T val)
+        /// <summary>
+        /// Converts and delivers one message. The payload is only read when something on the
+        /// channel listens for this type: every client sees every channel its app uses, so a
+        /// malformed value on a channel this one ignores is not worth a warning here - nor worth
+        /// the conversion.
+        /// </summary>
+        private static void Deliver<T>(string channel, string command, JToken data,
+            Dictionary<string, List<Listener<T>>> listeners, Func<JToken, T> convert)
+        {
+            if (!listeners.ContainsKey(channel))
+            {
+                ReportMismatch<T>(channel);
+                return;
+            }
+
+            T value;
+            try
+            {
+                // ParsePayload never hands over a C# null, but a caller other than the socket
+                // might; it means the same as a JSON null.
+                value = convert(data ?? JValue.CreateNull());
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"Colibri: received a {command} on channel '{channel}' that cannot be read as "
+                    + $"{ChannelListenerRegistry.FriendlyName(typeof(T))}: '{Abbreviate(data)}' ({e.GetType().Name}: {e.Message}). Ignoring it.");
+                return;
+            }
+
+            Invoke(channel, command, listeners, value);
+        }
+
+        /// <summary>
+        /// Arrays are read element by element, and only out of a JSON array. Enumerating any other
+        /// token "works" - a number or null yields no elements at all - which used to hand the
+        /// listener an empty array for a payload that was nothing of the kind.
+        /// </summary>
+        private static TElement[] ToArray<TElement>(JToken token, Func<JToken, TElement> readElement)
+        {
+            if (!(token is JArray array))
+                throw new InvalidCastException($"expected a JSON array, got {token.Type}");
+
+            var values = new TElement[array.Count];
+            for (var i = 0; i < array.Count; i++)
+                values[i] = readElement(array[i]);
+            return values;
+        }
+
+        private static string Abbreviate(JToken data)
+        {
+            const int maxLength = 100;
+
+            var text = data == null ? "null" : data.ToString(Newtonsoft.Json.Formatting.None);
+            return text.Length <= maxLength ? text : text.Substring(0, maxLength) + "...";
+        }
+
+        private static void Invoke<T>(string channel, string command, Dictionary<string, List<Listener<T>>> listeners, T val)
         {
             if (val == null)
                 return;
 
-            if (Dispatch(channel, listeners, val, track: true))
+            if (Dispatch(channel, command, listeners, val, track: true))
                 return;
 
+            ReportMismatch<T>(channel);
+        }
+
+        private static void ReportMismatch<T>(string channel)
+        {
             // Nothing is listening for this type on this channel. That is only worth reporting
             // when *something else* is - a channel with no listeners at all is normal, since
             // every client sees every channel its app uses.
@@ -170,7 +244,7 @@ namespace HCIKonstanz.Colibri.Synchronization
         /// Calls everything still listening on the channel, dropping the listeners whose objects
         /// have been destroyed on the way past. Returns false when the channel had nobody left.
         /// </summary>
-        private static bool Dispatch<T>(string channel, Dictionary<string, List<Listener<T>>> listeners, T val, bool track)
+        private static bool Dispatch<T>(string channel, string command, Dictionary<string, List<Listener<T>>> listeners, T val, bool track)
         {
             if (!listeners.TryGetValue(channel, out var channelListeners))
                 return false;
@@ -186,7 +260,19 @@ namespace HCIKonstanz.Colibri.Synchronization
 
             // Copied, because a listener is allowed to register or unregister while being called.
             foreach (var listener in channelListeners.ToArray())
-                listener.Callback.Invoke(val);
+            {
+                try
+                {
+                    listener.Callback.Invoke(val);
+                }
+                catch (Exception e)
+                {
+                    // One listener's bug is that listener's problem: the others on the channel
+                    // still get the message, and so does everything queued behind it.
+                    Debug.LogError($"Colibri: a listener for {command} on channel '{channel}' threw an exception. "
+                        + $"The other listeners still received the message.\n{e}");
+                }
+            }
 
             return true;
         }

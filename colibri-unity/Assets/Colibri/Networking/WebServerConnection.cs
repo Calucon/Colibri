@@ -105,6 +105,10 @@ namespace HCIKonstanz.Colibri.Networking
         private readonly LockFreeQueue<InPacket> _queuedCommands = new LockFreeQueue<InPacket>();
         private long _lastHeartbeatTime;
 
+        // Main thread only: the OnMessageReceived delegate last delivered to, and its handlers.
+        private MessageAction _deliveringTo;
+        private Delegate[] _deliveringToList;
+
         // Both touched from the connection loop and from Update() via the Status setter, so
         // every access to them is under _statusLock.
         private int _connectAttempts;
@@ -284,9 +288,7 @@ namespace HCIKonstanz.Colibri.Networking
                 OnDisconnected?.Invoke();
             }
 
-            // Handlers run on the main thread to keep threading issues out of user code.
-            while (_queuedCommands.Dequeue(out var packet))
-                OnMessageReceived?.Invoke(packet.Channel, packet.Command, packet.Payload);
+            DeliverReceivedMessages();
 
             if (Status == ConnectionStatus.Connected && MillisSinceLastHeartbeat() > HEARTBEAT_TIMEOUT_THRESHOLD_MS)
             {
@@ -295,6 +297,51 @@ namespace HCIKonstanz.Colibri.Networking
                 // unwinds, then fault the receive loop into the reconnect backoff below.
                 Status = ConnectionStatus.Disconnected;
                 CloseSocket(_socket);
+            }
+        }
+
+        /// <summary>
+        /// Hands a received message to the main thread, where <see cref="Update"/> delivers it.
+        /// </summary>
+        /// <remarks>Called from the receive loop; internal so the EditMode tests can queue one too.</remarks>
+        internal void EnqueueReceived(string channel, string command, JToken payload)
+            => _queuedCommands.Enqueue(new InPacket { Channel = channel, Command = command, Payload = payload });
+
+        /// <summary>
+        /// Delivers everything received since the last frame. Handlers run on the main thread to
+        /// keep threading issues out of user code, and one at a time: a handler that throws used to
+        /// take the remaining handlers of that message down with it, and push every message queued
+        /// behind it to the next frame.
+        /// </summary>
+        /// <remarks>Internal so the EditMode tests can drive it without a player loop.</remarks>
+        internal void DeliverReceivedMessages()
+        {
+            while (_queuedCommands.Dequeue(out var packet))
+            {
+                var handlers = OnMessageReceived;
+                if (handlers == null)
+                    continue;
+
+                // A multicast delegate is immutable, so its invocation list only needs fetching
+                // again when someone has subscribed or unsubscribed since.
+                if (!ReferenceEquals(handlers, _deliveringTo))
+                {
+                    _deliveringTo = handlers;
+                    _deliveringToList = handlers.GetInvocationList();
+                }
+
+                foreach (var handler in _deliveringToList)
+                {
+                    try
+                    {
+                        ((MessageAction)handler)(packet.Channel, packet.Command, packet.Payload);
+                    }
+                    catch (Exception e)
+                    {
+                        Debug.LogError($"Colibri: a handler of OnMessageReceived threw an exception while handling {packet.Command} "
+                            + $"on channel '{packet.Channel}'. The other handlers still received the message.\n{e}");
+                    }
+                }
             }
         }
 
@@ -563,12 +610,7 @@ namespace HCIKonstanz.Colibri.Networking
                             if (frame.Channel == COLIBRI_CHANNEL && frame.Command == PROTOCOL_REJECTED_COMMAND)
                                 throw BuildProtocolMismatch(frame.Payload);
 
-                            _queuedCommands.Enqueue(new InPacket
-                            {
-                                Channel = frame.Channel,
-                                Command = frame.Command,
-                                Payload = ParsePayload(frame.Payload)
-                            });
+                            EnqueueReceived(frame.Channel, frame.Command, ParsePayload(frame.Payload));
                             break;
 
                         case FrameType.Handshake:
