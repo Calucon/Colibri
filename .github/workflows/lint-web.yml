@@ -30,3 +30,8 @@ jobs:
       - run: npm run build
       - run: npm run lint
       - run: npm run format:check
+      # Over src, samples, test and e2e (tsconfig.json's include): the build only checks what
+      # src exports, and vitest strips types without checking them.
+      - run: npm run typecheck
+      # Unit tests only. The e2e suite needs a running colibri-server and has its own command.
+      - run: npm test
