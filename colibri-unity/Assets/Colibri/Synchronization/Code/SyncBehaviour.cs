@@ -380,9 +380,20 @@ namespace HCIKonstanz.Colibri.Synchronization
 
         void SyncTicker.ITickable.PollChanges()
         {
-            // A disabled object neither latches nor sends, so whatever changed while it was
-            // disabled is picked up as a normal change the frame it comes back.
-            if (!isActiveAndEnabled)
+            // Gated on the component alone. An inactive GameObject is still polled, because its
+            // being inactive is itself synced state: SyncTransform's Active reads activeSelf, and
+            // gated on isActiveAndEnabled the poll stopped the moment the object was switched
+            // off - so `false` was never seen, and other clients' copies never disappeared.
+            //
+            // Teardown sends nothing through here. Destroy, unloading a scene and leaving Play
+            // mode do not touch activeSelf, and the object leaves the ticker in OnDestroy, before
+            // any further poll could run. No OnDisable hook is involved either, so none of those
+            // can be mistaken for a deactivation.
+            //
+            // A component that is switched off on its own (enabled = false) neither latches nor
+            // sends, so whatever changed meanwhile is picked up as a normal change once it is
+            // back on.
+            if (!enabled)
                 return;
 
             var self = this as T;

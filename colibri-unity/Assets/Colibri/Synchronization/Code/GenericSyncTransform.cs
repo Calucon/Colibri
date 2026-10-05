@@ -4,6 +4,12 @@ namespace HCIKonstanz.Colibri.Synchronization
 {
     public abstract class GenericSyncTransform<T> : SyncBehaviour<T> where T : SyncBehaviour<T>
     {
+        /// <summary>
+        /// The object's own active flag (<c>activeSelf</c>). Switching the object off or on is
+        /// sent like any other change - the poll keeps running while the object is inactive - and
+        /// an update from another client switches it here. Disabling only this component, or
+        /// deactivating a parent, leaves this flag alone, so neither hides the other copies.
+        /// </summary>
         [Sync]
         public bool Active
         {

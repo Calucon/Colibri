@@ -1,10 +1,13 @@
+using System;
 using System.Collections;
 using System.Linq;
 using HCIKonstanz.Colibri.Synchronization;
 using Newtonsoft.Json.Linq;
 using NUnit.Framework;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 using UnityEngine.TestTools;
+using Object = UnityEngine.Object;
 
 namespace HCIKonstanz.Colibri.E2E
 {
@@ -95,6 +98,110 @@ namespace HCIKonstanz.Colibri.E2E
             yield return E2EServer.WaitUntil(
                 () => sync.transform.position == new Vector3(4f, 5f, 6f),
                 $"The object never moved; it is at {sync.transform.position}");
+        }
+
+
+        /*
+         *  Active state. Deactivating an object has to hide its copies everywhere else, and
+         *  reactivating it has to bring them back. It never did: the poll skipped inactive
+         *  objects, so `false` was never seen. And whatever tears an object down - Destroy, a
+         *  scene unload, the end of Play mode - must not be mistaken for a deactivation on the
+         *  way out.
+         */
+
+        [UnityTest]
+        public IEnumerator DeactivatingTheObjectHidesItOnTheOtherClientAndReactivatingItShowsIt()
+        {
+            var sync = SpawnConfigured<SyncTransform>("hidden-and-back", _ => { });
+            yield return LetInitialStateArrive();
+
+            sync.gameObject.SetActive(false);
+
+            yield return Peer.Expect(Channel, "model::update", frame => AssertActive(frame, sync.Id, false));
+
+            sync.gameObject.SetActive(true);
+
+            yield return Peer.Expect(Channel, "model::update", frame => AssertActive(frame, sync.Id, true));
+            yield return Peer.ExpectNothing(Channel);
+        }
+
+        /// <summary>
+        /// Switching the component off stops it syncing; it does not mean the object has gone.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator DisablingOnlyTheComponentDoesNotHideTheObjectElsewhere()
+        {
+            var sync = SpawnConfigured<SyncTransform>("component-off", _ => { });
+            yield return LetInitialStateArrive();
+
+            sync.enabled = false;
+            yield return Peer.ExpectNothing(Channel, 1.5f);
+
+            sync.enabled = true;
+            yield return Peer.ExpectNothing(Channel, 1.5f);
+        }
+
+        [UnityTest]
+        public IEnumerator AnotherClientHidingAndShowingTheObjectIsAppliedHereAndNotEchoed()
+        {
+            var sync = SpawnConfigured<SyncTransform>("hidden-remotely", _ => { });
+            yield return LetInitialStateArrive();
+
+            Peer.Send(Channel, "model::update", new JObject { { "id", sync.Id }, { "active", false } });
+            yield return E2EServer.WaitUntil(() => !sync.gameObject.activeSelf,
+                "The peer deactivated the object, but it is still active here");
+            yield return Peer.ExpectNothing(Channel);
+
+            Peer.Send(Channel, "model::update", new JObject { { "id", sync.Id }, { "active", true } });
+            yield return E2EServer.WaitUntil(() => sync.gameObject.activeSelf,
+                "The peer reactivated the object, but it is still inactive here");
+            yield return Peer.ExpectNothing(Channel);
+
+            // And this client can still hide it itself afterwards.
+            sync.gameObject.SetActive(false);
+            yield return Peer.Expect(Channel, "model::update", frame => AssertActive(frame, sync.Id, false));
+        }
+
+        [UnityTest]
+        public IEnumerator DestroyingTheObjectDeletesItWithoutDeactivatingItFirst()
+        {
+            var sync = SpawnConfigured<SyncTransform>("destroyed", _ => { });
+            yield return LetInitialStateArrive();
+
+            var id = sync.Id;
+            Object.Destroy(sync.gameObject);
+
+            yield return Peer.Expect(Channel, "model::delete",
+                frame => Assert.That(TcpPeer.Json(frame)["id"].Value<string>(), Is.EqualTo(id)));
+
+            // An active:false sent on the way out would have arrived before the delete and still
+            // be waiting here.
+            yield return Peer.ExpectNothing(Channel);
+        }
+
+        [UnityTest]
+        public IEnumerator UnloadingTheSceneDeletesTheObjectWithoutDeactivatingItFirst()
+        {
+            var scene = SceneManager.CreateScene($"colibri-unload-{Guid.NewGuid():N}");
+            var sync = SpawnConfigured<SyncTransform>("unloaded-with-its-scene", _ => { });
+            SceneManager.MoveGameObjectToScene(sync.gameObject, scene);
+            yield return LetInitialStateArrive();
+
+            var id = sync.Id;
+            yield return SceneManager.UnloadSceneAsync(scene);
+
+            yield return Peer.Expect(Channel, "model::delete",
+                frame => Assert.That(TcpPeer.Json(frame)["id"].Value<string>(), Is.EqualTo(id)));
+            yield return Peer.ExpectNothing(Channel);
+        }
+
+        private static void AssertActive(Networking.Protocol.DecodedFrame frame, string id, bool expected)
+        {
+            var payload = (JObject)TcpPeer.Json(frame);
+
+            Assert.That(payload["id"].Value<string>(), Is.EqualTo(id));
+            Assert.That(payload.ContainsKey("active"), Is.True, $"Expected the active state, got {payload}");
+            Assert.That(payload["active"].Value<bool>(), Is.EqualTo(expected));
         }
     }
 }
