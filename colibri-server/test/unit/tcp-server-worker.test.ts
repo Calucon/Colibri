@@ -3,6 +3,7 @@ import { EventEmitter } from 'events';
 import type * as net from 'net';
 import { TCPServerWorker, WireNetworkMessage } from '../../src/server/modules/networking/tcp-server-worker.js';
 import { FrameReader, FrameType, PROTOCOL_VERSION, encodeHandshakeFrame, encodeHeartbeatFrame, encodeMessageFrame } from '../../src/server/modules/networking/protocol.js';
+import { LogLevel } from '../../src/server/modules/core/log-message.js';
 
 // Vitest runs suites inside worker threads, so the real `parentPort` here is the test
 // runner's own channel: WorkerService would subscribe to it and the module bootstrap would
@@ -78,6 +79,7 @@ interface WorkerInternals {
     clients: Map<string, { id: string; app: string; socket: net.Socket }>;
     waitingClients: Map<string, { id: string; socket: net.Socket }>;
     clientsByApp: Map<string, Set<{ id: string }>>;
+    v1WarnedAt: Map<string, number>;
     stop(): void;
 }
 
@@ -94,8 +96,9 @@ describe('TCPServerWorker', () => {
     const logs = (): string[] =>
         posted.filter(p => p.channel === 'log').map(p => String(p.content.msg));
 
-    const connect = function (): { socket: FakeSocket; id: string } {
+    const connect = function (remoteAddress = '127.0.0.1'): { socket: FakeSocket; id: string } {
         const socket = new FakeSocket();
+        socket.remoteAddress = remoteAddress;
         internals.handleConnection(socket.asSocket());
         const entry = Array.from(internals.waitingClients.values()).find(c => c.socket === socket.asSocket());
         return { socket, id: entry!.id };
@@ -356,6 +359,69 @@ describe('TCPServerWorker', () => {
             } finally {
                 vi.useRealTimers();
             }
+        });
+    });
+
+    // A real colibri-unity 1.x client used to produce nothing but an anonymous "Invalid frame
+    // from client <uuid> ... Invalid frame length: 1744830464", once a second, forever.
+    describe('a Colibri 1.x client', () => {
+        // Byte for byte what colibri-unity 1.x's WebServerConnection.SendHandshake writes.
+        const v1Handshake = Buffer.from('\0\0\0h\0' + '1::app::host\0', 'utf8');
+
+        const warnings = (): string[] =>
+            posted.filter(p => p.channel === 'log' && p.content.level === LogLevel.Warn).map(p => String(p.content.msg));
+        const v1Warnings = (): string[] => warnings().filter(w => w.includes('Colibri 1.x'));
+
+        it('is named as one, with its address, the version spoken here and the fix', () => {
+            const { socket } = connect('10.0.0.17');
+            socket.emit('data', v1Handshake);
+
+            expect(socket.ended).toBe(true);
+            const [warning] = v1Warnings();
+            expect(warning).toContain('10.0.0.17');
+            expect(warning).toContain(`v${PROTOCOL_VERSION}`);
+            expect(warning).toContain('Unity package');
+            expect(logs().filter(l => l.includes('Invalid frame'))).toEqual([]);
+        });
+
+        it('is warned about at most once a minute per address', () => {
+            vi.useFakeTimers();
+            try {
+                for (let i = 0; i < 30; i++) {
+                    connect('10.0.0.17').socket.emit('data', v1Handshake);
+                    vi.advanceTimersByTime(1000);
+                }
+                expect(v1Warnings()).toHaveLength(1);
+
+                connect('10.0.0.18').socket.emit('data', v1Handshake);
+                expect(v1Warnings()).toHaveLength(2);
+
+                vi.advanceTimersByTime(30_000);
+                connect('10.0.0.17').socket.emit('data', v1Handshake);
+                expect(v1Warnings()).toHaveLength(3);
+            } finally {
+                vi.useRealTimers();
+            }
+        });
+
+        it('keeps a bounded amount of memory per address', () => {
+            for (let i = 0; i < 3000; i++) {
+                connect(`10.${(i >> 8) & 0xff}.${i & 0xff}.1`).socket.emit('data', v1Handshake);
+            }
+
+            expect(v1Warnings()).toHaveLength(3000);
+            expect(internals.v1WarnedAt.size).toBeLessThanOrEqual(1024);
+        });
+
+        it('still reports other garbage as an invalid frame', () => {
+            const { socket } = connect();
+            const bad = Buffer.alloc(5);
+            bad.writeUInt32LE(0xffffffff, 0);
+            socket.emit('data', bad);
+
+            expect(socket.ended).toBe(true);
+            expect(v1Warnings()).toEqual([]);
+            expect(logs().some(l => l.includes('Invalid frame length: 4294967295'))).toBe(true);
         });
     });
 

@@ -11,6 +11,7 @@ import {
     MAX_FRAME_LENGTH,
     PROTOCOL_REJECTED_COMMAND,
     PROTOCOL_VERSION,
+    V1FramingError,
     encodeHeartbeatFrame,
     encodeMessageFrame,
     protocolRejection,
@@ -37,6 +38,14 @@ const highWaterMark = 1024 * 1024;
 // lets the refusal frame reach the client; this bounds what a peer that never closes its side
 // can hold on to.
 const CLOSE_GRACE_MILLIS = 5000;
+
+// A Colibri 1.x client reconnects about once a second for as long as its app runs, so the
+// warning that names it is limited to once per remote address per this interval - often enough
+// to be found in the log, rarely enough not to bury everything else in it.
+const V1_WARNING_INTERVAL_MILLIS = 60_000;
+// Bounds the memory behind that limit: past this many addresses the least recently warned-about
+// is forgotten, which at worst means one extra warning for it.
+const MAX_V1_WARNING_ADDRESSES = 1024;
 
 // The worker thread only ever deals in raw payload bytes (straight off the wire, or
 // destined for it) - the Payload memoization abstraction lives at the ConnectionPool
@@ -99,6 +108,10 @@ export class TCPServerWorker extends WorkerService {
     private readonly clientsByApp = new Map<string, Set<TcpClient>>();
 
     private heartbeatInterval: NodeJS.Timeout | undefined;
+
+    // Remote address -> when a Colibri 1.x client there was last warned about. Kept in
+    // warning order (an address is re-inserted each time), so the oldest entry is always first.
+    private readonly v1WarnedAt = new Map<string, number>();
 
     public constructor() {
         super(true);
@@ -296,11 +309,15 @@ export class TCPServerWorker extends WorkerService {
         try {
             frames = client.reader.append(data);
         } catch (err) {
-            const reason = err instanceof FrameError ? err.message : String(err);
-            this.logError(
-                `Invalid frame from client ${client.id}, discarding buffer and terminating connection: ${reason}`,
-                false
-            );
+            if (err instanceof V1FramingError) {
+                this.reportV1Client(client);
+            } else {
+                const reason = err instanceof FrameError ? err.message : String(err);
+                this.logError(
+                    `Invalid frame from client ${client.id}, discarding buffer and terminating connection: ${reason}`,
+                    false
+                );
+            }
             client.reader.reset();
             this.closeClient(client);
             return;
@@ -415,6 +432,39 @@ export class TCPServerWorker extends WorkerService {
             // going away either way.
         }
         this.closeClient(client, packet);
+    }
+
+    // A 1.x client cannot be sent a refusal it would understand - the framing itself differs -
+    // so this warning is the whole diagnostic. Before it, all the log said was an anonymous
+    // "Invalid frame length: 1744830464" once a second, which names neither the client nor
+    // the fix.
+    private reportV1Client(client: TcpClient): void {
+        const now = performance.now();
+        const lastWarned = this.v1WarnedAt.get(client.address);
+        if (lastWarned !== undefined && now - lastWarned < V1_WARNING_INTERVAL_MILLIS) {
+            this.logDebug(`Refusing Colibri 1.x client ${client.id} from ${client.address} (warned about this address already)`);
+            return;
+        }
+
+        this.rememberV1Warning(client.address, now);
+        this.logWarning(
+            `Refusing a connection from ${client.address}: it looks like a Colibri 1.x client (it speaks the 1.x wire format), ` +
+                `but this server speaks protocol v${PROTOCOL_VERSION}. Upgrade the Colibri Unity package (de.uni.kn.colibri) ` +
+                'in that app to 2.x. A 1.x client retries about once a second; this is logged at most once a minute per address.'
+        );
+    }
+
+    private rememberV1Warning(address: string, now: number): void {
+        this.v1WarnedAt.delete(address);
+
+        // Oldest first: drop entries whose interval has passed, plus the oldest live ones
+        // while the map is full. Stops at the first entry that is neither.
+        for (const [warnedAddress, warnedAt] of this.v1WarnedAt) {
+            if (now - warnedAt < V1_WARNING_INTERVAL_MILLIS && this.v1WarnedAt.size < MAX_V1_WARNING_ADDRESSES) break;
+            this.v1WarnedAt.delete(warnedAddress);
+        }
+
+        this.v1WarnedAt.set(address, now);
     }
 
     // Ends a connection from this side: drops the client from every index *now*, rather than

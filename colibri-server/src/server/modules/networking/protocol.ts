@@ -96,6 +96,28 @@ export const protocolAcceptance = function (): ProtocolAcceptance {
 
 export class FrameError extends Error {}
 
+// Thrown instead of a plain FrameError when the bytes that failed to parse are the Colibri 1.x
+// framing, so the caller can say *why* rather than log an anonymous bad length.
+//
+// 1.x (colibri-server <= 1.3.x, colibri-unity 1.x) started every packet with three NUL bytes, an
+// ASCII header and another NUL: '\0\0\0h\0' for the handshake (then 'version::app::name\0') and
+// '\0\0\0<decimal body length>\0' for a message. Read as this protocol's u32 LE length, those four
+// bytes come to (header byte << 24) - at least 16 MiB, past MAX_FRAME_LENGTH - so a current frame
+// can never start that way and the check cannot misfire on a well-formed stream. A 1.x client's
+// first packet is its handshake, which surfaces as "Invalid frame length: 1744830464" ('h' << 24).
+export class V1FramingError extends FrameError {}
+
+const V1_HANDSHAKE_HEADER = 0x68; // 'h'
+const ASCII_0 = 0x30;
+const ASCII_9 = 0x39;
+
+const looksLikeV1Frame = function (buffer: Buffer, offset: number): boolean {
+    if (buffer[offset] !== 0 || buffer[offset + 1] !== 0 || buffer[offset + 2] !== 0) return false;
+
+    const header = buffer[offset + 3];
+    return header === V1_HANDSHAKE_HEADER || (header !== undefined && header >= ASCII_0 && header <= ASCII_9);
+};
+
 export type DecodedFrame =
     | { type: FrameType.Heartbeat; pingTimestamp: bigint }
     | { type: FrameType.Handshake; version: string; app: string; name: string }
@@ -200,7 +222,8 @@ export class FrameReader {
 
     // Appends newly received bytes and returns every complete frame now available.
     // Throws FrameError on a malformed or oversized frame - callers should treat that
-    // as fatal for the connection, same as the old maxBufferSize kill-switch.
+    // as fatal for the connection, same as the old maxBufferSize kill-switch. The
+    // V1FramingError subclass means the peer is speaking the Colibri 1.x framing.
     //
     // Deliberately not a generator: the read cursor only advances as frames are decoded,
     // so a caller that stopped iterating early (or never started) would have left the
@@ -221,7 +244,8 @@ export class FrameReader {
 
             const totalLength = this.buffer.readUInt32LE(this.readPos);
             if (totalLength <= 0 || totalLength > this.maxFrameLength) {
-                throw new FrameError(`Invalid frame length: ${totalLength}`);
+                const message = `Invalid frame length: ${totalLength}`;
+                throw looksLikeV1Frame(this.buffer, this.readPos) ? new V1FramingError(message) : new FrameError(message);
             }
 
             // totalLength counts everything after the length field itself (type + body).

@@ -3,6 +3,7 @@ import {
     FrameError,
     FrameReader,
     FrameType,
+    V1FramingError,
     encodeHandshakeFrame,
     encodeHeartbeatFrame,
     encodeMessageFrame,
@@ -12,6 +13,15 @@ const MAX_FRAME_LENGTH = 1024 * 1024;
 
 const readAll = function (reader: FrameReader, data: Buffer) {
     return Array.from(reader.append(data));
+};
+
+const thrownBy = function (fn: () => unknown): unknown {
+    try {
+        fn();
+    } catch (err) {
+        return err;
+    }
+    throw new Error('expected a throw');
 };
 
 describe('protocol v3 framing', () => {
@@ -142,6 +152,38 @@ describe('protocol v3 framing', () => {
             frame.writeUInt8(FrameType.Heartbeat, 4);
 
             expect(() => readAll(reader, frame)).toThrow(FrameError);
+        });
+
+        // colibri-unity 1.x's handshake, and a 1.x message header: three NULs, an ASCII header
+        // and a NUL. Read as a v3 length either is at least 16 MiB.
+        it('throws V1FramingError on the Colibri 1.x handshake', () => {
+            const handshake = Buffer.from('\0\0\0h\0' + '1::app::host\0', 'utf8');
+
+            const thrown = thrownBy(() => readAll(new FrameReader(MAX_FRAME_LENGTH), handshake));
+            expect(thrown).toBeInstanceOf(V1FramingError);
+            expect(thrown).toBeInstanceOf(FrameError);
+            expect((thrown as Error).message).toBe('Invalid frame length: 1744830464');
+        });
+
+        it('throws V1FramingError on a Colibri 1.x message header', () => {
+            const message = Buffer.from('\0\0\0' + '42\0', 'utf8');
+
+            expect(thrownBy(() => readAll(new FrameReader(MAX_FRAME_LENGTH), message))).toBeInstanceOf(V1FramingError);
+        });
+
+        it('recognises 1.x framing after valid frames in the same chunk', () => {
+            const chunk = Buffer.concat([encodeHeartbeatFrame(1n), Buffer.from('\0\0\0h\0', 'utf8')]);
+
+            expect(thrownBy(() => readAll(new FrameReader(MAX_FRAME_LENGTH), chunk))).toBeInstanceOf(V1FramingError);
+        });
+
+        it('throws a plain FrameError for an oversized length that is not 1.x framing', () => {
+            const frame = Buffer.alloc(5);
+            frame.writeUInt32LE(0x7f000000, 0); // three NULs, then a byte that is no 1.x header
+
+            const thrown = thrownBy(() => readAll(new FrameReader(MAX_FRAME_LENGTH), frame));
+            expect(thrown).toBeInstanceOf(FrameError);
+            expect(thrown).not.toBeInstanceOf(V1FramingError);
         });
 
         it('throws FrameError on an unknown frame type', () => {
