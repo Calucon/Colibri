@@ -398,27 +398,29 @@ describe('wrapper functions', () => {
     });
 });
 
+// Shared by the two describes below, which drive Sync and RegisterModelSync through the real
+// Colibri rather than a mock of it.
+class Widget extends SyncModel<Widget> {
+    @Synced() accessor label = '';
+}
+
+// Mirrors socket.io: a message reaches every handler registered for its channel.
+const deliver = (channel: string, msg: { command: string; payload?: unknown }) => {
+    for (const [event, handler] of [...fakeSocket.on.mock.calls, ...fakeSocket.once.mock.calls]) {
+        if (event === channel) handler({ channel, ...msg });
+    }
+};
+
+const latest = <T>(models$: Observable<T[]>): T[] => {
+    let current: T[] = [];
+    models$.subscribe(m => (current = m)).unsubscribe();
+    return current;
+};
+
 // Registering first and constructing Colibri second is the natural order for module-level code
 // (`const [players$] = RegisterModelSync(...)` at the top of a file), and it used to leave every
 // one of those registrations listening to nothing, silently.
 describe('registering before new Colibri()', () => {
-    class Widget extends SyncModel<Widget> {
-        @Synced() accessor label = '';
-    }
-
-    // Mirrors socket.io: a message reaches every handler registered for its channel.
-    const deliver = (channel: string, msg: { command: string; payload?: unknown }) => {
-        for (const [event, handler] of [...fakeSocket.on.mock.calls, ...fakeSocket.once.mock.calls]) {
-            if (event === channel) handler({ channel, ...msg });
-        }
-    };
-
-    const latest = <T>(models$: Observable<T[]>): T[] => {
-        let current: T[] = [];
-        models$.subscribe(m => (current = m)).unsubscribe();
-        return current;
-    };
-
     let warnSpy: ReturnType<typeof vi.spyOn>;
 
     beforeEach(() => {
@@ -510,6 +512,78 @@ describe('registering before new Colibri()', () => {
             widget.delete();
             vi.useRealTimers();
         }
+    });
+});
+
+// The server relays model updates, it does not replay them, so one relayed while this client was
+// disconnected is simply gone for it - and it used to stay stale until that model changed again.
+describe('catching up on models after a reconnect', () => {
+    const connectSocket = () => {
+        for (const [event, handler] of fakeSocket.on.mock.calls) {
+            if (event === 'connect') handler();
+        }
+    };
+
+    const requested = () =>
+        fakeSocket.emit.mock.calls
+            .filter(([, msg]) => (msg as Message).command === 'model::request')
+            .map(([channel]) => channel);
+
+    let debugSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+        debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => undefined);
+    });
+
+    afterEach(() => {
+        debugSpy.mockRestore();
+    });
+
+    it('asks for every registered model channel again on each reconnect', () => {
+        new Colibri('app', 'localhost', 9011);
+        RegisterModelSync({ name: 'resync-a', type: Widget });
+        RegisterModelSync({ name: 'resync-b', type: Widget });
+        expect(requested()).toEqual(['resync-a', 'resync-b']);
+
+        // The first connect is not a reconnect: Socket.IO sends the requests above on it.
+        connectSocket();
+        expect(requested()).toEqual(['resync-a', 'resync-b']);
+
+        connectSocket();
+        expect(requested()).toEqual(['resync-a', 'resync-b', 'resync-a', 'resync-b']);
+
+        connectSocket();
+        expect(requested()).toHaveLength(6);
+    });
+
+    it('does the same for a RegisterModelSync made before new Colibri()', () => {
+        RegisterModelSync({ name: 'resync-early', type: Widget });
+        new Colibri('app', 'localhost', 9011);
+
+        connectSocket();
+        connectSocket();
+
+        expect(requested()).toEqual(['resync-early', 'resync-early']);
+    });
+
+    it('brings a model missed during the outage up to date, in place, without duplicating it', () => {
+        new Colibri('app', 'localhost', 9011);
+        const [models$] = RegisterModelSync({ name: 'resync-widget', type: Widget });
+        connectSocket();
+        deliver('resync-widget', { command: 'model::update', payload: { id: 'w1', label: 'before' } });
+        const [widget] = latest(models$);
+
+        // Disconnected; another client changes w1 and the server relays it to everyone but us.
+        connectSocket();
+        expect(requested()).toEqual(['resync-widget', 'resync-widget']);
+
+        // What the server answers that request with: one model::update per model it has.
+        deliver('resync-widget', { command: 'model::update', payload: { id: 'w1', label: 'during the outage' } });
+
+        const models = latest(models$);
+        expect(models).toHaveLength(1);
+        expect(models[0]).toBe(widget);
+        expect(widget.label).toBe('during the outage');
     });
 });
 

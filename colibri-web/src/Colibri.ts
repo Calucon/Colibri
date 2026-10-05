@@ -1,7 +1,7 @@
 import { Subject } from 'rxjs';
 import { Socket, connect } from 'socket.io-client';
 import { ColibriError, ProtocolMismatchError } from './ColibriError';
-import { colibriCreated } from './lifecycle';
+import { colibriCreated, colibriReconnected } from './lifecycle';
 
 /**
  * The wire protocol this client speaks, announced in the Socket.IO handshake query. Must
@@ -126,6 +126,9 @@ export class Colibri {
     // Likewise for a refusal, which is otherwise reported once per `protocol::rejected` received.
     private hasReportedRefusal = false;
 
+    // Whether any connect has happened yet, so that the next one is known to be a reconnect.
+    private hasConnected = false;
+
     public constructor(
         public readonly app: string,
         public readonly server: string = pageHostname(),
@@ -180,6 +183,12 @@ export class Colibri {
     private onSocketConnect() {
         console.debug(`Connected to colibri server on ${this.server}`);
         this.waitForServerHello();
+
+        // The server relays, it does not replay: whatever it relayed while this client was away
+        // never reached it, so whoever has state to catch up on is told now. Socket.IO has
+        // already sent what this client queued while disconnected, so a catch-up sees that too.
+        if (this.hasConnected) colibriReconnected(this);
+        this.hasConnected = true;
     }
 
     /*

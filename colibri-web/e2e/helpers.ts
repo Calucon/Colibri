@@ -27,6 +27,7 @@ function rawSocket(client: Colibri) {
                 connected: boolean;
                 disconnect(): void;
                 once(event: string, cb: () => void): void;
+                io: { engine: { close(): void } };
             };
         }
     ).socket;
@@ -50,6 +51,23 @@ function waitForConnect(client: Colibri): Promise<void> {
     return new Promise(resolve => {
         socket.once('connect', resolve);
     });
+}
+
+/**
+ * Cuts `client`'s connection the way a network drop does: underneath Socket.IO rather than through
+ * disconnect(), so Socket.IO treats it as lost and reconnects by itself after its usual backoff
+ * (0.5-1.5s by default). Resolves once the client has noticed it is disconnected.
+ */
+export function dropConnection(client: Colibri): Promise<void> {
+    const socket = rawSocket(client);
+    return new Promise(resolve => {
+        socket.once('disconnect', resolve);
+        socket.io.engine.close();
+    });
+}
+
+export function isConnected(client: Colibri): boolean {
+    return rawSocket(client).connected;
 }
 
 const activeClients: Colibri[] = [];

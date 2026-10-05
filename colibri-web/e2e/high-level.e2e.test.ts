@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { firstValueFrom } from 'rxjs';
 import { filter, timeout } from 'rxjs/operators';
-import { createSingletonWithPeer, disconnectAll, nextMessage, uniqueApp } from './helpers';
+import { createSingletonWithPeer, disconnectAll, dropConnection, isConnected, nextMessage, uniqueApp } from './helpers';
 import { Sync } from '../src/Broadcasting';
 import { RegisterModelSync } from '../src/ModelSynchronization';
 import { SyncModel } from '../src/SyncModel';
@@ -105,6 +105,44 @@ describe('RegisterModelSync high-level API', () => {
         const models = await modelsPromise;
         const found = models.find(m => m.id === 'model-2');
         expect(found?.value).toBe('from-peer');
+    });
+
+    // The server relays model updates and does not replay them, so a client that missed one
+    // while disconnected used to stay stale until that model happened to change again.
+    it('catches up on a model update it missed while disconnected', async () => {
+        const { singleton, peer } = await createSingletonWithPeer(uniqueApp('modelsync-app-resync'));
+        const channelName = 'testmodel';
+
+        const [models$] = RegisterModelSync<TestModel>({ type: TestModel });
+        const modelWithValue = async (value: string) => {
+            const models = await firstValueFrom(
+                models$.pipe(
+                    filter(ms => ms.some(m => m.id === 'model-3' && m.value === value)),
+                    timeout(10_000)
+                )
+            );
+            return models.filter(m => m.id === 'model-3');
+        };
+
+        const before = modelWithValue('before');
+        peer.sendMessage(channelName, 'model::update', { id: 'model-3', value: 'before' });
+        const [original] = await before;
+
+        // A real outage: the transport goes away underneath Socket.IO, which reconnects by itself.
+        await dropConnection(singleton);
+        peer.sendMessage(channelName, 'model::update', { id: 'model-3', value: 'missed' });
+
+        // Make sure the server stored that while the singleton was still away. It handles one
+        // client's messages in order, so its answer to the peer's own request comes after it.
+        const stored = nextMessage(peer, { channel: channelName, command: 'model::update' });
+        peer.sendMessage(channelName, 'model::request');
+        expect((await stored).payload).toEqual({ id: 'model-3', value: 'missed' });
+        expect(isConnected(singleton)).toBe(false);
+
+        // Updated in place: the answer to the re-request must not add a second model-3.
+        const after = await modelWithValue('missed');
+        expect(after).toHaveLength(1);
+        expect(after[0]).toBe(original);
     });
 });
 

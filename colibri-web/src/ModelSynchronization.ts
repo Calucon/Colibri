@@ -1,6 +1,6 @@
 import { BehaviorSubject, Observable } from 'rxjs';
 import { Colibri, Message, RegisterChannel, SendMessage } from './Colibri';
-import { whenColibriCreated } from './lifecycle';
+import { onColibriReconnected, whenColibriCreated } from './lifecycle';
 import { SyncModel } from './SyncModel';
 
 interface ModelSyncMsg<T extends SyncModel<T>> extends Message {
@@ -52,9 +52,15 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
     const name = registration.name || registration.type.name.toLowerCase();
     if (!registration.name) warnIfMinified(registration.type.name, name);
 
-    // initial data fetch
+    // initial data fetch - and the same again after every reconnect, since an update relayed while
+    // this client was disconnected is gone for it, and only asking again brings it back. The
+    // server answers with one model::update per model it has, which onUpdate applies to the
+    // model with that id where there is one, so this catches up without duplicating anything.
     withColibri(colibri => {
         colibri.sendMessage(name, 'model::request');
+        onColibriReconnected(colibri, () => {
+            colibri.sendMessage(name, 'model::request');
+        });
     });
 
     // Register for updates (RegisterChannel itself waits for `new Colibri()` if it has to)
