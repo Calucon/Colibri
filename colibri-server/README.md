@@ -175,10 +175,10 @@ its address and the package to upgrade, at most once a minute per address. See
   protocol version. CI runs it; `npm run test:vectors -- --emit` prints the C# vector table.
 * `npm run test:tcpclient`: Manual smoke test against a server running on this machine (on
   `TCP_PORT`) - connects with the v3 TCP framing, handshakes and echoes heartbeats.
-  `npm run test:tcpclient -- 1` announces protocol version 1 instead, to see a refusal. Exits 0
-  when it connected and was heartbeated, 1 when something is wrong with the server (no
-  heartbeat, or a frame it cannot decode), and 2 when the server refused its protocol version,
-  after printing the server's reason.
+  `npm run test:tcpclient -- 1` announces protocol version 1 instead, to see a refusal. It exits
+  2 when the server refused its protocol version, after printing the server's reason, and 1 when
+  no heartbeat arrived; 0 means it connected and was heartbeated. A frame it cannot decode is
+  printed as `Malformed frame from server` and ends the run.
 * `npm run test:stressecho`: A raw TCP client that answers the probes of colibri-unity's Network
   Stress sample, so a single Unity editor can measure round trips
   (`npm run test:stressecho -- [app] [seconds]`).
