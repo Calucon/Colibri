@@ -511,6 +511,18 @@ namespace HCIKonstanz.Colibri.Synchronization
                 // everything again, and without this the previous scene's listeners would pile up
                 // on a channel that nothing happens to send on.
                 Prune(channel, channelListeners, track);
+
+                // Already listening. Delegates are equal when they call the same method on the
+                // same object, so this is a listener that belongs to nothing that is ever destroyed
+                // - a static method, or a lambda that captures nothing, which the compiler creates
+                // once and hands out again - or the same object registering the same method twice.
+                // Registered in Start, the first kind used to be added again on every scene
+                // reload, and every message was delivered to it twice, then three times, ...
+                for (var i = 0; i < channelListeners.Count; i++)
+                {
+                    if (channelListeners[i].Callback.Equals(listener) && channelListeners[i].FetchId == fetchId)
+                        return;
+                }
             }
 
             channelListeners.Add(new Listener<T>(listener, fetchId));
