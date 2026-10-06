@@ -6,6 +6,7 @@ import { AddressInfo } from 'net';
 import { tmpdir } from 'os';
 import * as path from 'path';
 import { Subscription } from 'rxjs';
+import { gzipSync } from 'zlib';
 import { ConsoleLog, LogLevel, LogMessage, Service } from '../../src/server/modules/core/index.js';
 import { WebServer } from '../../src/server/modules/web/web-server.js';
 import { RestAPI } from '../../src/server/modules/web/rest-api.js';
@@ -151,6 +152,68 @@ describe('WebServer over HTTP', () => {
             await expectRefused(await putRaw('value', { headers: { 'Content-Type': 'text/plain' }, body: '43' }));
 
             await expect(unityGet('value')).resolves.toEqual({ status: 200, text: '42' });
+        });
+
+        // body-parser makes {} of an empty application/json body. The check for that looked
+        // at Content-Length: 0, which a chunked request does not have, so an empty chunked
+        // body was stored as {} and answered 201.
+        describe('framed without a Content-Length', () => {
+            // A PUT with exactly these headers and body chunks, over a plain http.request so
+            // the framing is what the test says (fetch picks its own).
+            const putFramed = (name: string, headers: Record<string, string>, chunks: (string | Buffer)[]) =>
+                new Promise<{ status: number; body: unknown; headers: http.IncomingHttpHeaders }>((resolve, reject) => {
+                    const request = http.request(storeUrl('RawApp', name), { method: 'PUT', headers }, (response) => {
+                        let text = '';
+                        response.setEncoding('utf8');
+                        response.on('data', chunk => text += chunk);
+                        response.on('end', () => resolve({ status: response.statusCode!, body: JSON.parse(text) as unknown, headers: response.headers }));
+                    });
+                    request.on('error', reject);
+                    for (const chunk of chunks) request.write(chunk);
+                    request.end();
+                });
+            const chunked = { 'Content-Type': 'application/json', 'Transfer-Encoding': 'chunked' };
+
+            it('answers 400 for an empty chunked application/json body, and stores nothing', async () => {
+                const response = await putFramed('value', chunked, []);
+
+                expect(response.status).toBe(400);
+                expect(response.headers['content-type']).toMatch(/^application\/json/);
+                expect(response.body).toEqual({ error: expect.stringMatching(/JSON body.*Content-Type: application\/json/) });
+                expect((await fetch(`${baseUrl}/api/store/RawApp`)).status).toBe(404);
+                expect(logs.filter(l => l.origin === 'RestAPI' && l.level === LogLevel.Warn)).toHaveLength(1);
+            });
+
+            it('answers 400 for a gzip body that inflates to nothing', async () => {
+                const response = await putFramed('value', { ...chunked, 'Content-Encoding': 'gzip' }, [ gzipSync(Buffer.alloc(0)) ]);
+
+                expect(response.status).toBe(400);
+                expect((await fetch(`${baseUrl}/api/store/RawApp`)).status).toBe(404);
+            });
+
+            it('leaves a value that is already stored as it was', async () => {
+                expect((await putFramed('value', chunked, [ '42' ])).status).toBe(201);
+
+                expect((await putFramed('value', chunked, [])).status).toBe(400);
+
+                await expect(fetch(storeUrl('RawApp', 'value')).then(r => r.text())).resolves.toBe('42');
+            });
+
+            // An empty object is a value like any other, and has to stay storable.
+            it.each([
+                [ 'chunked', [ '{', '}' ] ],
+                [ 'with a Content-Length', [ '{}' ] ],
+            ])('stores an explicit {} sent %s', async (framing, chunks) => {
+                const headers = framing === 'chunked' ? chunked : { 'Content-Type': 'application/json', 'Content-Length': '2' };
+
+                const response = await putFramed('empty', headers, chunks);
+
+                expect(response.status).toBe(201);
+                expect(response.body).toMatchObject({ data: {} });
+                const stored = await fetch(storeUrl('RawApp', 'empty'));
+                expect(stored.status).toBe(200);
+                expect(await stored.text()).toBe('{}');
+            });
         });
 
         // What setRestObject(key, undefined) sends: JSON.stringify(undefined) is no body at all.

@@ -1,5 +1,5 @@
 import { Service } from '../core/index.js';
-import { WebServer } from './web-server.js';
+import { hasEmptyJsonBody, WebServer } from './web-server.js';
 import { Router } from 'express';
 import { mkdir, readFile, rename, writeFile } from 'fs/promises';
 import * as path from 'path';
@@ -73,7 +73,9 @@ export class RestAPI extends Service {
                 // application/json, or no body at all, and makes {} of an empty JSON body.
                 // The undefined used to be stored: a name listed under its app that GET and
                 // DELETE then answered 404 for. Both clients always send a JSON body.
-                if (req.body === undefined || req.headers['content-length'] === '0') {
+                // An empty body is told from `{}` by its raw length, not by Content-Length: a
+                // chunked request has none, and its empty body used to be stored as {}.
+                if (req.body === undefined || hasEmptyJsonBody(req)) {
                     const error = `Value with name ${req.params.value} not saved: send the value as a JSON body, with Content-Type: application/json`;
                     this.logWarning(`PUT /api/store/${req.params.app}/${req.params.value} answered 400: ${error}`);
                     res.status(400).json({ error });
