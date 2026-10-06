@@ -399,6 +399,55 @@ namespace HCIKonstanz.Colibri.E2E
 
 
         /*
+         *  Connection events
+         */
+
+        /// <summary>
+        /// The connection drops and is back before the next frame: a long frame - a scene load on a
+        /// headset - during a Wi-Fi blip. OnConnected and OnDisconnected used to be two flags that
+        /// Update raised in a fixed order, connected first, so this raised OnConnected and then
+        /// OnDisconnected, and left user code believing it was offline while it was connected.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator ADropAndReconnectWithinOneFrameEndsWithOnConnected()
+        {
+            var events = new List<string>();
+            System.Action onConnected = () => events.Add("connected");
+            System.Action onDisconnected = () => events.Add("disconnected");
+
+            var connection = Connection;
+            connection.OnConnected += onConnected;
+            connection.OnDisconnected += onDisconnected;
+            try
+            {
+                var sessions = connection.ConnectedSessions;
+                _proxy.Cut();
+
+                // No Update runs while this holds the main thread. The connection's own loop does
+                // not need one: it notices the drop and connects again regardless.
+                var deadline = System.DateTime.UtcNow.AddSeconds(10);
+                while (connection.ConnectedSessions == sessions && System.DateTime.UtcNow < deadline)
+                    System.Threading.Thread.Sleep(10);
+
+                Assert.That(connection.ConnectedSessions, Is.EqualTo(sessions + 1),
+                    "The client never reconnected while the main thread was held");
+                Assert.That(events, Is.Empty, "A connection event was raised off the main thread");
+
+                yield return null;
+
+                Assert.That(events, Is.EqualTo(new[] { "disconnected", "connected" }),
+                    "The drop and the reconnect were not reported in the order they happened");
+                Assert.That(connection.Status, Is.EqualTo(ConnectionStatus.Connected));
+            }
+            finally
+            {
+                connection.OnConnected -= onConnected;
+                connection.OnDisconnected -= onDisconnected;
+            }
+        }
+
+
+        /*
          *  Helpers
          */
 

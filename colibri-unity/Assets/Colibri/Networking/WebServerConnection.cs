@@ -91,13 +91,19 @@ namespace HCIKonstanz.Colibri.Networking
         /// first frame, not merely an accepted TCP connection. Something that accepts and then
         /// says nothing, or speaks a framing this client cannot read, never raises it.
         /// </summary>
+        /// <remarks>
+        /// Both events are raised from <c>Update</c>, once per connection and in the order things
+        /// happened, so the last one raised always tells the truth: a connection that drops and
+        /// comes back between two frames - a long frame during a Wi-Fi blip - raises
+        /// <see cref="OnDisconnected"/> and then <see cref="OnConnected"/> in the next frame.
+        /// </remarks>
         public event Action OnConnected;
 
         /// <summary>
-        /// Raised on the main thread once for every <see cref="OnConnected"/>, when that connection
-        /// ends - dropped, timed out, or refused by the server. An attempt that never got as far as
-        /// Connected raises neither event. That includes a server that refuses this client in its
-        /// very first frame: it is reported by <see cref="Status"/> becoming
+        /// Raised on the main thread once for every <see cref="OnConnected"/>, after it, when that
+        /// connection ends - dropped, timed out, or refused by the server. An attempt that never got
+        /// as far as Connected raises neither event. That includes a server that refuses this client
+        /// in its very first frame: it is reported by <see cref="Status"/> becoming
         /// <see cref="ConnectionStatus.ProtocolMismatch"/> and by <see cref="Connected"/> being
         /// cancelled.
         /// </summary>
@@ -201,9 +207,12 @@ namespace HCIKonstanz.Colibri.Networking
         private static TaskCompletionSource<bool> NewGate()
             => new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        // workaround to execute events in main unity thread
-        private volatile bool _fireOnConnected;
-        private volatile bool _fireOnDisconnected;
+        // OnConnected (true) and OnDisconnected (false) still to be raised on the main thread, in
+        // the order the transitions happened: they are queued under _statusLock, by the Status
+        // setter. They used to be two flags, raised connected-first, so a connection that dropped
+        // and came back before the next Update raised OnConnected and then OnDisconnected, and
+        // left user code believing it was disconnected while it was connected.
+        private readonly ConcurrentQueue<bool> _connectionEvents = new ConcurrentQueue<bool>();
 
         /// <summary>
         /// Smoothed rate at which <see cref="Update"/> runs, which is the rate at which received
@@ -276,7 +285,7 @@ namespace HCIKonstanz.Colibri.Networking
                     {
                         _connectAttempts = 0;
                         _connectedSessions++;
-                        _fireOnConnected = true;
+                        _connectionEvents.Enqueue(true);
                         _isGateOpen = true;
 
                         // The gate is created with RunContinuationsAsynchronously, so no awaiting
@@ -299,7 +308,7 @@ namespace HCIKonstanz.Colibri.Networking
                     // refusal included. It used to be raised for every failed attempt, connected
                     // or not, and never for a refusal at all.
                     if (wasConnected)
-                        _fireOnDisconnected = true;
+                        _connectionEvents.Enqueue(false);
                 }
             }
         }
@@ -380,16 +389,12 @@ namespace HCIKonstanz.Colibri.Networking
             RefreshConfig();
             TrackDeliveryRate();
 
-            if (_fireOnConnected)
+            while (_connectionEvents.TryDequeue(out var connected))
             {
-                _fireOnConnected = false;
-                Raise(OnConnected, nameof(OnConnected));
-            }
-
-            if (_fireOnDisconnected)
-            {
-                _fireOnDisconnected = false;
-                Raise(OnDisconnected, nameof(OnDisconnected));
+                if (connected)
+                    Raise(OnConnected, nameof(OnConnected));
+                else
+                    Raise(OnDisconnected, nameof(OnDisconnected));
             }
 
             DeliverReceivedMessages();
