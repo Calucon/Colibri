@@ -5,9 +5,41 @@ export interface SyncModel {
     [key: string]: unknown;
 }
 
+// How long a deleted model's id is remembered; see DataStore.removeModel.
+export const DEFAULT_TOMBSTONE_MILLIS = 600_000;
+
+// How many deleted ids one app remembers at most. Far more than a lab scene deletes in the
+// tombstones' lifetime - only a scene that spawns and destroys synced objects in a loop comes near -
+// and a bound on what such a scene, or a client deleting ids in a runaway loop, can make the server
+// keep. Past it the oldest is forgotten first.
+export const MAX_TOMBSTONES_PER_APP = 10_000;
+
+// How many clients that deleted the same model, one after another, a tombstone remembers.
+const MAX_DELETERS_PER_TOMBSTONE = 8;
+
+// What is left of a deleted model.
+export interface Tombstone {
+    readonly channel: string;
+    readonly id: string;
+    // performance.now() of the latest delete.
+    deletedAt: number;
+    // The clients (connection ids) that sent a delete for it, oldest first.
+    readonly deletedBy: string[];
+}
+
+// One app's tombstones: by channel and id for lookups, and in the order they were last deleted
+// for expiry and eviction, which only ever take the oldest.
+interface AppTombstones {
+    byChannel: Map<string, Map<string, Tombstone>>;
+    oldestFirst: Set<Tombstone>;
+}
+
 export class DataStore extends Service {
     public serviceName = 'DataStore';
     public groupName = 'core';
+
+    // How long removeModel() remembers a deleted model's id. 0 remembers none.
+    public tombstoneMillis = DEFAULT_TOMBSTONE_MILLIS;
 
     // Nested by app -> channel -> model id, instead of a flat `group + channel` string key.
     // That flat key was ambiguous (app 'ab' + channel 'c' collided with app 'a' + channel
@@ -15,6 +47,8 @@ export class DataStore extends Service {
     // wiped app 'test2' when the last client of app 'test' disconnected. Both bugs are
     // structural here: clearApp() just deletes the one Map entry for that app.
     private readonly store = new Map<string, Map<string, Map<string, SyncModel>>>();
+
+    private readonly tombstones = new Map<string, AppTombstones>();
 
     public constructor() {
         super();
@@ -40,8 +74,40 @@ export class DataStore extends Service {
         }
     }
 
-    public removeModel(group: string, channel: string, id: string): void {
+    // Removes the model and, for tombstoneMillis, remembers that it was deleted and by whom.
+    //
+    // updateModel() creates whatever model it is handed, so without that memory any update that
+    // arrives after a delete brings the model back: one another client sent before the delete
+    // reached it, one this server held back under a limit and passed on after the delete (order
+    // is only kept per client), or one a client queued while it was offline. Relayed, it has every
+    // client's manager spawn the object again, with nobody left to delete it.
+    public removeModel(group: string, channel: string, id: string, deletedBy?: string): void {
         this.store.get(group)?.get(channel)?.delete(id);
+        if (this.tombstoneMillis > 0) {
+            this.addTombstone(group, channel, id, deletedBy);
+        }
+    }
+
+    // The tombstone of a model deleted no longer than tombstoneMillis ago, if there is one.
+    public deletion(group: string, channel: string, id: string): Tombstone | undefined {
+        const app = this.tombstones.get(group);
+        if (!app) return undefined;
+
+        const tombstone = app.byChannel.get(channel)?.get(id);
+        if (!tombstone) return undefined;
+
+        if (performance.now() - tombstone.deletedAt >= this.tombstoneMillis) {
+            this.forgetTombstone(group, app, tombstone);
+            return undefined;
+        }
+        return tombstone;
+    }
+
+    // For a model that is being created again on purpose; see ModelSynchronization.
+    public forgetDeletion(group: string, channel: string, id: string): void {
+        const app = this.tombstones.get(group);
+        const tombstone = app?.byChannel.get(channel)?.get(id);
+        if (app && tombstone) this.forgetTombstone(group, app, tombstone);
     }
 
     /** @deprecated No current caller - `clearApp` is what actually runs on disconnect. */
@@ -49,8 +115,11 @@ export class DataStore extends Service {
         this.store.get(group)?.delete(channel);
     }
 
+    // Forgets the app's models and its tombstones: with no client left, nothing is left that could
+    // bring a deleted model back, and whatever the next client brings is the app's state afresh.
     public clearApp(group: string): void {
         this.store.delete(group);
+        this.tombstones.delete(group);
     }
 
     public getModel(group: string, channel: string, id: string): SyncModel | undefined {
@@ -60,6 +129,11 @@ export class DataStore extends Service {
     public getAll(group: string, channel: string): SyncModel[] {
         const models = this.store.get(group)?.get(channel);
         return models ? Array.from(models.values()) : [];
+    }
+
+    // How many tombstones the app holds, expired ones not yet dropped included. For the tests.
+    public tombstoneCount(group: string): number {
+        return this.tombstones.get(group)?.oldestFirst.size ?? 0;
     }
 
     private getOrCreateChannel(group: string, channel: string): Map<string, SyncModel> {
@@ -75,5 +149,55 @@ export class DataStore extends Service {
             byChannel.set(channel, models);
         }
         return models;
+    }
+
+    private addTombstone(group: string, channel: string, id: string, deletedBy: string | undefined): void {
+        const now = performance.now();
+
+        let app = this.tombstones.get(group);
+        if (!app) {
+            app = { byChannel: new Map(), oldestFirst: new Set() };
+            this.tombstones.set(group, app);
+        }
+
+        let byId = app.byChannel.get(channel);
+        if (!byId) {
+            byId = new Map();
+            app.byChannel.set(channel, byId);
+        }
+
+        let tombstone = byId.get(id);
+        if (tombstone) {
+            // Deleted again: it is now the most recently deleted.
+            app.oldestFirst.delete(tombstone);
+            tombstone.deletedAt = now;
+        } else {
+            tombstone = { channel, id, deletedAt: now, deletedBy: [] };
+            byId.set(id, tombstone);
+        }
+        app.oldestFirst.add(tombstone);
+
+        if (deletedBy !== undefined && !tombstone.deletedBy.includes(deletedBy)) {
+            tombstone.deletedBy.push(deletedBy);
+            if (tombstone.deletedBy.length > MAX_DELETERS_PER_TOMBSTONE) tombstone.deletedBy.shift();
+        }
+
+        // Oldest first: drop the expired ones, and the oldest live ones while there are too many.
+        for (const oldest of app.oldestFirst) {
+            const expired = now - oldest.deletedAt >= this.tombstoneMillis;
+            if (!expired && app.oldestFirst.size <= MAX_TOMBSTONES_PER_APP) break;
+            this.forgetTombstone(group, app, oldest);
+        }
+    }
+
+    private forgetTombstone(group: string, app: AppTombstones, tombstone: Tombstone): void {
+        app.oldestFirst.delete(tombstone);
+
+        const byId = app.byChannel.get(tombstone.channel);
+        if (byId?.get(tombstone.id) === tombstone) {
+            byId.delete(tombstone.id);
+            if (byId.size === 0) app.byChannel.delete(tombstone.channel);
+        }
+        if (app.oldestFirst.size === 0) this.tombstones.delete(group);
     }
 }

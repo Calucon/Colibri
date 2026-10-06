@@ -89,4 +89,8 @@ export const Config = {
     // Warn when one app has more clients than this, across both transports (see
     // DEFAULT_APP_CLIENT_WARNING_THRESHOLD); 0: never.
     APP_CLIENT_WARNING_THRESHOLD: parseNonNegativeInt('APP_CLIENT_WARNING_THRESHOLD', process.env.APP_CLIENT_WARNING_THRESHOLD, 8),
+
+    // Seconds the server remembers that a synced model was deleted, refusing updates that would
+    // create it again (see DataStore.removeModel); 0: not at all.
+    MODEL_TOMBSTONE_SECONDS: parseNonNegativeInt('MODEL_TOMBSTONE_SECONDS', process.env.MODEL_TOMBSTONE_SECONDS, 600),
 };

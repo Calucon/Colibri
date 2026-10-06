@@ -97,6 +97,18 @@ describe('Config', () => {
         });
     });
 
+    describe('MODEL_TOMBSTONE_SECONDS', () => {
+        it('defaults to remembering a deleted model for 10 minutes, and takes 0 to not remember it', async () => {
+            expect((await loadConfig({ MODEL_TOMBSTONE_SECONDS: undefined })).MODEL_TOMBSTONE_SECONDS).toBe(600);
+            expect((await loadConfig({ MODEL_TOMBSTONE_SECONDS: '0' })).MODEL_TOMBSTONE_SECONDS).toBe(0);
+            expect((await loadConfig({ MODEL_TOMBSTONE_SECONDS: '30' })).MODEL_TOMBSTONE_SECONDS).toBe(30);
+        });
+
+        it.each(['-1', '2.5', 'forever'])('refuses to start with "%s"', async (raw) => {
+            await expect(loadConfig({ MODEL_TOMBSTONE_SECONDS: raw })).rejects.toThrow('MODEL_TOMBSTONE_SECONDS');
+        });
+    });
+
     it('loads .env without printing dotenv\'s banner and tip', async () => {
         // dotenv reads .env from the working directory.
         const cwd = await mkdtemp(path.join(tmpdir(), 'colibri-config-'));

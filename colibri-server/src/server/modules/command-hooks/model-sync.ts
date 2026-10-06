@@ -67,6 +67,23 @@ export class ModelSynchronization extends Service {
                 return;
             }
 
+            // An update to a model deleted a moment ago would create it afresh, here and in every
+            // other client (see DataStore.removeModel) - unless it comes from a client that deleted
+            // it itself. Each client's messages arrive in the order it sent them, so for that one
+            // client an update after its delete is no straggler: it is creating the model again,
+            // e.g. a scene it unloaded being loaded again, with its synced objects' fixed ids.
+            const deletion = this.store.deletion(msg.origin.app, msg.channel, payload.id);
+            if (deletion) {
+                if (!deletion.deletedBy.includes(msg.origin.id)) {
+                    this.logDebug(
+                        `Ignoring a model::update for '${payload.id}' on channel '${msg.channel}' from client '${msg.origin.name}' ` +
+                            `(${msg.origin.id}, app '${msg.origin.app}'): that model was deleted (MODEL_TOMBSTONE_SECONDS)`
+                    );
+                    return;
+                }
+                this.store.forgetDeletion(msg.origin.app, msg.channel, payload.id);
+            }
+
             this.store.updateModel(msg.origin.app, msg.channel, payload as SyncModel);
             this.connectionPool.broadcast(msg);
         } catch (error) {
@@ -84,7 +101,7 @@ export class ModelSynchronization extends Service {
             const payload = msg.payload?.asValue<{ id?: string }>();
 
             if (payload?.id) {
-                this.store.removeModel(msg.origin.app, msg.channel, payload.id);
+                this.store.removeModel(msg.origin.app, msg.channel, payload.id, msg.origin.id);
                 this.connectionPool.broadcast(msg);
             } else {
                 this.logWarning('Received delete message without payload');

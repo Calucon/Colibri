@@ -16,6 +16,7 @@ new colibri.ConsoleLog(colibri.ConsoleLog.optionsFromEnv(process.env)).attach(co
 // Print console errors in GUI
 // const redirectConsole = new colibri.RedirectConsole();
 const dataStore = new colibri.DataStore();
+dataStore.tombstoneMillis = Config.MODEL_TOMBSTONE_SECONDS * 1000;
 
 /**
  *    Servers
