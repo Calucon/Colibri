@@ -297,7 +297,8 @@ await PutRestApi(key, data);
 const stored = await GetRestApi(key);
 ```
 
-A stored value can be any JSON value up to 5 MiB. `setRestObject` resolves to `false` if the server did not store it,
+A stored value can be any JSON value up to 5 MiB, `null` included; `undefined` is not one, so
+`setRestObject(key, undefined)` stores nothing. `setRestObject` resolves to `false` if the server did not store it,
 and `getRestObject` to `null` if there is no such key or the server answered with an error; both reject if the server
 cannot be reached. Keys become part of the URL as they are, so stick to letters, digits, `-` and `_`.
 
