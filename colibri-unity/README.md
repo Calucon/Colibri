@@ -512,8 +512,14 @@ soon as the connection is back — ahead of anything sent afterwards:
 
 - Broadcasts (`Sync.Send`) and log lines: at most 256 are kept. Past that the oldest are dropped,
   with one warning per outage.
-- Changes to synced objects (`SyncBehaviour`, `SyncTransform`) are never dropped. Several changes
-  to the same object during one outage are merged into one update, newer values winning.
+- Changes to synced objects (`SyncBehaviour`, `SyncTransform`) are not dropped by that bound.
+  Several changes to the same object during one outage are merged into one update, newer values
+  winning.
+- Behind both, at most **10 000 messages** wait in all — during an outage, or while connected over
+  a link too slow for what is sent. Past that the oldest broadcasts and log lines go first, and then
+  the oldest synced-object messages (requests, updates and deletes), which other clients then never
+  see. The console says so once per connection: `Colibri: more than 10000 messages are waiting to be
+  sent…`.
 
 After reconnecting, Colibri asks the server again for every synced object it listens to, so what
 other clients changed in the meantime arrives. It does not catch up on everything:

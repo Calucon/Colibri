@@ -577,11 +577,19 @@ the socket, re-reading the live session for every frame. While connected it is j
 socket. While not, it is the retry queue, opened again (`OpenOutbox`) before `Status` says
 `Connected`, so anything that reacts to `Connected` lines up behind the outage's messages. A failed
 write leaves its frame at the head for the next session. During an outage, broadcasts and log lines
-are capped at 256, oldest first; model messages are never dropped, and the un-awaited
+are capped at 256, oldest first; model messages are not dropped by that cap, and the un-awaited
 `model::update`s for one object are folded into one copied `JObject` — newer members winning, the
 result moving to the back — unless something else about that object (an awaited update, a request
 for it or for its channel, a delete) is queued in between. Reconnecting ends every fold. Nothing in
 the send path awaits the `Connected` gate any more; only user code does.
+
+Folding bounds model updates by the number of objects, but requests, deletes and updates that
+cannot be folded were still unbounded, and so was the outbox of a connection whose writes fall
+behind what is sent. Behind both bounds sits `MAX_OUTBOX_MESSAGES`: 10 000 messages in the whole
+outbox, connected or not. Past it, `EnforceOutboxLimit` drops the oldest droppable message first
+and only then the oldest model message — never the one `DrainOutbox` is writing, which may well
+arrive — completes an awaited send it dropped with `false`, and warns once per connection. Losing
+model state is a real loss, but a bounded one.
 
 ---
 
