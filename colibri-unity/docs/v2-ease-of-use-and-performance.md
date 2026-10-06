@@ -42,8 +42,8 @@ grown to three packages, one of which (R3) ships in two halves and additionally 
 Miss half of it and Unity produces a wall of `The type or namespace name 'R3' could not be found`
 with nothing pointing at the cause.
 
-On top of that, four things failed in complete silence — and all four are things a beginner hits in
-their first hour:
+On top of that, four things failed in complete silence — and all four are things a new user hits in
+the first hour:
 
 | Situation | What happened before |
 |---|---|
@@ -628,11 +628,11 @@ invokes a handler immediately if the operation has already finished, so there is
 window.)
 
 The plain awaiter never throws, so `catch (UnityWebRequestException)` — a UniTask type — is gone,
-replaced by an explicit result check. This is strictly better for a beginner: instead of an
-exception message, they get the operation, the object name, the URL, the transport error, the HTTP
-status, and a pointer at the configuration window. That covers failed requests only: the
-Newtonsoft calls around them are not caught, so a value that cannot be converted still throws
-(§6).
+replaced by an explicit result check. This is strictly better for someone new to Colibri: instead
+of an exception message, the log shows the operation, the object name, the URL, the transport
+error, the HTTP status, and a pointer at the configuration window. That covers failed requests
+only: the Newtonsoft calls around them are not caught, so a value that cannot be converted still
+throws (§6).
 
 **`RemoteLogging`** — `Subject<int>` + `.Where(!_isSending)` + `.ThrottleLast(1s)` became a queue
 filled from Unity's threaded log callback (which fires on arbitrary threads) and drained by a
