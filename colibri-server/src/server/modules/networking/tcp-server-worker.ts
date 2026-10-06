@@ -406,11 +406,12 @@ export class TCPServerWorker extends WorkerService {
         this.postMessage('clientConnected$', { id: client.id, app, name, version });
     }
 
-    // Tells the client why it was refused and closes the connection. This is best-effort by
-    // nature: it only reaches a client whose *framing* this server still speaks. A genuine
-    // v1 client cannot decode the frame at all, so for that case the log line below - naming
-    // both versions and the peer - is the whole diagnostic, and it is the one an integrator
-    // will actually look at.
+    // Tells the client why it was refused and closes the connection. Only a client that speaks
+    // this server's *framing* gets here - one whose handshake frame decoded, but announced another
+    // protocol version - so it can read the refusal. A Colibri 1.x client never reaches this
+    // method: its handshake is not a valid frame in the current framing, so FrameReader throws a
+    // V1FramingError on its first bytes and reportV1Client names it instead (it could not decode
+    // a refusal anyway). Either way the log line is the diagnostic an integrator will look at.
     //
     // end(packet) rather than write-then-end: it queues the rejection and the FIN together,
     // so the frame cannot be lost to a close that races the write callback.
