@@ -82,28 +82,43 @@ namespace HCIKonstanz.Colibri.Synchronization
                 _isCreatingObject = true;
                 var prevEnabled = Template.enabled;
                 var prevId = Template.Id;
+                T go = null;
 
-                Template.enabled = false;
-                Template.Id = id;
-                var go = Instantiate(Template);
+                // Restored in finally: applying the state can throw - a [Sync] setter of the
+                // student's, a value that cannot be read - and the exception leaves through
+                // Sync's dispatch, which reports it. Left behind, _isCreatingObject stayed true,
+                // so no object created on this client afterwards ever sent its state, and the
+                // template kept the remote model's id.
+                try
+                {
+                    Template.enabled = false;
+                    Template.Id = id;
+                    go = Instantiate(Template);
 
-                // Templates are often kept switched off in the scene, and a clone starts out as
-                // its template is. A clone that is off never runs Awake: it never registers for
-                // its own updates or with the ticker, so it stayed exactly as this first update
-                // left it - and an object hidden elsewhere (active: false) could never be shown
-                // again. Switched on first, Awake runs and latches the template's values; the
-                // state applied next is then latched too, so none of it is echoed back, and it
-                // decides whether the object ends up visible.
-                if (!go.gameObject.activeSelf)
-                    go.gameObject.SetActive(true);
+                    // Templates are often kept switched off in the scene, and a clone starts out
+                    // as its template is. A clone that is off never runs Awake: it never registers
+                    // for its own updates or with the ticker, so it stayed exactly as this first
+                    // update left it - and an object hidden elsewhere (active: false) could never
+                    // be shown again. Switched on first, Awake runs and latches the template's
+                    // values; the state applied next is then latched too, so none of it is echoed
+                    // back, and it decides whether the object ends up visible.
+                    if (!go.gameObject.activeSelf)
+                        go.gameObject.SetActive(true);
 
-                go.OnModelUpdate(data);
-                _existingObjects.Add(go);
-                go.enabled = true;
+                    // Known before its state is applied, so that a throw there cannot make the
+                    // next update for this id build a second object.
+                    _existingObjects.Add(go);
+                    go.OnModelUpdate(data);
+                }
+                finally
+                {
+                    if (go)
+                        go.enabled = true;
 
-                Template.enabled = prevEnabled;
-                Template.Id = prevId;
-                _isCreatingObject = false;
+                    Template.enabled = prevEnabled;
+                    Template.Id = prevId;
+                    _isCreatingObject = false;
+                }
             }
         }
 

@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Linq;
+using System.Text.RegularExpressions;
 using HCIKonstanz.Colibri.Synchronization;
 using Newtonsoft.Json.Linq;
 using NUnit.Framework;
@@ -30,6 +31,30 @@ namespace HCIKonstanz.Colibri.E2E
     }
 
     public class E2ESyncModelManager : SyncBehaviourManager<E2ESyncModel>
+    {
+    }
+
+    /// <summary>A model with a [Sync] setter that throws for one value, as a student's setter can.</summary>
+    public class E2EFragileModel : SyncBehaviour<E2EFragileModel>
+    {
+        public const string Refused = "refused";
+
+        private string _label = "";
+
+        [Sync]
+        public string Label
+        {
+            get => _label;
+            set
+            {
+                if (value == Refused)
+                    throw new InvalidOperationException($"E2EFragileModel does not take the label '{Refused}'");
+                _label = value;
+            }
+        }
+    }
+
+    public class E2EFragileModelManager : SyncBehaviourManager<E2EFragileModel>
     {
     }
 
@@ -253,6 +278,63 @@ namespace HCIKonstanz.Colibri.E2E
             finally
             {
                 UnityEngine.Object.Destroy(clone.gameObject);
+            }
+        }
+
+        /// <summary>
+        /// Applying the first state of a model from another client can throw - here a [Sync]
+        /// setter refuses the value. The manager had switched its template off, given it the
+        /// remote id and noted that it was building an object, and put none of that back: the
+        /// template kept the other client's id, and no object created on this client afterwards
+        /// ever sent its state, since the manager still believed each one was its own clone.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator AStateThatThrowsWhileItIsAppliedDoesNotStopTheManager()
+        {
+            const string channel = "e2efragilemodel";
+
+            var templateObject = Spawn("fragile-template");
+            templateObject.SetActive(false);
+            var template = templateObject.AddComponent<E2EFragileModel>();
+            var templateId = template.Id;
+            var manager = Spawn<E2EFragileModelManager>("fragile-manager");
+            manager.Template = template;
+
+            yield return null;
+            yield return LetInitialStateArrive();
+
+            LogAssert.Expect(LogType.Error, new Regex($"^Colibri: a listener for model::update on channel '{channel}' threw an exception"));
+
+            // The second update reaches the server before the clone can ask for its state, so
+            // only building the clone meets the refused value.
+            var id = Guid.NewGuid().ToString();
+            Peer.Send(channel, "model::update", new JObject { { "id", id }, { "label", E2EFragileModel.Refused } });
+            Peer.Send(channel, "model::update", new JObject { { "id", id }, { "label", "accepted" } });
+
+            yield return E2EServer.WaitUntil(() => FragileInstances(id).Any(m => m.Label == "accepted"),
+                $"The manager never built the model '{id}', or it never took the later update");
+
+            var clones = FragileInstances(id);
+            try
+            {
+                Assert.That(clones.Length, Is.EqualTo(1), $"{clones.Length} objects carry the id '{id}'");
+                Assert.That(template.Id, Is.EqualTo(templateId), "The template kept the id of the model it was cloned for");
+                Assert.That(template.enabled, Is.True, "The template was left switched off");
+                Assert.That(clones[0].enabled, Is.True, "The clone was left switched off");
+
+                // An object created here afterwards still sends its state.
+                var local = SpawnConfigured<E2EFragileModel>("fragile-local", m => m.Label = "local");
+                yield return Peer.Expect(channel, "model::update", frame =>
+                {
+                    var payload = TcpPeer.Json(frame);
+                    Assert.That(payload["id"].Value<string>(), Is.EqualTo(local.Id));
+                    Assert.That(payload["label"].Value<string>(), Is.EqualTo("local"));
+                });
+            }
+            finally
+            {
+                foreach (var clone in clones)
+                    UnityEngine.Object.Destroy(clone.gameObject);
             }
         }
 
@@ -485,6 +567,11 @@ namespace HCIKonstanz.Colibri.E2E
 
         private static E2ESyncModel[] Instances(string id)
             => UnityEngine.Object.FindObjectsByType<E2ESyncModel>(FindObjectsInactive.Include, FindObjectsSortMode.None)
+                .Where(m => m.Id == id)
+                .ToArray();
+
+        private static E2EFragileModel[] FragileInstances(string id)
+            => UnityEngine.Object.FindObjectsByType<E2EFragileModel>(FindObjectsInactive.Include, FindObjectsSortMode.None)
                 .Where(m => m.Id == id)
                 .ToArray();
     }
