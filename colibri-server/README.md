@@ -113,7 +113,7 @@ in the environment wins. [`.env.example`](.env.example) lists every one with its
 | `TCP_INBOUND_BACKLOG_LIMIT` | `2000` | messages from Unity clients that may wait for the server's main thread before it holds back `model::update` and drops `broadcast::` messages, so an overloaded server's memory and delay stay bounded; `0`: no limit |
 | `CLIENT_MESSAGE_RATE_LIMIT`, `CLIENT_MESSAGE_RATE_BURST` | `1000`, `2000` | `model::update` and `broadcast::` messages a second that one client, Unity or web, may send, and how many at once after a quieter stretch; beyond that, the same happens to its messages. Catches a runaway send loop. `0` turns the limit off; the burst must be at least 1 |
 | `TCP_IDLE_TIMEOUT_SECONDS` | `10` | seconds a Unity client may send nothing at all, not even its heartbeat replies, before it is disconnected as gone, e.g. a headset that left the Wi-Fi; a connection that has not handshaked by then is closed too. `0`: never |
-| `APP_CLIENT_WARNING_THRESHOLD` | `8` | log a warning when one app has more clients than this, Unity and web together, the admin UI not counted; usually groups that kept the same app name. `0`: never |
+| `APP_CLIENT_WARNING_THRESHOLD` | `8` | log a warning when one app has more clients than this, Unity and web together, the admin UI not counted; usually separate projects that kept the same app name. `0`: never |
 
 `DATA_ROOT` and `WEBSERVER_ROOT` may be absolute paths, e.g. `DATA_ROOT=/var/lib/colibri`. A
 relative path is taken from the compiled server's directory, `dist/server`, so the defaults are
@@ -153,9 +153,9 @@ Everything the server logs, and every line a client sends through colibri-unity'
 ### Load limits
 
 Every message is relayed to every other client of the same app, so the server's work grows with
-the square of an app's size. Give each group of a class an app name of its own. Each time an app
-grows past `APP_CLIENT_WARNING_THRESHOLD` clients, the server logs a warning naming it, e.g.
-`App 'MyApp' now has 9 clients, more than 8 (APP_CLIENT_WARNING_THRESHOLD) ...`.
+the square of an app's size. Give each project that shares a server an app name of its own. Each
+time an app grows past `APP_CLIENT_WARNING_THRESHOLD` clients, the server logs a warning naming
+it, e.g. `App 'MyApp' now has 9 clients, more than 8 (APP_CLIENT_WARNING_THRESHOLD) ...`.
 
 When clients send more than the server can process, it holds messages back and drops some
 rather than fall further and further behind. If its main thread is `TCP_INBOUND_BACKLOG_LIMIT`
