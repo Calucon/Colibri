@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises';
+import { copyFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
@@ -14,6 +14,8 @@ const SAVE_DEBOUNCE_MILLIS = 250;
 // A store.json in the format every earlier version wrote, including a value name
 // ('constructor') that the old object-backed store could persist as an own key.
 const FIXTURE_STORE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'store.json');
+// That store.json cut off after 140 bytes, as a write interrupted part way leaves it.
+const TRUNCATED_STORE = path.join(path.dirname(FIXTURE_STORE), 'store-truncated.json');
 
 // Names that are also members of Object.prototype (or, for '__proto__', its accessor).
 const PROTOTYPE_NAMES = [ '__proto__', 'constructor', 'prototype', 'hasOwnProperty', 'toString', 'valueOf', '__defineGetter__' ];
@@ -435,6 +437,142 @@ describe('RestAPI', () => {
             await api.flush();
 
             await expect(readStore()).resolves.toEqual({ appA: { one: 1, two: 2 } });
+        });
+    });
+
+    // A store.json that could not be loaded, or only in part, used to be overwritten by the
+    // first save after startup with only what had been loaded: one PUT, and everything else in
+    // it was gone for good.
+    describe('a store.json it could not load', () => {
+        let errors: LogMessage[];
+        let subscription: Subscription;
+
+        beforeEach(() => {
+            errors = [];
+            subscription = Service.output$.subscribe(msg => {
+                if (msg.origin === 'RestAPI' && msg.level === LogLevel.Error) errors.push(msg);
+            });
+        });
+
+        afterEach(() => {
+            subscription.unsubscribe();
+        });
+
+        const copiesAside = async () => (await readdir(dataPath)).filter(name => name.startsWith('store.json.corrupt-')).sort();
+        const movedReports = () => errors.filter(e => e.message.startsWith('Moved '));
+
+        it.each([
+            [ 'a truncated store.json', async () => readFile(TRUNCATED_STORE, 'utf8'), {} ],
+            [ 'one that is not JSON', async () => '{not json', {} ],
+            [ 'one that is not a JSON object', async () => '[1,2,3]', {} ],
+            [ 'one with an app that is not an object', async () => JSON.stringify({ good: { k: 1 }, bad: 42 }), { good: { k: 1 } } ],
+        ])('moves %s aside, unchanged, before the first save', async (_, contents, loaded) => {
+            const original = await contents();
+            await writeFile(storePath, original, 'utf8');
+            await api.init();
+            expect(errors.map(e => e.message).join('\n')).toContain(`${storePath} is moved aside`);
+
+            await put('/appA/key', 1);
+            await api.flush();
+
+            const aside = await copiesAside();
+            expect(aside).toHaveLength(1);
+            expect(aside[0]).toMatch(/^store\.json\.corrupt-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z$/);
+            await expect(readFile(path.join(dataPath, aside[0]!), 'utf8')).resolves.toBe(original);
+            await expect(readStore()).resolves.toEqual({ ...loaded, appA: { key: 1 } });
+
+            // On the log bus, which both the admin UI's log and stderr print.
+            expect(movedReports()).toHaveLength(1);
+            expect(movedReports()[0]!.message).toContain(`Moved ${storePath} to ${path.join(dataPath, aside[0]!)}`);
+            expect(movedReports()[0]!.message).toContain('could not be loaded at startup');
+        });
+
+        it('moves it aside before a DELETE is saved, too', async () => {
+            await writeFile(storePath, JSON.stringify({ good: { k: 1 }, bad: 42 }), 'utf8');
+            await api.init();
+
+            await expect(del('/good')).resolves.toMatchObject({ status: 200 });
+            await api.flush();
+
+            expect(await copiesAside()).toHaveLength(1);
+            await expect(readStore()).resolves.toEqual({});
+        });
+
+        it('leaves it where it is while nothing is saved', async () => {
+            await copyFile(TRUNCATED_STORE, storePath);
+            await api.init();
+
+            await api.flush();
+
+            expect(await copiesAside()).toEqual([]);
+            await expect(readFile(storePath, 'utf8')).resolves.toBe(await readFile(TRUNCATED_STORE, 'utf8'));
+        });
+
+        it('moves it aside only once', async () => {
+            await copyFile(TRUNCATED_STORE, storePath);
+            await api.init();
+
+            await put('/appA/one', 1);
+            await api.flush();
+            await put('/appA/two', 2);
+            await api.flush();
+
+            expect(await copiesAside()).toHaveLength(1);
+            expect(movedReports()).toHaveLength(1);
+            await expect(readStore()).resolves.toEqual({ appA: { one: 1, two: 2 } });
+        });
+
+        it('never moves it over a copy that is already there', async () => {
+            vi.useFakeTimers({ toFake: [ 'Date' ] });
+            vi.setSystemTime(new Date('2026-10-19T09:30:00.000Z'));
+            const taken = path.join(dataPath, 'store.json.corrupt-2026-10-19T09-30-00.000Z');
+            await writeFile(taken, 'an earlier copy', 'utf8');
+            await writeFile(`${taken}-2`, 'another earlier copy', 'utf8');
+            await writeFile(storePath, '{not json', 'utf8');
+            await api.init();
+
+            await put('/appA/key', 1);
+            await api.flush();
+
+            await expect(readFile(taken, 'utf8')).resolves.toBe('an earlier copy');
+            await expect(readFile(`${taken}-2`, 'utf8')).resolves.toBe('another earlier copy');
+            await expect(readFile(`${taken}-3`, 'utf8')).resolves.toBe('{not json');
+            await expect(readStore()).resolves.toEqual({ appA: { key: 1 } });
+        });
+
+        // A directory where the file should be: reading it fails (EISDIR) for any user, root too.
+        it('moves aside a store.json it could not read at all', async () => {
+            await mkdir(storePath);
+            await writeFile(path.join(storePath, 'inside'), 'kept', 'utf8');
+            await api.init();
+            expect(errors[0]!.message).toContain(`Could not load ${storePath}: EISDIR`);
+
+            await put('/appA/key', 1);
+            await api.flush();
+
+            const aside = await copiesAside();
+            expect(aside).toHaveLength(1);
+            await expect(readFile(path.join(dataPath, aside[0]!, 'inside'), 'utf8')).resolves.toBe('kept');
+            await expect(readStore()).resolves.toEqual({ appA: { key: 1 } });
+        });
+
+        it('saves nothing while it cannot be moved aside, and tries again with the next save', async () => {
+            await writeFile(storePath, '{not json', 'utf8');
+            await api.init();
+            const internals = api as unknown as { moveUnloadedStoreAside(reason: string): Promise<void> };
+            vi.spyOn(internals, 'moveUnloadedStoreAside').mockRejectedValueOnce(new Error('EBUSY: resource busy or locked'));
+
+            await put('/appA/key', 1);
+            await api.flush();
+
+            await expect(readFile(storePath, 'utf8')).resolves.toBe('{not json');
+            expect(errors.at(-1)!.message).toContain('EBUSY');
+
+            // Still unsaved, so the flush at shutdown tries again - and this time it can.
+            await api.flush();
+
+            expect(await copiesAside()).toHaveLength(1);
+            await expect(readStore()).resolves.toEqual({ appA: { key: 1 } });
         });
     });
 });

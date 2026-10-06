@@ -1,11 +1,15 @@
 import { Service } from '../core/index.js';
 import { hasEmptyJsonBody, WebServer } from './web-server.js';
 import { Router } from 'express';
-import { mkdir, readFile, rename, writeFile } from 'fs/promises';
+import { lstat, mkdir, readFile, rename, writeFile } from 'fs/promises';
 import * as path from 'path';
 
 const STORE_FILENAME = 'store.json';
 const SAVE_DEBOUNCE_MILLIS = 250;
+
+const errorMessage = function (err: unknown): string {
+    return err instanceof Error ? err.message : String(err);
+};
 
 // App name -> value name -> value, both names straight from the URL. Maps rather than plain
 // objects: `this.data[req.params.app]` resolved any name that is also an Object.prototype
@@ -28,6 +32,11 @@ export class RestAPI extends Service {
     // Whether `data` holds a change store.json does not have yet - set by every change,
     // cleared when a write takes its snapshot, and set again if that write fails.
     private dirty = false;
+    // Why store.json was not loaded, or only in part (unreadable, not JSON, not an object of
+    // objects), until it has been moved aside. The store starts without whatever was left out,
+    // and its first save used to overwrite the file with only what was loaded - one PUT after
+    // a restart and the rest of it was gone. See moveUnloadedStoreAside.
+    private unloadedReason: string | undefined;
 
     public constructor(dataPath: string, webserver: WebServer) {
         super();
@@ -142,9 +151,14 @@ export class RestAPI extends Service {
             const raw = await readFile(this.storeFilePath, 'utf8');
             this.data = this.parseStore(raw);
         } catch (err) {
-            if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-                this.logError(err instanceof Error ? err.message : String(err), false);
-            }
+            if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+            this.unloadedReason = errorMessage(err);
+            this.logError(`Could not load ${this.storeFilePath}: ${this.unloadedReason}. The store starts empty.`, false);
+        }
+
+        if (this.unloadedReason !== undefined) {
+            this.logError(`${this.storeFilePath} is moved aside, to ${STORE_FILENAME}.corrupt-<date and time>, before the store `
+                + 'is next saved, instead of being overwritten with only what could be loaded.', false);
         }
     }
 
@@ -156,12 +170,14 @@ export class RestAPI extends Service {
         const parsed: unknown = JSON.parse(raw);
         const store: StoreData = new Map();
         if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-            this.logError(`Ignoring ${STORE_FILENAME}: expected a JSON object at the top level`, false);
+            this.unloadedReason = 'expected a JSON object at the top level';
+            this.logError(`Ignoring ${STORE_FILENAME}: ${this.unloadedReason}`, false);
             return store;
         }
 
         for (const [app, values] of Object.entries(parsed)) {
             if (values === null || typeof values !== 'object' || Array.isArray(values)) {
+                this.unloadedReason ??= `expected an object of values for app '${app}'`;
                 this.logError(`Ignoring app '${app}' in ${STORE_FILENAME}: expected an object of values`, false);
                 continue;
             }
@@ -218,12 +234,53 @@ export class RestAPI extends Service {
             const json = this.serializeStore();
             this.dirty = false;
             await mkdir(path.dirname(this.storeFilePath), { recursive: true });
+            if (this.unloadedReason !== undefined) {
+                await this.moveUnloadedStoreAside(this.unloadedReason);
+                this.unloadedReason = undefined;
+            }
             await writeFile(this.storeTempFilePath, json, 'utf8');
             await rename(this.storeTempFilePath, this.storeFilePath);
         } catch (err) {
             // Still unsaved, so the next save - at the latest flush() at shutdown - tries again.
             this.dirty = true;
-            this.logError(err instanceof Error ? err.message : String(err), false);
+            this.logError(errorMessage(err), false);
+        }
+    }
+
+    // Moves the store.json that init() could not load, or only in part, to
+    // store.json.corrupt-<date and time> next to it, before the first save replaces it. Never
+    // over an existing file: a name that is taken (an earlier run's, in the same millisecond)
+    // gets a counter. Throws if the file is there but cannot be moved, so that writeStoreFile
+    // saves nothing rather than overwrite it, and tries again with the next save.
+    private async moveUnloadedStoreAside(reason: string): Promise<void> {
+        // No colons, which a Windows file name cannot have.
+        const base = `${this.storeFilePath}.corrupt-${new Date().toISOString().replace(/:/g, '-')}`;
+        let target = base;
+        for (let n = 2; await RestAPI.exists(target); n++) {
+            target = `${base}-${n}`;
+        }
+
+        try {
+            await rename(this.storeFilePath, target);
+        } catch (err) {
+            // Removed since startup: there is nothing left that the save could overwrite.
+            if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+            throw new Error(`Not saving the store: ${this.storeFilePath}, which could not be loaded at startup, `
+                + `would be overwritten, and moving it aside to ${target} failed: ${errorMessage(err)}`);
+        }
+
+        this.logError(`Moved ${this.storeFilePath} to ${target} before saving the store: it could not be loaded `
+            + `at startup (${reason}), and saving would have overwritten it with only what was loaded. `
+            + 'Its contents are kept there, unchanged.', false);
+    }
+
+    private static async exists(file: string): Promise<boolean> {
+        try {
+            await lstat(file);
+            return true;
+        } catch (err) {
+            if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
+            throw err;
         }
     }
 }
