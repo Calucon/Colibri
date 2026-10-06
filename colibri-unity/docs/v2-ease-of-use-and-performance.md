@@ -363,8 +363,8 @@ would want an explicit dirty flag instead of a poll, and that is a different des
 `SemaphoreSlim`, a lock-free queue and `FrameCodec`: receive → queue → drained on the main thread
 in `Update`; send → `SemaphoreSlim` → `Socket.SendAsync`. Not one R3 or UniTask call in the whole
 file. (The receive queue is a `ConcurrentQueue` today, and sends go through the outbox described
-at the end of this section.) Latency and throughput are therefore untouched by everything above — this work moved
-per-frame CPU and allocation, not wire time.
+at the end of this section.) Latency and throughput are therefore untouched by everything above —
+this work moved per-frame CPU and allocation, not wire time.
 
 Which is not to say the network path was fine. It was not, and the next section is about that.
 
