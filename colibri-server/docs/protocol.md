@@ -403,9 +403,9 @@ bounded:
 their messages as it reads them, so there is no queue of them to bound.
 
 Both limits only ever touch `model::update` and `broadcast::` messages, the bulk of a sync loop's
-traffic, and never on the `colibri` or `log` channel. Everything else - handshakes, heartbeats,
-`model::request`, `model::delete`, log lines, anything on the `colibri` channel - always goes
-through at once. Past a limit:
+traffic, and never those on the `colibri` or `log` channel. Everything else - handshakes,
+heartbeats, `model::request`, `model::delete`, log lines, anything on the `colibri` channel -
+always goes through at once. Past a limit:
 
 - **`model::update` is held back and merged per object** (per channel and `id`): a field in a
   later update replaces the one held, and fields not sent again are kept. As soon as there is
@@ -419,10 +419,10 @@ through at once. Past a limit:
 - An update the server could not apply anyway - not a JSON object with a string `id` - is
   dropped, and so is an update for one more object once 1000 are held for that client.
 
-Nothing a client sends overtakes its held updates: they are passed on before its next message
-that is not limited, so a `model::delete` cannot arrive ahead of an update to the same object and
-bring it back, before a second handshake, and when it disconnects, before its app sees
-`client::disconnected`.
+Nothing a client sends overtakes its held updates. They are passed on before the next message
+from that client that is not limited, before a second handshake, and, when it disconnects, before
+its app sees `client::disconnected`. So a `model::delete` cannot arrive ahead of an update to the
+same object and bring it back.
 
 Clients are not told. The other clients of the app receive fewer updates, each possibly carrying
 the changes of several, and later; synced objects move less smoothly, and a stream of

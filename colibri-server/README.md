@@ -78,7 +78,8 @@ Settings from [Configuration](#configuration) go into an `environment:` section,
 `CONSOLE_LOG_LEVEL: debug`, or into a `.env` file mounted at `/srv/colibri/.env`. To use other
 ports, change only the host side of `ports:`, e.g. `"8011:9011"`, and leave the ports inside the
 container as they are. If you do set `WEBSERVER_PORT`, publish that port instead, e.g.
-`"9111:9111"`; the image's health check follows it, and `WEBSERVER_HOST`, wherever they are set.
+`"9111:9111"`; the image's health check follows `WEBSERVER_PORT` and `WEBSERVER_HOST` wherever
+they are set.
 
 The image sets `NODE_ENV=production` and runs the server as PID 1, so `docker stop` shuts it down
 cleanly and writes any pending store changes first.

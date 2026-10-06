@@ -285,9 +285,9 @@ EditMode tests, which `npm run test:vectors` checks in CI.
   to sleep sends no FIN, so its connection stayed open, listed as connected and keeping its app's
   synchronized models alive, until the operating system gave up on it many minutes later. A TCP
   client that has sent nothing at all for `TCP_IDLE_TIMEOUT_SECONDS` (default 10, `0` turns it
-  off) is now disconnected like any other, with a warning naming it, and a connection that never
-  handshakes is closed after the same time. Echoing the 100 ms heartbeat keeps a client connected.
-  Every TCP connection also has keepalive switched on.
+  off) is now disconnected as if it had closed the connection, with a warning naming it, and a
+  connection that never handshakes is closed after the same time. Echoing the 100 ms heartbeat
+  keeps a client connected. Every TCP connection also has keepalive switched on.
 
 ### Correctness & robustness
 
