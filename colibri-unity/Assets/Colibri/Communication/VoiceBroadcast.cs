@@ -53,7 +53,11 @@ namespace HCIKonstanz.Colibri.Communication
                 PermissionCallbacks microphonePermissionCallbacks = new PermissionCallbacks();
                 microphonePermissionCallbacks.PermissionGranted += OnMicrophonePermissionGranted;
                 microphonePermissionCallbacks.PermissionDenied += OnMicrophonePermissionDenied;
+#if UNITY_2023_1_OR_NEWER
+                // This event only exists from Unity 2023.1 on. Unguarded, it was a compile error
+                // in every Android build on 2022.3, the oldest version the package supports.
                 microphonePermissionCallbacks.PermissionRequestDismissed += OnMicrophonePermissionDenied;
+#endif
                 Permission.RequestUserPermission(Permission.Microphone, microphonePermissionCallbacks);
                 return;
             }
