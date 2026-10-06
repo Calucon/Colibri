@@ -88,6 +88,20 @@ describe('Colibri constructor', () => {
         expect(() => new Colibri('app', 'localhost', port)).toThrow(ColibriError);
     });
 
+    // 1.x took '9011' from plain JavaScript because its range checks coerced the string; the
+    // stricter whole-number check must not turn that into a refusal.
+    it.each(['9011', ' 9011 '])('accepts the port as the numeric string %j', port => {
+        const colibri = new Colibri('app', 'localhost', port as unknown as number);
+        expect(colibri.port).toBe(9011);
+        expect(colibri.uri).toBe('ws://localhost:9011');
+    });
+
+    it.each(['abc', '90x1', ''])('throws a ColibriError for the port string %j, which is not a number', port => {
+        expect(() => new Colibri('app', 'localhost', port as unknown as number)).toThrow(
+            'Port must be a whole number (1 - 65535)'
+        );
+    });
+
     it('accepts the ends of the port range', () => {
         expect(new Colibri('app', 'localhost', 1).uri).toBe('ws://localhost:1');
         (Colibri as unknown as { instance: Colibri | null }).instance = null;

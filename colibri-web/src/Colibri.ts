@@ -108,10 +108,19 @@ const DEFAULT_PORT = 9011;
 const checkPort = (port: number) => {
     // Number.isInteger also rejects NaN, which every comparison lets through - and
     // `Number(process.argv[3])` is exactly how a sample ends up passing one.
-    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    if (!Number.isInteger(port)) {
+        throw new ColibriError(`Port must be a whole number (1 - 65535): ${port}`);
+    }
+    if (port < 1 || port > 65535) {
         throw new ColibriError(`Port out of allowed range (1 - 65535): ${port}`);
     }
 };
+
+// Plain JavaScript callers - and anything read from a query string or an environment variable -
+// can pass the port as a numeric string. 1.x accepted '9011' (its range checks coerced it), so a
+// string of digits still means that port; anything else is left for checkPort to refuse.
+const coercePort = (port: unknown): number | undefined =>
+    typeof port === 'string' && /^\s*\d+\s*$/.test(port) ? Number(port) : (port as number | undefined);
 
 // The port may come from the address, from the constructor's argument, or from both if they
 // agree. Two different ports are a mistake, and picking either would hide it.
@@ -204,7 +213,7 @@ export class Colibri {
 
         // Only ws(s):// used to be recognised, so 'https://host' became 'ws://https://host:9011'.
         const address = parseServerAddress(server);
-        this.port = resolvePort(server, address.port, port);
+        this.port = resolvePort(server, address.port, coercePort(port));
         this.uri = `${address.socket}://${address.host}:${this.port}`;
         this.uriRestApi = `${address.rest}://${address.host}:${this.port}/api/store/${app}/`;
 
