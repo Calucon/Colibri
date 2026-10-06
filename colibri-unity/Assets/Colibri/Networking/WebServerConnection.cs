@@ -781,9 +781,11 @@ namespace HCIKonstanz.Colibri.Networking
                 {
                     var frame = frames[i];
 
-                    // Checked before the session counts as connected: a server that refuses this
-                    // client says so in its very first frame, and that must not first be reported
-                    // as a connection.
+                    // Checked before the session counts as connected: colibri-server says nothing
+                    // to a client before it has accepted the handshake, so a refusal is the very
+                    // first frame, and that must not first be reported as a connection. (A server
+                    // that heartbeats first, as colibri-server once did, is refused all the same:
+                    // the refusal then ends a session that counted as connected.)
                     if (frame.Type == FrameType.Message && frame.Channel == COLIBRI_CHANNEL && frame.Command == PROTOCOL_REJECTED_COMMAND)
                         throw BuildProtocolMismatch(frame.Payload);
 

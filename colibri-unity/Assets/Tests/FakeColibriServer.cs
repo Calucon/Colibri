@@ -33,7 +33,12 @@ namespace HCIKonstanz.Colibri.E2E
             /// <summary>Accepts and keeps the connection open, but never sends a byte.</summary>
             Silent,
 
-            /// <summary>What a live server looks like from the client: a heartbeat every 100 ms.</summary>
+            /// <summary>
+            /// What a live server looks like from the client: it reads the handshake, accepts it,
+            /// and from then on heartbeats every 100 ms. Nothing before the handshake: colibri-server
+            /// only heartbeats the clients it has accepted, so the first frame a client sees is a
+            /// heartbeat after acceptance - or, from <see cref="Refuse"/>, the refusal.
+            /// </summary>
             Heartbeat,
 
             /// <summary>
@@ -42,6 +47,15 @@ namespace HCIKonstanz.Colibri.E2E
             /// does it, with the refusal and the FIN queued together.
             /// </summary>
             Refuse,
+
+            /// <summary>
+            /// What colibri-server did before it stopped heartbeating clients it had not accepted:
+            /// a heartbeat from the moment the connection is accepted, handshake or not, and only
+            /// then - having read the handshake - the refusal. To the client that is a session that
+            /// already counts as connected when it is refused. No current server does this; it is
+            /// here for the test that keeps the client correct against one that does.
+            /// </summary>
+            HeartbeatThenRefuse,
         }
 
         private readonly TcpListener _listener;
@@ -196,18 +210,30 @@ namespace HCIKonstanz.Colibri.E2E
                         break;
 
                     case Behaviour.Heartbeat:
-                        var reading = Record(stream, session, token);
-                        await Heartbeat(stream, token).ConfigureAwait(false);
+                        var handshakeRead = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                        var reading = Record(stream, session, handshakeRead, token);
+
+                        // Not a word until the handshake is in. A client that hangs up before
+                        // sending one is never sent anything.
+                        if (await Task.WhenAny(handshakeRead.Task, reading).ConfigureAwait(false) == handshakeRead.Task)
+                            await Heartbeat(stream, token).ConfigureAwait(false);
+
                         await reading.ConfigureAwait(false);
                         break;
 
                     case Behaviour.Refuse:
-                        var handshake = await ReadHandshake(stream, token).ConfigureAwait(false);
-                        var refusal = FrameCodec.EncodeMessage("colibri", "protocol::rejected", Encoding.UTF8.GetBytes(
-                            $"{{\"serverVersion\":\"{RefusingServerVersion}\",\"clientVersion\":\"{handshake?.Version}\","
-                            + $"\"reason\":\"Unsupported protocol version {handshake?.Version}; this server speaks {RefusingServerVersion}\"}}"));
-                        await stream.WriteAsync(refusal, 0, refusal.Length, token).ConfigureAwait(false);
-                        await HangUp(client, stream, token).ConfigureAwait(false);
+                        await Refuse(client, stream, await ReadHandshake(stream, token).ConfigureAwait(false), token)
+                            .ConfigureAwait(false);
+                        break;
+
+                    case Behaviour.HeartbeatThenRefuse:
+                        // A beat before the handshake has even been read. The client reads it before
+                        // the refusal behind it, so it is connected by the time it is refused.
+                        var beat = FrameCodec.EncodeHeartbeat(1);
+                        await stream.WriteAsync(beat, 0, beat.Length, token).ConfigureAwait(false);
+
+                        await Refuse(client, stream, await ReadHandshake(stream, token).ConfigureAwait(false), token)
+                            .ConfigureAwait(false);
                         break;
                 }
             }
@@ -239,6 +265,15 @@ namespace HCIKonstanz.Colibri.E2E
                         return frame;
                 }
             }
+        }
+
+        private async Task Refuse(TcpClient client, NetworkStream stream, DecodedFrame? handshake, CancellationToken token)
+        {
+            var refusal = FrameCodec.EncodeMessage("colibri", "protocol::rejected", Encoding.UTF8.GetBytes(
+                $"{{\"serverVersion\":\"{RefusingServerVersion}\",\"clientVersion\":\"{handshake?.Version}\","
+                + $"\"reason\":\"Unsupported protocol version {handshake?.Version}; this server speaks {RefusingServerVersion}\"}}"));
+            await stream.WriteAsync(refusal, 0, refusal.Length, token).ConfigureAwait(false);
+            await HangUp(client, stream, token).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -273,7 +308,7 @@ namespace HCIKonstanz.Colibri.E2E
             }
         }
 
-        private async Task Record(NetworkStream stream, int session, CancellationToken token)
+        private async Task Record(NetworkStream stream, int session, TaskCompletionSource<bool> handshakeRead, CancellationToken token)
         {
             var reader = new FrameReader();
             var buffer = new byte[16 * 1024];
@@ -285,6 +320,9 @@ namespace HCIKonstanz.Colibri.E2E
 
                 foreach (var frame in Decode(reader, buffer, read))
                 {
+                    if (frame.Type == FrameType.Handshake)
+                        handshakeRead.TrySetResult(true);
+
                     if (frame.Type != FrameType.Message)
                         continue;
 

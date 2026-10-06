@@ -270,7 +270,8 @@ namespace HCIKonstanz.Colibri.E2E
          */
 
         /// <summary>
-        /// A newer server refuses this client in its very first frame. That is never a connection,
+        /// A newer server refuses this client in its very first frame - colibri-server says nothing
+        /// at all to a client before it has accepted its handshake. That is never a connection,
         /// is not retried, and leaves nothing waiting: OnDisconnected used to never fire for it,
         /// the Connected task stayed pending for good, and every later send awaited it forever.
         /// </summary>
@@ -338,6 +339,43 @@ namespace HCIKonstanz.Colibri.E2E
             {
                 Application.logMessageReceivedThreaded -= countRefusalWarnings;
             }
+        }
+
+        /// <summary>
+        /// The same refusal from a server that heartbeats a connection before it has read the
+        /// handshake, as colibri-server used to: by the time the refusal arrives the session has
+        /// counted as connected. It has to be just as final, and the OnConnected it raised still
+        /// gets its OnDisconnected, after it.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator ARefusalAfterTheSessionCountedAsConnectedIsFinalToo()
+        {
+            IgnoreTheExpectedFailures();
+
+            _scriptedServer = FakeColibriServer.Start(FakeColibriServer.Behaviour.HeartbeatThenRefuse);
+
+            var events = new System.Collections.Generic.List<string>();
+            var connection = ConnectionTo(_scriptedServer.Port);
+            connection.OnConnected += () => events.Add("connected");
+            connection.OnDisconnected += () => events.Add("disconnected");
+
+            yield return E2EServer.WaitUntil(() => Connection.Status == ConnectionStatus.ProtocolMismatch,
+                "The client never settled into ProtocolMismatch after the server refused it", 10f);
+
+            Assert.That(Connection.ServerVersion, Is.EqualTo("3"));
+            Assert.That(Connection.Connected.IsCanceled, Is.True, "`await Connected` would wait forever after a refusal");
+
+            var sentAfter = Connection.SendCommandAsync("refusal-test", "broadcast::int", 2);
+            Assert.That(sentAfter.IsCompleted && !sentAfter.Result, Is.True,
+                "A send after the refusal is waiting for a connection that will never come");
+
+            // Long enough for a retry to have happened, if there were going to be one.
+            yield return E2EServer.Settle(1.5f);
+
+            Assert.That(_scriptedServer.Accepted, Is.EqualTo(1), "A refusal is final, but the client tried again");
+            Assert.That(Connection.Status, Is.EqualTo(ConnectionStatus.ProtocolMismatch));
+            Assert.That(events, Is.EqualTo(new[] { "connected", "disconnected" }),
+                "The session the refusal ended was connected, so it should end with OnDisconnected");
         }
 
         /// <summary>
