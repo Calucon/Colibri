@@ -341,13 +341,17 @@ EditMode tests, which `npm run test:vectors` checks in CI.
   carries the CORS headers, so a browser client sees the error rather than a network failure.
 - Overwriting an existing value answers 200 for a falsy value (`0`, `false`, `''`, `null`) too;
   it used to answer 201.
-- **A `PUT` without a JSON body is refused.** With no body, an empty one, or another
-  `Content-Type` (`text/plain`, say), `PUT /api/store/:app/:name` answers 400 with an error that
-  names `Content-Type: application/json`, and stores nothing. It used to store `undefined` - a
-  name listed under its app that `GET` and `DELETE` then answered 404 for - or, for an empty JSON
-  body, `{}`. colibri-unity's `Store` and colibri-web's `setRestObject` send a JSON body for every
-  value, `null` included, except that `setRestObject(key, undefined)` sends none: it now gets
-  `false` back and stores nothing, where it used to store `{}`. Store `null` instead.
+- **A `PUT` without a JSON body is refused.** With no body, an empty one, or a `Content-Type`
+  other than JSON or form data (`text/plain`, say), `PUT /api/store/:app/:name` answers 400 with
+  an error that names `Content-Type: application/json`, and stores nothing. It used to store
+  `undefined` - a name listed under its app that `GET` and `DELETE` then answered 404 for - or,
+  for an empty JSON body, `{}`. colibri-unity's `Store` and colibri-web's `setRestObject` send a
+  JSON body for every value, `null` included, except that `setRestObject(key, undefined)` sends
+  none: it now gets `false` back and stores nothing, where it used to store `{}`. Store `null`
+  instead. Form data (`application/x-www-form-urlencoded`) is still parsed into an object of its
+  fields and stored, up to 100 kB, as in 1.3.1. That is what `curl -d` sends without
+  `-H 'Content-Type: application/json'`, so `curl -X PUT -d '{"x":1}'` stores
+  `{"{\"x\":1}": ""}` rather than answering 400.
 - Saving `store.json` is debounced (~250 ms) and atomic (write `store.json.tmp`, then rename), and
   a save waits for the one still in flight, so two quick writes cannot interleave into a partial
   file. The store is flushed on crash paths as well as on a clean shutdown, but only when it holds

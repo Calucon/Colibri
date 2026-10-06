@@ -496,13 +496,20 @@ colibri-unity's `Store` and colibri-web's `getRestObject` / `setRestObject` use 
 | `GET /api/store` | `200` with the app names, `["app1", …]` |
 | `GET /api/store/:app` | `200` with the value names of that app; `404` if the app is unknown |
 | `GET /api/store/:app/:name` | `200` with the stored JSON value; `404` if there is none |
-| `PUT /api/store/:app/:name` | stores the request body: any JSON value - an object, an array, a number, a string, `true`, `null` - sent as `Content-Type: application/json`, up to 5 MiB. `201` if it is new, `200` if it replaced a value, each with `{ "result": "…", "data": <the value> }`. `400` for malformed JSON, and for no JSON body at all - none, an empty one, or one sent with another `Content-Type` - in which case nothing is stored; `413` for a body over 5 MiB. |
+| `PUT /api/store/:app/:name` | stores the request body: any JSON value - an object, an array, a number, a string, `true`, `null` - sent as `Content-Type: application/json`, up to 5 MiB. `201` if it is new, `200` if it replaced a value, each with `{ "result": "…", "data": <the value> }`. `400` for malformed JSON, and for no JSON body at all - none, an empty one, or one sent as `text/plain` or any other `Content-Type` except form data (see below) - in which case nothing is stored; `413` for a body over 5 MiB. |
 | `DELETE /api/store/:app` | `200`, and every value of the app is gone; `404` if the app is unknown |
 | `DELETE /api/store/:app/:name` | `200`; `404` if there is no such value |
 
 Errors are JSON, `{ "error": "…" }`, and never carry a stack trace. Any app or value name is
 allowed, `__proto__` and `constructor` included. Every response allows any origin (CORS), so a
 page served from somewhere else can use the store too.
+
+A body sent as form data, `Content-Type: application/x-www-form-urlencoded`, is the exception: it
+is accepted, parsed into an object of its fields with string values (an array for a field given
+twice) and stored, up to 100 kB, with `413` above that. Neither client sends form data, but
+`curl -d` does unless you add `-H 'Content-Type: application/json'`, so
+`curl -X PUT -d '{"x":1}' …/api/store/app/name` answers `201` and stores `{"{\"x\":1}": ""}`,
+not `{"x": 1}`.
 
 Writes reach `store.json` within 250ms, together with any made in the meantime, and the file is
 replaced atomically (written to `store.json.tmp`, then renamed). A save that fails is logged and
