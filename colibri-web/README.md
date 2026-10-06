@@ -196,6 +196,10 @@ Limitations:
   symmetry with Unity. **Unity clients must receive numbers sent from web with `Sync.Receive<float>`,
   never `Sync.Receive<int>`.** The other direction is handled: `receiveNumber` accepts both.
 - Remember to unregister your listener where necessary!
+- By default the server takes up to 1000 broadcasts and model updates a second from one client, in bursts of up
+  to 2000. Beyond that it drops the client's broadcasts, and holds back its model updates, merging them per object so
+  that the latest value of every field still arrives. It logs a warning naming the client. The limit is there to catch
+  a runaway send loop, and the server's operator can change it.
 
 ### SyncModel
 
