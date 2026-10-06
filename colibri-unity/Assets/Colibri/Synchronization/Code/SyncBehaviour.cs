@@ -8,6 +8,7 @@ using System.Linq.Expressions;
 using Newtonsoft.Json.Linq;
 using System.Linq;
 using System.Threading.Tasks;
+using HCIKonstanz.Colibri.Core;
 
 namespace HCIKonstanz.Colibri.Synchronization
 {
@@ -366,7 +367,14 @@ namespace HCIKonstanz.Colibri.Synchronization
             Sync.RemoveModelDeleteListener(Channel, OnModelDelete);
 
             ModelDestroyed?.Invoke(this);
-            if (_isQuitting || _hasReceivedDestroyCommand)
+
+            // Shutting down is not deleting: the object is meant to outlive this client on the
+            // server. _isQuitting alone cannot tell, because Unity sends OnApplicationQuit only
+            // to active GameObjects - and a synced object is inactive whenever this client or
+            // another one has hidden it. Such an object deleted itself, and with it every other
+            // client's copy, on the way out of Play mode or the app. Application.quitting
+            // (SingletonLifetime.IsQuitting) is raised before teardown whatever the object's state.
+            if (_isQuitting || SingletonLifetime.IsQuitting || _hasReceivedDestroyCommand)
                 return;
 
             Sync.SendModelDelete(Channel, Id);

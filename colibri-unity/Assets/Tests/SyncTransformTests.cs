@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Linq;
+using HCIKonstanz.Colibri.Core;
 using HCIKonstanz.Colibri.Synchronization;
 using Newtonsoft.Json.Linq;
 using NUnit.Framework;
@@ -193,6 +194,66 @@ namespace HCIKonstanz.Colibri.E2E
             yield return Peer.Expect(Channel, "model::delete",
                 frame => Assert.That(TcpPeer.Json(frame)["id"].Value<string>(), Is.EqualTo(id)));
             yield return Peer.ExpectNothing(Channel);
+        }
+
+
+        /*
+         *  Quitting. Leaving Play mode or the app tears every object down, and that must delete
+         *  nothing on the server: the object is meant to outlive this client. An active object
+         *  hears about it through OnApplicationQuit, but Unity never sends that to an inactive
+         *  one - and a synced object is inactive whenever this client or another one has hidden
+         *  it. Such an object used to delete itself, and every other client's copy with it.
+         */
+
+        [UnityTest]
+        public IEnumerator AnObjectHiddenHereIsNotDeletedEverywhereWhenThisClientQuits()
+        {
+            var sync = SpawnConfigured<SyncTransform>("hidden-then-quit", _ => { });
+            yield return LetInitialStateArrive();
+
+            sync.gameObject.SetActive(false);
+            yield return Peer.Expect(Channel, "model::update", frame => AssertActive(frame, sync.Id, false));
+
+            yield return DestroyWhileQuitting(sync);
+
+            yield return Peer.ExpectNothing(Channel, 1.5f);
+        }
+
+        [UnityTest]
+        public IEnumerator AnObjectHiddenByAnotherClientIsNotDeletedEverywhereWhenThisClientQuits()
+        {
+            var sync = SpawnConfigured<SyncTransform>("hidden-remotely-then-quit", _ => { });
+            yield return LetInitialStateArrive();
+
+            Peer.Send(Channel, "model::update", new JObject { { "id", sync.Id }, { "active", false } });
+            yield return E2EServer.WaitUntil(() => !sync.gameObject.activeSelf,
+                "The peer deactivated the object, but it is still active here");
+
+            yield return DestroyWhileQuitting(sync);
+
+            yield return Peer.ExpectNothing(Channel, 1.5f);
+        }
+
+        /// <summary>
+        /// Stands in for the end of Play mode: Application.quitting has been raised, then the
+        /// object is destroyed. A test cannot send OnApplicationQuit, and the inactive objects
+        /// above would not receive it anyway.
+        /// </summary>
+        private static IEnumerator DestroyWhileQuitting(Component component)
+        {
+            SingletonLifetime.IsQuitting = true;
+            try
+            {
+                Object.Destroy(component.gameObject);
+
+                // Destruction happens at the end of the frame; OnDestroy has run by the next one.
+                yield return null;
+            }
+            finally
+            {
+                // Every later test needs a live application again.
+                SingletonLifetime.IsQuitting = false;
+            }
         }
 
         private static void AssertActive(Networking.Protocol.DecodedFrame frame, string id, bool expected)

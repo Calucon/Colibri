@@ -17,7 +17,13 @@ namespace HCIKonstanz.Colibri.Core
         /// True from the moment the application starts shutting down. Creating a singleton then
         /// would only leak a GameObject that nothing is left to tear down.
         /// </summary>
-        public static bool IsQuitting { get; private set; }
+        /// <remarks>
+        /// Raised by <see cref="Application.quitting"/>, which Unity sends when Play mode ends and
+        /// when a player quits, before the scenes are torn down and whatever the state of any
+        /// object - unlike OnApplicationQuit, which inactive GameObjects never receive. Settable
+        /// within the assembly so that tests can stand in for the end of Play mode.
+        /// </remarks>
+        public static bool IsQuitting { get; internal set; }
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
         private static void ResetState()
