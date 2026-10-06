@@ -405,11 +405,11 @@ otherwise spend on their prototype, so:
   samples use, and names such as `test`, `demo`, `app` or `colibri`, ignoring case and surrounding
   spaces. Everyone on a server with the same App Name is in one app, so projects that keep such a
   name see each other's objects and messages, and since every update goes to every other client
-  in the app, the server's work grows with the square of their number. The Unity client does not
-  say so at runtime; colibri-server's log does, naming the app, once it has more than 8 clients
-  (by default; `APP_CLIENT_WARNING_THRESHOLD`), except for `colibri`, the admin UI's own app. The
-  window also no longer accepts an App Name of only spaces, and its title no longer forces a
-  horizontal scrollbar.
+  in the app, the server's work grows with the square of the number of clients in it. The Unity
+  client does not say so at runtime; colibri-server's log does, naming the app, once it has more
+  than 8 clients (by default; `APP_CLIENT_WARNING_THRESHOLD`), except for `colibri`, the admin UI's
+  own app. The window also no longer accepts an App Name of only spaces, and its title no longer
+  forces a horizontal scrollbar.
 - **`Window → Colibri Status`** — connection state, server, app name, protocol version, time since
   the last server heartbeat (not a latency: the heartbeat carries the *server's* clock), the
   channels with listeners and the type each expects, and the last 20 messages in and out. It uses
