@@ -306,7 +306,11 @@ namespace HCIKonstanz.Colibri.E2E
             Assert.That(gaveUpAfter, Is.GreaterThanOrEqualTo(4.5f).And.LessThan(10f),
                 "The attempt should be given up after the connect timeout of 5 s");
             Assert.That(Connection.LastConnectFailure, Does.Contain($":{_unansweredPort.Port} did not answer within 5 s"));
-            Assert.That(Connection.Status, Is.Not.EqualTo(ConnectionStatus.Connecting));
+
+            // The failure is recorded where the attempt fails, and the status only changes a moment
+            // later, as the connection loop unwinds - not necessarily before the frame that saw it.
+            yield return E2EServer.WaitUntil(() => Connection.Status != ConnectionStatus.Connecting,
+                "The client stayed in Connecting after giving up the attempt", 2f);
 
             yield return E2EServer.WaitUntil(() => Connection.Status == ConnectionStatus.Reconnecting,
                 "The client did not try again after giving up an attempt", 5f);
