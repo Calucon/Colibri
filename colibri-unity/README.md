@@ -6,9 +6,17 @@
 - **colibri-server 2.0.0 or higher.** Colibri Unity 2.0.0 speaks the [v3 binary TCP
   protocol](../colibri-server/docs/protocol.md) and **cannot talk to a 1.x server** — there is no
   version negotiation, both sides have to be upgraded together. Colibri Unity 1.x likewise cannot
-  talk to a 2.0.0 server. A mismatch is not silent: the server refuses the connection and says
-  so, `Window → Colibri Status` shows the mismatch in red, and the client stops reconnecting
-  instead of retrying forever.
+  talk to a 2.0.0 server. What a mismatch looks like depends on which side is old:
+  - **This package against a 1.x server.** Neither side can read the other's framing, so no
+    refusal can be sent. After three connections in a row that end before the server has sent
+    anything this client can read, the console reports a *suspected* protocol mismatch and `Window → Colibri Status` shows it as a
+    yellow warning. The client keeps retrying, waiting longer each time (up to 10 s), because the
+    same symptom also fits an address that is not a Colibri server at all.
+  - **Colibri Unity 1.x against a 2.0.0 server.** The old client cannot be told either. The
+    server's log names the client's address and says it looks like a Colibri 1.x client.
+  - **Same framing, different protocol version** (a future server). The server refuses the
+    connection and says why, `Window → Colibri Status` shows the refusal in red, and the client
+    stops reconnecting: `Status` becomes `ConnectionStatus.ProtocolMismatch`.
 
 ## Installation
 
