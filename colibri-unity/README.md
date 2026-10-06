@@ -228,7 +228,9 @@ Limitations:
 - You have to register the listener *before* sending out data
 - Type and channel *must* match between listener and sender. If they don't, Colibri says so in the
   console — naming the channel, both types, and how to fix it.
-- Remember to unregister your listener where necessary!
+- A listener whose component or GameObject is destroyed is removed for you. Call
+  `Sync.Unregister` only to stop listening early, or for a `static` listener or one on a plain
+  C# object (see above).
 
 
 
