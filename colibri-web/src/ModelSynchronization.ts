@@ -48,18 +48,48 @@ const warnIfMinified = (className: string, channel: string) => {
     );
 };
 
+// Whether a model::update carries nothing but the id - which is how the server answers a request
+// for a model it does not have. A change always has a field in it; only a model with no synced
+// fields at all is ever sent like this.
+const isBare = (modelData: object) => Object.keys(modelData).every(key => key === 'id');
+
 export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyncRegistration<T>): ModelSync<T> => {
     const name = registration.name || registration.type.name.toLowerCase();
     if (!registration.name) warnIfMinified(registration.type.name, name);
+
+    const models = new BehaviorSubject<T[]>([]);
+
+    // The models this client registered itself with registerModel, as opposed to those the server
+    // told it about. Only these are this client's to send again (see below).
+    const ownModels = new WeakSet<T>();
+
+    // Own models asked for by id after a reconnect, whose answer has not arrived yet - and the
+    // instance that asked, which is the one to answer through.
+    const awaitingAnswer = new Map<string, Colibri>();
 
     // initial data fetch - and the same again after every reconnect, since an update relayed while
     // this client was disconnected is gone for it, and only asking again brings it back. The
     // server answers with one model::update per model it has, which onUpdate applies to the
     // model with that id where there is one, so this catches up without duplicating anything.
+    //
+    // The server may have lost this client's own models meanwhile, though: it forgets every model
+    // of an app when the app's last client leaves, and when it restarts. Nothing sent them again,
+    // so a client that joined later never saw them. So each own model is also asked for by id,
+    // which the server answers with what it has - or, for a model it does not have, a bare { id }.
+    // Only then does onUpdate send the model's full state; what the server does have is newer than
+    // this client's, and is applied rather than overwritten.
+    //
+    // The server keeps no record of deletes, so a model another client deleted while this one was
+    // away looks the same as one the server forgot, and is sent again too.
     withColibri(colibri => {
         colibri.sendMessage(name, 'model::request');
         onColibriReconnected(colibri, () => {
             colibri.sendMessage(name, 'model::request');
+            for (const model of models.value) {
+                if (!ownModels.has(model)) continue;
+                awaitingAnswer.set(model.id, colibri);
+                colibri.sendMessage(name, 'model::request', { id: model.id });
+            }
         });
     });
 
@@ -75,10 +105,24 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
     });
 
     // Handle updates
-    const models = new BehaviorSubject<T[]>([]);
-
     const onUpdate = (modelData: Partial<T>) => {
         const model = models.value.find(m => m.id === modelData.id);
+
+        // The first update for an own model after its request settles it. One with fields in it
+        // means the server has the model - the server stores an update before it relays it - and
+        // is applied below like any other. A bare one means the server has nothing for it: send
+        // all of it. No model any more - deleted since it was asked for - means nothing to send,
+        // and the bare id must not become a model of its own either.
+        const id = modelData.id;
+        const asker = id === undefined ? undefined : awaitingAnswer.get(id);
+        if (id !== undefined && asker) {
+            awaitingAnswer.delete(id);
+            if (isBare(modelData)) {
+                if (model) asker.sendMessage(name, 'model::update', model.toJson());
+                return;
+            }
+        }
+
         if (model) {
             // Update existing model
             model.update(modelData);
@@ -113,6 +157,7 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
         withColibri(colibri => {
             colibri.sendMessage(name, 'model::update', model.toJson());
         });
+        ownModels.add(model);
         models.next([...models.value, model]);
     };
 

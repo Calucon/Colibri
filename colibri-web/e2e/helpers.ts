@@ -1,6 +1,7 @@
 import { firstValueFrom } from 'rxjs';
 import { filter, timeout } from 'rxjs/operators';
-import { Colibri, type Message } from '../src/Colibri';
+import { connect, type Socket } from 'socket.io-client';
+import { Colibri, PROTOCOL_VERSION, type Message } from '../src/Colibri';
 
 export const HOST = process.env.COLIBRI_E2E_SERVER ?? '127.0.0.1';
 export const PORT = Number(process.env.COLIBRI_E2E_PORT ?? 9011);
@@ -25,10 +26,11 @@ function rawSocket(client: Colibri) {
         client as unknown as {
             socket: {
                 connected: boolean;
+                connect(): void;
                 disconnect(): void;
                 on(event: string, cb: () => void): void;
                 once(event: string, cb: () => void): void;
-                io: { engine: { close(): void } };
+                io: { engine: { close(): void }; reconnection(on: boolean): void };
             };
         }
     ).socket;
@@ -67,6 +69,26 @@ export function dropConnection(client: Colibri): Promise<void> {
     });
 }
 
+/**
+ * Like {@link dropConnection}, but the client stays away until the function this resolves with is
+ * called - for a test that needs something to happen on the server first. That function reconnects
+ * the same socket, as Socket.IO would have by itself, and resolves once it is connected again.
+ */
+export async function dropConnectionUntilReleased(client: Colibri): Promise<() => Promise<void>> {
+    const socket = rawSocket(client);
+    socket.io.reconnection(false);
+    await dropConnection(client);
+
+    return () => {
+        socket.io.reconnection(true);
+        const connected = new Promise<void>(resolve => {
+            socket.once('connect', resolve);
+        });
+        socket.connect();
+        return connected;
+    };
+}
+
 export function isConnected(client: Colibri): boolean {
     return rawSocket(client).connected;
 }
@@ -84,6 +106,17 @@ export function connectErrors(client: Colibri, count: number): Promise<void> {
 }
 
 const activeClients: Colibri[] = [];
+
+/**
+ * Creates another client of `app`, connected, without making it the singleton: whatever was the
+ * singleton stays so, and the high-level API (Sync, RegisterModelSync) goes on using it.
+ */
+export async function createPeer(app: string): Promise<Colibri> {
+    const singleton = Colibri.getInstance(false);
+    const peer = await createClient(app);
+    (Colibri as unknown as { instance: Colibri | null }).instance = singleton;
+    return peer;
+}
 
 /**
  * Creates a client for `server` and `port` without waiting for it to connect - for an address
@@ -143,11 +176,49 @@ export async function createSingletonWithPeer(app: string): Promise<{
     return { singleton, peer };
 }
 
+const adminSockets: Socket[] = [];
+
+/**
+ * Connects the way the server's admin UI does - a raw socket, since the Colibri class is for
+ * applications - and so is told about every client that connects or disconnects. Its
+ * `disconnected(app)` resolves once the server has seen a client of `app` go, by which time the
+ * server is done with it: if it was the app's last client, the app's models are gone.
+ */
+export async function connectAsAdminUi(): Promise<{ disconnected(app: string): Promise<void> }> {
+    const socket = connect(`ws://${HOST}:${PORT}`, {
+        query: { app: 'colibri', version: PROTOCOL_VERSION },
+        transports: ['websocket'],
+        reconnection: false
+    });
+    adminSockets.push(socket);
+    await new Promise<void>(resolve => {
+        socket.once('connect', () => {
+            resolve();
+        });
+    });
+
+    return {
+        disconnected: (app: string) =>
+            new Promise(resolve => {
+                const onClients = (msg: { command: string; payload?: { app?: string } }) => {
+                    if (msg.command !== 'client::disconnected' || msg.payload?.app !== app) return;
+                    socket.off('colibri::clients', onClients);
+                    resolve();
+                };
+                socket.on('colibri::clients', onClients);
+            })
+    };
+}
+
 /** Disconnects and forgets every client created via this module, and clears the singleton. */
 export function disconnectAll(): void {
     let client: Colibri | undefined;
     while ((client = activeClients.pop()) !== undefined) {
         closeSocket(client);
+    }
+    let admin: Socket | undefined;
+    while ((admin = adminSockets.pop()) !== undefined) {
+        admin.disconnect();
     }
     resetSingleton();
 }

@@ -740,6 +740,150 @@ describe('catching up on models after a reconnect', () => {
     });
 });
 
+// The server forgets every model of an app when the app's last client leaves, and when it restarts.
+// A model this client had registered itself was never sent again after that, so a client joining
+// later never saw it.
+describe('sending its own models again after a reconnect', () => {
+    const connectSocket = () => {
+        for (const [event, handler] of fakeSocket.on.mock.calls) {
+            if (event === 'connect') handler();
+        }
+    };
+
+    /** Everything emitted with `command`, as [channel, payload]. */
+    const sent = (command: string) =>
+        fakeSocket.emit.mock.calls
+            .filter(([, msg]) => (msg as Message).command === command)
+            .map(([channel, msg]) => [channel, (msg as Message).payload]);
+
+    // Long enough for a change a model reported to have been sent: SyncModel buffers for 1ms.
+    const settle = () => new Promise(resolve => setTimeout(resolve, 10));
+
+    let debugSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+        debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => undefined);
+    });
+
+    afterEach(() => {
+        debugSpy.mockRestore();
+    });
+
+    /** A Colibri with one own model, 'w1', connected and then reconnected. */
+    const reconnectedWithOwnModel = () => {
+        new Colibri('app', 'localhost', 9011);
+        const [models$, registerModel] = RegisterModelSync({ name: 'own', type: Widget });
+        const widget = new Widget('w1');
+        widget.label = 'mine';
+        registerModel(widget);
+
+        connectSocket();
+        connectSocket();
+        return { models$, widget };
+    };
+
+    it('asks for each of its own models by id on a reconnect, and not on the first connect', () => {
+        new Colibri('app', 'localhost', 9011);
+        const [, registerModel] = RegisterModelSync({ name: 'own', type: Widget });
+        registerModel(new Widget('w1'));
+        registerModel(new Widget('w2'));
+
+        connectSocket();
+        expect(sent('model::request')).toEqual([['own', {}]]);
+
+        connectSocket();
+        expect(sent('model::request')).toEqual([
+            ['own', {}],
+            ['own', {}],
+            ['own', { id: 'w1' }],
+            ['own', { id: 'w2' }]
+        ]);
+    });
+
+    it('sends the whole model when the server answers with nothing but its id', () => {
+        const { models$, widget } = reconnectedWithOwnModel();
+        fakeSocket.emit.mockClear();
+
+        deliver('own', { command: 'model::update', payload: { id: 'w1' } });
+
+        expect(sent('model::update')).toEqual([['own', { id: 'w1', label: 'mine' }]]);
+        expect(latest(models$)).toEqual([widget]);
+        expect(widget.label).toBe('mine');
+    });
+
+    // What the server has is newer than what this client kept: another client changed it.
+    it('takes what the server has instead of overwriting it', async () => {
+        const { models$, widget } = reconnectedWithOwnModel();
+        fakeSocket.emit.mockClear();
+
+        // The answers to the request for every model, and to the one for w1.
+        deliver('own', { command: 'model::update', payload: { id: 'w1', label: 'newer' } });
+        deliver('own', { command: 'model::update', payload: { id: 'w1', label: 'newer' } });
+        await settle();
+
+        expect(sent('model::update')).toEqual([]);
+        expect(widget.label).toBe('newer');
+        expect(latest(models$)).toEqual([widget]);
+    });
+
+    it('leaves alone the models the server told it about', async () => {
+        new Colibri('app', 'localhost', 9011);
+        RegisterModelSync({ name: 'own', type: Widget });
+        connectSocket();
+        deliver('own', { command: 'model::update', payload: { id: 'theirs', label: 'not mine' } });
+
+        connectSocket();
+        expect(sent('model::request')).toEqual([
+            ['own', {}],
+            ['own', {}]
+        ]);
+
+        deliver('own', { command: 'model::update', payload: { id: 'theirs' } });
+        await settle();
+        expect(sent('model::update')).toEqual([]);
+    });
+
+    it('does not bring back an own model deleted before the answer came', () => {
+        const { models$ } = reconnectedWithOwnModel();
+        fakeSocket.emit.mockClear();
+
+        deliver('own', { command: 'model::delete', payload: { id: 'w1' } });
+        deliver('own', { command: 'model::update', payload: { id: 'w1' } });
+
+        expect(sent('model::update')).toEqual([]);
+        expect(latest(models$)).toEqual([]);
+    });
+
+    it('does it again on every reconnect', () => {
+        reconnectedWithOwnModel();
+        deliver('own', { command: 'model::update', payload: { id: 'w1' } });
+
+        connectSocket();
+        deliver('own', { command: 'model::update', payload: { id: 'w1' } });
+
+        expect(sent('model::update')).toEqual([
+            ['own', { id: 'w1', label: 'mine' }],
+            ['own', { id: 'w1', label: 'mine' }],
+            ['own', { id: 'w1', label: 'mine' }]
+        ]);
+    });
+
+    it('does it for a model registered before new Colibri()', () => {
+        const [, registerModel] = RegisterModelSync({ name: 'own-early', type: Widget });
+        const widget = new Widget('early');
+        widget.label = 'mine';
+        registerModel(widget);
+        new Colibri('app', 'localhost', 9011);
+        connectSocket();
+        connectSocket();
+        fakeSocket.emit.mockClear();
+
+        deliver('own-early', { command: 'model::update', payload: { id: 'early' } });
+
+        expect(sent('model::update')).toEqual([['own-early', { id: 'early', label: 'mine' }]]);
+    });
+});
+
 // Socket.IO retries a connection that fails, for as long as it takes, and a wrong address or a
 // server that is down used to look like nothing more than a slow connection.
 describe('reporting a server that cannot be reached', () => {
