@@ -395,6 +395,13 @@ an hour they do not spend on their prototype, so:
   forever in silence. It now returns the defaults and reports the missing config once, pointing at
   the menu item that fixes it. The "connected" log names the host, port and **app name**, because a
   typo there produces a healthy connection on which no other client is ever seen.
+- **The setup window warns about an App Name others use too**: `myAppName`, which the web client's
+  samples use, and names such as `test`, `demo`, `app` or `colibri`, ignoring case and surrounding
+  spaces. Everyone on a server with the same App Name is in one app, so a class that keeps such a
+  name sees each other's objects and messages, and since every update goes to every other client
+  in the app, the server's work grows with the square of their number. Nothing says so at runtime.
+  The window also no longer accepts an App Name of only spaces, and its title no longer forces a
+  horizontal scrollbar.
 - **`Window → Colibri Status`** — connection state, server, app name, protocol version, time since
   the last server heartbeat (not a latency: the heartbeat carries the *server's* clock), the
   channels with listeners and the type each expects, and the last 20 messages in and out. It uses

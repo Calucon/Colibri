@@ -42,9 +42,10 @@ Alternatively, import the `.unitypackage` attached to the 2.0.0 release on the [
 ## Quickstart
 
 1. Install Colibri (above). A configuration window opens on its own.
-2. Enter an **App Name** — any word you like, but every client that should see each other has to
-   use the *same* one — and the **Server Address** of your colibri-server, then press *Save
-   Config*. Use the server your course or study gives you, or run your own colibri-server 2.x
+2. Enter an **App Name** — every client that should see each other has to use the *same* one, and
+   nobody else on the server should use it — and the **Server Address** of your colibri-server,
+   then press *Save Config*. The window warns about names many people pick, such as `test` or
+   `myAppName`. Use the server your course or study gives you, or run your own colibri-server 2.x
    ([Docker setup](../colibri-server/README.md#docker-recommended)). The address is preset to the
    public test server `colibri.hci.uni-konstanz.de`, which this package can only use while it runs
    colibri-server 2.x: against a 1.x server, *Window → Colibri Status* reports a suspected protocol
@@ -75,6 +76,7 @@ Upon installation, a configuration window should show up:
 - Enter the address of your (shared) [server](../colibri-server): a host name or an IP address, without `http://`. The preset is the public test server `colibri.hci.uni-konstanz.de`, which this package can only use while it runs colibri-server 2.x (see [Requirements](#requirements)). Otherwise run your own colibri-server 2.x, or use the one your course gives you.
 - On a headset or phone, `localhost` is the device itself. Enter the IPv4 address of the machine running the server on your local network instead.
 - Choose a unique *app name*. Though a server supports multiple clients, data is only synchronized between clients with identical *app names*!
+- Unique means that nobody else on the server uses it. Everyone with the same app name is in one app: they see each other's objects and messages, and since every update goes to every other client in the app, the server's work grows with the square of their number. The window warns about names many people use: `myAppName`, which the web client's samples use, and names such as `test`, `demo`, `app` or `colibri`.
 - To adjust the Colibri Configuration you can reopen the window in Unity under "Window" -> "Colibri Configuration" 
 - All changes are saved to `Resources/ColibriConfig`
 
@@ -177,6 +179,7 @@ Colibri also reports the common mistakes in the console rather than failing quie
 | Never connects, and nothing answers at all | `Colibri: 192.168.0.10:9012 did not answer within 5 s. Check the server address, and that this device is on the same network as the server.` — a wrong IP, a server on another network or subnet, a Wi-Fi with client isolation, or a firewall dropping the packets: fix the address or the network |
 | Never connects, and the connection is refused | `Colibri: connection to 192.168.0.10 failed (ConnectionRefused), retrying...` — the machine is reachable, but nothing listens on that TCP port: start colibri-server, or check the *TCP server Port* |
 | Two clients don't see each other | The connect log names the app name in use; both clients must show the same one |
+| Objects or messages you did not create show up | Nothing at runtime: someone else uses the same app name. *Window → Colibri Configuration* warns when it is a name many people use, such as `myAppName` or `test` |
 | A `[Sync]` field never syncs | Its type is reported at startup if Colibri cannot put it on the wire |
 | Connected, but one client is silent | That client's Editor window is in the background and *Run In Background* is off — see step 5 of the Quickstart |
 | `Store.Get`/`Put` reports a failure | The log names the operation, the object, the URL, the transport error and the HTTP status; requests give up after 10 s rather than hanging |

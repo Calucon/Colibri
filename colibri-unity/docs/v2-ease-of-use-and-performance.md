@@ -781,6 +781,22 @@ Colibri: connected to 192.168.0.10:9012 as app 'my-seminar-project'.
 Only clients using the same App Name can see each other.
 ```
 
+### An App Name everyone uses
+
+A typo in the app name isolates a client; the opposite mistake joins it to strangers. The server
+puts every client with the same app name into one app, whoever they are, so a class that keeps a
+name everybody picks — `myAppName` from the web client's samples, `test`, `demo` — ends up in one
+shared app. Each group sees every other group's objects and messages, and since every update goes
+to every other client in the app, the server's work grows with the square of the number of
+clients. Nothing fails at runtime: it just works, for everyone at once.
+
+So *Window → Colibri Configuration* warns, right under the App Name field, when the name is one of
+`myappname`, `myapp`, `appname`, `app`, `test`, `testapp`, `demo`, `example`, `colibri` or
+`default`, ignoring case and surrounding spaces. The check is `ColibriConfig.SharedAppNameWarning`,
+covered by `AppNameCheckTests`. The empty-name error now uses `ColibriConfig.IsConfigured`, so a
+name of only spaces, which the Status window already reported as not configured, no longer passes
+there either.
+
 ### And one more, at startup
 
 `[Sync]` members are validated when the model type is first initialized, rather than failing on the
