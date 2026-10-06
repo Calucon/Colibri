@@ -34,11 +34,29 @@ export class ModelSynchronization extends Service {
             const payload = (msg.payload?.asValue<{ id?: string }>()) || {};
 
             if (typeof(payload?.id) === 'string') {
-                const model = this.store.getModel(app, msg.channel, payload.id) || { id: payload.id };
+                const model = this.store.getModel(app, msg.channel, payload.id);
+
+                // A client asking for a model it has a copy of - colibri-unity re-requests each of
+                // its objects after a reconnect - whose model another client deleted meanwhile: the
+                // relayed delete never reached it, so it is told now, or it keeps a stale copy that
+                // nobody else has. The client that deleted it is asking because it is creating it
+                // again (see onModelUpdate), and gets the answer for an unknown id.
+                const deletion = model ? undefined : this.store.deletion(app, msg.channel, payload.id);
+                if (deletion && !deletion.deletedBy.includes(msg.origin.id)) {
+                    this.connectionPool.emit({
+                        channel: msg.channel,
+                        command: 'model::delete',
+                        payload: Payload.fromValue({ id: payload.id })
+                    }, msg.origin);
+                    return;
+                }
+
+                // An id the server has no model for is answered with the bare id: the requester's
+                // copy is all there is, and its updates create the model here.
                 this.connectionPool.emit({
                     channel: msg.channel,
                     command: 'model::update',
-                    payload: Payload.fromValue(model)
+                    payload: Payload.fromValue(model || { id: payload.id })
                 }, msg.origin);
             } else {
                 for (const model of this.store.getAll(app, msg.channel)) {

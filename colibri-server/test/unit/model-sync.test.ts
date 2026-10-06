@@ -193,4 +193,91 @@ describe('ModelSynchronization', () => {
             expect(store.getModel('appA', 'objects', 'cube')).toBeUndefined();
         });
     });
+
+    // colibri-unity asks for each of its objects by id - when one wakes, and again after every
+    // reconnect. A client that was offline while another deleted one of them never got the
+    // relayed delete, and the bare { id } it was answered with kept its stale copy alive.
+    describe('a request for one model', () => {
+        it('is answered with a delete, to the requester alone, when another client deleted the model', () => {
+            const deleter = server.connect(makeClient('deleter'));
+            server.connect(makeClient('bystander'));
+            send(deleter, 'model::update', { id: 'cube', x: 1 });
+            send(deleter, 'model::delete', { id: 'cube' });
+            // Back after an outage: a connection of its own, which the delete was never relayed to.
+            const returning = server.connect(makeClient('returning'));
+            server.sent.length = 0;
+
+            send(returning, 'model::request', { id: 'cube' });
+
+            expect(sent()).toEqual(['model::delete {"id":"cube"} -> returning']);
+        });
+
+        it('is answered with the bare id for an id the server simply does not know, as before', () => {
+            const client = server.connect(makeClient('client'));
+
+            send(client, 'model::request', { id: 'new-object' });
+
+            expect(sent()).toEqual(['model::update {"id":"new-object"} -> client']);
+        });
+
+        it('is answered with the model when there is one', () => {
+            const owner = server.connect(makeClient('owner'));
+            const client = server.connect(makeClient('client'));
+            send(owner, 'model::update', { id: 'cube', x: 1 });
+            server.sent.length = 0;
+
+            send(client, 'model::request', { id: 'cube' });
+
+            expect(sent()).toEqual(['model::update {"id":"cube","x":1} -> client']);
+        });
+
+        // It asks because it is creating the object again, e.g. loading a scene it unloaded.
+        it('from the client that deleted the model is answered as for an unknown id', () => {
+            const deleter = server.connect(makeClient('deleter'));
+            send(deleter, 'model::delete', { id: 'cube' });
+
+            send(deleter, 'model::request', { id: 'cube' });
+
+            expect(sent()).toEqual(['model::update {"id":"cube"} -> deleter']);
+        });
+
+        it('is answered with the bare id once the deletion is 10 minutes old', () => {
+            const deleter = server.connect(makeClient('deleter'));
+            const client = server.connect(makeClient('client'));
+            send(deleter, 'model::delete', { id: 'cube' });
+            server.sent.length = 0;
+
+            vi.advanceTimersByTime(10 * 60 * 1000);
+            send(client, 'model::request', { id: 'cube' });
+
+            expect(sent()).toEqual(['model::update {"id":"cube"} -> client']);
+        });
+
+        it('is answered with the model once its deleter has created it again', () => {
+            const deleter = server.connect(makeClient('deleter'));
+            const client = server.connect(makeClient('client'));
+            send(deleter, 'model::delete', { id: 'cube' });
+            send(deleter, 'model::update', { id: 'cube', x: 2 });
+            server.sent.length = 0;
+
+            send(client, 'model::request', { id: 'cube' });
+
+            expect(sent()).toEqual(['model::update {"id":"cube","x":2} -> client']);
+        });
+    });
+
+    describe('a request for every model of a channel', () => {
+        it('is answered with the models there are, and nothing about deleted ones', () => {
+            const owner = server.connect(makeClient('owner'));
+            const client = server.connect(makeClient('client'));
+            send(owner, 'model::update', { id: 'kept', x: 1 });
+            send(owner, 'model::update', { id: 'deleted', x: 1 });
+            send(owner, 'model::delete', { id: 'deleted' });
+            server.sent.length = 0;
+
+            send(client, 'model::request', null);
+
+            expect(sent()).toEqual(['model::update {"id":"kept","x":1} -> client']);
+        });
+    });
 });
