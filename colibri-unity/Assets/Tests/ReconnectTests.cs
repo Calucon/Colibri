@@ -13,8 +13,8 @@ using UnityEngine.TestTools;
 namespace HCIKonstanz.Colibri.E2E
 {
     /// <summary>
-    /// The connection dropping mid-session and coming back, against the real server - the Wi-Fi
-    /// blip every headset in a study will have.
+    /// The connection dropping mid-session and coming back, against the real server - the brief
+    /// Wi-Fi dropout that every headset in a multi-user session will see.
     ///
     /// The Unity client talks to the server through a <see cref="TcpProxy"/> that the test can
     /// cut, while the raw peer stays connected directly, as the rest of a session's clients would.

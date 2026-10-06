@@ -11,9 +11,10 @@ namespace HCIKonstanz.Colibri.E2E
     /// <summary>
     /// What Colibri says when a message cannot be delivered.
     ///
-    /// Sending a value on a channel whose listener expects a different type is the classic first
-    /// hour mistake, and it used to be dropped in complete silence. Saying so is only useful if it
-    /// is said once - a warning per message would arrive sixty times a second and be scrolled past.
+    /// Sending a value on a channel whose listener expects a different type is the most common
+    /// mistake when getting started, and it used to be dropped in complete silence. Saying so is
+    /// only useful if it is said once - a warning per message would arrive sixty times a second and
+    /// be scrolled past.
     /// </summary>
     public class DiagnosticsTests : ColibriE2EFixture
     {

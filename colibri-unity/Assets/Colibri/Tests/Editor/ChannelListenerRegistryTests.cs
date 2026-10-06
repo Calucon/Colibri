@@ -6,10 +6,10 @@ using UnityEngine;
 namespace HCIKonstanz.Colibri.Tests
 {
     /// <summary>
-    /// Sending a value on a channel whose listeners expect a different type is the classic first
-    /// hour mistake, and it used to be dropped in complete silence. These cover when that is worth
-    /// reporting - and, just as importantly, when it is not: a channel nobody listens to is normal
-    /// traffic, and warning about it would train people to ignore the console.
+    /// Sending a value on a channel whose listeners expect a different type is the most common
+    /// mistake when getting started, and it used to be dropped in complete silence. These cover
+    /// when that is worth reporting - and, just as importantly, when it is not: a channel nobody
+    /// listens to is normal traffic, and warning about it would train people to ignore the console.
     /// </summary>
     public class ChannelListenerRegistryTests
     {
