@@ -31,6 +31,14 @@ rationale, migration steps, and what the Editor verification did and did not cov
   once the server has sent its first frame, not when TCP connects, and it is cancelled when the
   server refuses this client's protocol version or the component is disabled — awaiting it then
   throws `TaskCanceledException`.
+- **`Store` converts values with Newtonsoft instead of `JsonUtility`.** `JsonUtility` saved public
+  fields and private `[SerializeField]` fields; Newtonsoft saves public fields and properties. A
+  private `[SerializeField]` field is therefore neither saved nor loaded any more: make it public
+  or add `[JsonProperty]`. A `Vector3`, `Quaternion` or `Color` inside the saved class, which
+  `JsonUtility` wrote as `{"x":…}`, now makes `await Store.Put(…)` throw a
+  `JsonSerializationException` (for a `Vector3`, Newtonsoft follows `normalized` into itself).
+  Values 1.x saved that way still load. Store such values as `float` fields or arrays, or save a
+  `JObject` built with Colibri's `ToJson()`.
 - **`ObservableModel<T>`, `ObservableManager<T>` and `Samples/ObservableModel` are deleted.**
 - **Vendored `Newtonsoft.Json.dll` is gone**, replaced by the `com.unity.nuget.newtonsoft-json`
   package, which is declared as a real dependency — so installing Colibri is one git URL and
@@ -226,7 +234,8 @@ rationale, migration steps, and what the Editor verification did and did not cov
   that cannot be resolved, or has no IPv4 address, turns voice off with a clear error instead of
   throwing from `OnEnable`.
 - **`Store`** serializes with Newtonsoft instead of `JsonUtility`, which cannot handle dictionaries,
-  properties, or top-level arrays and so silently disagreed with what `Sync` can carry.
+  properties, or top-level arrays and so silently disagreed with what `Sync` can carry. What that
+  costs a 1.x project is under Breaking changes.
 
 ## SyncBehaviour and SyncTransform
 
@@ -607,6 +616,9 @@ The fixes it produced:
   member is cheaper as a property. Attribute construction dispatches through an explicit per-type
   `if` chain rather than `MakeGenericMethod`, which keeps every instantiation visible to the AOT
   compiler.
+- `Store` logs and returns `default`/`false` only for a failed request. A value Newtonsoft cannot
+  convert throws out of the `await` instead: on `Put`, a class holding a `Vector3`, `Quaternion` or
+  `Color`; on `Get`, a saved value that does not fit the requested type (a `JsonException`).
 - Every `SyncBehaviour<T>` registers its own listener on its type's channel, so each inbound
   `model::update` is offered to every instance of that type. With every object changing, the cost
   of applying a frame's updates therefore grows with the square of the number of objects. The
