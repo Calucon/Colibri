@@ -3,7 +3,9 @@
 Colibri relays real-time object synchronization between two kinds of clients:
 
 - **Unity clients** connect over raw **TCP** using the binary framing described below.
-- **Web clients** connect over **Socket.IO** and are unaffected by anything in this document.
+- **Web clients** connect over **Socket.IO**, using the
+  [envelope described further down](#socketio-envelope-web-clients). The framing sections do not
+  apply to them; the version check and everything about channels, commands and payloads does.
 
 Both transports carry the same logical `{ channel, command, payload }` message shape into the
 server's `ConnectionPool`, which is transport-agnostic - a message received on one transport can be
@@ -18,6 +20,8 @@ except in a handful of hooks (`ModelSynchronization`, `MeasureLatency`, `WebLog`
 > flatbuffer framing cannot talk to a v2.0.0+ server, and vice versa. There is no version
 > *negotiation* - the server accepts exactly one protocol version and refuses every other one,
 > so both sides must be upgraded together. See [Version checking](#version-checking).
+
+This document calls the framing "v3"; the protocol version a client announces for it is `2`.
 
 Every frame on the wire has a fixed-size header followed by a type-specific body:
 
@@ -42,10 +46,18 @@ null-terminated - there is no delimiter scanning anywhere in the parser.
 ### Handshake
 
 A client must send a `handshake` frame immediately after connecting, before sending anything
-else. `version`, `app`, and `name` are `::`-joined into the body as plain utf8 text (none of the
-three may themselves contain `::`). The server assigns the connection to `app` and begins
-including it in that app's broadcasts; any `message` frame received before the handshake is
-rejected and logged.
+else. `version`, `app`, and `name` are `::`-joined into the body as plain utf8 text. None of the
+three may contain `::`, or start or end with `:` - `"2::app:::name"` splits into the app `app`
+and the name `:name`. The server only checks that the body splits into exactly three fields, and
+closes the connection if it does not; colibri-unity replaces a `::` and a colon at either end of
+its app and device name with `_`, and warns about a changed app name. The server assigns the
+connection to `app` and begins including it in that app's broadcasts; any `message` frame
+received before the handshake is ignored and logged.
+
+A client may send another handshake on the same connection. The server then moves it to the new
+app: the old app sees `client::disconnected` and loses its models if that was its last client, and
+the new app sees `client::connected`. A second handshake into the same app shows up as a
+disconnect followed by a connect, and keeps the app's models.
 
 ### Version checking
 
@@ -55,8 +67,9 @@ not a negotiation: there is one supported version at a time, and there is no sub
 v3 client could both speak, so a client announcing anything else is **refused**, not downgraded.
 
 A refused client is never added to its app's broadcast set and never reaches
-`clientConnected$`, so it does not appear in the admin UI. The server first sends it a normal
-message frame explaining why, then closes the connection:
+`clientConnected$`, so it does not appear in the admin UI. The server logs the refusal as an
+error naming the client, its address and both versions, sends the client a normal message frame
+explaining why, then closes the connection:
 
 | field | value |
 | --- | --- |
@@ -64,23 +77,33 @@ message frame explaining why, then closes the connection:
 | command | `protocol::rejected` |
 | payload | `{ "reason": string, "serverVersion": string, "clientVersion": string }` |
 
+On TCP the refusal frame is queued ahead of the server's FIN, so it arrives before the close.
+From then on the server treats the client as gone: it gets no more heartbeats, and anything it
+sends is ignored, including frames that arrived behind the refused handshake in the same packet.
+A peer that has not closed its side of the connection 5 s later is disconnected.
+
 The same applies to Socket.IO clients, which announce their version in the handshake query
 (`?app=…&version=…`) and receive the identical `colibri` / `protocol::rejected` event before
-being disconnected. The one exception is the admin UI (`app === 'colibri'`), which ships with
-the server and is warned about rather than refused - a check that can lock you out of your own
-console is worse than the mismatch it detects.
+being disconnected. A client that sends no version is refused with `clientVersion: ""` and a
+reason that says `'(none)'`. The one exception is the admin UI (`app === 'colibri'`), which ships
+with the server and is warned about rather than refused - a check that can lock you out of your
+own console is worse than the mismatch it detects.
 
-**What this cannot do.** Three gaps, all deliberate:
+**What this cannot do.** Four gaps, all deliberate:
 
-- The refusal only reaches a client whose *framing* the server still speaks. A genuine v1 client
-  cannot decode the frame at all, so for that case the server-side error log - which names the peer
-  and both versions - is the whole diagnostic. Clients cover the remaining gap heuristically:
-  `colibri-unity` reports a likely protocol mismatch after three consecutive sessions that fault
-  before a single frame could be read, instead of reconnecting silently forever.
-- It only reaches a client that *handles* `protocol::rejected`. Any colibri-web published before
-  this check existed surfaces the rejection as an ordinary message and is then disconnected for
-  good - Socket.IO does not reconnect after a server-side `disconnect()` - with nothing logged on
-  the client. See [MIGRATION.md](../../MIGRATION.md).
+- The refusal only reaches a client whose *framing* the server still speaks. A Colibri 1.x Unity
+  client fails before its version is ever read: its first packet, the 1.x handshake, does not
+  parse as a v3 frame (see [Reading frames off the wire](#reading-frames-off-the-wire)), and it
+  could not decode a refusal anyway. The server recognises the 1.x framing instead, closes the
+  connection and logs a warning naming the remote address: it looks like a Colibri 1.x client,
+  the server speaks protocol v2, and the Unity package (`de.uni.kn.colibri`) in that app has to
+  be upgraded to 2.x. The warning is logged at most once a minute per address; the repeats go to
+  debug level. It is the whole diagnostic: the 1.x client cannot tell what happened, and keeps
+  reconnecting.
+- It only reaches a client that *handles* `protocol::rejected`. colibri-web 1.x surfaces the
+  rejection as an ordinary message and is then disconnected for good - Socket.IO does not
+  reconnect after a server-side `disconnect()` - with nothing logged on the client. The
+  server's log line is the diagnostic. See [MIGRATION.md](../../MIGRATION.md).
 - The `app === 'colibri'` exemption is by app name, so any Socket.IO client naming itself `colibri`
   opts out of the check entirely. That app name is reserved for the admin UI and also collides with
   the `colibri` control channel; it is not a name an application should be using.
@@ -91,12 +114,18 @@ console is worse than the mismatch it detects.
 Clients must keep their announced version in step with this constant:
 `CLIENT_VERSION` in `colibri-unity`'s `WebServerConnection.cs`, `PROTOCOL_VERSION` in
 `colibri-web`'s `Colibri.ts`, and the `version` query in the admin UI's `socketio.service.ts`.
+`npm run test:vectors`, which CI runs, fails when any of them differs from `PROTOCOL_VERSION` or
+can no longer be found.
 
 **This is not the release version, and does not move with one.** It names the wire format, and
 nothing derives it from a `package.json`. A 2.0.1 bugfix and a 2.1.0 feature release both still
 announce `2`, so every combination of 2.x client and 2.x server interoperates - a client is
-refused only when the *wire format* it speaks differs, never because the two sides ship different
-release numbers.
+refused only when the protocol version it *announces* differs, never because the two sides ship
+different release numbers.
+
+The one client this refuses although its messages would still work is colibri-web 1.x: the
+Socket.IO envelope did not change, but it announces `1`, so it is refused like any other 1.x
+client. Upgrade it to colibri-web 2.x along with the server.
 
 | change | `PROTOCOL_VERSION` | effect |
 | --- | --- | --- |
@@ -106,8 +135,11 @@ release numbers.
 
 That last row is the whole cost of bumping it, and the whole point. Bump it only when an existing
 client would otherwise misread the bytes on the wire - not to signal that something was added.
-Adding a new `command` is not a wire-format change: unknown commands are ignored by every client
-(Unity's `Sync` switch has no default case, and colibri-web dispatches per registered channel).
+Adding a new `command` is not a wire-format change, because no client breaks on a command it does
+not know: colibri-unity's `Sync` and colibri-web's `Sync.receive*` listeners ignore it, and a
+colibri-web `RegisterModelSync` channel logs `Unknown model command` to the console and otherwise
+ignores it. Code that handles raw messages (colibri-web's `RegisterChannel`, colibri-unity's
+`OnMessageReceived`) sees every command and has to skip the ones it does not know.
 
 ### Detecting an out-of-date server
 
@@ -127,7 +159,18 @@ any application traffic - it sends:
 | | how it notices | how long it takes | what it does |
 | --- | --- | --- | --- |
 | `colibri-web` | no `colibri`/`protocol::accepted` within 5s of connecting | 5s | warns, emits a **non-fatal** `ProtocolMismatchError` (`fatal: false`, `serverVersion: '1'`), **stays connected** |
-| `colibri-unity` | 3 consecutive sessions accepted but ended before a frame decoded | ~4s (500/1000/2000ms backoff) | warns, sets `SuspectedProtocolMismatch`, keeps retrying |
+| `colibri-unity` | 3 sessions in a row that got past the handshake and ended before a frame decoded | about 1.5s against a 1.x server: three sessions, 500ms and then 1000ms apart | logs an error, sets `SuspectedProtocolMismatch`, keeps retrying |
+
+colibri-web reports each kind of mismatch at most once per `Colibri` instance on
+`Colibri.protocolMismatch`: this suspicion, and a refusal (`fatal: true`). A suspicion can be
+followed by a refusal, but not the other way round.
+
+colibri-unity counts a session as connected only once the server has sent its first frame, so
+none of these sessions resets the reconnect backoff, which keeps doubling (0.5s, 1s, 2s, ... up
+to 10s). Every session that got past the handshake and ended without a frame counts, however it
+ended - a clean close, a reset, an undecodable frame, or 2s without any frame. The first frame a
+session decodes clears the count and the suspicion. A server that accepts the connection and then
+says nothing takes longer to suspect, since each of those sessions lasts the full 2s.
 
 TCP clients are sent no announcement and need none: the framing itself changed incompatibly in
 2.0.0, so a pre-2.0.0 server is already unmistakable to them.
@@ -144,8 +187,7 @@ broadcast is the obvious candidate and is wrong: it was added in colibri-server 
 it silently accepts every 1.2.x and 1.3.x server as current. Verified against the published
 `hcikn/colibri:1.1.1` and `hcikn/colibri:1.3.1` images - 1.1.1 sends no beat, 1.3.1 sends it while
 still using the old `\0\0\0` framing. Nothing else a web client can observe separates them either:
-the Socket.IO envelope, the `client::connected` payload (both carry `version`) and the relay
-behaviour are identical.
+the Socket.IO envelope, the `colibri::clients` payloads and the relay behaviour are identical.
 
 Two things follow from this being a guess rather than something the server said, and both are
 deliberate:
@@ -169,13 +211,18 @@ about naming the cause rather than deciding whether to continue.
 
 ### Heartbeat / latency
 
-The server sends a `heartbeat` frame to every connected client (handshaked or not) every 100ms,
-carrying `process.hrtime.bigint()` as the ping timestamp. A client is expected to echo the frame
-back verbatim. The server relays an echoed heartbeat into the normal message pipeline as a
-synthetic `colibri`/`latency` message so `MeasureLatency`'s round-trip accounting handles it the
-same way it handles a web client's latency ping - this is the only place a `heartbeat` frame
-travels client→server. Merging the heartbeat and the latency ping into one frame halves the idle
+The server sends a `heartbeat` frame to every connection, from the moment it is accepted until
+it is closed or refused, every 100ms, carrying `process.hrtime.bigint()` as the ping timestamp. A
+client is expected to echo the frame back verbatim (an echo before the handshake is ignored). The
+server relays an echoed heartbeat into the normal message pipeline as a synthetic
+`colibri`/`latency` message so `MeasureLatency`'s round-trip accounting handles it the same way it
+handles a web client's latency ping - this is the only place a `heartbeat` frame travels
+client→server. Merging the heartbeat and the latency ping into one frame halves the idle
 per-client packet rate compared to running them as two independent 100ms timers.
+
+Because the server is never silent for long, a client can treat silence as a dead connection:
+colibri-unity drops a session after 2s without any frame - including while it waits for the
+first one - and reconnects.
 
 Socket.IO clients are not sent that frame - they get a `colibri`/`latency` event directly, also
 every 100ms, from the same `MeasureLatency` timer.
@@ -220,10 +267,11 @@ for colour. This is the agreement:
 | `broadcast::vector3` | `[x, y, z]` | `Send(ch, Vector3)` | `sendVector3` |
 | `broadcast::quaternion` | `[x, y, z, w]` | `Send(ch, Quaternion)` | `sendQuaternion` |
 | `broadcast::color` | `"#RRGGBBAA"` **or** `[r, g, b, a]` | `Send(ch, Color)` → string | `sendColor` → array |
-| `broadcast::json` | any object | `Send(ch, JToken)` | `sendJson` |
+| `broadcast::json` | any JSON value (colibri-web sends an object) | `Send(ch, JToken)` | `sendJson` |
 
-Append `[]` to any command for the array form, whose payload is an array of the above (so
-`broadcast::vector3[]` is `[[x,y,z], …]`). Two commands need more than a row:
+Every command except `broadcast::json` also has an array form: append `[]`, and the payload is
+an array of the above (so `broadcast::vector3[]` is `[[x,y,z], …]`). Two commands need more
+than a row:
 
 **Colour has two forms on the wire, and receivers must accept both.** Unity writes the HTML string
 `ColorUtility.ToHtmlStringRGBA` produces; colibri-web writes `[r, g, b, a]` with each component
@@ -252,23 +300,109 @@ buffered and only copies the trailing partial frame (never the whole stream) whe
 this is what keeps a long-lived, frequently-fragmented connection from paying an
 O(streamLength²) `Buffer.concat` cost. A malformed or oversized frame (declared length `<= 0` or
 greater than the reader's configured max) throws `FrameError`, which the caller treats as fatal
-for that connection - the same behavior as the old `maxBufferSize` kill-switch.
+for that connection: it logs the error and closes the connection.
+
+When the bytes that failed are the Colibri 1.x framing - three NUL bytes, then `h` or an ASCII
+digit - it throws the subclass `V1FramingError` instead, which is how the server recognises a 1.x
+client (see [Version checking](#version-checking)). No v3 frame can start that way, since those
+four bytes read as a length of at least 16 MiB. The 1.x handshake starts `\0\0\0h`, which reads
+as `Invalid frame length: 1744830464` (`0x68000000`, `'h' << 24`).
 
 ### Backpressure
 
 Before writing a frame to a client's socket, the server checks `socket.writableLength` against a
 1MB high-water mark. If the client's write buffer already exceeds it, the frame is dropped (not
-queued) and a warning is logged. For a last-write-wins synchronization server, dropping a stale
-update for a client that cannot keep up is the correct behavior - buffering without bound would
-only grow process memory for data that is about to be superseded anyway.
+queued). The server logs a warning when a client starts falling behind, and another, with the
+number of frames dropped, once it has caught up. For a last-write-wins synchronization server,
+dropping a stale update for a client that cannot keep up is the correct behavior - buffering
+without bound would only grow process memory for data that is about to be superseded anyway.
 
-## Socket.IO envelope (web clients, unchanged)
+## Socket.IO envelope (web clients)
 
-A web client's message is a Socket.IO event named after the `channel`, with an `{ command,
-payload }` envelope as its data. `payload` is a plain JSON value, not a byte buffer - no framing
-is needed since Socket.IO already handles message boundaries. `ConnectionPool.broadcast()` uses a
-Socket.IO **room per app** so a message to N web clients of the same app is encoded once, not N
-times.
+A web client connects with the handshake query `?app=<app>&version=2`; a connection without an
+`app` is logged and disconnected. A message is a Socket.IO event named after the `channel`, with
+a `{ command, payload }` envelope as its data; an event without a string `command` is logged and
+ignored. `payload` is a plain JSON value, not a byte buffer - no framing is needed since
+Socket.IO already handles message boundaries. The envelope is unchanged from 1.x.
+`ConnectionPool.broadcast()` uses a Socket.IO **room per app** so a message to N web clients of
+the same app is encoded once, not N times.
+
+## Size limits
+
+Every way into the server takes messages of up to about 5 MiB, so whatever one client can send,
+the others can receive:
+
+| path | limit | beyond it |
+| --- | --- | --- |
+| TCP frame | 5 MiB (5,242,880 bytes) for type and body, so a payload gets that minus its channel, its command and 5 bytes | `FrameError`: the server closes the connection |
+| Socket.IO packet | 5 MiB plus room for the largest channel and command, about 5.13 MiB | engine.io drops the connection, and the message with it |
+| REST request body | 5 MiB | `413` |
+
+On TCP, channel and command are each at most 65,535 bytes of utf8 (a `u16` length). A message
+from a web client that does not fit into a TCP frame is not relayed to TCP clients; the server
+logs `Dropping unencodable message` instead.
+
+## Server messages
+
+Besides relaying, the server speaks on a few channels of its own. Applications should not use
+these channel names, or the app name `colibri`.
+
+| channel | command | sent | payload |
+| --- | --- | --- | --- |
+| `colibri` | `protocol::accepted` | to a Socket.IO client, once it is accepted | `{ serverVersion }` |
+| `colibri` | `protocol::rejected` | to a refused client, before it is disconnected | `{ reason, serverVersion, clientVersion }` |
+| `colibri` | `latency` | to every Socket.IO client every 100ms; the client sends it back unchanged | a number to echo |
+| `colibri::clients` | `client::connected`, `client::disconnected` | to every client of the app, and the admin UI, when a client joins or leaves | `{ id, name, app }` |
+| `colibri::clients` | `client::request` | by a client, to ask who is connected | the server answers with one `client::connected` per client of the requester's app, with `version` added |
+| `log` | `debug`, `info`, `warn` / `warning`, `error` | by a client, to write to the server log at that level (any other command: debug) | text |
+
+`name` is the name from the handshake for a TCP client and the client's IP address for a
+Socket.IO client. The admin UI also uses `colibri::log` and `colibri::latency`.
+
+## Model synchronization
+
+colibri-unity's `SyncBehaviour` and colibri-web's `RegisterModelSync` keep shared objects
+("models") in step with three commands on the model's channel. Each client names the channel
+after the model type: colibri-unity uses the class name in lower case, plus `_<ModelId>` when the
+`ModelId` field is set; colibri-web uses the registration's `name`, or else the class name in lower
+case, which a minifying build changes - so pass `name`. A Unity and a web client only sync with
+each other when the channel names match.
+
+| command | payload | what the server does |
+| --- | --- | --- |
+| `model::update` | an object with a string `id`, plus the fields that changed (or all of them) | merges it into its copy - each field sent replaces the stored one, fields not sent are kept - and relays the message unchanged to every other client of the app. Without a string `id` it logs an error and drops it. |
+| `model::delete` | `{ "id": "…" }` | removes its copy and relays the message to every other client of the app. Without an `id` it logs a warning and drops it. |
+| `model::request` | `{ "id": "…" }` for one model; anything else (`null`, `{}`) for all of them | answers the requester alone, with one `model::update` per model it has on that channel. Asked for an id it does not have, it answers `{ "id": "…" }`. |
+
+The merge only looks at top-level fields: a nested object sent in an update replaces the stored
+one as a whole.
+
+The server keeps the models per app and channel, in memory only. It clears an app's models when
+the app's last client disconnects, and has none after a restart. The REST store below is what
+persists.
+
+## REST store
+
+A small key-value store over HTTP, on the web port, separate from the model store: values are
+kept per app in `store.json` in the server's data directory (`DATA_ROOT`) and survive restarts.
+colibri-unity's `Store` and colibri-web's `getRestObject` / `setRestObject` use it.
+
+| request | answer |
+| --- | --- |
+| `GET /api/store` | `200` with the app names, `["app1", …]` |
+| `GET /api/store/:app` | `200` with the value names of that app; `404` if the app is unknown |
+| `GET /api/store/:app/:name` | `200` with the stored JSON value; `404` if there is none |
+| `PUT /api/store/:app/:name` | stores the request body: any JSON value - an object, an array, a number, a string, `true`, `null` - sent as `Content-Type: application/json`, up to 5 MiB. `201` if it is new, `200` if it replaced a value, each with `{ "result": "…", "data": <the value> }`. `400` for malformed JSON, `413` for a body over 5 MiB. |
+| `DELETE /api/store/:app` | `200`, and every value of the app is gone; `404` if the app is unknown |
+| `DELETE /api/store/:app/:name` | `200`; `404` if there is no such value |
+
+Errors are JSON, `{ "error": "…" }`, and never carry a stack trace. Any app or value name is
+allowed, `__proto__` and `constructor` included. Every response allows any origin (CORS), so a
+page served from somewhere else can use the store too.
+
+Writes reach `store.json` within 250ms, together with any made in the meantime, and the file is
+replaced atomically (written to `store.json.tmp`, then renamed). When the server shuts down - on
+`docker stop`, Ctrl+C or an uncaught error - it writes whatever is still pending.
 
 ## Cross-transport relaying
 
@@ -280,9 +414,15 @@ cross-transport relay (or a hook that inspects the payload) pays for a conversio
 
 ## Known limits
 
-**No client re-requests model state after a reconnect.** `model::request` is sent once, when a
-model listener is registered - `Sync.AddModelUpdateListener` in colibri-unity, `RegisterModelSync`
-in colibri-web. The server clears an app's store when its last client disconnects
-(`model-sync.ts`), so after a server restart a client that reconnects keeps whatever models it
-had locally and is never told they are gone. Re-registering the listener is the only way to
-resynchronize today.
+**A reconnect catches up on updates, not on deletions.** Both clients ask for the current models
+again after every reconnect: colibri-web for each `RegisterModelSync`, and colibri-unity for each
+registered listener - a `SyncBehaviour` for its own id, a `SyncBehaviourManager` or a listener
+without an id for the whole channel - behind the messages it queued during the outage. Two gaps
+remain. A model deleted while a client was away
+stays in that client, since the answer only lists the models that exist. And a model the server no
+longer has - after a restart, or once the app's last client has left - comes back only when a
+client sends an update for it: clients do not send their local models again on reconnect.
+
+**Nobody is authenticated.** Any client that can reach the server can join any app under any name,
+and read and change its models and its REST store. The version check is not access control.
+Colibri is meant for a local network you trust.
