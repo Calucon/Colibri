@@ -5,14 +5,30 @@ See [CHANGELOG.md](CHANGELOG.md) for release notes, including breaking changes w
 
 ## Installation
 
-- NPM: `npm install @hcikn/colibri`
-- Yarn: `yarn add @hcikn/colibri`
+- NPM: `npm install @hcikn/colibri@2`
+- Yarn: `yarn add @hcikn/colibri@2`
 
 `rxjs` (7.8.1 or a newer 7.x) is a peer dependency. npm 7 and newer install it for you; otherwise add it to your
 project yourself.
 
 colibri-web 2.x needs colibri-server 2.x: a 2.x server refuses 1.x web clients, and a 2.x web client warns about a 1.x
-server (see [Protocol version](#protocol-version)).
+server (see [Protocol version](#protocol-version)). Keep the `@2` in the install command, so that you never get a 1.x
+release by accident.
+
+If npm answers `No matching version found for @hcikn/colibri@2` (yarn: `Couldn't find any versions`), 2.0 is not on npm
+yet. Build the package from a checkout of this repository instead, with Node.js 22 or newer:
+
+```sh
+cd colibri-web
+npm ci
+npm run build
+npm pack
+```
+
+`npm pack` writes `hcikn-colibri-2.0.0.tgz`. Copy it into your project, install it with
+`npm install ./hcikn-colibri-2.0.0.tgz` (or `yarn add ./hcikn-colibri-2.0.0.tgz`), and commit it with your project,
+because `package.json` refers to the file by its path. In a download without Git history, the `.git can't be found`
+message these commands print is harmless.
 
 > **Colibri targets TypeScript as of 2.0** — TypeScript 5.0 or newer, with standard
 > (non-`experimentalDecorators`) decorators. `@Synced()` is a TypeScript decorator, and the
