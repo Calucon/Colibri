@@ -134,10 +134,15 @@ namespace HCIKonstanz.Colibri.Tests
         /// A loopback port nothing answers on: a listener that never accepts, with its backlog
         /// already full. Linux - and so Android - and macOS drop further SYNs instead of refusing
         /// them, so connecting hangs as it does to a host that is not there. Windows refuses them,
-        /// and then the test cannot run; see UnansweredPort in the PlayMode suite.
+        /// after retrying the SYN for a second or so, and then the test cannot run; see
+        /// UnansweredPort in the PlayMode suite.
         /// </summary>
         private int UnansweredPort()
         {
+            // Not probed: its late refusal would outlast a short probe and pass for no answer.
+            if (Environment.OSVersion.Platform == PlatformID.Win32NT)
+                IgnoreNoUnansweredPort();
+
             var listener = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
             _disposables.Add(listener);
             listener.Bind(new IPEndPoint(IPAddress.Loopback, 0));
@@ -149,10 +154,12 @@ namespace HCIKonstanz.Colibri.Tests
                 var probe = NewSocket();
                 var connecting = probe.ConnectAsync(IPAddress.Loopback, port);
 
+                // A loopback connection that is answered at all is answered within a millisecond;
+                // the rest leaves room for a busy machine and for a refusal that comes late.
                 bool answered;
                 try
                 {
-                    answered = connecting.Wait(250);
+                    answered = connecting.Wait(1000);
                 }
                 catch (AggregateException)
                 {
@@ -168,9 +175,14 @@ namespace HCIKonstanz.Colibri.Tests
                 return port;
             }
 
+            IgnoreNoUnansweredPort();
+            return 0;
+        }
+
+        private static void IgnoreNoUnansweredPort()
+        {
             Assert.Ignore("This system refuses a connection to a full backlog instead of leaving it unanswered, "
                 + "so there is no port here that never answers.");
-            return 0;
         }
     }
 }

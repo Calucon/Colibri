@@ -14,8 +14,10 @@ namespace HCIKonstanz.Colibri.E2E
     /// and so Android - and macOS then drop further SYNs rather than refuse them, and a connect
     /// to the port hangs until it is given up.
     ///
-    /// Windows refuses a connection to a full backlog instead. <see cref="Hangs"/> says whether
-    /// this machine produced a port that really never answers; a test should be skipped when not.
+    /// Windows refuses a connection to a full backlog instead, and only after retrying the SYN for
+    /// a second or so - long enough to look like no answer to a short probe - so it is not even
+    /// tried there. <see cref="Hangs"/> says whether this machine produced a port that really
+    /// never answers; a test should be skipped when not.
     /// </summary>
     public sealed class UnansweredPort : IDisposable
     {
@@ -27,12 +29,22 @@ namespace HCIKonstanz.Colibri.E2E
         /// <summary>Whether a connection attempt to <see cref="Port"/> really goes unanswered here.</summary>
         public bool Hangs { get; }
 
+        /// <summary>
+        /// How long a probe may go unanswered before the port counts as never answering. A loopback
+        /// connection that is answered at all is answered within a millisecond; this leaves room
+        /// for a busy machine and for a refusal that comes late.
+        /// </summary>
+        private const int ProbeMs = 1000;
+
         public UnansweredPort()
         {
             _listener = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
             _listener.Bind(new IPEndPoint(IPAddress.Loopback, 0));
             _listener.Listen(0);
             Port = ((IPEndPoint)_listener.LocalEndPoint).Port;
+
+            if (Environment.OSVersion.Platform == PlatformID.Win32NT)
+                return;
 
             // Queue connections nobody accepts until one is no longer answered. A backlog of 0 is
             // one connection on Linux; the bound is for systems that round it up.
@@ -44,7 +56,7 @@ namespace HCIKonstanz.Colibri.E2E
                 bool answered;
                 try
                 {
-                    answered = connecting.Wait(250);
+                    answered = connecting.Wait(ProbeMs);
                 }
                 catch (AggregateException)
                 {

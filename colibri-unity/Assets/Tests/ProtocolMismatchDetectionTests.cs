@@ -297,6 +297,12 @@ namespace HCIKonstanz.Colibri.E2E
                 "The attempt to reach a port that never answers was never given up", 15f);
             var gaveUpAfter = Time.realtimeSinceStartup - started;
 
+            // Refused after all, only later than the probe waited for: not the case under test.
+            if (Connection.LastConnectFailure.Contains(nameof(SocketError.ConnectionRefused)))
+                Assert.Ignore($"The port refused the attempt after {gaveUpAfter:0.0} s "
+                    + "instead of leaving it unanswered, so there is no port here that never answers. Check the timeout by hand: "
+                    + "an unreachable server address should leave Connecting after 5 s.");
+
             Assert.That(gaveUpAfter, Is.GreaterThanOrEqualTo(4.5f).And.LessThan(10f),
                 "The attempt should be given up after the connect timeout of 5 s");
             Assert.That(Connection.LastConnectFailure, Does.Contain($":{_unansweredPort.Port} did not answer within 5 s"));
