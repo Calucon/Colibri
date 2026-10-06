@@ -51,9 +51,9 @@ namespace HCIKonstanz.Colibri.Setup
         public bool IsConfigured => !string.IsNullOrWhiteSpace(AppName);
 
         /// <summary>
-        /// App names that many people end up with: "myAppName" is what every sample, the docs and
-        /// the web client's examples use, and the others are what anyone types first. Lowercase;
-        /// compared without regard to case.
+        /// App names that many people end up with: example and placeholder names - colibri-web's
+        /// samples use "myAppName" - and what anyone types first. Lowercase; compared without
+        /// regard to case.
         /// </summary>
         private static readonly string[] CommonAppNames =
         {
@@ -66,8 +66,8 @@ namespace HCIKonstanz.Colibri.Setup
         /// </summary>
         /// <remarks>
         /// The server puts every client with the same app name into one app, whoever they are. So
-        /// everyone in a class who keeps the sample's name sees everyone else's objects and
-        /// messages, and since each update goes to every other client in the app, the server's
+        /// everyone in a class who settles on the same example name sees everyone else's objects
+        /// and messages, and since each update goes to every other client in the app, the server's
         /// work grows with the square of their number. Nothing says so at runtime: it just works,
         /// for everyone at once.
         /// </remarks>
@@ -80,8 +80,8 @@ namespace HCIKonstanz.Colibri.Setup
             if (System.Array.IndexOf(CommonAppNames, name.ToLowerInvariant()) < 0)
                 return null;
 
-            return $"'{name}' is an App Name other people use too - the samples and the documentation use 'myAppName'. "
-                + "Everyone on this server with the same App Name is in one app: they all see each other's objects and messages, "
+            return $"'{name}' is a generic App Name that other people are likely to pick too. "
+                + "Everyone on this server who uses the same App Name is in one app: they all see each other's objects and messages, "
                 + "and the server's work grows with the square of their number. Choose a name of your own, such as your group and project.";
         }
 
