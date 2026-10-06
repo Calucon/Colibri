@@ -46,6 +46,9 @@ let messages = 0;
 // Set once the server says why it is refusing this client; a refused client is never heartbeated,
 // so without this the summary below blamed a missing heartbeat instead.
 let refusal: Partial<ProtocolRejection> | undefined;
+// Set when the server sent something this client cannot decode. That used to end the connection
+// and nothing else, so after a heartbeat had arrived the script exited 0 as if all was well.
+let undecodable = false;
 
 const readRefusal = function (payload: Buffer): Partial<ProtocolRejection> {
     try {
@@ -65,6 +68,7 @@ client.on('data', (data) => {
         frames = reader.append(data);
     } catch (err) {
         console.error('Malformed frame from server:', err);
+        undecodable = true;
         client.destroy();
         return;
     }
@@ -106,7 +110,12 @@ client.on('close', () => {
     clearTimeout(endTimer);
     console.log(`Disconnected after ${heartbeats} heartbeat(s) and ${messages} message(s)`);
 
-    if (refusal) {
+    // First: a frame that cannot be decoded is a broken server whatever came before it, and
+    // the frames that arrived along with it were never seen.
+    if (undecodable) {
+        console.error('FAILED: the server sent a frame this client cannot decode (see above)');
+        process.exitCode = 1;
+    } else if (refusal) {
         console.error(
             `REFUSED: the server speaks protocol v${refusal.serverVersion ?? '?'}, ` +
                 `and this client announced '${refusal.clientVersion ?? version}'.`
