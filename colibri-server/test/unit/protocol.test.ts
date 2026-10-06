@@ -300,6 +300,42 @@ describe('protocol v3 framing', () => {
 
             expect(() => readAll(reader, frame)).toThrow(FrameError);
         });
+
+        // A ':' at either end of a field merges with the separator next to it into ':::', which
+        // split('::') reads as '::' + ':'. "2::app:::name" used to decode as app 'app', name
+        // ':name' - the client silently joined another app than the one it announced.
+        it.each([
+            ['an app ending in a colon', PROTOCOL_VERSION, 'app:', 'name'],
+            ['a name starting with a colon', PROTOCOL_VERSION, 'app', ':name'],
+            ['an app starting with a colon', PROTOCOL_VERSION, ':app', 'name'],
+            ['a name ending in a colon', PROTOCOL_VERSION, 'app', 'name:'],
+            ['a version ending in a colon', `${PROTOCOL_VERSION}:`, 'app', 'name'],
+            ['an app that is a single colon', PROTOCOL_VERSION, ':', 'name'],
+        ])('rejects a handshake with %s', (_case, version, app, name) => {
+            const reader = new FrameReader(MAX_FRAME_LENGTH);
+            const frame = encodeHandshakeFrame(version, app, name);
+
+            expect(() => readAll(reader, frame)).toThrow(FrameError);
+        });
+
+        it('rejects the body "2::app:::name" rather than reading it as app "app", name ":name"', () => {
+            const body = Buffer.from(`${PROTOCOL_VERSION}::app:::name`, 'utf8');
+            const frame = Buffer.alloc(5 + body.length);
+            frame.writeUInt32LE(1 + body.length, 0);
+            frame.writeUInt8(FrameType.Handshake, 4);
+            body.copy(frame, 5);
+
+            expect(() => readAll(new FrameReader(MAX_FRAME_LENGTH), frame)).toThrow(FrameError);
+        });
+
+        it('still accepts a single colon inside a field', () => {
+            const reader = new FrameReader(MAX_FRAME_LENGTH);
+            const frame = encodeHandshakeFrame(PROTOCOL_VERSION, 'room:1', 'quest:3');
+
+            expect(readAll(reader, frame)).toEqual([
+                { type: FrameType.Handshake, version: PROTOCOL_VERSION, app: 'room:1', name: 'quest:3' },
+            ]);
+        });
     });
 
     // Every decoded payload is posted to the main thread, and structured clone copies a view's

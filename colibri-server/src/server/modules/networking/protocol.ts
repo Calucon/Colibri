@@ -299,9 +299,16 @@ export class FrameReader {
                 // Exactly three fields. '::' is the field separator and docs/protocol.md
                 // forbids it inside a field, so a name containing one is a malformed
                 // frame - previously it was silently truncated at the first extra '::'.
+                //
+                // A field may not start or end with ':' either. Next to a separator that makes
+                // ':::', which split() reads as '::' + ':' - so "2::app:::name" (app "app:",
+                // name "name") came out as app "app", name ":name", and the client joined a
+                // different app than the one it announced, without an error anywhere. Such a
+                // body is ambiguous, so it is refused exactly like a field containing '::'.
                 const parts = text.split('::');
                 const [version, app, name] = parts;
-                if (parts.length !== 3 || version === undefined || app === undefined || name === undefined) {
+                if (parts.length !== 3 || version === undefined || app === undefined || name === undefined
+                    || parts.some(field => field.startsWith(':') || field.endsWith(':'))) {
                     throw new FrameError(`Malformed handshake frame: "${text}"`);
                 }
                 return { type: FrameType.Handshake, version, app, name };

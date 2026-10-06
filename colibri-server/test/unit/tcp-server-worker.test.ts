@@ -150,6 +150,17 @@ describe('TCPServerWorker', () => {
             expect(internals.clientsByApp.has('appA')).toBe(false);
         });
 
+        it('refuses a handshake whose app ends in a colon instead of moving the colon into the name', () => {
+            const { socket, id } = connect();
+            socket.emit('data', encodeHandshakeFrame(PROTOCOL_VERSION, 'app:', 'name'));
+
+            expect(socket.ended).toBe(true);
+            expect(internals.clients.has(id)).toBe(false);
+            expect(internals.clientsByApp.has('app')).toBe(false);
+            expect(posted.filter(p => p.channel === 'clientConnected$')).toHaveLength(0);
+            expect(logs().some(l => l.includes('Malformed handshake frame'))).toBe(true);
+        });
+
         it('terminates the connection on a malformed handshake', () => {
             const { socket } = connect();
             const bad = Buffer.alloc(5);
