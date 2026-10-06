@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { Subject } from 'rxjs';
+import { Subject, config as rxjsConfig } from 'rxjs';
 import { TCPServerProxy } from '../../src/server/modules/networking/tcp-server-proxy.js';
 import { WorkerServiceProxy } from '../../src/server/modules/core/worker-service-proxy.js';
 import { WorkerMessage } from '../../src/server/modules/core/worker-message.js';
@@ -13,6 +13,8 @@ import { Payload } from '../../src/server/modules/core/payload.js';
 // worker module is a .ts file that a plain worker_threads.Worker cannot load anyway.
 interface ProxyInternals {
     workerMessages: Subject<WorkerMessage>;
+    inboundBacklog: Int32Array;
+    onWorkerExited(): void;
 }
 
 describe('TCPServerProxy', () => {
@@ -159,6 +161,87 @@ describe('TCPServerProxy', () => {
             proxy.broadcastToApp({ channel: 'objects', command: 'model::update', payload: Payload.fromBytes(bytes) }, 'appA');
 
             expect(sentPayload()).toBe(bytes);
+        });
+    });
+
+    // The worker counts every message it posts here; this side has to count each one back down
+    // once it is dispatched, or the worker would think the main thread is further behind than it
+    // is - and, past the limit, drop updates for good.
+    describe('the inbound backlog', () => {
+        let sent: { channel: string; content: Record<string, unknown> }[];
+        const internals = () => proxy as unknown as ProxyInternals;
+
+        beforeEach(() => {
+            sent = [];
+            vi.spyOn(WorkerServiceProxy.prototype as unknown as { postMessage(channel: string, content?: Record<string, unknown>): void }, 'postMessage')
+                .mockImplementation((channel, content) => {
+                    sent.push({ channel, content: content ?? {} });
+                });
+        });
+
+        const startMessages = () => sent.filter(m => m.channel === 'm:start');
+
+        it('shares its counter and the limit with the worker in the start message', () => {
+            proxy.start(9012, '0.0.0.0', { inboundBacklogLimit: 1234 });
+
+            const [start] = startMessages();
+            expect(start?.content).toMatchObject({ port: 9012, host: '0.0.0.0', options: { inboundBacklogLimit: 1234 } });
+            const counter = (start?.content.options as { inboundBacklog: Int32Array }).inboundBacklog;
+            expect(counter).toBe(internals().inboundBacklog);
+            expect(counter.buffer).toBeInstanceOf(SharedArrayBuffer);
+        });
+
+        it('counts a message back down once it has been dispatched', () => {
+            handshake('c1', 'appA');
+            Atomics.store(internals().inboundBacklog, 0, 3);
+            let pendingWhileHandling = -1;
+            proxy.messages$.subscribe(() => {
+                pendingWhileHandling = Atomics.load(internals().inboundBacklog, 0);
+            });
+
+            modelUpdate('c1', 'objects', { id: 'm1' });
+
+            expect(pendingWhileHandling).toBe(3);
+            expect(Atomics.load(internals().inboundBacklog, 0)).toBe(2);
+        });
+
+        it('counts a message back down even when handling it threw', async () => {
+            const unhandled: unknown[] = [];
+            const original = rxjsConfig.onUnhandledError;
+            rxjsConfig.onUnhandledError = err => unhandled.push(err);
+            try {
+                handshake('c1', 'appA');
+                Atomics.store(internals().inboundBacklog, 0, 1);
+
+                // No payload at all: turning it into a Payload throws.
+                fromWorker('clientMessage$', { channel: 'objects', command: 'model::update', origin: { id: 'c1' } });
+
+                expect(Atomics.load(internals().inboundBacklog, 0)).toBe(0);
+                // RxJS reports the subscriber's error on a later timer tick.
+                await new Promise(resolve => setTimeout(resolve, 0));
+                expect(unhandled).toHaveLength(1);
+            } finally {
+                rxjsConfig.onUnhandledError = original;
+            }
+        });
+
+        it('starts a restarted worker from zero, with the same counter and settings', () => {
+            vi.useFakeTimers();
+            try {
+                vi.spyOn(WorkerServiceProxy.prototype as unknown as { restartWorker(): boolean }, 'restartWorker').mockReturnValue(true);
+                proxy.start(9012, '0.0.0.0', { inboundBacklogLimit: 77 });
+                Atomics.store(internals().inboundBacklog, 0, 500);
+
+                internals().onWorkerExited();
+                expect(Atomics.load(internals().inboundBacklog, 0)).toBe(0);
+                vi.advanceTimersByTime(1000);
+
+                const [first, restarted] = startMessages();
+                expect(restarted?.content).toEqual(first?.content);
+                expect((restarted?.content.options as { inboundBacklog: Int32Array }).inboundBacklog).toBe(internals().inboundBacklog);
+            } finally {
+                vi.useRealTimers();
+            }
         });
     });
 });

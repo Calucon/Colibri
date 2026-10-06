@@ -30,6 +30,16 @@ const parsePositiveInt = function (name: string, raw: string | undefined, fallba
     return value;
 };
 
+// For the limits below, where 0 is meaningful: it switches the limit off.
+const parseNonNegativeInt = function (name: string, raw: string | undefined, fallback: number): number {
+    if (raw === undefined || raw === '') return fallback;
+    const value = Number(raw);
+    if (!Number.isInteger(value) || value < 0) {
+        throw new Error(`Invalid ${name}: "${raw}" is not a non-negative integer (0 turns it off)`);
+    }
+    return value;
+};
+
 export const Config = {
     TCP_HOST: process.env.TCP_HOST || '0.0.0.0',
     TCP_PORT: parsePort('TCP_PORT', process.env.TCP_PORT, 9012),
@@ -61,4 +71,8 @@ export const Config = {
     // capture - each logError call with printStacktrace on walks this many frames - while
     // still being enough to see past RxJS's internal call chain into application code.
     STACK_TRACE_LIMIT: parsePositiveInt('STACK_TRACE_LIMIT', process.env.STACK_TRACE_LIMIT, 30),
+
+    // How many TCP messages may wait for the main thread before the TCP worker drops incoming
+    // model::update and broadcast::* messages (see DEFAULT_INBOUND_BACKLOG_LIMIT). 0: never drop.
+    TCP_INBOUND_BACKLOG_LIMIT: parseNonNegativeInt('TCP_INBOUND_BACKLOG_LIMIT', process.env.TCP_INBOUND_BACKLOG_LIMIT, 2000),
 };

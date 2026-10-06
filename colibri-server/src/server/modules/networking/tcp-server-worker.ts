@@ -17,6 +17,7 @@ import {
     ownBytes,
     protocolRejection,
 } from './protocol.js';
+import { DropEpisode, InboundBacklog, describeEpisode, isDroppable } from './inbound-limits.js';
 
 export const TCP_SERVER_WORKER = fileURLToPath(import.meta.url);
 
@@ -47,6 +48,20 @@ const V1_WARNING_INTERVAL_MILLIS = 60_000;
 // Bounds the memory behind that limit: past this many addresses the least recently warned-about
 // is forgotten, which at worst means one extra warning for it.
 const MAX_V1_WARNING_ADDRESSES = 1024;
+
+// How many TCP messages may be waiting for the main thread before the worker starts dropping the
+// droppable ones (see isDroppable). At the main thread's saturation point on a 4-core lab server
+// (about 15k model::update/s) 2000 is roughly 130 ms of work: well clear of a normal burst, and
+// short enough that what does get through is not seconds old.
+export const DEFAULT_INBOUND_BACKLOG_LIMIT = 2000;
+
+// Settings the proxy sends along with 'm:start'; anything left out keeps its default.
+export interface TcpServerOptions {
+    // TCPServerProxy's backlog counter. Without it the backlog is neither counted nor limited.
+    inboundBacklog?: Int32Array;
+    // 0 turns the limit off.
+    inboundBacklogLimit?: number;
+}
 
 // The worker thread only ever deals in raw payload bytes (straight off the wire, or
 // destined for it) - the Payload memoization abstraction lives at the ConnectionPool
@@ -110,6 +125,12 @@ export class TCPServerWorker extends WorkerService {
 
     private heartbeatInterval: NodeJS.Timeout | undefined;
 
+    private inboundBacklog = new InboundBacklog(undefined, DEFAULT_INBOUND_BACKLOG_LIMIT);
+    // Logged once when the backlog first overflows and once when it has drained, however much is
+    // dropped in between - not per message, which under overload would itself be thousands of
+    // posts a second to the thread that is already behind.
+    private readonly backlogEpisode = new DropEpisode();
+
     // Remote address -> when a Colibri 1.x client there was last warned about. Kept in
     // warning order (an address is re-inserted each time), so the oldest entry is always first.
     private readonly v1WarnedAt = new Map<string, number>();
@@ -136,6 +157,7 @@ export class TCPServerWorker extends WorkerService {
     private handleParentMessage(msg: WorkerMessage): void {
         switch (msg.channel) {
             case 'm:start':
+                this.configure((msg.content.options as TcpServerOptions | undefined) ?? {});
                 this.start(
                     msg.content.port as number,
                     msg.content.host as string
@@ -168,6 +190,13 @@ export class TCPServerWorker extends WorkerService {
         }
     }
 
+    public configure(options: TcpServerOptions): void {
+        this.inboundBacklog = new InboundBacklog(
+            options.inboundBacklog,
+            options.inboundBacklogLimit ?? DEFAULT_INBOUND_BACKLOG_LIMIT
+        );
+    }
+
     public start(port: number, host: string): void {
         this.server = net.createServer((socket) =>
             this.handleConnection(socket)
@@ -175,7 +204,18 @@ export class TCPServerWorker extends WorkerService {
         this.server.listen(port, host);
 
         this.logInfo(`Starting Colibri TCP server on ${host}:${port}`);
-        this.heartbeatInterval = setInterval(() => this.handleHeartbeat(), 100);
+        this.heartbeatInterval = setInterval(() => this.tick(), 100);
+    }
+
+    private tick(): void {
+        this.handleHeartbeat();
+
+        const backlogSummary = this.backlogEpisode.endIfQuiet(performance.now());
+        if (backlogSummary) {
+            this.logWarning(
+                `The main thread has caught up with TCP messages again; ${describeEpisode(backlogSummary)} while it was behind.`
+            );
+        }
     }
 
     // Tolerates being called before start() (an 'm:stop' racing startup) and destroys live
@@ -348,25 +388,17 @@ export class TCPServerWorker extends WorkerService {
                     break;
 
                 case FrameType.Message:
-                    if (client.app) {
-                        this.postMessage('clientMessage$', {
-                            channel: frame.channel,
-                            command: frame.command,
-                            payload: frame.payload,
-                            origin: {
-                                id: client.id,
-                                app: client.app,
-                                name: client.name,
-                                version: client.version,
-                                metadata: {},
-                            },
-                        });
-                    } else {
+                    if (!client.app) {
                         this.logError(
                             `Ignoring message (${frame.channel} / ${frame.command}) from client ${client.id} without app`,
                             false
                         );
+                        break;
                     }
+
+                    if (isDroppable(frame.channel, frame.command) && this.dropForBacklog()) break;
+
+                    this.postClientMessage(client, frame.channel, frame.command, frame.payload);
                     break;
             }
         }
@@ -502,12 +534,19 @@ export class TCPServerWorker extends WorkerService {
     private handlePong(client: TcpClient, pingTimestamp: bigint): void {
         if (!client.app) return;
 
+        // ownBytes: a Buffer.from() this small is a view into the 64 KiB Buffer pool, and
+        // postMessage would clone all of it - ten times a second per client.
+        this.postClientMessage(client, 'colibri', 'latency', ownBytes(Buffer.from(pingTimestamp.toString(), 'utf8')));
+    }
+
+    // Every message for the main thread's hooks goes through here, so each one is counted in the
+    // backlog that TCPServerProxy counts back down once it has been dispatched.
+    private postClientMessage(client: TcpClient, channel: string, command: string, payload: Buffer): void {
+        this.inboundBacklog.posted();
         this.postMessage('clientMessage$', {
-            channel: 'colibri',
-            command: 'latency',
-            // ownBytes: a Buffer.from() this small is a view into the 64 KiB Buffer pool, and
-            // postMessage would clone all of it - ten times a second per client.
-            payload: ownBytes(Buffer.from(pingTimestamp.toString(), 'utf8')),
+            channel,
+            command,
+            payload,
             origin: {
                 id: client.id,
                 app: client.app,
@@ -516,6 +555,23 @@ export class TCPServerWorker extends WorkerService {
                 metadata: {},
             },
         });
+    }
+
+    // Past the backlog limit the main thread is further behind than it can make up while clients
+    // keep sending at this rate, and every further message would only sit in the queue - in
+    // memory, getting older. Dropping the droppable ones here is what keeps both bounded.
+    private dropForBacklog(): boolean {
+        if (!this.inboundBacklog.full) return false;
+
+        if (this.backlogEpisode.recordDrop(performance.now())) {
+            this.logWarning(
+                `The main thread is ${this.inboundBacklog.pending} TCP messages behind ` +
+                    `(TCP_INBOUND_BACKLOG_LIMIT is ${this.inboundBacklog.limit}): the server is taking in more than it can process. ` +
+                    'Dropping model::update and broadcast::* messages from Unity clients until it catches up, so synced objects ' +
+                    'will lag or jump. Fewer synced objects, a lower sync rate or fewer clients per app reduce the load.'
+            );
+        }
+        return true;
     }
 
     private handleSocketError(client: TcpClient, error: Error): void {

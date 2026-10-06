@@ -68,7 +68,9 @@ const startup = async () => {
 
     const httpServer = webServer.start();
     socketioServer.start(httpServer);
-    tcpServer.start(Config.TCP_PORT, Config.TCP_HOST);
+    tcpServer.start(Config.TCP_PORT, Config.TCP_HOST, {
+        inboundBacklogLimit: Config.TCP_INBOUND_BACKLOG_LIMIT,
+    });
     voiceServer.start(Config.VOICE_PORT, Config.VOICE_HOST);
 };
 

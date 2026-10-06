@@ -1,4 +1,4 @@
-import { TCP_SERVER_WORKER, TCP_SERVER_WORKER_ROLE, WireNetworkMessage } from './tcp-server-worker.js';
+import { TCP_SERVER_WORKER, TCP_SERVER_WORKER_ROLE, TcpServerOptions, WireNetworkMessage } from './tcp-server-worker.js';
 import { Payload, WorkerServiceProxy } from '../core/index.js';
 import { ownBytes } from './protocol.js';
 import { Observable, Subject } from 'rxjs';
@@ -32,7 +32,15 @@ export class TCPServerProxy
 
     private messageStream = new Subject<NetworkMessage>();
 
-    private startOptions: { port: number; host: string } | undefined;
+    // How many clientMessage$ the worker has posted that have not been dispatched here yet: the
+    // worker adds one per post, this side takes one off per message handled. Shared memory rather
+    // than a message, because it has to be readable while the very queue it measures is full. The
+    // worker drops droppable messages while it is over the limit; see InboundBacklog.
+    private readonly inboundBacklog = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+
+    // What the worker needs to know beyond the port: everything in TcpServerOptions except the
+    // backlog counter, which is this proxy's own.
+    private startOptions: { port: number; host: string; options: Omit<TcpServerOptions, 'inboundBacklog'> } | undefined;
     private restartAttempts = 0;
     private restartTimer: NodeJS.Timeout | undefined;
 
@@ -74,22 +82,35 @@ export class TCPServerProxy
 
                 case 'clientMessage$': {
                     const wireMessage = msg.content as unknown as WireNetworkMessage;
-                    this.onClientMessage({
-                        channel: wireMessage.channel,
-                        command: wireMessage.command,
-                        payload: Payload.fromBytes(toBuffer(wireMessage.payload)),
-                        origin: wireMessage.origin ? this.clients.get(wireMessage.origin.id) : undefined,
-                    });
+                    try {
+                        this.onClientMessage({
+                            channel: wireMessage.channel,
+                            command: wireMessage.command,
+                            payload: Payload.fromBytes(toBuffer(wireMessage.payload)),
+                            origin: wireMessage.origin ? this.clients.get(wireMessage.origin.id) : undefined,
+                        });
+                    } finally {
+                        // Even if a subscriber threw: a message counted and never taken off again
+                        // would leave the worker that much closer to dropping, for good.
+                        Atomics.sub(this.inboundBacklog, 0, 1);
+                    }
                     break;
                 }
             }
         });
     }
 
-    public start(port: number, host: string): void {
-        this.startOptions = { port, host };
-        this.postMessage('m:start', { port: port, host: host });
+    public start(port: number, host: string, options: Omit<TcpServerOptions, 'inboundBacklog'> = {}): void {
+        this.startOptions = { port, host, options };
+        this.postStart();
         this.clientStream.next(this.currentClients);
+    }
+
+    private postStart(): void {
+        if (!this.startOptions) return;
+
+        const { port, host, options } = this.startOptions;
+        this.postMessage('m:start', { port, host, options: { ...options, inboundBacklog: this.inboundBacklog } });
     }
 
     public async stop(): Promise<void> {
@@ -119,9 +140,13 @@ export class TCPServerProxy
         }
         this.clientStream.next(this.currentClients);
 
+        // Node delivers every message a worker posted before it reports the worker's exit, so
+        // the backlog is back to 0 by now. Reset all the same: a count left behind by a thread
+        // that no longer exists would have the next one dropping messages from the start.
+        Atomics.store(this.inboundBacklog, 0, 0);
+
         // No startOptions means we were never started, or are being shut down on purpose.
-        const options = this.startOptions;
-        if (!options) return;
+        if (!this.startOptions) return;
 
         if (this.restartAttempts >= MAX_RESTART_ATTEMPTS) {
             this.logError(
@@ -136,7 +161,7 @@ export class TCPServerProxy
             this.restartTimer = undefined;
             this.logWarning(`Restarting the TCP server worker (attempt ${this.restartAttempts}/${MAX_RESTART_ATTEMPTS})`);
             if (this.restartWorker()) {
-                this.postMessage('m:start', { port: options.port, host: options.host });
+                this.postStart();
             }
         }, RESTART_DELAY_MILLIS);
     }

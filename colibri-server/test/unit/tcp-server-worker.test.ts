@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import type * as net from 'net';
-import { TCPServerWorker, WireNetworkMessage } from '../../src/server/modules/networking/tcp-server-worker.js';
+import { TCPServerWorker, TcpServerOptions, WireNetworkMessage } from '../../src/server/modules/networking/tcp-server-worker.js';
 import { FrameReader, FrameType, PROTOCOL_VERSION, encodeHandshakeFrame, encodeHeartbeatFrame, encodeMessageFrame } from '../../src/server/modules/networking/protocol.js';
 import { LogLevel } from '../../src/server/modules/core/log-message.js';
 
@@ -75,6 +75,7 @@ interface WorkerInternals {
     handleConnection(socket: net.Socket): void;
     handleParentMessage(msg: { channel: string; content: Record<string, unknown> }): void;
     handleHeartbeat(): void;
+    tick(): void;
     postMessage(channel: string, content: Record<string, unknown>): void;
     clients: Map<string, { id: string; app: string; socket: net.Socket }>;
     waitingClients: Map<string, { id: string; socket: net.Socket }>;
@@ -600,6 +601,159 @@ describe('TCPServerWorker', () => {
             const frames = framesWrittenTo(socket);
             expect(frames).toHaveLength(1);
             expect(frames[0]?.type === FrameType.Message && frames[0].command).toBe('protocol::rejected');
+        });
+    });
+
+    // The worker->main MessagePort queue used to grow without bound once the main thread fell
+    // behind: every message a structured clone held in memory, seconds old by the time it was
+    // handled, until the process ran out of memory - and nothing was logged on the way.
+    describe('inbound backlog', () => {
+        let backlog: Int32Array;
+
+        const configure = function (options: Omit<TcpServerOptions, 'inboundBacklog'>): void {
+            backlog = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+            worker.configure({ ...options, inboundBacklog: backlog });
+        };
+
+        const handshaked = function (): FakeSocket {
+            const { socket } = connect();
+            socket.emit('data', encodeHandshakeFrame(PROTOCOL_VERSION, 'appA', 'quest-1'));
+            posted = [];
+            return socket;
+        };
+
+        const send = function (socket: FakeSocket, channel: string, command: string, payload = '{"id":"a"}'): void {
+            socket.emit('data', encodeMessageFrame(wireMessage(channel, command, payload)));
+        };
+
+        const relayed = (): string[] =>
+            posted.filter(p => p.channel === 'clientMessage$').map(p => `${String(p.content.channel)} ${String(p.content.command)}`);
+        const warnings = (): string[] =>
+            posted.filter(p => p.channel === 'log' && p.content.level === LogLevel.Warn).map(p => String(p.content.msg));
+
+        it('counts every message posted to the main thread, heartbeat replies included', () => {
+            configure({ inboundBacklogLimit: 100 });
+            const socket = handshaked();
+
+            send(socket, 'objects', 'model::update');
+            send(socket, 'objects', 'model::request');
+            socket.emit('data', encodeHeartbeatFrame(1n));
+
+            expect(relayed()).toEqual(['objects model::update', 'objects model::request', 'colibri latency']);
+            expect(Atomics.load(backlog, 0)).toBe(3);
+        });
+
+        it('drops model::update and broadcast::* while the main thread is at the limit', () => {
+            configure({ inboundBacklogLimit: 2 });
+            const socket = handshaked();
+            send(socket, 'objects', 'model::update');
+            send(socket, 'objects', 'model::update');
+            expect(relayed()).toHaveLength(2);
+
+            send(socket, 'objects', 'model::update');
+            send(socket, 'myChannel', 'broadcast::json', '{"x":1}');
+
+            expect(relayed()).toHaveLength(2);
+            expect(Atomics.load(backlog, 0)).toBe(2);
+        });
+
+        it('never drops a request, a delete, a log line, latency or anything on the colibri channel', () => {
+            configure({ inboundBacklogLimit: 1 });
+            const socket = handshaked();
+            send(socket, 'objects', 'model::update');
+
+            send(socket, 'objects', 'model::request');
+            send(socket, 'objects', 'model::delete');
+            send(socket, 'clients', 'client::request', '');
+            send(socket, 'log', 'error', 'boom');
+            send(socket, 'colibri', 'broadcast::json');
+            socket.emit('data', encodeHeartbeatFrame(1n));
+
+            expect(relayed()).toEqual([
+                'objects model::update',
+                'objects model::request',
+                'objects model::delete',
+                'clients client::request',
+                'log error',
+                'colibri broadcast::json',
+                'colibri latency',
+            ]);
+        });
+
+        it('relays again once the main thread has caught up', () => {
+            configure({ inboundBacklogLimit: 1 });
+            const socket = handshaked();
+            send(socket, 'objects', 'model::update');
+            send(socket, 'objects', 'model::update');
+            expect(relayed()).toHaveLength(1);
+
+            // What TCPServerProxy does once it has dispatched a message.
+            Atomics.sub(backlog, 0, 1);
+            send(socket, 'objects', 'model::update', '{"id":"after"}');
+
+            expect(relayed()).toHaveLength(2);
+        });
+
+        it('warns once when it starts dropping and sums up once it has stopped', () => {
+            vi.useFakeTimers();
+            try {
+                configure({ inboundBacklogLimit: 1 });
+                const socket = handshaked();
+                send(socket, 'objects', 'model::update');
+                for (let i = 0; i < 50; i++) {
+                    send(socket, 'objects', 'model::update');
+                    vi.advanceTimersByTime(10);
+                    internals.tick();
+                }
+
+                expect(warnings()).toHaveLength(1);
+                expect(warnings()[0]).toContain('TCP messages behind');
+                expect(warnings()[0]).toContain('TCP_INBOUND_BACKLOG_LIMIT');
+
+                // The last drop was 10 ms ago; the episode ends a second after it.
+                Atomics.store(backlog, 0, 0);
+                vi.advanceTimersByTime(989);
+                internals.tick();
+                expect(warnings()).toHaveLength(1);
+
+                vi.advanceTimersByTime(1);
+                internals.tick();
+                expect(warnings()).toHaveLength(2);
+                expect(warnings()[1]).toContain('caught up');
+                expect(warnings()[1]).toContain('dropped 50 message(s) over 0.5 s');
+
+                internals.tick();
+                expect(warnings()).toHaveLength(2);
+            } finally {
+                vi.useRealTimers();
+            }
+        });
+
+        it('never drops with the limit off', () => {
+            configure({ inboundBacklogLimit: 0 });
+            const socket = handshaked();
+
+            for (let i = 0; i < 100; i++) send(socket, 'objects', 'model::update');
+
+            expect(relayed()).toHaveLength(100);
+            expect(warnings()).toEqual([]);
+        });
+
+        it('takes its settings from the start message', () => {
+            const shared = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+            const start = vi.spyOn(worker, 'start').mockImplementation(() => undefined);
+            internals.handleParentMessage({
+                channel: 'm:start',
+                content: { port: 1, host: '127.0.0.1', options: { inboundBacklog: shared, inboundBacklogLimit: 1 } },
+            });
+            expect(start).toHaveBeenCalledWith(1, '127.0.0.1');
+            const socket = handshaked();
+
+            send(socket, 'objects', 'model::update');
+            send(socket, 'objects', 'model::update');
+
+            expect(relayed()).toHaveLength(1);
+            expect(Atomics.load(shared, 0)).toBe(1);
         });
     });
 

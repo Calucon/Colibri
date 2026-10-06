@@ -50,6 +50,24 @@ describe('Config', () => {
         });
     });
 
+    describe('inbound limits', () => {
+        it('default to dropping past a backlog of 2000 TCP messages', async () => {
+            const config = await loadConfig({ TCP_INBOUND_BACKLOG_LIMIT: undefined });
+
+            expect(config.TCP_INBOUND_BACKLOG_LIMIT).toBe(2000);
+        });
+
+        it('take 0 to turn a limit off', async () => {
+            const config = await loadConfig({ TCP_INBOUND_BACKLOG_LIMIT: '0' });
+
+            expect(config.TCP_INBOUND_BACKLOG_LIMIT).toBe(0);
+        });
+
+        it.each(['-1', '1.5', 'lots'])('refuse to start with a limit of "%s"', async (raw) => {
+            await expect(loadConfig({ TCP_INBOUND_BACKLOG_LIMIT: raw })).rejects.toThrow('TCP_INBOUND_BACKLOG_LIMIT');
+        });
+    });
+
     it('loads .env without printing dotenv\'s banner and tip', async () => {
         // dotenv reads .env from the working directory.
         const cwd = await mkdtemp(path.join(tmpdir(), 'colibri-config-'));
