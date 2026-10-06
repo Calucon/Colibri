@@ -52,7 +52,8 @@ namespace HCIKonstanz.Colibri.Samples
         [Tooltip("Synchronized objects in the scene. Press Apply after changing.")]
         [Range(0, 500)] public int ObjectCount = 100;
 
-        [Tooltip("How many of them move each frame. One moving object is one message per frame.")]
+        [Tooltip("How many of them move each frame. A moving object changes in every frame, and sends "
+            + "at most SyncSettings.MaxSendRate messages a second (30 by default); 0 there means one per frame.")]
         [Range(0f, 1f)] public float MovingFraction = 1f;
 
         [Tooltip("Ballast added to every object's payload, in bytes.")]
@@ -97,12 +98,14 @@ namespace HCIKonstanz.Colibri.Samples
         private long _probesOutOfOrder;
         private int _highestEchoSeen;
 
-        private long _modelsSent;
-        private long _modelsSentAtSample;
+        // Changes the driver made, not messages: see DriveObjects.
+        private long _changesMade;
+        private long _changesMadeAtSample;
+        private int _movingObjects;
         private long _modelsReceivedAtSample;
         private long _probesEchoedAtSample;
         private float _nextRateSample;
-        private float _outPerSecond;
+        private float _changedPerSecond;
         private float _inPerSecond;
         private float _echoPerSecond;
 
@@ -185,7 +188,8 @@ namespace HCIKonstanz.Colibri.Samples
             RefreshPercentiles(force: true);
 
             Debug.Log(
-                $"STRESS objects={_objects.Count} out={_outPerSecond:0}/s in={_inPerSecond:0}/s "
+                $"STRESS objects={_objects.Count} changed={_changedPerSecond:0}/s sentAtMost={SentAtMostPerSecond():0}/s "
+                + $"sendLimit={SyncSettings.MaxSendRate}/s in={_inPerSecond:0}/s "
                 + $"frame={_smoothedFrameSeconds * 1000f:0.0}ms worstFrame={_worstFrameSeconds * 1000f:0}ms "
                 + $"rtt_p50={_p50:0.0}ms rtt_p95={_p95:0.0}ms rtt_p99={_p99:0.0}ms rtt_max={_rttWorst:0.0}ms "
                 + $"probes={_probesEchoed}/{_probesSent} lost={_probesLost} outOfOrder={_probesOutOfOrder} "
@@ -256,6 +260,7 @@ namespace HCIKonstanz.Colibri.Samples
         {
             var moving = Mathf.RoundToInt(_objects.Count * MovingFraction);
             var t = Time.realtimeSinceStartup;
+            _movingObjects = 0;
 
             for (var i = 0; i < moving; i++)
             {
@@ -264,13 +269,29 @@ namespace HCIKonstanz.Colibri.Samples
                     continue;
 
                 // Always a different value from last frame, so every driven object really does
-                // produce a message and the outbound count below is a count rather than a guess.
+                // change in every frame. That is what is counted here: changes, not messages. The
+                // send-rate limit (SyncSettings.MaxSendRate) holds each object to that many
+                // messages a second and folds the changes in between into them, so at 72 fps and
+                // the default 30 a second, fewer than half of these changes are a message of their
+                // own. What arrives is the other client's "In".
                 var basePosition = GridPosition(i);
                 basePosition.z = Mathf.Sin(t * 2f + i * 0.3f);
 
                 model.Drive(basePosition, _padding);
-                _modelsSent++;
+                _changesMade++;
+                _movingObjects++;
             }
+        }
+
+        /// <summary>
+        /// The most messages a second the changes counted above can have become: one per change,
+        /// or the send-rate limit's worth per moving object, whichever is less. A bound, not a
+        /// count - Colibri does not report what it sent.
+        /// </summary>
+        private float SentAtMostPerSecond()
+        {
+            var limit = SyncSettings.MaxSendRate;
+            return limit > 0 ? Mathf.Min(_changedPerSecond, (float)_movingObjects * limit) : _changedPerSecond;
         }
 
 
@@ -434,12 +455,12 @@ namespace HCIKonstanz.Colibri.Samples
             // an unknown interval.
             if (_nextRateSample > 0f)
             {
-                _outPerSecond = _modelsSent - _modelsSentAtSample;
+                _changedPerSecond = _changesMade - _changesMadeAtSample;
                 _inPerSecond = StressModel.Received - _modelsReceivedAtSample;
                 _echoPerSecond = _probesEchoed - _probesEchoedAtSample;
             }
 
-            _modelsSentAtSample = _modelsSent;
+            _changesMadeAtSample = _changesMade;
             _modelsReceivedAtSample = StressModel.Received;
             _probesEchoedAtSample = _probesEchoed;
             _nextRateSample = now + 1f;
@@ -481,12 +502,12 @@ namespace HCIKonstanz.Colibri.Samples
         {
             StressModel.ResetCounters();
 
-            _modelsSent = 0;
-            _modelsSentAtSample = 0;
+            _changesMade = 0;
+            _changesMadeAtSample = 0;
             _modelsReceivedAtSample = 0;
             _probesEchoedAtSample = 0;
             _nextRateSample = 0f;
-            _outPerSecond = _inPerSecond = _echoPerSecond = 0f;
+            _changedPerSecond = _inPerSecond = _echoPerSecond = 0f;
 
             _probesSent = _probesEchoed = _probesLost = _probesOutOfOrder = 0;
             _highestEchoSeen = 0;
@@ -578,7 +599,12 @@ namespace HCIKonstanz.Colibri.Samples
 
             var spawning = _objects.Count != ObjectCount;
             Row("Objects", spawning ? $"{_objects.Count} of {ObjectCount}..." : _objects.Count.ToString());
-            Row("Out", $"{_outPerSecond:0} msg/s");
+            // Changes, and what they can have become on the wire - not a count of messages sent,
+            // which the send-rate limit keeps below the changes. "In" on the other client is.
+            var limit = SyncSettings.MaxSendRate;
+            Row("Changed", $"{_changedPerSecond:0} /s");
+            Row("Sent", $"up to {SentAtMostPerSecond():0} msg/s   "
+                + (limit > 0 ? $"(at most {limit}/s per object)" : "(no send-rate limit)"));
             Row("In", $"{_inPerSecond:0} msg/s");
 
             // Named for what it is. A missing value here is last-write-wins doing its job, not a

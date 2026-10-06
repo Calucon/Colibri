@@ -5,8 +5,9 @@ namespace HCIKonstanz.Colibri.Samples
 {
     /// <summary>
     /// One synchronized object of load. The stress harness spawns as many of these as you ask it
-    /// for and moves some fraction of them every frame; Colibri's sync ticker then flushes one
-    /// message per changed object per frame, which is how a real scene generates traffic.
+    /// for and moves some fraction of them every frame; Colibri's sync ticker then sends each
+    /// object's changes, at most <c>SyncSettings.MaxSendRate</c> messages a second per object,
+    /// which is how a real scene generates traffic.
     /// </summary>
     /// <remarks>
     /// The harness owns this type on purpose. Driving the load through <c>SyncTransform</c> would
@@ -30,10 +31,11 @@ namespace HCIKonstanz.Colibri.Samples
         /// Updates that were superseded before they were sent, measured from gaps in the sequence.
         /// </summary>
         /// <remarks>
-        /// Deliberately not called "lost". State synchronization is last-write-wins and coalesces
-        /// per frame: if the sender changes a value three times between two flushes, two of those
-        /// values never go on the wire, and that is the design working. A dropped *message* is a
-        /// different thing, and the harness's probe channel is what measures that.
+        /// Deliberately not called "lost". State synchronization is last-write-wins and coalesces:
+        /// if the sender changes a value three times between two sends - a frame apart, or one
+        /// interval of the send-rate limit - two of those values never go on the wire, and that is
+        /// the design working. A dropped *message* is a different thing, and the harness's probe
+        /// channel is what measures that.
         /// </remarks>
         public static long Coalesced;
 
@@ -74,8 +76,9 @@ namespace HCIKonstanz.Colibri.Samples
         /// <summary>
         /// Moves this object on the driving client. Writes the backing state rather than going
         /// through the properties above, so a locally driven change is never counted as a received
-        /// one, and always bumps the sequence - which is what makes the harness's outbound count
-        /// exact rather than an estimate. An unchanged value produces no message at all.
+        /// one, and always bumps the sequence, so every call is a change: the harness counts the
+        /// calls as changes made, and the receiving side counts the gaps in the sequence as
+        /// changes coalesced. An unchanged value produces no message at all.
         /// </summary>
         public void Drive(Vector3 position, string padding)
         {
