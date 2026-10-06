@@ -118,6 +118,25 @@ const looksLikeV1Frame = function (buffer: Buffer, offset: number): boolean {
     return header === V1_HANDSHAKE_HEADER || (header !== undefined && header >= ASCII_0 && header <= ASCII_9);
 };
 
+// Returns a Buffer whose backing ArrayBuffer holds exactly these bytes and nothing else: the
+// input itself when it already does, otherwise a copy outside Node's Buffer pool.
+//
+// Every payload crosses the worker_threads boundary by structured clone, and structured clone
+// copies a typed array's *whole* backing ArrayBuffer, not just the bytes the view covers. A small
+// Buffer from Buffer.from(), Buffer.allocUnsafe() and friends is a view into a shared 64 KiB pool
+// slab (Buffer.poolSize on Node 24), so a 30-byte model::update used to be cloned - and kept alive
+// on the receiving thread - as 64 KiB. That alone capped the TCP transport at about half of what
+// it otherwise handles.
+export const ownBytes = function (bytes: Uint8Array): Buffer {
+    if (bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength) {
+        return Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes.buffer, 0, bytes.byteLength);
+    }
+
+    const copy = Buffer.allocUnsafeSlow(bytes.byteLength);
+    copy.set(bytes);
+    return copy;
+};
+
 export type DecodedFrame =
     | { type: FrameType.Heartbeat; pingTimestamp: bigint }
     | { type: FrameType.Handshake; version: string; app: string; name: string }
@@ -305,8 +324,10 @@ export class FrameReader {
                 offset += commandLength;
 
                 // Copied out (not a subarray) since the backing buffer is reused/compacted
-                // on subsequent append() calls.
-                const payload = Buffer.from(this.buffer.subarray(offset, bodyEnd));
+                // on subsequent append() calls - and into an allocation of its own, never the
+                // Buffer pool, because this is what gets posted to the main thread (see ownBytes).
+                const payload = Buffer.allocUnsafeSlow(bodyEnd - offset);
+                this.buffer.copy(payload, 0, offset, bodyEnd);
                 return { type: FrameType.Message, channel, command, payload };
             }
 

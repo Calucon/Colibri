@@ -6,6 +6,7 @@ import { WorkerMessage } from '../../src/server/modules/core/worker-message.js';
 import { ConnectionPool, NetworkClient } from '../../src/server/modules/command-hooks/connection-pool.js';
 import { DataStore } from '../../src/server/modules/command-hooks/data-store.js';
 import { ModelSynchronization } from '../../src/server/modules/command-hooks/model-sync.js';
+import { Payload } from '../../src/server/modules/core/payload.js';
 
 // The proxy's only link to the worker thread is the message channel, so these tests stand in for
 // the thread by pushing what TCPServerWorker would post. No thread is started: under vitest the
@@ -111,6 +112,53 @@ describe('TCPServerProxy', () => {
 
             expect(store.getAll('appA', 'objects')).toHaveLength(1);
             expect(proxy.currentClients.map((c: NetworkClient) => c.name)).toEqual(['second-name']);
+        });
+    });
+
+    // Every broadcast is structured-cloned into the worker, which copies a payload's whole backing
+    // ArrayBuffer. A payload encoded from a string (anything web-origin or built by the server) is
+    // a view into the 64 KiB Buffer pool, and used to cross as 64 KiB.
+    describe('payloads sent to the worker', () => {
+        let sent: { channel: string; content: Record<string, unknown> }[];
+
+        beforeEach(() => {
+            sent = [];
+            vi.spyOn(WorkerServiceProxy.prototype as unknown as { postMessage(channel: string, content?: Record<string, unknown>): void }, 'postMessage')
+                .mockImplementation((channel, content) => {
+                    sent.push({ channel, content: content ?? {} });
+                });
+            handshake('c1', 'appA');
+        });
+
+        const sentPayload = function (): Buffer {
+            const msg = sent.at(-1)?.content.msg as { payload: Buffer } | undefined;
+            if (!msg) throw new Error('nothing was sent to the worker');
+            return msg.payload;
+        };
+
+        it('own exactly their bytes when broadcast to an app', () => {
+            proxy.broadcastToApp({ channel: 'objects', command: 'model::update', payload: Payload.fromValue({ id: 'm1', x: 1 }) }, 'appA');
+
+            const payload = sentPayload();
+            expect(payload.toString()).toBe('{"id":"m1","x":1}');
+            expect(payload.buffer.byteLength).toBe(payload.length);
+        });
+
+        it('own exactly their bytes when sent to one client', () => {
+            proxy.broadcast({ channel: 'objects', command: 'model::update', payload: Payload.fromString('{"id":"m1"}') }, proxy.currentClients);
+
+            const payload = sentPayload();
+            expect(payload.toString()).toBe('{"id":"m1"}');
+            expect(payload.buffer.byteLength).toBe(payload.length);
+        });
+
+        it('are passed through without a copy when they already own their bytes', () => {
+            const bytes = Buffer.allocUnsafeSlow(11);
+            bytes.write('{"id":"m1"}');
+
+            proxy.broadcastToApp({ channel: 'objects', command: 'model::update', payload: Payload.fromBytes(bytes) }, 'appA');
+
+            expect(sentPayload()).toBe(bytes);
         });
     });
 });

@@ -14,6 +14,7 @@ import {
     V1FramingError,
     encodeHeartbeatFrame,
     encodeMessageFrame,
+    ownBytes,
     protocolRejection,
 } from './protocol.js';
 
@@ -503,7 +504,9 @@ export class TCPServerWorker extends WorkerService {
         this.postMessage('clientMessage$', {
             channel: 'colibri',
             command: 'latency',
-            payload: Buffer.from(pingTimestamp.toString(), 'utf8'),
+            // ownBytes: a Buffer.from() this small is a view into the 64 KiB Buffer pool, and
+            // postMessage would clone all of it - ten times a second per client.
+            payload: ownBytes(Buffer.from(pingTimestamp.toString(), 'utf8')),
             origin: {
                 id: client.id,
                 app: client.app,

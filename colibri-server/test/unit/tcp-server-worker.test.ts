@@ -440,6 +440,22 @@ describe('TCPServerWorker', () => {
         });
     });
 
+    describe('inbound messages', () => {
+        it('posts each payload to the main thread in a buffer of its own', () => {
+            const { socket } = connect();
+            socket.emit('data', encodeHandshakeFrame(PROTOCOL_VERSION, 'appA', 'a'));
+
+            socket.emit('data', Buffer.concat([
+                encodeMessageFrame(wireMessage('chan', 'model::update', '{"id":"a"}')),
+                encodeMessageFrame(wireMessage('chan', 'model::update', '{"id":"b"}')),
+            ]));
+
+            const payloads = posted.filter(p => p.channel === 'clientMessage$').map(p => p.content.payload as Buffer);
+            expect(payloads.map(p => p.toString())).toEqual(['{"id":"a"}', '{"id":"b"}']);
+            for (const payload of payloads) expect(payload.buffer.byteLength).toBe(payload.length);
+        });
+    });
+
     describe('broadcastToApp', () => {
         it('writes to every client of the app except the excluded one', () => {
             const a = connect();
@@ -548,6 +564,20 @@ describe('TCPServerWorker', () => {
             expect(relayed?.content.channel).toBe('colibri');
             expect(relayed?.content.command).toBe('latency');
             expect((relayed?.content.payload as Buffer).toString('utf8')).toBe('123456789');
+        });
+
+        // Posted to the main thread ten times a second per client: a Buffer.from() this small is a
+        // view into the 64 KiB Buffer pool, and structured clone copies the whole pool slab.
+        it('posts the relayed timestamp in a buffer of its own', () => {
+            const { socket } = connect();
+            socket.emit('data', encodeHandshakeFrame(PROTOCOL_VERSION, 'appA', 'a'));
+            posted = [];
+
+            socket.emit('data', encodeHeartbeatFrame(123456789n));
+
+            const payload = posted.find(p => p.channel === 'clientMessage$')?.content.payload as Buffer;
+            expect(payload.byteOffset).toBe(0);
+            expect(payload.buffer.byteLength).toBe(payload.length);
         });
 
         it('ignores a heartbeat from a client that has not handshaked yet', () => {

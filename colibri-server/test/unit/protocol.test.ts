@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { MessageChannel } from 'worker_threads';
 import {
     FrameError,
     FrameReader,
@@ -8,6 +9,7 @@ import {
     encodeHandshakeFrame,
     encodeHeartbeatFrame,
     encodeMessageFrame,
+    ownBytes,
 } from '../../src/server/modules/networking/protocol.js';
 
 const MAX_FRAME_LENGTH = 1024 * 1024;
@@ -297,6 +299,86 @@ describe('protocol v3 framing', () => {
             const frame = encodeHandshakeFrame(PROTOCOL_VERSION, 'app', 'na::me');
 
             expect(() => readAll(reader, frame)).toThrow(FrameError);
+        });
+    });
+
+    // Every decoded payload is posted to the main thread, and structured clone copies a view's
+    // whole backing ArrayBuffer. A payload sharing a 64 KiB Buffer-pool slab crossed the thread
+    // boundary as 64 KiB, however small it was.
+    describe('payload ownership', () => {
+        const decodePayloads = function (...payloads: string[]): Buffer[] {
+            const reader = new FrameReader(MAX_FRAME_LENGTH);
+            const chunk = Buffer.concat(payloads.map(p => encodeMessageFrame({ channel: 'c', command: 'model::update', payload: Buffer.from(p) })));
+            return reader.append(chunk).map(frame => {
+                if (frame.type !== FrameType.Message) throw new Error('expected a message frame');
+                return frame.payload;
+            });
+        };
+
+        // A real MessagePort, so this is the clone a worker's postMessage actually makes.
+        const roundTrip = async function (payload: Buffer): Promise<Uint8Array> {
+            const { port1, port2 } = new MessageChannel();
+            try {
+                const received = new Promise<Uint8Array>(resolve => port2.once('message', (msg: { payload: Uint8Array }) => resolve(msg.payload)));
+                port1.postMessage({ payload });
+                return await received;
+            } finally {
+                port1.close();
+                port2.close();
+            }
+        };
+
+        it('gives every decoded payload a backing buffer of exactly its own length', () => {
+            const payloads = decodePayloads('{"id":"a","x":1}', '{"id":"b"}', '');
+
+            expect(payloads.map(p => p.toString())).toEqual(['{"id":"a","x":1}', '{"id":"b"}', '']);
+            for (const payload of payloads) {
+                expect(payload.byteOffset).toBe(0);
+                expect(payload.buffer.byteLength).toBe(payload.length);
+            }
+        });
+
+        it('clones only a small payload\'s own bytes across a MessagePort', async () => {
+            const [payload] = decodePayloads('{"id":"a","x":1}');
+
+            const received = await roundTrip(payload!);
+
+            expect(Buffer.from(received).toString()).toBe('{"id":"a","x":1}');
+            expect(received.buffer.byteLength).toBe(payload!.length);
+        });
+
+        describe('ownBytes', () => {
+            it('copies a view into the Buffer pool out into a buffer of its own', () => {
+                const pooled = Buffer.from('12345678', 'utf8');
+                expect(pooled.buffer.byteLength).toBeGreaterThan(pooled.length);
+
+                const owned = ownBytes(pooled);
+
+                expect(owned.toString()).toBe('12345678');
+                expect(owned.byteOffset).toBe(0);
+                expect(owned.buffer.byteLength).toBe(8);
+            });
+
+            it('passes a buffer that already owns its bytes through without copying', () => {
+                const exact = Buffer.allocUnsafeSlow(4).fill(7);
+
+                expect(ownBytes(exact)).toBe(exact);
+            });
+
+            it('wraps a plain Uint8Array that owns its bytes as a Buffer over the same memory', () => {
+                const bytes = new Uint8Array([1, 2, 3]);
+
+                const owned = ownBytes(bytes);
+
+                expect(Buffer.isBuffer(owned)).toBe(true);
+                expect(owned.buffer).toBe(bytes.buffer);
+                expect([...owned]).toEqual([1, 2, 3]);
+            });
+
+            it('keeps an empty payload empty', () => {
+                expect(ownBytes(Buffer.alloc(0)).length).toBe(0);
+                expect(ownBytes(Buffer.from('')).buffer.byteLength).toBe(0);
+            });
         });
     });
 });

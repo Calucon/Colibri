@@ -1,5 +1,6 @@
 import { TCP_SERVER_WORKER, TCP_SERVER_WORKER_ROLE, WireNetworkMessage } from './tcp-server-worker.js';
 import { Payload, WorkerServiceProxy } from '../core/index.js';
+import { ownBytes } from './protocol.js';
 import { Observable, Subject } from 'rxjs';
 import { NetworkClient, NetworkMessage, NetworkServer } from '../command-hooks/index.js';
 
@@ -174,11 +175,15 @@ export class TCPServerProxy
         return true;
     }
 
+    // ownBytes, because this payload is about to be structured-cloned into the worker, which
+    // copies the whole ArrayBuffer behind it. A TCP-origin payload already owns its bytes and
+    // passes through untouched; anything asBytes() had to encode from a string (every web-origin
+    // or server-built message) is a view into the 64 KiB Buffer pool and is copied out first.
     private toWireMessage(msg: NetworkMessage): { channel: string; command: string; payload: Buffer } {
         return {
             channel: msg.channel,
             command: msg.command,
-            payload: msg.payload?.asBytes() ?? Buffer.alloc(0),
+            payload: ownBytes(msg.payload?.asBytes() ?? Buffer.alloc(0)),
         };
     }
 
