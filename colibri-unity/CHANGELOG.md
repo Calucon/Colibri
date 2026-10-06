@@ -560,6 +560,30 @@ an hour they do not spend on their prototype, so:
   hiding, showing and deleting, including an object hidden when this client quits; `SyncModelTests`
   a value from another client followed by a local change; `LifecycleTests` a listener registered
   after the connection was rebuilt.
+- The send-rate limit and the other late changes have tests of their own. In EditMode,
+  `SendRateTests` drive the limit on a clock of their own: the leading edge, a burst, the held
+  update going out when its interval is up, 30 a second at 72, 90 and 120 fps, a limit of `0`,
+  showing and hiding, a server value replacing a held change, a delete from another client
+  dropping it, and where the limit comes from. `ModelUpdateTests` cover an update reaching a model
+  before any object of its type has woken; `AppNameCheckTests` the shared-app-name warning;
+  `ConnectTimeoutTests` an attempt nothing answers, cancelling one, and a refusal reported at
+  once; `VoicePacketQueueTests` voice packets from several receive threads at once; `OutboxTests`
+  the 10 000-message cap, connected and not; `RemoteLoggingTests` the missing-lines note. In
+  PlayMode, `SyncModelTests` and `SyncTransformTests` run the limit end to end — a burst, a limit
+  of `0`, what is held going out on quit, pause and focus loss, a destroy and a delete from
+  another client, hiding a moving object — and objects built from a disabled template, visible and
+  hidden; `ReconnectTests` a drop and reconnect within one frame and the missing-lines note;
+  `ProtocolMismatchDetectionTests` an attempt nothing answers, given up after 5 s and retried.
+  `FakeColibriServer` now stays silent until it has read the handshake, as colibri-server does;
+  its old behaviour, heartbeating before it has read the handshake and refusing after, is kept as
+  `HeartbeatThenRefuse`.
+- The tests that need a port that never answers are skipped on Windows, which refuses a
+  connection to a full listen backlog instead of leaving it unanswered:
+  `ConnectTimeoutTests.AnAttemptNothingAnswersIsGivenUpAfterTheTimeout` and
+  `.CancellingGivesUpTheAttemptAtOnce`, and
+  `ProtocolMismatchDetectionTests.AnAttemptNothingAnswersIsGivenUpAfterFiveSecondsAndRetried`.
+  There the timeout is checked by hand: with an unreachable server address, the client leaves
+  *Connecting* after 5 s.
 - `node colibri-unity/run-tests.mjs` runs both suites, starting and stopping a server with
   `docker compose` — unless one is already listening, which it uses as it stands. See
   [README.md](README.md#for-maintainers).
@@ -571,7 +595,8 @@ an hour they do not spend on their prototype, so:
   `colibri-unity/Assets/Colibri/Networking/`.
 - Still no GameCI workflow: the Unity suites run locally, since a Unity container in CI needs a
   licence secret. Voice chat has no end-to-end coverage — it needs a microphone; only the choice of
-  the server's address is unit-tested.
+  the server's address and the queue that hands received packets to the main thread are
+  unit-tested.
 
 ## End-to-end verification, and what it fixed
 

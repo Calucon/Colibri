@@ -1262,7 +1262,8 @@ touch:
 
 - **Voice chat.** It needs a microphone, so neither the port-0 bind nor the `CancellationToken`
   shutdown that replaced `Thread.Abort` has been exercised. Only the choice of the server's IPv4
-  address has a unit test (`VoiceServerAddressTests`); the sample itself has no coverage at all.
+  address (`VoiceServerAddressTests`) and, since, the queue that hands received packets to the main
+  thread (`VoicePacketQueueTests`) have unit tests; the sample itself has no coverage at all.
 - **The visual half of Unity ↔ Unity.** The player was built and both clients were connected
   concurrently, but object-follows-object between them was not confirmed.
 - **Unity 2022.3, Android and the headset.** The pass and the test suites ran on Unity

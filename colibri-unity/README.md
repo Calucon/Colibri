@@ -610,8 +610,9 @@ Two suites, and they need different things:
 
 - **EditMode** (`Assets/Colibri/Tests/Editor/`) is plain NUnit over the framing, the JSON
   conversions, the diagnostics, the outage queue, message dispatch, the `[Sync]` accessors
-  (including the IL2CPP path), the Android build check and the voice server address. No server
-  needed, runs anywhere Unity does.
+  (including the IL2CPP path), the send-rate limit, the connect timeout, the Android build check,
+  the app-name warning, and the voice server address and packet queue. No server needed, runs
+  anywhere Unity does.
 - **PlayMode** (`Assets/Tests/`) is the real thing: a Unity client and a raw v3 peer talking to a
   running `colibri-server`. The script starts one with `docker compose` and stops it again — unless
   something is already listening on the port, which it uses as it stands and leaves running.
@@ -620,6 +621,14 @@ Two suites, and they need different things:
 
 Results land in `TestResults/` as NUnit XML plus the editor log. Without a reachable server the
 end-to-end tests report as *skipped* with the command that fixes it, rather than failing.
+
+The connect-timeout tests that need a port that never answers are skipped on Windows, which
+refuses a connection to a full listen backlog instead of leaving it unanswered:
+`ConnectTimeoutTests.AnAttemptNothingAnswersIsGivenUpAfterTheTimeout` and
+`.CancellingGivesUpTheAttemptAtOnce`, and
+`ProtocolMismatchDetectionTests.AnAttemptNothingAnswersIsGivenUpAfterFiveSecondsAndRetried`. Check
+the timeout there by hand: with an unreachable server address, the client should leave
+*Connecting* after 5 s.
 
 | Variable | Meaning |
 | --- | --- |
@@ -642,7 +651,7 @@ Both suites can also be run from **Window → General → Test Runner** in the e
 ones need *Run In Background* on, which they set for themselves.
 
 Voice chat has no end-to-end coverage — it needs a microphone. Only the choice of the server's
-address is unit-tested.
+address and the queue that hands received packets to the main thread are unit-tested.
 
 ### Documents
 
