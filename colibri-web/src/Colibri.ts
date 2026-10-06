@@ -11,6 +11,8 @@ import { colibriCreated, colibriReconnected } from './lifecycle';
 export const PROTOCOL_VERSION = '2';
 
 const COLIBRI_CHANNEL = 'colibri';
+// The app name the server's admin UI connects with. Not the channel above, though spelt the same.
+const ADMIN_APP = 'colibri';
 const PROTOCOL_REJECTED_COMMAND = 'protocol::rejected';
 const PROTOCOL_ACCEPTED_COMMAND = 'protocol::accepted';
 const LATENCY_COMMAND = 'latency';
@@ -226,6 +228,18 @@ export class Colibri {
         // there is already an instance running
         if (Colibri.instance) throw new ColibriError('A Colibri instance already exists!');
         else Colibri.instance = this;
+
+        // The server tells the admin UI from an application by this name alone, so an app called
+        // 'colibri' connects - and is treated - as an admin UI, with nothing else to show for it.
+        // Only warned about: an app already relying on it keeps working as it did.
+        if (app === ADMIN_APP) {
+            console.warn(
+                `Colibri: the app name '${ADMIN_APP}' is reserved for the server's admin UI, and the server ` +
+                    `treats this client as one: it sends it the server's log as it is written and every ` +
+                    `client's connects and disconnects, shares its messages with every open admin UI, and ` +
+                    `skips the protocol version check. Give your app a name of its own.`
+            );
+        }
 
         this.socket = connect(this.uri, {
             query: { app, version: PROTOCOL_VERSION },

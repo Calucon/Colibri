@@ -290,6 +290,33 @@ describe('Colibri constructor', () => {
         expect(received).toEqual([{ channel: 'some-channel', command: 'cmd', payload: { a: 1 } }]);
     });
 
+    // The server takes a client of the app 'colibri' for its own admin UI: it gets the server's log
+    // and every client's connects, and is exempt from the version check. Nothing used to say so.
+    it("warns that the app name 'colibri' is reserved for the admin UI", () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+        new Colibri('colibri', 'localhost', 9011);
+
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+        expect(warnSpy.mock.calls[0][0]).toContain("'colibri' is reserved for the server's admin UI");
+        // Still connects under that name: an app relying on it keeps working.
+        expect(connectMock).toHaveBeenCalledWith('ws://localhost:9011', {
+            query: { app: 'colibri', version: PROTOCOL_VERSION },
+            transports: ['websocket']
+        });
+        warnSpy.mockRestore();
+    });
+
+    // The server compares the name exactly, so only 'colibri' itself is the admin UI.
+    it.each(['my-app', 'Colibri', 'colibri-study'])('does not warn about the app name %j', app => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+        new Colibri(app, 'localhost', 9011);
+
+        expect(warnSpy).not.toHaveBeenCalled();
+        warnSpy.mockRestore();
+    });
+
     it('throws when a second instance is constructed', () => {
         new Colibri('app', 'localhost', 9011);
         expect(() => new Colibri('app2', 'localhost', 9012)).toThrow('A Colibri instance already exists!');
