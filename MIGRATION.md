@@ -105,8 +105,8 @@ Anything you wrote that speaks TCP to Colibri has to be rewritten against
 ### Worth knowing
 
 **If you run the published image without a version tag** (`hcikn/colibri`, which means `latest`),
-the first pull after 2.0.0 is published upgrades your server — and cuts off every 1.x client with
-it. Pin the version you run, and change it when you upgrade the clients.
+the next pull can take a 1.x server to 2.x — and that cuts off every 1.x client. Pin the version
+you run, and change it when you upgrade the clients.
 
 **The Docker image is multi-stage now.** It ships only `dist/` and production dependencies, sets
 `NODE_ENV=production`, starts `node` directly instead of `npm start` (so the server is PID 1 and
