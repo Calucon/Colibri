@@ -21,6 +21,10 @@ https://github.com/hcigroupkonstanz/Colibri.git?path=colibri-unity/Assets/Colibr
 
 That is the whole installation. Unity pulls in the one library Colibri needs by itself.
 
+Package Manager should now list **Colibri 2.0.0** or newer. If it shows a 1.x version, you have the
+old Colibri: it does not compile without extra packages (UniRx and UniTask), and it cannot talk to
+a 2.0 server either. Remove it, and ask your supervisor which URL to use instead.
+
 You need **Unity 2022.3 or newer**, and the server has to be **version 2.0 or newer** — a 2.0
 client and a 1.x server cannot talk to each other at all.
 
