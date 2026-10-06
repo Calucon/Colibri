@@ -604,6 +604,14 @@ namespace HCIKonstanz.Colibri.Synchronization
             // inactive; Awake then latches every current value anyway.
             if (_trackers != null)
                 _trackers[attribute.Index].Latch(self);
+
+            // A local change of the same member that is still waiting to be sent - polled earlier
+            // this frame, or held by the send-rate limit - has just been overwritten here by the
+            // server's value. Sent anyway, it would overwrite that value on the server and every
+            // other client too, while this client goes on showing the server's: the copies would
+            // disagree for good. Dropped, they all agree on the value this client now shows.
+            if (_nextUpdate != null && _nextUpdate.Remove(attribute.Name) && _nextUpdate.Count == 1)
+                _nextUpdate = null;
         }
     }
 }

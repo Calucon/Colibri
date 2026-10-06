@@ -309,6 +309,72 @@ namespace HCIKonstanz.Colibri.Tests
 
 
         /*
+         *  A value from the server meets a local change that has not gone out yet
+         */
+
+        /// <summary>
+        /// This client applies and shows the server's value. Sending its own older change of the
+        /// same member afterwards would put that on the server and every other client instead,
+        /// and the copies would disagree from then on.
+        /// </summary>
+        [Test]
+        public void AValueFromTheServerReplacesAHeldChangeOfTheSameMember()
+        {
+            var model = SpawnModel();
+
+            model.Label = "mine";
+            Assert.That(Frame(model, Start), Is.Not.Null);
+
+            model.Label = "mine, later";
+            model.Count = 2;
+            Assert.That(Frame(model, Start + 0.010), Is.Null, "Precondition: the changes are held");
+
+            model.OnModelUpdate(new JObject { { "id", model.Id }, { "label", "theirs" } });
+            var sent = Frame(model, Start + Interval);
+
+            Assert.That(model.Label, Is.EqualTo("theirs"));
+            Assert.That(sent, Is.Not.Null, "The held change of the other member was lost");
+            Assert.That(sent["count"].Value<int>(), Is.EqualTo(2));
+            Assert.That(sent.ContainsKey("label"), Is.False, $"The older local label went out over the server's: {sent}");
+        }
+
+        [Test]
+        public void AValueFromTheServerForTheOnlyHeldMemberLeavesNothingToSend()
+        {
+            var model = SpawnModel();
+
+            model.Label = "mine";
+            Assert.That(Frame(model, Start), Is.Not.Null);
+
+            model.Label = "mine, later";
+            Assert.That(Frame(model, Start + 0.010), Is.Null, "Precondition: the change is held");
+
+            model.OnModelUpdate(new JObject { { "id", model.Id }, { "label", "theirs" } });
+
+            var sent = new List<JObject>();
+            RunFrames(model, Start + Interval, Start + 1.0, 90, sent);
+            Assert.That(sent, Is.Empty, "An update without anything left in it, or with the older label, was sent");
+        }
+
+        /// <summary>
+        /// Not only the limit's doing: without it, a change polled in Update and a server value
+        /// delivered before LateUpdate's flush - both in one frame - ended the same way.
+        /// </summary>
+        [Test]
+        public void WithoutALimitAValueFromTheServerStillReplacesAChangeFromTheSameFrame()
+        {
+            var model = SpawnModel();
+
+            model.Label = "mine";
+            ((SyncTicker.ITickable)model).PollChanges();
+            model.OnModelUpdate(new JObject { { "id", model.Id }, { "label", "theirs" } });
+
+            Assert.That(model.TakeDueUpdate(Start, interval: 0), Is.Null);
+            Assert.That(model.Label, Is.EqualTo("theirs"));
+        }
+
+
+        /*
          *  Where the limit comes from
          */
 
