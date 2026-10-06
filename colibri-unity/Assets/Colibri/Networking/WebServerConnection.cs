@@ -132,8 +132,9 @@ namespace HCIKonstanz.Colibri.Networking
         /// Disabling or destroying this component raises what is still due there and then, from
         /// <c>OnDisable</c>, so a connection open at that moment ends with its
         /// <see cref="OnDisconnected"/> too - or, when a handler of one of these events is what
-        /// disabled it, right after that event has reached every handler. The one exception is the end of Play mode or of the
-        /// app, which raises neither: the objects the handlers belong to may already be gone.
+        /// disabled it, right after that event has reached every handler. The one exception is
+        /// the end of Play mode or of the app, which raises neither: the objects the handlers
+        /// belong to may already be gone.
         /// </remarks>
         public event Action OnConnected;
 
