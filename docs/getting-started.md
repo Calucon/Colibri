@@ -274,6 +274,12 @@ Sync.sendNumber('Temperature', 21.5);
 Sync.receiveNumber('Temperature', value => console.log(value));
 ```
 
+The server address can be just the host (`'192.168.0.10'`), the host and port
+(`'192.168.0.10:9011'`), or the same `http://<your-server>:9011` you open in a browser to see the
+log. Use `https://…`, as in `'https://colibri.example.org:9011'`, only if your server is reached
+over HTTPS. Without a port in the address it is 9011. Anything after the host and port — a path
+such as `/log` — is refused with a `ColibriError`.
+
 Same app name, same channel names, same rules. Two differences to watch:
 
 - **Vectors and colours are plain arrays in TypeScript**, not objects: `Sync.sendVector3('pos', [1,
