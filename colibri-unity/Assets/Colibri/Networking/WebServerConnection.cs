@@ -66,9 +66,11 @@ namespace HCIKonstanz.Colibri.Networking
         private const int RECONNECT_DELAY_MAX_MS = 10 * 1000;
 
         /// <summary>
-        /// How many messages may wait for the connection while it is down. This is a
-        /// last-write-wins sync client: growing the queue without limit during a long outage would
-        /// only buffer updates that are already superseded, so past this the oldest are dropped.
+        /// How many broadcasts and other messages that are not model state may wait for the
+        /// connection while it is down. This is a last-write-wins sync client: growing the queue
+        /// without limit during a long outage would only buffer updates that are already
+        /// superseded, so past this the oldest are dropped. Model messages are never dropped; see
+        /// "The outbox" below for why, and for what bounds them instead.
         /// </summary>
         private const int MAX_QUEUED_MESSAGES = 256;
 
@@ -105,7 +107,7 @@ namespace HCIKonstanz.Colibri.Networking
         // disabled and would leave a second play session talking to a dead socket.
         //
         // volatile: written by the connection loop off the main thread, read by Update()'s
-        // heartbeat watchdog and by the send path.
+        // heartbeat watchdog and by OnDisable. The send path uses _outboxSocket instead.
         private volatile Socket _socket;
         private CancellationTokenSource _lifetime;
         private string _hostname = "";
@@ -116,7 +118,7 @@ namespace HCIKonstanz.Colibri.Networking
         private readonly SemaphoreSlim _sendLock = new SemaphoreSlim(1, 1);
 
         // Every outgoing message, in the order it was sent, until it has been written to a socket.
-        // See "Sending" below. Everything from here to _hasWarnedAboutRefusal is under _outboxLock:
+        // See "The outbox" below. Everything from here to _hasWarnedAboutRefusal is under _outboxLock:
         // senders on any thread, the drainer on the thread pool and the connection loop all touch it.
         private readonly LinkedList<Outgoing> _outbox = new LinkedList<Outgoing>();
         private readonly object _outboxLock = new object();
@@ -248,7 +250,7 @@ namespace HCIKonstanz.Colibri.Networking
         // session in Connecting forever, now that Connected waits for the server to speak.
         private volatile bool _isWatchdogArmed;
 
-        // The setter is a read-modify-write over four fields, and the connection loop and
+        // The setter is a read-modify-write over several fields, and the connection loop and
         // Update()'s heartbeat watchdog can both reach it at the same time. Interleaved, the two
         // can lose a transition - the watchdog's Disconnected landing between the loop's compare
         // and its assignment leaves the gate open on a socket that is already closed.
@@ -378,13 +380,13 @@ namespace HCIKonstanz.Colibri.Networking
             if (_fireOnConnected)
             {
                 _fireOnConnected = false;
-                OnConnected?.Invoke();
+                Raise(OnConnected, nameof(OnConnected));
             }
 
             if (_fireOnDisconnected)
             {
                 _fireOnDisconnected = false;
-                OnDisconnected?.Invoke();
+                Raise(OnDisconnected, nameof(OnDisconnected));
             }
 
             DeliverReceivedMessages();
@@ -410,6 +412,29 @@ namespace HCIKonstanz.Colibri.Networking
 
                 // Faults the receive loop into the reconnect backoff.
                 CloseSocket(_socket);
+            }
+        }
+
+        /// <summary>
+        /// Calls each handler on its own. One that throws would otherwise skip the handlers after
+        /// it - Sync's re-request of the models after a reconnect among them - and the rest of
+        /// this frame's Update: the received messages and the heartbeat watchdog.
+        /// </summary>
+        private static void Raise(Action handlers, string eventName)
+        {
+            if (handlers == null)
+                return;
+
+            foreach (var handler in handlers.GetInvocationList())
+            {
+                try
+                {
+                    ((Action)handler)();
+                }
+                catch (Exception e)
+                {
+                    Debug.LogError($"Colibri: a handler of {eventName} threw an exception. The other handlers were still called.\n{e}");
+                }
             }
         }
 

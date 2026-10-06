@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Net;
 using System.Net.Sockets;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using HCIKonstanz.Colibri.Networking;
@@ -405,6 +406,38 @@ namespace HCIKonstanz.Colibri.E2E
             Assert.That(onConnected, Is.EqualTo(1));
             Assert.That(onDisconnected, Is.EqualTo(1),
                 "OnDisconnected should be raised once for the connection that ended, and not for the attempts that failed after it");
+        }
+
+        /// <summary>
+        /// A handler of OnConnected or OnDisconnected with a bug in it. The exception used to leave
+        /// Update, skipping every handler after it - Sync's re-request of the models after a
+        /// reconnect is one - and the rest of that frame's work.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator AThrowingConnectionEventHandlerDoesNotStopTheOthers()
+        {
+            _scriptedServer = FakeColibriServer.Start(FakeColibriServer.Behaviour.Heartbeat);
+
+            var connected = 0;
+            var disconnected = 0;
+            var connection = ConnectionTo(_scriptedServer.Port);
+            connection.OnConnected += () => throw new System.InvalidOperationException("OnConnected handler bug");
+            connection.OnConnected += () => connected++;
+            connection.OnDisconnected += () => throw new System.InvalidOperationException("OnDisconnected handler bug");
+            connection.OnDisconnected += () => disconnected++;
+
+            LogAssert.Expect(LogType.Error, new Regex("^Colibri: a handler of OnConnected threw an exception"));
+            yield return E2EServer.WaitUntil(() => connected == 1,
+                "A throwing OnConnected handler kept the next one from being called", 10f);
+
+            // The next attempt finds a server that never speaks, so nothing connects again
+            // while the test is looking.
+            _scriptedServer.Mode = FakeColibriServer.Behaviour.Silent;
+            LogAssert.Expect(LogType.Error, new Regex("^Colibri: a handler of OnDisconnected threw an exception"));
+            _scriptedServer.ResetConnections();
+
+            yield return E2EServer.WaitUntil(() => disconnected == 1,
+                "A throwing OnDisconnected handler kept the next one from being called", 10f);
         }
 
         /// <summary>The counterpart: a server that heartbeats is connected, once, and stays so.</summary>
