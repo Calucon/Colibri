@@ -150,8 +150,8 @@ environment variable, described in [`.env.example`](colibri-server/.env.example)
   the operating system gave up on it many minutes later.
 - `APP_CLIENT_WARNING_THRESHOLD` (default 8, `0` for never): a warning when one app has more
   clients than this. Every message goes to each of an app's other clients, so the server's work
-  grows with the square of an app's size; the usual way to get there is several projects on one
-  server that all kept the same app name, such as `test` or the one from an example.
+  grows with the square of an app's size; this usually happens when several projects on one server
+  use the same app name, such as `test` or the one from an example.
 
 Each stretch of dropping or holding back is logged as one warning when it starts, naming the client
 for the rate limit, and one summary with the counts once it is over. The rate limit's default is
@@ -353,11 +353,11 @@ These are the ones to watch: your project builds, and then behaves differently.
 
 **Synced objects send at most 30 updates a second.** In 1.x a `SyncTransform`, like any other
 `SyncBehaviour<T>`, sent an update in every frame in which one of its values changed: 72 to 120 a
-second for each moving object on a headset, more than one server and one Wi-Fi network can sustain
-for dozens of headsets. Each synced object now sends at most *Max Send Rate* updates a second,
-30 by default, projects configured with 1.x included. The first change after a quiet spell goes
-out at once, later changes within the interval are merged, and their latest values go out when it
-is up, so only the values in between are skipped. Switching an object off or on, and destroying
+second for each moving object on a headset, a rate that one server and one Wi-Fi network cannot
+sustain for dozens of headsets. Each synced object now sends at most *Max Send Rate* updates a
+second, 30 by default, projects configured with 1.x included. The first change after a quiet spell
+goes out at once, later changes within the interval are merged, and their latest values go out when
+it is up, so only the values in between are skipped. Switching an object off or on, and destroying
 it, go out at once. Other clients therefore see a moving object take 30 steps a second rather than
 one per frame. *Window → Colibri Configuration → Optional Config → Max Send Rate* sets the limit,
 `SyncSettings.MaxSendRate` changes it from code for the running app, and `0` brings back the 1.x
