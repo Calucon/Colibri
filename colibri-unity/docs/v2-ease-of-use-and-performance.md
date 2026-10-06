@@ -796,9 +796,8 @@ alongside the Editor, so the two-Unity-clients configuration itself is covered t
 not cover is the visual half; see the subsection after the ten.
 
 Ten of the problems the run turned up were fixed; they are listed in
-[`CHANGELOG.md`](../CHANGELOG.md), and the full record of the pass is in
-`colibri-unity-v2-verification-findings.md` at the repository root. Two more were diagnoses rather
-than defects, and both are worth knowing before teaching with this:
+[`CHANGELOG.md`](../CHANGELOG.md) under *End-to-end verification, and what it fixed*. Two more were
+diagnoses rather than defects, and both are worth knowing before teaching with this:
 
 - Unity 6's *Insecure HTTP Option* defaults to *Not allowed*, and the `Store` round trip over
   `http://localhost:9011` worked anyway, because Unity exempts loopback. It only bites when the
@@ -821,12 +820,12 @@ than defects, and both are worth knowing before teaching with this:
    with no conflict. What was *not* tested is the wording of the item: the project is Unity
    6000.5.7f1 rather than 2022.3, and Colibri was added as a local `file:` reference rather than
    through the git URL the README hands out, so the URL itself is still unexercised.
-2. **Not covered, and it wants rephrasing rather than running.** The whole pass happened inside
-   `ColibriTest`; the `colibri-unity` project was never opened. After the samples moved to `Samples~`
-   (see the change log) that project can no longer open the sample scenes in place anyway, which is
-   most of what opening it was for — `ColibriTest` is where they are opened now. What the item was
-   really asking, namely that the package compiles with R3 and UniTask out of the manifest, is
-   covered by item 1.
+2. **Covered, though not by this pass.** The pass itself happened inside `ColibriTest`, and after
+   the samples moved to `Samples~` (see the change log) the `colibri-unity` project can no longer
+   open the sample scenes in place — `ColibriTest` is where they are opened now. But
+   `run-tests.mjs` opens the `colibri-unity` project itself, pinned to Unity 6000.5.7f1, and runs
+   both test suites there, so the project is opened and compiled on every test run. That the
+   package compiles with R3 and UniTask out of the manifest is covered by item 1 as well.
 3. **Done. 52 passed, 0 failed.** `FrameCodecTests`, `FrameReaderTests`, `ProtocolVectorTests` and
    `ChannelListenerRegistryTests`, run through `TestRunnerApi` against the package's
    `HCIKonstanz.Colibri.Tests` assembly. `colibri-server`'s own suite was green at the same time —
@@ -1019,17 +1018,17 @@ up as a second copy.
 
 ### Still not covered
 
-All ten of the original criteria have now been addressed. Nine came back as results; the tenth, item
-2, is a question about the criterion rather than a run still owed — opening the `colibri-unity`
-project can no longer mean what it meant before the samples moved to `Samples~`, and what it was
-really asking is covered by item 1. Beyond the ten, this pass did not touch:
+All ten of the original criteria have now been addressed. Beyond the ten, this pass did not
+touch:
 
 - **Voice chat.** It needs a microphone, so neither the port-0 bind nor the `CancellationToken`
-  shutdown that replaced `Thread.Abort` has been exercised. It is the one sample with no coverage at
-  all.
+  shutdown that replaced `Thread.Abort` has been exercised. Only the choice of the server's IPv4
+  address has a unit test (`VoiceServerAddressTests`); the sample itself has no coverage at all.
 - **The visual half of Unity ↔ Unity.** The player was built and both clients were connected
   concurrently, but object-follows-object between them was not confirmed.
-- **The `colibri-unity` dev project itself.** Only `ColibriTest` was opened — see item 2.
+- **Unity 2022.3, Android and the headset.** The pass and the test suites ran on Unity
+  6000.5.7f1, in the Editor and in a development Windows player. No run in a 2022.3 Editor, of an
+  Android build, or on a Meta Quest is recorded here.
 
 ---
 
