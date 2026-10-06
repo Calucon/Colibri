@@ -11,6 +11,18 @@ type LogLevel = 'error' | 'warn' | 'info' | 'debug';
 const MAX_EARLY_LINES = 100;
 
 export class RemoteLogger {
+    // The instance whose patches are on the console. Every later instance shares it rather than
+    // patching again: a second set of patches wrapped the first, so every line was forwarded once
+    // per RemoteLogger - and React's StrictMode, a hot reload or a component's constructor creates
+    // one more without anyone meaning to. Static rather than per instance so that there is one for
+    // the whole page, as there is one console.
+    private static patched: RemoteLogger | null = null;
+
+    // The RemoteLogger that forwards for this one: itself, or the one that patched the console.
+    private readonly forwarder: RemoteLogger;
+    // Whether the console was already patched when another RemoteLogger was created; said once.
+    private hasWarnedOfAnotherInstance = false;
+
     private readonly consoleDebug = console.debug;
     private readonly consoleLog = console.log;
     private readonly consoleInfo = console.info;
@@ -34,7 +46,31 @@ export class RemoteLogger {
         return new RemoteLogger(enabled);
     }
 
+    /**
+     * Forwards everything logged through `console` to the server's log. Create one, at startup.
+     *
+     * A second one does not patch the console again: it warns once, and from then on controls the
+     * first - its `enabled`, `enable()` and `disable()` switch the one forwarding there is.
+     * @param enabled whether to forward from the start
+     */
     public constructor(private enabled: boolean = true) {
+        const patched = RemoteLogger.patched;
+        if (patched) {
+            this.forwarder = patched;
+            patched.enabled = enabled;
+            if (!patched.hasWarnedOfAnotherInstance) {
+                patched.hasWarnedOfAnotherInstance = true;
+                console.warn(
+                    'RemoteLogger: the console is already forwarded by an earlier new RemoteLogger(), so this ' +
+                        'one controls that instead of forwarding every line a second time. Create one, at startup.'
+                );
+            }
+            return;
+        }
+
+        RemoteLogger.patched = this;
+        this.forwarder = this;
+
         // intercept calls from console
 
         console.debug = (...args: unknown[]) => {
@@ -118,11 +154,11 @@ export class RemoteLogger {
     }
 
     public enable() {
-        this.enabled = true;
+        this.forwarder.enabled = true;
     }
 
     public disable() {
-        this.enabled = false;
+        this.forwarder.enabled = false;
     }
 }
 

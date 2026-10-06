@@ -53,6 +53,8 @@ afterEach(() => {
     console.warn = originalConsole.warn;
     console.error = originalConsole.error;
     (Colibri as unknown as { instance: Colibri | null }).instance = null;
+    // The console was just restored, so the next RemoteLogger has to patch it afresh.
+    (RemoteLogger as unknown as { patched: RemoteLogger | null }).patched = null;
 });
 
 /** Every line that went out on the `log` channel, as [level, message]. */
@@ -101,6 +103,91 @@ describe('RemoteLogger enable/disable', () => {
         logger.enable();
         console.log('visible');
         expect(forwarded()).toEqual([['info', 'visible']]);
+    });
+});
+
+// A second RemoteLogger - React's StrictMode, a hot reload, two modules each setting one up -
+// used to patch the console over the first one's patches, so every line went out twice.
+describe('RemoteLogger created more than once', () => {
+    beforeEach(() => {
+        createColibri();
+    });
+
+    // The warning about the second one is forwarded like any other line; these tests are about
+    // what comes after it.
+    const forgetForwarded = () => {
+        emit.mockClear();
+    };
+
+    it('forwards each line once, however many there are', () => {
+        const original = console.log;
+        new RemoteLogger();
+        new RemoteLogger();
+        new RemoteLogger();
+        forgetForwarded();
+
+        console.log('once');
+
+        expect(forwarded()).toEqual([['info', 'once']]);
+        expect(original).toHaveBeenCalledTimes(1);
+    });
+
+    it('warns once, on the second, and not on any after it', () => {
+        const originalWarn = console.warn;
+        new RemoteLogger();
+        expect(originalWarn).not.toHaveBeenCalled();
+
+        new RemoteLogger();
+        new RemoteLogger();
+
+        expect(originalWarn).toHaveBeenCalledTimes(1);
+        expect(originalWarn).toHaveBeenCalledWith(expect.stringContaining('already forwarded'));
+        // And it reaches the server's log, where whoever reads it is looking.
+        expect(forwarded()).toEqual([['warn', expect.stringContaining('already forwarded')]]);
+    });
+
+    it('leaves the console as the first one patched it', () => {
+        new RemoteLogger();
+        const patchedLog = console.log;
+
+        new RemoteLogger();
+
+        expect(console.log).toBe(patchedLog);
+    });
+
+    it('switches the one forwarding there is from any of them', () => {
+        const first = new RemoteLogger();
+        const second = new RemoteLogger();
+        forgetForwarded();
+
+        second.disable();
+        console.log('hidden');
+        expect(forwarded()).toEqual([]);
+
+        second.enable();
+        first.disable();
+        console.log('also hidden');
+        expect(forwarded()).toEqual([]);
+
+        first.enable();
+        console.log('visible');
+        expect(forwarded()).toEqual([['info', 'visible']]);
+    });
+
+    // A component that disables its logger on unmount and creates one on mount - which StrictMode
+    // does twice - must end up forwarding, as the last constructor asked.
+    it('takes the enabled flag of the latest one created', () => {
+        const first = new RemoteLogger();
+        first.disable();
+
+        new RemoteLogger();
+        forgetForwarded();
+        console.log('forwarded again');
+        expect(forwarded()).toEqual([['info', 'forwarded again']]);
+
+        new RemoteLogger(false);
+        console.log('hidden');
+        expect(forwarded()).toEqual([['info', 'forwarded again']]);
     });
 });
 
