@@ -410,9 +410,10 @@ an hour they do not spend on their prototype, so:
   implementations; the round-trip tests alone would pass just as happily with both C# sides wrong in
   the same direction.
 - `ChannelListenerRegistryTests` covers the type-mismatch diagnostics — including the cases where a
-  message must *not* be reported. `Sync` itself is not directly testable, because registering a
-  listener reaches `WebServerConnection.Instance`, which spawns a GameObject; the registry was split
-  out as plain C# precisely so the interesting part could be.
+  message must *not* be reported. Registering a listener with `Sync` reaches
+  `WebServerConnection.Instance`, which spawns a GameObject, so the registry was split out as plain
+  C# to be testable without one. `MessageDispatchTests` drives `Sync`'s own dispatch, accepting the
+  inert connection object that registering creates in edit mode.
 - `ListenerOwnerTests` covers which Unity object a listener is judged to belong to, since that is
   what automatic unregistration hangs on: a method group, a lambda written in a component, a lambda
   nested two closures deep, and the cases that must resolve to *nothing* — a static method, a plain
@@ -422,6 +423,14 @@ an hour they do not spend on their prototype, so:
   forms of a colour, integer tokens where a float is expected, and every malformed shape, each of
   which has to fall back and warn exactly once rather than throw. This is the file the colour bug
   lived in, and it had no tests at all.
+- `MessageDispatchTests` covers malformed payloads of every broadcast type and a listener that
+  throws; `OutboxTests` the outage queue's folding rules and that queued messages arrive in order
+  over a real loopback socket; `RemoteLoggingTests` logging from many threads at once and the
+  1000-line bound; `SyncAccessorTests` the IL2CPP accessor path, run in the Editor;
+  `SyncStrippingTests` that `[Sync]` is a `PreserveAttribute`; `WireNameTests` the wire names under
+  a Turkish culture; `AndroidSettingsCheckTests` the Android build check; and
+  `VoiceServerAddressTests` the choice of the server's IPv4 address. `FrameCodecTests` also covers
+  the colon at either end of a handshake field.
 - New PlayMode assembly `HCIKonstanz.Colibri.E2E` (`Assets/Tests/`, in the development project
   rather than the shipped package). A real Unity client, a real colibri-server and a raw v3 peer as
   the second endpoint — the server excludes the sender from its own broadcasts, so one client can
@@ -444,15 +453,29 @@ an hour they do not spend on their prototype, so:
   mechanism ever changes; a companion asserts the receive loop's thread is not the main one, which
   is the same fact stated the other way round. A third covers traffic entries ageing out of the
   Status window's log.
+- `ReconnectTests` cut the Unity client's connection mid-session through a `TcpProxy`, while the raw
+  peer stays connected, and pin the outage queue end to end: messages arriving in order ahead of
+  newer ones, the bound with its single warning, every object's latest state with its requests and
+  deletes, the models requested again after reconnecting, and `RemoteLogging` delivering each line
+  once. `ProtocolMismatchDetectionTests` walk the client through scripted sessions against a
+  `FakeColibriServer` that hangs up, stays silent, heartbeats or refuses: the growing backoff, the
+  suspected mismatch and what clears it, the watchdog before the first frame, a refusal in the
+  first frame, and the pairing of `OnConnected` and `OnDisconnected`. `SyncTransformTests` cover
+  hiding, showing and deleting, including an object hidden when this client quits; `SyncModelTests`
+  a value from another client followed by a local change; `LifecycleTests` a listener registered
+  after the connection was rebuilt.
 - `node colibri-unity/run-tests.mjs` runs both suites, starting and stopping a server with
   `docker compose` — unless one is already listening, which it uses as it stands. See
   [README.md](README.md#for-maintainers).
 - The cross-implementation protocol vectors are checked automatically: `npm run test:vectors` in
   colibri-server re-encodes each one and fails if `ProtocolVectorTests.cs` no longer expects the
-  same bytes. It runs in the server's CI workflow, which now also triggers on changes to the C#
-  vectors.
+  same bytes. It also fails when `WebServerConnection`'s `CLIENT_VERSION` differs from the server's
+  protocol version, so bumping one side alone cannot go unnoticed. It runs in the server's CI
+  workflow, which also triggers on changes to the C# vectors and to
+  `colibri-unity/Assets/Colibri/Networking/`.
 - Still no GameCI workflow: the Unity suites run locally, since a Unity container in CI needs a
-  licence secret. Voice chat remains uncovered — it needs a microphone.
+  licence secret. Voice chat has no end-to-end coverage — it needs a microphone; only the choice of
+  the server's address is unit-tested.
 
 ## End-to-end verification, and what it fixed
 
