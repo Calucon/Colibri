@@ -71,6 +71,11 @@ this is the server's full detail.
   TCP clients are sent no announcement and need none — the framing changed incompatibly in 2.0.0,
   so an old server is already unmistakable to them.
 
+- **Nothing is sent to a TCP client before its handshake is accepted.** The 100 ms heartbeat
+  went to every connection, so a client the server was about to refuse could get a heartbeat
+  first and count itself connected: colibri-unity reported a connection and then the protocol
+  mismatch. Now a refused client's first frame is the refusal.
+
 - **A TCP client that handshakes again leaves its old app properly.** It is reported as
   disconnected from the old app and connected to the new one, the old app's synchronized models
   are cleared if it was the last client there, and the admin UI no longer lists it twice.
@@ -230,7 +235,7 @@ Checked end to end against colibri-unity 2.0.0, with a decoding proxy in front o
 The C# codec stays pinned to this server's encoder by byte-for-byte vectors in colibri-unity's
 EditMode tests, which `npm run test:vectors` checks in CI.
 
-### Load
+### Load and lost connections
 
 - **An overloaded server no longer queues TCP messages without bound.** The TCP thread passed
   every message to the main thread as fast as clients sent it, so a server taking in more than it
@@ -254,6 +259,13 @@ EditMode tests, which `npm run test:vectors` checks in CI.
   The server now logs a warning naming the app each time it grows past
   `APP_CLIENT_WARNING_THRESHOLD` clients (default 8, `0` turns it off), Unity and web together,
   the admin UI not counted.
+- **A TCP client that has gone silent is disconnected.** A headset that leaves the Wi-Fi or goes
+  to sleep sends no FIN, so its connection stayed open, listed as connected and keeping its app's
+  synchronized models alive, until the operating system gave up on it many minutes later. A TCP
+  client that has sent nothing at all for `TCP_IDLE_TIMEOUT_SECONDS` (default 10, `0` turns it
+  off) is now disconnected like any other, with a warning naming it, and a connection that never
+  handshakes is closed after the same time. Echoing the 100 ms heartbeat keeps a client connected.
+  Every TCP connection also has keepalive switched on.
 
 ### Correctness & robustness
 

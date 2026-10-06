@@ -99,9 +99,11 @@ explaining why, then closes the connection:
 | payload | `{ "reason": string, "serverVersion": string, "clientVersion": string }` |
 
 On TCP the refusal frame is queued ahead of the server's FIN, so it arrives before the close.
-From then on the server treats the client as gone: it gets no more heartbeats, and anything it
-sends is ignored, including frames that arrived behind the refused handshake in the same packet.
-A peer that has not closed its side of the connection 5 s later is disconnected.
+The server sends a TCP client nothing at all before it has accepted its handshake, so for a
+refused client the refusal is the first frame it receives. From then on the server treats the
+client as gone: anything it sends is ignored, including frames that arrived behind the refused
+handshake in the same packet. A peer that has not closed its side of the connection 5 s later is
+disconnected.
 
 The same applies to Socket.IO clients, which announce their version in the handshake query
 (`?app=…&version=…`) and receive the identical `colibri` / `protocol::rejected` event before
@@ -244,6 +246,17 @@ timers.
 Because the server is never silent for long, a client can treat silence as a dead connection:
 colibri-unity drops a session after 2s without any frame - including while it waits for the
 first one - and reconnects.
+
+The server does the same the other way round. It takes a TCP client that has sent nothing at
+all - no heartbeat echo, no message - for `TCP_IDLE_TIMEOUT_SECONDS` (10 s by default, `0` turns
+this off) for gone, e.g. a headset that left the Wi-Fi without closing its connection. It logs a
+warning naming the client, closes the connection and handles it like any other disconnect: the
+other clients of the app see `client::disconnected`, and the app loses its models if that was its
+last client. Echoing every heartbeat is enough to stay connected, as long as the echo comes from a
+thread that keeps running while the application is busy; colibri-unity echoes from its receive
+loop, off Unity's main thread. A connection that has not sent a handshake within the same time is
+closed too. Every connection also has TCP keepalive switched on. Socket.IO clients are not covered
+by this setting: Socket.IO's own ping notices one that has gone, by default within 45 s.
 
 Socket.IO clients are not sent that frame - they get a `colibri`/`latency` event directly, also
 every 100ms, from the same `MeasureLatency` timer.

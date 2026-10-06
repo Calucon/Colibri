@@ -107,6 +107,7 @@ in the environment wins. [`.env.example`](.env.example) lists every one with its
 | `CONSOLE_LOG_BROADCAST_TRAFFIC` | `false` | `true` also prints every `broadcast::` message, whatever the level |
 | `TCP_INBOUND_BACKLOG_LIMIT` | `2000` | messages from Unity clients that may wait for the server's main thread before it holds back `model::update` and drops `broadcast::` messages, so an overloaded server's memory and delay stay bounded; `0`: no limit |
 | `CLIENT_MESSAGE_RATE_LIMIT`, `CLIENT_MESSAGE_RATE_BURST` | `1000`, `2000` | `model::update` and `broadcast::` messages a second that one client, Unity or web, may send, and how many at once after a quieter stretch; beyond that, the same happens to its messages. Catches a runaway send loop. `0` turns the limit off; the burst must be at least 1 |
+| `TCP_IDLE_TIMEOUT_SECONDS` | `10` | seconds a Unity client may send nothing at all, not even its heartbeat replies, before it is disconnected as gone, e.g. a headset that left the Wi-Fi; a connection that has not handshaked by then is closed too. `0`: never |
 | `APP_CLIENT_WARNING_THRESHOLD` | `8` | log a warning when one app has more clients than this, Unity and web together, the admin UI not counted; usually groups that kept the same app name. `0`: never |
 
 `DATA_ROOT` and `WEBSERVER_ROOT` may be absolute paths, e.g. `DATA_ROOT=/var/lib/colibri`. A
@@ -169,6 +170,21 @@ updates a second. The backlog warning means the server as a whole is taking in m
 process; fewer synced objects, a lower sync rate or fewer clients per app reduce the load. The
 rate warning names one client that sends far more than the others, usually because something
 sends every frame without a rate cap.
+
+### Lost connections
+
+The server sends every Unity client a heartbeat ten times a second, and the client echoes it. A
+Unity client that has sent nothing at all for `TCP_IDLE_TIMEOUT_SECONDS` (10 s) is disconnected
+as if it had closed the connection, with a warning naming it: the other clients of its app see it
+leave, and if it was the app's last client, the app's synchronized models are cleared. This is how
+a headset that left the Wi-Fi or went to sleep without closing its connection is noticed, which
+would otherwise take the operating system many minutes.
+
+colibri-unity echoes the heartbeats off Unity's main thread, so a long scene load does not trip
+the timeout. A debugger stopped at a breakpoint usually pauses every thread of the app, though,
+and then it does: when you debug with long breakpoints against a server of your own, raise
+`TCP_IDLE_TIMEOUT_SECONDS` or set it to `0`. Web clients are not affected; Socket.IO's own ping
+notices a web client that has gone, within about 45 s.
 
 ## Protocol
 
