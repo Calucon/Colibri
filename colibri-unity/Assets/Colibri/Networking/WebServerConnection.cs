@@ -564,7 +564,10 @@ namespace HCIKonstanz.Colibri.Networking
                 var address = _serverAddress;
                 var app = _appName;
 
-                if (string.IsNullOrEmpty(address) || string.IsNullOrEmpty(app))
+                // Whitespace counts as nothing, as in ColibriConfig.IsConfigured: an App Name of
+                // spaces used to connect, into an app of its own that no other client is in,
+                // while the setup and status windows said the project was not configured.
+                if (string.IsNullOrWhiteSpace(address) || string.IsNullOrWhiteSpace(app))
                 {
                     // Nothing configured (yet) - poll rather than give up, so setting the app
                     // name at runtime still connects. Said once, not twice a second.
