@@ -510,7 +510,9 @@ window.)
 The plain awaiter never throws, so `catch (UnityWebRequestException)` — a UniTask type — is gone,
 replaced by an explicit result check. This is strictly better for a beginner: instead of an
 exception message, they get the operation, the object name, the URL, the transport error, the HTTP
-status, and a pointer at the configuration window.
+status, and a pointer at the configuration window. That covers failed requests only: the
+Newtonsoft calls around them are not caught, so a value that cannot be converted still throws
+(§6).
 
 **`RemoteLogging`** — `Subject<int>` + `.Where(!_isSending)` + `.ThrottleLast(1s)` became a queue
 filled from Unity's threaded log callback (which fires on arbitrary threads) and drained by a
@@ -779,7 +781,7 @@ Two things that follow from the design rather than from the harness:
 | `static Observable<SyncBehaviour<T>> ModelDestroyed()` | `static event Action<SyncBehaviour<T>> ModelDestroyed` |
 | A `Sync.Receive` listener outlives its object | Dropped once the object that registered it is destroyed |
 | `ColibriConfig.Load()` may return `null` | Never returns `null` |
-| `Store.*` may throw `UnityWebRequestException` | Never throws; logs and returns `default`/`false` |
+| `Store.*` may throw `UnityWebRequestException` | A failed request no longer throws; it logs and returns `default`/`false`. A value Newtonsoft cannot convert still throws a `JsonException` |
 | `WebServerConnection.Connected` completes when TCP connects | Completes on the server's first frame; cancelled on a protocol refusal |
 | `OnDisconnected` raised for every failed attempt | Raised exactly once per `OnConnected` |
 | `SendCommandAsync` waits on the `Connected` gate | Queued in the outbox; `true` once written, `false` only if it will never be sent |
@@ -823,7 +825,8 @@ the v3 wire protocol.
    whether an app name has been set.
 
 6. **`try { await Store.Get… } catch (UnityWebRequestException)`** can be deleted; check the return
-   value instead (`null` / `false`).
+   value instead (`null` / `false`). Keep a `catch (JsonException)` if the saved value may not fit
+   the type you ask for: `Get` still throws then.
 
 7. **`await connection.Connected` can throw.** It is cancelled when the server refuses this
    client's protocol version and when the component is disabled, so an `await` of it then throws
@@ -831,6 +834,12 @@ the v3 wire protocol.
 
 8. **`OnDisconnected` is no longer raised for failed attempts**, only once for every
    `OnConnected`. Code that counted failed attempts with it should watch `Status` instead.
+
+9. **Check the classes you save with `Store`.** It converts with Newtonsoft now, not `JsonUtility`.
+   A `Vector3`, `Quaternion` or `Color` field makes `Put` throw a `JsonSerializationException`;
+   keep such values as `float` fields or arrays, or save a `JObject` built with `ToJson()`. A
+   private `[SerializeField]` field is neither saved nor loaded any more; make it public or add
+   `[JsonProperty]`. Values 1.x saved still load.
 
 ---
 
