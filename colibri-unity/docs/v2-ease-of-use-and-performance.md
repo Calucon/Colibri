@@ -641,8 +641,9 @@ not. It counts the lines it drops, and the next send starts with one line saying
 missing, handed straight to the connection — through `Debug.Log` it would come back into the
 buffer. After a protocol refusal it discards the lines and the count. While connected it hands
 each line to `SendCommand` exactly once and never retries: the connection's outbox keeps a line
-across an outage, and the old in-flight gate and retry re-arm were what had sent some lines twice. `UniTask.Yield`'s allocation-free await does not apply
-anywhere here, because §2 removed the await rather than swapping it for `Task.Yield`.
+across an outage, and the old in-flight gate and retry re-arm were what had sent some lines twice.
+`UniTask.Yield`'s allocation-free await does not apply anywhere here, because §2 removed the await
+rather than swapping it for `Task.Yield`.
 
 ---
 
