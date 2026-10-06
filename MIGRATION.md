@@ -456,7 +456,10 @@ store as well.
    socket stays up and everything still reports itself connected. This is not new in 2.0, but it is
    the single most common way to lose an afternoon.
 4. **Open *Window → Colibri Status*** while connected. It shows the app name, and a typo there
-   produces a perfectly healthy connection on which no other client is ever seen.
+   produces a perfectly healthy connection on which no other client is ever seen. The opposite
+   mistake, a name others use too, puts strangers in your app: *Window → Colibri Configuration*
+   now warns about names such as `test` or `myAppName`, and the server logs a warning when one app
+   has more than 8 clients.
 
 ---
 
