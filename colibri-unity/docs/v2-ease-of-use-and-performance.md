@@ -736,8 +736,8 @@ Two things that follow from the design rather than from the harness:
   p99** at 20 Hz with nothing lost — the floor everything else is read against.
 - **Inbound model dispatch is O(N) per message**, so the object-count slider is walking into an
   O(N²) frame cost. Every `SyncBehaviour<T>` registers its own listener on one channel per *type*
-  (`SyncBehaviour.cs:235`) and each instance compares `id == Id` and returns on a miss
-  (`SyncBehaviour.cs:309`) — one inbound update is offered to all N models, and
+  (in `SyncBehaviour.Awake`) and each instance compares `id == Id` and returns on a miss
+  (in `SyncBehaviour.OnModelUpdate`) — one inbound update is offered to all N models, and
   `SyncBehaviourManager` adds a second linear scan. At 100 objects each sending once a frame that
   is 10,000 comparisons a frame; at 500 it is 250,000. Nothing here fixes that. The point of the
   sample is that it can now be measured rather than argued about, and an index from `Id` to model is
