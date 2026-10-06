@@ -364,13 +364,19 @@ sent to a `string` listener was previously dropped without a word. That mismatch
 once per (channel, type), not once per message — and it names both types and the fix. If new
 warnings appear after upgrading, they were always happening; you just could not see them.
 
-**`Sync` listeners now unregister themselves.** `Sync.Receive` records which Unity object the
-listener belongs to — the component for a method group, the component the closure captured for a
-lambda — and drops the listener once that object is destroyed. Your existing `Sync.Unregister` calls
-in `OnDestroy` are still correct and still worth keeping; they are simply no longer the difference
-between working and not. What changes silently is the failure they used to cause: a forgotten
-`Unregister` meant the destroyed component kept being called, `MissingReferenceException` came out
-of `WebServerConnection.Update`, and every message queued behind it that frame was lost. If your
+**`Sync` listeners now unregister themselves with their component.** `Sync.Receive` records which
+Unity object the listener belongs to — the component for a method group, the component the closure
+captured for a lambda — and drops the listener once that object is destroyed. A listener with no
+such object stays registered until `Sync.Unregister`, as in 1.x: a static method, or a lambda that
+uses nothing of its component (only its parameter, `Debug.Log` or a static), because that lambda
+captures nothing. Registering does not check for duplicates, so if `Start` adds one of those, a
+scene reload adds it again and each message then reaches it twice.
+
+Your existing `Sync.Unregister` calls in `OnDestroy` are still correct and still worth keeping; for
+listeners that belong to a component they are simply no longer the difference between working and
+not. What changes silently is the failure they used to cause: a forgotten `Unregister` meant the
+destroyed component kept being called, `MissingReferenceException` came out of
+`WebServerConnection.Update`, and every message queued behind it that frame was lost. If your
 project had unexplained gaps in delivery, this is a strong candidate.
 
 Note the asymmetry with the point above: **this covers `Sync.Receive` only.** `SyncBehaviour<T>`'s
@@ -389,8 +395,9 @@ store as well.
    first initialized, and an unsupported type, a property missing an accessor, or two members whose
    lowercased names collide are now reported at startup rather than on the first message.
 2. **Every static event you subscribe to is unsubscribed** in `OnDisable` or `OnDestroy`. This is
-   `SyncBehaviour<T>.ModelCreated` and `ModelDestroyed`; `Sync.Receive` listeners look after
-   themselves now.
+   `SyncBehaviour<T>.ModelCreated` and `ModelDestroyed`. `Sync.Receive` listeners mostly look after
+   themselves now; a static method or a lambda that uses nothing of its component still needs its
+   `Sync.Unregister` (see [above](#behaviour-changes-that-will-not-fail-to-compile)).
 3. **Turn on *Run In Background*** (Project Settings → Player). With it off, an unfocused Editor
    stops running the player loop, so the client silently stops sending and receiving — while the
    socket stays up and everything still reports itself connected. This is not new in 2.0, but it is
