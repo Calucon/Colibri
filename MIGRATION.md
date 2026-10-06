@@ -395,8 +395,10 @@ next change. Unity and web clients now ask again every time they reconnect, and 
 they have rather than creating duplicates. A model deleted during the outage is not removed, and the
 server still forgets an app's models once its last client disconnects. While a Unity client is
 disconnected, what it sends waits in one queue and goes out in order when the connection is back;
-past 256 broadcasts and log lines the oldest are dropped, with one warning per outage, while model
-updates are never dropped.
+past 256 broadcasts and log lines the oldest are dropped, with one warning per outage, while the
+model updates for one object are merged into one instead. Behind that, the whole queue is capped
+at 10,000 messages, connected or not: past it the oldest broadcasts and log lines go first, then
+the oldest model messages, with a warning.
 
 **Voice chat binds to an ephemeral port.** The receive socket used to bind port 9014, which capped a
 machine at one Unity client. The server replies to the datagram's source port, so the fixed port
