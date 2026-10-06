@@ -117,6 +117,9 @@ namespace HCIKonstanz.Colibri.Networking
         // framing for everything that followed.
         private readonly SemaphoreSlim _sendLock = new SemaphoreSlim(1, 1);
 
+        /// <remarks>Internal for the EditMode tests, which hold it to stand in for a slow write.</remarks>
+        internal SemaphoreSlim SendLock => _sendLock;
+
         // Every outgoing message, in the order it was sent, until it has been written to a socket.
         // See "The outbox" below. Everything from here to _hasWarnedAboutRefusal is under _outboxLock:
         // senders on any thread, the drainer on the thread pool and the connection loop all touch it.
@@ -1010,6 +1013,11 @@ namespace HCIKonstanz.Colibri.Networking
          *  for the same object during an outage is folded into one, newer fields winning, which
          *  is exactly what a last-write-wins server would have ended up with. That keeps model
          *  state bounded by the number of objects rather than by how long the outage lasts.
+         *
+         *  The folded update moves to the back of the queue, so a fold must never carry an update
+         *  past something else about the same object: a newer update, a delete, or a request the
+         *  server would answer without it. Such a message ends the fold for that object, and the
+         *  next update starts a new one behind it; reconnecting ends every fold.
          */
 
         private const string MODEL_REQUEST_COMMAND = "model::request";
@@ -1027,19 +1035,22 @@ namespace HCIKonstanz.Colibri.Networking
             public bool CanDrop;
 
             // Set for a model::update queued during an outage, which later updates for the same
-            // object are folded into (see _queuedModelUpdates). The payload is a private copy.
+            // object in that outage may be folded into (see _queuedModelUpdates). The payload is a
+            // private copy.
             public JObject ModelUpdate;
             public (string Channel, string Id) ModelKey;
         }
 
         // Under _outboxLock: how many droppable messages the outbox holds, and the model::update
-        // that is queued for each object during the current outage.
+        // queued for each object during the current outage that later ones can still be folded
+        // into - one that nothing else about the object has been queued behind.
         private int _droppableCount;
         private readonly Dictionary<(string Channel, string Id), LinkedListNode<Outgoing>> _queuedModelUpdates
             = new Dictionary<(string Channel, string Id), LinkedListNode<Outgoing>>();
 
         /// <summary>Lets the outbox drain into this session. Called once it is Connected.</summary>
-        private void OpenOutbox(Socket socket, CancellationToken token)
+        /// <remarks>Internal for the EditMode tests, which open and close it around sessions they fake.</remarks>
+        internal void OpenOutbox(Socket socket, CancellationToken token)
         {
             bool startDraining;
             lock (_outboxLock)
@@ -1047,6 +1058,13 @@ namespace HCIKonstanz.Colibri.Networking
                 _outboxSocket = socket;
                 _outboxToken = token;
                 _hasWarnedAboutDrops = false;
+
+                // Updates are only folded within one outage. From here on, those folded during the
+                // outage that just ended are ordinary queued messages: what is sent while connected
+                // lines up behind them without being looked at. If one is still queued when the
+                // connection drops again - a slow link - folding the next outage's update for that
+                // object into it would move it past those, a newer update to the object among them.
+                _queuedModelUpdates.Clear();
 
                 startDraining = !_isDraining && _outbox.Count > 0;
                 if (startDraining)
@@ -1058,7 +1076,8 @@ namespace HCIKonstanz.Colibri.Networking
         }
 
         /// <summary>Makes every send from now on wait in the outbox for the next connection.</summary>
-        private void CloseOutbox()
+        /// <remarks>Internal for the EditMode tests.</remarks>
+        internal void CloseOutbox()
         {
             lock (_outboxLock)
             {
@@ -1229,9 +1248,42 @@ namespace HCIKonstanz.Colibri.Networking
             }
 
             var canDrop = IsDroppable(command);
+            if (!canDrop)
+                StopFolding(channel, payload);
+
             _outbox.AddLast(new Outgoing { Frame = frame, Sent = sent, CanDrop = canDrop });
             if (canDrop)
                 _droppableCount++;
+        }
+
+        // Under _outboxLock, for a model command that is not folded: an update someone awaits, a
+        // request or a delete. A folded update goes to the back of the queue, so the update queued
+        // for an object may only absorb later ones while nothing else about that object is queued
+        // behind it. Otherwise its older values would overtake a newer update, arrive after a
+        // delete and bring the object back, or miss a request the server then answers without them.
+        private void StopFolding(string channel, JToken payload)
+        {
+            if (TryGetModelId(payload, out _, out var id))
+            {
+                _queuedModelUpdates.Remove((channel, id));
+                return;
+            }
+
+            // No id: a request for the whole channel, which is about every object on it. (A
+            // malformed update or delete ends up here too; ending more folds than needed only
+            // costs queue space.)
+            List<(string Channel, string Id)> onChannel = null;
+            foreach (var key in _queuedModelUpdates.Keys)
+            {
+                if (key.Channel == channel)
+                    (onChannel ??= new List<(string Channel, string Id)>()).Add(key);
+            }
+
+            if (onChannel != null)
+            {
+                foreach (var key in onChannel)
+                    _queuedModelUpdates.Remove(key);
+            }
         }
 
         private static bool IsDroppable(string command)
@@ -1304,7 +1356,8 @@ namespace HCIKonstanz.Colibri.Networking
                 lock (_outboxLock)
                 {
                     // Gone already if, while it was being written, the session ended and the
-                    // outage bound dropped it or a newer update for the same object absorbed it.
+                    // outage bound dropped it. (A fold never absorbs it: only updates queued since
+                    // the outbox last closed are folded into, and this one was queued before that.)
                     if (node.List == _outbox)
                         RemoveFromOutbox(node);
                 }
