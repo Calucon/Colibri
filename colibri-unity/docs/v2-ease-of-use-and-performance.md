@@ -360,9 +360,10 @@ would want an explicit dirty flag instead of a poll, and that is a different des
 ### What did *not* change
 
 **The network path never touched either library.** `WebServerConnection` is raw `Socket`, `Task`,
-`SemaphoreSlim`, `LockFreeQueue` and `FrameCodec`: receive → `LockFreeQueue` → drained on the main
-thread in `Update`; send → `SemaphoreSlim` → `Socket.SendAsync`. Not one R3 or UniTask call in the
-whole file. Latency and throughput are therefore untouched by everything above — this work moved
+`SemaphoreSlim`, a lock-free queue and `FrameCodec`: receive → queue → drained on the main thread
+in `Update`; send → `SemaphoreSlim` → `Socket.SendAsync`. Not one R3 or UniTask call in the whole
+file. (The receive queue is a `ConcurrentQueue` today, and sends go through the outbox described
+at the end of this section.) Latency and throughput are therefore untouched by everything above — this work moved
 per-frame CPU and allocation, not wire time.
 
 Which is not to say the network path was fine. It was not, and the next section is about that.
@@ -391,12 +392,13 @@ created — a client that looks like it is on a bad network while the network is
 with `NoDelay` set on both ends.
 
 The fix is `.ConfigureAwait(false)` on every await from `RunConnectionLoop` down: `RunSession`,
-`ReceiveLoop`, `SendFrame`, `TrySendFrame`, `FlushQueue`, `Delay`, `SendCommandAsync`. Nothing about
-the design changed — this is the threading the file was already written for. The comment on
-`_msgQueue` says *"written from the send path, drained from the connect path — both off the main
-thread"*, and the `volatile` fields, the `Interlocked` stamp, the `LockFreeQueue` and the
-`SemaphoreSlim` are all there for concurrency the missing `ConfigureAwait` had been quietly
-preventing. The mechanism existed; only its precondition was absent.
+`ReceiveLoop`, `SendFrame`, `Delay`, and the send path — at the time `TrySendFrame`, `FlushQueue`
+and `SendCommandAsync`, today the outbox's `DrainOutbox`. Nothing about the design changed — this
+is the threading the file was already written for. The comment on `_msgQueue` said *"written from
+the send path, drained from the connect path — both off the main thread"*, and the `volatile`
+fields, the `Interlocked` stamp, the `LockFreeQueue` and the `SemaphoreSlim` were all there for
+concurrency the missing `ConfigureAwait` had been quietly preventing. The mechanism existed; only
+its precondition was absent.
 
 Because that precondition is now met, the remaining shared state had to be audited rather than
 assumed:
@@ -404,8 +406,8 @@ assumed:
 | State | Before | Now |
 |---|---|---|
 | `_lastHeartbeatTime` | `Interlocked` | unchanged |
-| `_queuedCommands` | `LockFreeQueue` | unchanged |
-| `_msgQueue` | `lock (_msgQueueLock)` | unchanged |
+| `_queuedCommands` | `LockFreeQueue` | `ConcurrentQueue` |
+| `_msgQueue` | `lock (_msgQueueLock)` | replaced by the outbox, under `_outboxLock` |
 | `_sendLock` | `SemaphoreSlim` | unchanged |
 | `_fireOnConnected` / `_fireOnDisconnected` | `volatile` | unchanged |
 | `_socket` | plain field | `volatile` |
@@ -414,12 +416,16 @@ assumed:
 | `_connectAttempts` | plain field | under `_statusLock` |
 | `Status` **setter** | unsynchronized read-modify-write | serialized on `_statusLock` |
 
+`LockFreeQueue` recycles its nodes through a pool that is only safe with a single producer, so it
+is left to `VoiceServerConnection`, whose one receive thread is exactly that; the connection's
+receive queue and `RemoteLogging`'s log buffer use `ConcurrentQueue`.
+
 The `Status` setter is the one that genuinely needed a lock rather than a keyword: it compares,
 assigns, re-arms the connected gate and raises two flags, and the connection loop and `Update`'s
 heartbeat watchdog can now reach it at the same time. Interleaved, the watchdog's `Disconnected`
 landing between the loop's compare and its assignment would leave the gate open on a socket that is
 already closed. The gate is created with `RunContinuationsAsynchronously`, so `TrySetResult` inside
-the lock schedules waiting senders rather than running them there.
+the lock schedules whoever awaits it rather than running them there.
 
 **What did not move: the main-thread handoff user code depends on.** Received messages still go
 receive loop → `_queuedCommands` → drained in `Update()`, so handlers, `SyncBehaviour` fields and
@@ -437,6 +443,33 @@ and then — before yielding, since yielding would flush anything queued on the 
 destroy the evidence — asserts the last heartbeat is under 500 ms old. It fails on the old code and
 describes the reported symptom rather than the implementation, so it stays honest if the mechanism
 changes. The second asserts the receive loop's managed thread id is not the main thread's.
+
+### Connected, and sending while disconnected
+
+Two later changes to the same file are worth knowing alongside the threading above.
+
+**`Connected` means the server has spoken.** A session becomes `Connected` on the first frame the
+server sends, not when the TCP connection opens — anything can accept a connection, a 1.x server
+and a port that is not Colibri included. Only then is the reconnect backoff reset, `OnConnected`
+raised and the queue flushed, and before then the 2 s watchdog in `Update` counts only a decoded
+frame as proof of life, so something that accepts and says nothing is dropped. `OnDisconnected` is
+raised exactly once per `OnConnected`. Both events are raised from `Update`, each handler in its own
+`try`/`catch`, because `Sync`'s re-request of the models after a reconnect is one of those handlers
+and a student's throwing handler must not skip it.
+
+**The outbox.** Sends used to wait on the `Connected` gate: each one issued during an outage parked
+a task, and on reconnect the parked continuations resumed together on the thread pool and raced for
+the socket, so outage messages went out in any order and interleaved with new ones. Every message
+now goes into one FIFO (a `LinkedList` under `_outboxLock`) that a single `DrainOutbox` writes to
+the socket, re-reading the live session for every frame. While connected it is just the way to the
+socket. While not, it is the retry queue, opened again (`OpenOutbox`) before `Status` says
+`Connected`, so anything that reacts to `Connected` lines up behind the outage's messages. A failed
+write leaves its frame at the head for the next session. During an outage, broadcasts and log lines
+are capped at 256, oldest first; model messages are never dropped, and the un-awaited
+`model::update`s for one object are folded into one copied `JObject` — newer members winning, the
+result moving to the back — unless something else about that object (an awaited update, a request
+for it or for its channel, a delete) is queued in between. Reconnecting ends every fold. Nothing in
+the send path awaits the `Connected` gate any more; only user code does.
 
 ---
 
@@ -474,13 +507,15 @@ replaced by an explicit result check. This is strictly better for a beginner: in
 exception message, they get the operation, the object name, the URL, the transport error, the HTTP
 status, and a pointer at the configuration window.
 
-**`RemoteLogging`** — `Subject<int>` + `.Where(!_isSending)` + `.ThrottleLast(1s)` became a
-`volatile bool` set from Unity's threaded log callback (which fires on arbitrary threads) and
-drained by a one-second timer in `Update`. The in-flight gate and the retry re-arm behave exactly as
-before. A send that throws is now caught and reported **once** — logging from inside the log sender
-feeds straight back into this queue, so an unconditional report would spam the console forever.
-`UniTask.Yield`'s allocation-free await does not apply anywhere here, because §2 removed the await
-rather than swapping it for `Task.Yield`.
+**`RemoteLogging`** — `Subject<int>` + `.Where(!_isSending)` + `.ThrottleLast(1s)` became a queue
+filled from Unity's threaded log callback (which fires on arbitrary threads) and drained by a
+one-second timer in `Update`. It has since been simplified further. The queue is a
+`ConcurrentQueue`, since several threads may log at once, with an `Interlocked` count beside it.
+While the connection is not `Connected` it keeps the newest 1000 lines; after a protocol refusal it
+discards them. While connected it hands each line to `SendCommand` exactly once and never retries:
+the connection's outbox keeps a line across an outage, and the old in-flight gate and retry
+re-arm were what had sent some lines twice. `UniTask.Yield`'s allocation-free await does not apply
+anywhere here, because §2 removed the await rather than swapping it for `Task.Yield`.
 
 ---
 
@@ -625,6 +660,10 @@ members whose lowercased names collide are each reported by name with the fix.
 `Window → Colibri Configuration`. It shows:
 
 - connection state, colour-coded; server `host:port`; the app name actually in use; protocol version
+- a protocol refusal in red, with the server's version and reason — not retried, so the usual
+  "check that colibri-server is running" advice would be wrong — and a *suspected* mismatch
+  (`SuspectedProtocolMismatch`, several connections in a row that ended before a single frame) as a
+  yellow warning while the client keeps retrying
 - **time since the last server heartbeat** — deliberately not called latency. The server's heartbeat
   carries the *server's* clock, so the client genuinely cannot derive a round trip from it; real
   latency figures live on the server's admin UI. What it does tell you is whether the server is
@@ -714,6 +753,10 @@ Two things that follow from the design rather than from the harness:
 | `WebServerConnection.ServerAddress` / `.TcpPort` / `.AppName` | Read-only, snapshot of the live config |
 | `WebServerConnection.ClientVersion` | Static; the handshake's protocol version |
 | `WebServerConnection.DeliveryFramesPerSecond` | Smoothed rate `Update` runs at — how fast messages reach user code |
+| `ConnectionStatus.ProtocolMismatch` | Terminal: the server refused this client's protocol version |
+| `WebServerConnection.ServerVersion` / `.ProtocolMismatchReason` | Set only with a refusal |
+| `WebServerConnection.SuspectedProtocolMismatch` | Set after several sessions in a row end before a frame; a guess, retried |
+| `ProtocolMismatchException` | Unwinds a refused session; public so tests and applications can identify it |
 
 ### Changed
 
@@ -724,12 +767,15 @@ Two things that follow from the design rather than from the harness:
 | A `Sync.Receive` listener outlives its object | Dropped once the object that registered it is destroyed |
 | `ColibriConfig.Load()` may return `null` | Never returns `null` |
 | `Store.*` may throw `UnityWebRequestException` | Never throws; logs and returns `default`/`false` |
+| `WebServerConnection.Connected` completes when TCP connects | Completes on the server's first frame; cancelled on a protocol refusal |
+| `OnDisconnected` raised for every failed attempt | Raised exactly once per `OnConnected` |
+| `SendCommandAsync` waits on the `Connected` gate | Queued in the outbox; `true` once written, `false` only if it will never be sent |
 
 ### Unchanged
 
 All 17 `Sync.Receive` / `Sync.Unregister` overloads, every `Sync.Send` overload, `SyncBehaviour`'s
-`[Sync]` attribute and the set of types it supports, `SyncBehaviourManager`, `SyncTransform`, the v3
-wire protocol, and `WebServerConnection.Connected`.
+`[Sync]` attribute and the set of types it supports, `SyncBehaviourManager`, `SyncTransform`, and
+the v3 wire protocol.
 
 ---
 
@@ -946,7 +992,7 @@ diagnoses rather than defects, and both are worth knowing before teaching with t
     which is what the sync-loop rewrite intends. `[RemoteLogger]`, dragged in from
     `Packages/de.uni.kn.colibri/Prefabs/[RemoteLogger].prefab`, put one line per second on the wire
     for 25+ seconds with no storm and no stuck in-flight gate, so the `Subject` + `ThrottleLast` →
-    `volatile bool` + 1 s timer rewrite in §3 behaves. Its payload is **unquoted** —
+    1 s timer rewrite in §3 behaves. Its payload is **unquoted** —
     `payload(23B)="verification log line 1"`, 23 bytes for 23 characters, against the quoted
     `broadcast::string` in item 5 — which is exactly the `log`-channel exception the protocol pass
     documented. What this does not cover is how two Unity clients *look* while syncing: the next
