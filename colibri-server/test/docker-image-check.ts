@@ -437,6 +437,10 @@ const main = async function (): Promise<void> {
                 await runDeployment(image, deployment);
             } catch (err) {
                 check(`${deployment.name} ran to completion`, false, err instanceof Error ? err.message : String(err));
+            } finally {
+                // A deployment that failed early leaves its container running, and with
+                // COLIBRI_DOCKER_PORT set, the next one could not publish the same ports.
+                await docker([ 'rm', '-f', '-v', `${PREFIX}-${deployment.name}` ]);
             }
         }
     } finally {
