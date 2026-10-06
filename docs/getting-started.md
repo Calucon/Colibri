@@ -244,6 +244,13 @@ never asked for.
 | **SyncBehaviour** | `[Sync]` on your own class |
 | **Remote Store** | Saving and loading data on the server |
 | **Voice Chat** | Talking to the other clients |
+| **Network Stress** | Putting Colibri under load and measuring throughput, latency and dropped messages |
+
+Four of them — SendData, SyncTransform, Remote Store and Voice Chat — show their instructions as
+TextMeshPro text, which stays invisible until the *TMP Essential Resources* are in your project.
+Unity usually offers to import them the first time you open such a scene; if it does not, use
+*Window → TextMeshPro → Import TMP Essential Resources*. On Unity 2022.3 that menu comes with the
+*TextMeshPro* package, so install that from the Package Manager first if it is missing.
 
 The `[RemoteLogger]` and `[SyncTransformManager]` prefabs are *not* samples — they are always there,
 in `Packages/Colibri/Prefabs/`.
