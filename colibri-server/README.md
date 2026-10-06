@@ -69,8 +69,10 @@ e.g. `sudo chown -R 1001:1001 ./data` for `--user 1001:1001`. A new named volume
 `--user` and let the container hand the directory to `node` itself.
 
 If the server cannot write to its data directory, it says so at startup, on stderr - with the
-path, the error and the uid it runs as - and in the admin UI's log. It keeps running, but saves
-nothing: `store.json` and voice recordings stay in memory until it stops.
+path, the error, the uid it runs as and what to do about that error: give the directory to that
+uid, drop a read-only (`:ro`) mount, move a file out of the way, or free disk space - and in the
+admin UI's log. It keeps running, but saves nothing: `store.json` and voice recordings stay in
+memory until it stops.
 
 Settings from [Configuration](#configuration) go into an `environment:` section, e.g.
 `CONSOLE_LOG_LEVEL: debug`, or into a `.env` file mounted at `/srv/colibri/.env`. To use other
