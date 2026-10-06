@@ -216,6 +216,9 @@ Anything Json.NET can serialize works, a plain number or string included, up to 
 If the server cannot be reached, the call fails after ten seconds and the console says what went
 wrong, at which URL. It will not hang forever waiting.
 
+Colibri has no passwords: anyone who can reach the server can read, change and delete what is
+stored there. Keep personal data, such as what you record from study participants, out of it.
+
 ---
 
 ## See the console on a device without one
