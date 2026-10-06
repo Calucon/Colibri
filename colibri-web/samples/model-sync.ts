@@ -22,20 +22,24 @@ void (async () => {
     new Colibri('myAppName', await colibriAddress(), await colibriPort());
 
     /**
-     *  This is the registration for the SampleClass.
-     *  It returns an observable (BehaviorSubject) that contains all
-     *  instances of SampleClass and a function to register new instances.
+     *  This is the registration for the SampleClass. It returns an Observable of every
+     *  SampleClass instance - the ones registered here and the ones other clients
+     *  created - and a function to register new instances.
+     *
+     *  `name` is the channel the instances are synced on; every client syncing them,
+     *  Unity included, has to use the same one. Always give it: without it, the channel
+     *  is the class name in lowercase, which a minifying production build changes.
      */
     const [SampleClasses$, registerExampleClass] = RegisterModelSync<SampleClass>({
+        name: 'sampleclass',
         type: SampleClass
     });
 
-    // SampleClasses$ contains all synchronized instances.
-    // Since 'RegisterModelSync' returns a BehaviorSubject,
-    // the method will be executed with the current value.
+    // SampleClasses$ contains all synchronized instances. It hands every new subscriber
+    // the current list at once, so the callback below also runs right away.
     SampleClasses$.subscribe(classes => {
-        // will be called whenever a new instance is created,
-        // an existing one is updated, or one is deleted
+        // will be called whenever an instance is added, an existing one is updated,
+        // or another client deletes one
         // please refer to RxJS documentation for more information: https://rxjs.dev/guide/overview
         console.log(
             'Current SampleClasses:',
@@ -51,7 +55,9 @@ void (async () => {
     const newClass = new SampleClass('use a real id here');
     registerExampleClass(newClass);
 
-    // models can be deleted by calling the delete method
+    // colibri-web has no call that deletes a model for every client. newClass.delete() only
+    // stops this client sending newClass's changes: newClass stays in SampleClasses$,
+    // on the server and on every other client.
     // newClass.delete();
 
     const sendNumber = () => {
