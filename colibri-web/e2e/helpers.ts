@@ -74,8 +74,21 @@ const activeClients: Colibri[] = [];
 
 /** Creates a standalone client against the real server, becoming the current singleton. */
 export async function createClient(app: string): Promise<Colibri> {
+    return connectNew(() => new Colibri(app, HOST, PORT));
+}
+
+/**
+ * Like {@link createClient}, but connecting to `server` exactly as given, with no port argument -
+ * for the address forms a user would paste, which must name this server (and its port) by
+ * themselves.
+ */
+export async function createClientWithAddress(app: string, server: string): Promise<Colibri> {
+    return connectNew(() => new Colibri(app, server));
+}
+
+async function connectNew(construct: () => Colibri): Promise<Colibri> {
     resetSingleton();
-    const client = new Colibri(app, HOST, PORT);
+    const client = construct();
     activeClients.push(client);
     await waitForConnect(client);
     return client;

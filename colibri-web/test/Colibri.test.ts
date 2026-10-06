@@ -166,6 +166,63 @@ describe('Colibri constructor', () => {
         expect(() => new Colibri('app', 'https://', 9011)).toThrow('Server Address missing or empty!');
     });
 
+    // The admin UI's URL is 'http://<server>:9011', and the port in it used to stay part of the
+    // host: 'ws://host:9011:9011', which retried forever without a word.
+    it.each([
+        ['http://example.com:9011/', 9011, 'ws://example.com:9011', 'http://example.com:9011/api/store/app/'],
+        ['ws://example.com:8080', 8080, 'ws://example.com:8080', 'http://example.com:8080/api/store/app/'],
+        ['https://example.com:443', 443, 'wss://example.com:443', 'https://example.com:443/api/store/app/'],
+        ['example.com:9011', 9011, 'ws://example.com:9011', 'http://example.com:9011/api/store/app/'],
+        ['http://[::1]:44011', 44011, 'ws://[::1]:44011', 'http://[::1]:44011/api/store/app/'],
+        ['[::1]', 9011, 'ws://[::1]:9011', 'http://[::1]:9011/api/store/app/']
+    ])('takes the port from the server %j when none is passed', (server, port, uri, rest) => {
+        const c = new Colibri('app', server);
+
+        expect(c.port).toBe(port);
+        expect(c.uri).toBe(uri);
+        expect(c.uriRestApi).toBe(rest);
+        expect(connectMock).toHaveBeenCalledWith(uri, expect.anything());
+    });
+
+    it('accepts the same port in the server address and the argument', () => {
+        expect(new Colibri('app', 'http://example.com:44011', 44011).uri).toBe('ws://example.com:44011');
+    });
+
+    it('rejects a server address whose port disagrees with the one passed', () => {
+        expect(() => new Colibri('app', 'http://example.com:9011', 44011)).toThrow(ColibriError);
+        expect(() => new Colibri('app', 'http://example.com:9011', 44011)).toThrow('give the port once');
+        expect(connectMock).not.toHaveBeenCalled();
+    });
+
+    it('uses 9011 when neither the server address nor the argument has a port', () => {
+        expect(new Colibri('app', 'example.com').port).toBe(9011);
+    });
+
+    it.each(['example.com:0', 'example.com:65536'])('rejects the out-of-range port in the server %j', server => {
+        expect(() => new Colibri('app', server)).toThrow('Port out of allowed range (1 - 65535)');
+    });
+
+    // A path used to land in front of the port: 'wss://example.com/colibri:9011'.
+    it.each([
+        'https://example.com/colibri',
+        'https://example.com/colibri/',
+        'http://example.com:9011/log',
+        'http://example.com:9011/#/log',
+        'example.com?app=x'
+    ])('rejects the server %j, which has a path or query after the host', server => {
+        expect(() => new Colibri('app', server)).toThrow(ColibriError);
+        expect(() => new Colibri('app', server)).toThrow('has a path or query after the host');
+        expect(connectMock).not.toHaveBeenCalled();
+    });
+
+    it.each(['example.com:', 'example.com:abc', 'ws://:9011', 'fe80::1'])(
+        'rejects the server %j, which is not a host and an optional port',
+        server => {
+            expect(() => new Colibri('app', server)).toThrow(ColibriError);
+            expect(connectMock).not.toHaveBeenCalled();
+        }
+    );
+
     it('connects with the app/version query and websocket transport', () => {
         new Colibri('myapp', 'localhost', 9011);
         expect(connectMock).toHaveBeenCalledWith('ws://localhost:9011', {

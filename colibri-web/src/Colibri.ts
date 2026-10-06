@@ -74,12 +74,58 @@ const parseServerAddress = (server: string) => {
 
     // A trailing slash is what copying a URL out of an address bar gives you; left in, it put
     // the port after the slash.
-    const host = (match ? match[2] : address).replace(/\/+$/, '');
-    if (host.length === 0) {
+    const authority = (match ? match[2] : address).replace(/\/+$/, '');
+    if (authority.length === 0) {
         throw new ColibriError('Server Address missing or empty!');
     }
 
-    return { ...schemes, host };
+    // The URLs built from this are the host, the port and nothing else, so a path used to land in
+    // front of the port ('wss://host/colibri:9011') - and the admin UI's own URL ends in '/log'.
+    // Dropping it instead would quietly connect somewhere other than what was asked for.
+    if (/[/?#]/.test(authority)) {
+        throw new ColibriError(
+            `Server address '${server}' has a path or query after the host - pass only the host and, optionally, the port, e.g. 'http://example.com:9011'.`
+        );
+    }
+
+    // Host, then an optional port, as in any URL; an IPv6 host has to be in brackets to tell its
+    // colons from the port's. The port used to be kept as part of the host, so the admin UI's
+    // 'http://host:9011' connected to 'ws://host:9011:9011'.
+    const hostAndPort = /^(\[[^\]]+\]|[^:]+)(?::(\d+))?$/.exec(authority);
+    if (!hostAndPort) {
+        throw new ColibriError(
+            `Server address '${server}' is not a host, or a host and a numeric port - an IPv6 address goes in brackets.`
+        );
+    }
+
+    // `at`, because an optional group that did not match is undefined, which indexing's type hides.
+    const portText = hostAndPort.at(2);
+    return { ...schemes, host: hostAndPort[1], port: portText === undefined ? undefined : Number(portText) };
+};
+
+const DEFAULT_PORT = 9011;
+
+const checkPort = (port: number) => {
+    // Number.isInteger also rejects NaN, which every comparison lets through - and
+    // `Number(process.argv[3])` is exactly how a sample ends up passing one.
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        throw new ColibriError(`Port out of allowed range (1 - 65535): ${port}`);
+    }
+};
+
+// The port may come from the address, from the constructor's argument, or from both if they
+// agree. Two different ports are a mistake, and picking either would hide it.
+const resolvePort = (server: string, fromAddress: number | undefined, given: number | undefined): number => {
+    if (given !== undefined) checkPort(given);
+    if (fromAddress === undefined) return given ?? DEFAULT_PORT;
+
+    checkPort(fromAddress);
+    if (given !== undefined && given !== fromAddress) {
+        throw new ColibriError(
+            `Server address '${server}' has port ${fromAddress}, but port ${given} was passed as well - give the port once.`
+        );
+    }
+    return fromAddress;
 };
 
 export interface Message {
@@ -118,6 +164,8 @@ export class Colibri {
     public readonly protocolMismatch = this.protocolMismatchSubject.asObservable();
     public readonly uri: string;
     public readonly uriRestApi: string;
+    /** The port connected to: the one in the server address, else the one passed, else 9011. */
+    public readonly port: number;
 
     private oldServerTimer: ReturnType<typeof setTimeout> | undefined;
     // Once per instance, not once per connection: a server does not get newer between two
@@ -129,10 +177,22 @@ export class Colibri {
     // Whether any connect has happened yet, so that the next one is known to be a reconnect.
     private hasConnected = false;
 
+    /**
+     * Connects to a Colibri server. Only one instance may exist.
+     * @param app the application name; clients only see each other's messages within one app
+     * @param server the host, optionally after `ws://`, `wss://`, `http://` or `https://` (the
+     *   secure ones mean `wss` for the socket and `https` for the REST API) and optionally with a
+     *   port, as in `'http://example.com:9011'`; nothing after the host and port. Defaults to the
+     *   host that served the page, and is required outside a browser.
+     * @param port the server port, if the address does not have one; 9011 if neither does. When
+     *   both have one, they must agree.
+     * @throws ColibriError for an address or port this client cannot connect to, or when an
+     *   instance already exists
+     */
     public constructor(
         public readonly app: string,
         public readonly server: string = pageHostname(),
-        public readonly port: number = 9011
+        port?: number
     ) {
         if (server.trim().length <= 0) {
             throw new ColibriError(
@@ -142,16 +202,11 @@ export class Colibri {
             );
         }
 
-        // Number.isInteger also rejects NaN, which every comparison below lets through - and
-        // `Number(process.argv[3])` is exactly how a sample ends up passing one.
-        if (!Number.isInteger(port) || port < 1 || port > 65535) {
-            throw new ColibriError(`Port out of allowed range (1 - 65535): ${port}`);
-        }
-
         // Only ws(s):// used to be recognised, so 'https://host' became 'ws://https://host:9011'.
         const address = parseServerAddress(server);
-        this.uri = `${address.socket}://${address.host}:${port}`;
-        this.uriRestApi = `${address.rest}://${address.host}:${port}/api/store/${app}/`;
+        this.port = resolvePort(server, address.port, port);
+        this.uri = `${address.socket}://${address.host}:${this.port}`;
+        this.uriRestApi = `${address.rest}://${address.host}:${this.port}/api/store/${app}/`;
 
         // there is already an instance running
         if (Colibri.instance) throw new ColibriError('A Colibri instance already exists!');
