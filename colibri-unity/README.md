@@ -84,8 +84,8 @@ Upon installation, a configuration window should show up:
 
 ### Advanced Configuration
 
-If your server is running a non-default configuration, the advanced configuration allows you modify server ports.
-Do not modify port numbers unless you know what you are doing!
+If your server is running a non-default configuration, the advanced configuration allows you to modify server ports.
+The ports must match the server's, so change them only if the server does not use the defaults.
 
 The Remote Store talks to the server over REST. With the `SSL/TLS` toggle off those requests go
 out as plain `http`, and Unity blocks cleartext HTTP by default. **Loopback is exempt**, so a
