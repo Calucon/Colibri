@@ -515,6 +515,7 @@ namespace HCIKonstanz.Colibri.Synchronization
             var id = data["id"].Value<string>();
             if (id == Id)
             {
+                var isFirstUpdate = !_hasReceivedFirstUpdate;
                 _hasReceivedFirstUpdate = true;
 
                 foreach (var prop in data)
@@ -524,6 +525,18 @@ namespace HCIKonstanz.Colibri.Synchronization
                 }
 
                 _isReady.TrySetResult(true);
+
+                // A bare { id } is the server's answer to a model::request for a model it holds
+                // nothing of; a SyncBehaviour never sends one as an update. The first such answer
+                // is the usual start of a new object, and what follows it is unchanged: a
+                // manager's TriggerSync sends the full state. A later one answers the request made
+                // again after a reconnect, and means the server has lost this object - it clears
+                // an app's models when its last client leaves, which is what a lone client's Wi-Fi
+                // blip looks like from the server. Nothing used to put the state back, so every
+                // client that joined afterwards was missing the object. The full state carries
+                // members, so a client receiving it applies it and sends nothing in return.
+                if (!isFirstUpdate && data.Count == 1 && !_hasReceivedDestroyCommand)
+                    AddFullState();
             }
         }
 

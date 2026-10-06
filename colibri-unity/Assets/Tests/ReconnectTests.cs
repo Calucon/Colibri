@@ -354,6 +354,83 @@ namespace HCIKonstanz.Colibri.E2E
         }
 
         /// <summary>
+        /// The server clears an app's models when its last client leaves, so a client that was
+        /// alone when its connection dropped comes back to a server that holds nothing of its
+        /// objects, and the request each object makes again is answered with a bare { id }.
+        /// Nothing used to put the state back: a client that joined afterwards never saw the
+        /// object, though it was right there on the client that had created it.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator AModelTheServerForgotWhileThisClientWasAloneIsSentAgainInFull()
+        {
+            const string channel = "e2esyncmodel";
+            var spawned = new List<GameObject>();
+            var lateJoiner = new TcpPeer();
+            var answers = new List<JObject>();
+            E2ESyncModel model = null;
+            System.Action<JObject> recordAnswers = update =>
+            {
+                if (model != null && (string)update["id"] == model.Id)
+                    answers.Add(update);
+            };
+
+            Sync.AddModelUpdateListener(channel, recordAnswers);
+            try
+            {
+                model = Spawn<E2ESyncModel>(spawned, "alone-through-an-outage");
+                yield return E2EServer.Settle(1.5f);
+
+                // The server hears of the label alone; the other members never changed.
+                model.Label = "before the outage";
+                yield return _peer.Expect(channel, "model::update",
+                    frame => Assert.That((string)TcpPeer.Json(frame)["id"], Is.EqualTo(model.Id)));
+
+                // This client alone on the app, so that the server clears its models once it drops.
+                _peer.Dispose();
+                _peer = null;
+                _proxy.HoldNewConnections = true;
+                yield return CutTheConnection();
+                answers.Clear();
+                yield return E2EServer.Settle(0.5f);
+                _proxy.HoldNewConnections = false;
+
+                yield return E2EServer.WaitUntil(() => answers.Count > 0,
+                    "The model's request after reconnecting was never answered", 20f);
+                Assert.That(answers[0].Properties().Select(p => p.Name).ToArray(), Is.EqualTo(new[] { "id" }),
+                    $"Precondition: the server should have forgotten the model, but answered {answers[0]}");
+
+                yield return E2EServer.WaitUntil(
+                    () => SecondSession().Any(f => f.Channel == channel && f.Command == "model::update"),
+                    "The model never sent its state again after the server had lost it");
+
+                yield return lateJoiner.Connect("late-joiner");
+                yield return E2EServer.Settle(0.3f);
+
+                lateJoiner.Send(channel, "model::request", new JObject { { "id", model.Id } });
+                yield return lateJoiner.Expect(channel, "model::update", frame =>
+                {
+                    var payload = (JObject)TcpPeer.Json(frame);
+                    Assert.That((string)payload["id"], Is.EqualTo(model.Id));
+                    Assert.That((string)payload["label"], Is.EqualTo("before the outage"), $"Got {payload}");
+                    Assert.That(payload.ContainsKey("_count") && payload.ContainsKey("where"), Is.True,
+                        $"The server should hold every member again, not only the ones that once changed: {payload}");
+                });
+            }
+            finally
+            {
+                lateJoiner.Dispose();
+                Sync.RemoveModelUpdateListener(channel, recordAnswers);
+
+                // Immediately, while this test's connection is still there: see the test above.
+                foreach (var gameObject in spawned)
+                {
+                    if (gameObject)
+                        Object.DestroyImmediate(gameObject);
+                }
+            }
+        }
+
+        /// <summary>
         /// RemoteLogging across an outage: every line reaches the server exactly once, in order.
         /// It used to retry a line whose send had failed, while the connection had also queued that
         /// same send for retry, so some lines arrived twice. Lines logged during the outage wait in
