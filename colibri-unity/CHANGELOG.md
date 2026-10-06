@@ -1,5 +1,7 @@
 # colibri-unity v2.0.0 — Change Log
 
+**2.0.0 — not released yet.**
+
 Summary of everything that changed in the `1.3.1` → `2.0.0` modernization, closing out the v2
 release across all three packages. `colibri-server` 2.0.0 replaced the v1 TCP framing with a fixed
 binary v3 protocol and its changelog listed the Unity client rewrite as
@@ -10,44 +12,6 @@ rationale, migration steps, and what the Editor verification did and did not cov
 [`docs/v2-ease-of-use-and-performance.md`](docs/v2-ease-of-use-and-performance.md).
 
 ---
-
-## Unreleased
-
-### Added
-
-- `WebServerConnection.SuspectedProtocolMismatch`, and a *Window → Colibri Status* warning to go
-  with it. When several connections in a row are accepted but end before a single frame can be
-  read — the symptom of a server too old to decode this client's framing, and therefore too old to
-  send the refusal that would explain it — the panel now says so instead of advising you to check
-  that colibri-server is running, which is the wrong advice when something is plainly answering on
-  that port. It stays a suspicion: the client keeps retrying, and `Status` /
-  `ProtocolMismatchReason` remain reserved for a refusal actually received from the server.
-
-### Fixed
-
-- The mismatch hint could not fire for a server that accepted the connection and then closed it
-  without sending anything: `ReceiveLoop` returns normally on a clean EOF, and the retry loop
-  treated that as a successful session and reset the counter. Such a session now counts. It is
-  scoped to connections that got as far as sending the handshake, so "connection refused" from a
-  server that is simply not running is still reported as what it is rather than as a version
-  problem.
-
-### Added
-
-- **Protocol version mismatches are reported instead of retried forever.** The server now checks
-  the handshake's version field and refuses anything it does not speak, telling the client why on
-  the `colibri` channel. `WebServerConnection` intercepts that before the message queue — it is
-  Colibri's own plumbing, not an application message — logs both versions, and **stops the
-  reconnect loop**, since a mismatch cannot resolve itself. New `ConnectionStatus.ProtocolMismatch`
-  is the terminal state; `WebServerConnection.ServerVersion` and `.ProtocolMismatchReason` carry
-  the detail, and `Window → Colibri Status` shows it in red rather than the usual (here actively
-  wrong) "check that colibri-server is running" advice.
-- A **framing-mismatch heuristic** for the case the refusal cannot reach: a server on genuinely
-  different framing cannot decode our frames and we cannot decode its, so after three consecutive
-  sessions that fault before a single frame is read, the client says that this usually means a
-  protocol mismatch instead of logging the same decode error forever.
-- `ProtocolMismatchException`, thrown internally to unwind a refused session, and public so
-  a test or an application can identify it.
 
 ## Breaking changes
 
@@ -103,11 +67,40 @@ rationale, migration steps, and what the Editor verification did and did not cov
   removed; nothing sends that to a TCP client any more (`MeasureLatency`'s message-level ping is
   Socket.IO-only).
 - **Handshake** is sent immediately after connect with `version = "2"`, matching colibri-web's
-  `query: { app, version: '2' }`. The server does not validate it — it is client-library metadata
-  shown on the admin UI's Clients page. A device or app name containing the `::` field separator is
+  `query: { app, version: '2' }`. The server checks it and refuses any other version (see below).
+  A device or app name containing the `::` field separator, or starting or ending with `:`, is
   sanitized rather than producing a frame the server drops the connection over.
 - `Assets/Colibri/FlatBuffers/` (10 files) and `Networking/Message.cs` are deleted, mirroring the
   server dropping its own `flatbuffers` dependency.
+
+## Protocol version mismatches
+
+- **A refused version is reported instead of retried forever.** The server checks the handshake's
+  version field and refuses anything it does not speak, telling the client why on the `colibri`
+  channel. `WebServerConnection` intercepts that before the message queue — it is Colibri's own
+  plumbing, not an application message — logs both versions, and **stops the reconnect loop**,
+  since a mismatch cannot resolve itself. New `ConnectionStatus.ProtocolMismatch` is the terminal
+  state; `WebServerConnection.ServerVersion` and `.ProtocolMismatchReason` carry the detail, and
+  `Window → Colibri Status` shows it in red rather than the usual (here actively wrong) "check that
+  colibri-server is running" advice.
+- **The refusal is final for user code too.** `Connected` is cancelled, so `await Connected` throws
+  instead of waiting forever. Everything still queued is dropped, and every later send is dropped
+  as it is made, with a one-time warning, instead of waiting for a connection that will never come.
+  `RemoteLogging` discards its buffered lines. Disabling and re-enabling the component retries.
+- `ProtocolMismatchException`, thrown internally to unwind a refused session, and public so a test
+  or an application can identify it.
+- **A suspected mismatch, for the case the refusal cannot reach.** A server on genuinely different
+  framing — a 1.x server — cannot decode this client's frames, and this client cannot decode its,
+  so no refusal can arrive. After three sessions in a row that get past the handshake and then end
+  before a single frame decodes — however they end: a clean close, a reset, an undecodable frame or
+  the heartbeat watchdog — the client logs that this usually means a protocol mismatch,
+  `WebServerConnection.SuspectedProtocolMismatch` says the same, and `Window → Colibri Status`
+  shows it as a yellow warning instead of advising you to check that colibri-server is running,
+  which is the wrong advice when something is plainly answering on that port. It stays a
+  suspicion: the client keeps retrying, `Status` and `ProtocolMismatchReason` remain reserved for a
+  refusal actually received, and the first frame a later session decodes clears it at once. A
+  session that never got as far as sending the handshake — "connection refused" from a server that
+  is simply not running — does not count, so that is still reported as what it is.
 
 ## Correctness
 
