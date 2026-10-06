@@ -182,7 +182,7 @@ Colibri also reports the common mistakes in the console rather than failing quie
 | Never connects, and nothing answers at all | `Colibri: 192.168.0.10:9012 did not answer within 5 s. Check the server address, and that this device is on the same network as the server.` — a wrong IP, a server on another network or subnet, a Wi-Fi with client isolation, or a firewall dropping the packets: fix the address or the network |
 | Never connects, and the connection is refused | `Colibri: connection to 192.168.0.10 failed (ConnectionRefused), retrying...` — the machine is reachable, but nothing listens on that TCP port: start colibri-server, or check the *TCP server Port* |
 | Two clients don't see each other | The connect log names the app name in use; both clients must show the same one |
-| Objects or messages you did not create show up | Nothing at runtime: someone else uses the same app name. *Window → Colibri Configuration* warns when it is a name many people use, such as `myAppName` or `test` |
+| Objects or messages you did not create show up | Nothing in Unity at runtime: someone else uses the same app name. *Window → Colibri Configuration* warns when it is a name many people use, such as `myAppName` or `test`, and the server's log warns, naming the app, once it has more than 8 clients (by default) |
 | A `[Sync]` field never syncs | Its type is reported at startup if Colibri cannot put it on the wire |
 | Connected, but one client is silent | That client's Editor window is in the background and *Run In Background* is off — see step 5 of the Quickstart |
 | `Store.Get`/`Put` reports a failure | The log names the operation, the object, the URL, the transport error and the HTTP status; requests give up after 10 s rather than hanging |
