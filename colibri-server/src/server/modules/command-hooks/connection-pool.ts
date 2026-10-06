@@ -37,9 +37,9 @@ export abstract class NetworkServer {
 
 export type MessageHandler = (message: NetworkMessage) => void;
 
-// Past this many clients in one app, the pool warns that the app may be shared by accident. A lab
-// group is a handful of devices plus a browser or two; a class whose groups all kept the same App
-// Name (a sample's default, say) ends up as one app of dozens of clients instead.
+// Past this many clients in one app, the pool warns that the app may be shared by accident. A
+// typical session is a handful of devices plus a browser or two; separate projects that all kept
+// the same App Name (a sample's default, say) end up as one app of dozens of clients instead.
 export const DEFAULT_APP_CLIENT_WARNING_THRESHOLD = 8;
 
 // The app the admin UI joins. However many are open, they are not an application's clients.
@@ -331,8 +331,8 @@ export class ConnectionPool extends Service {
     }
 
     // Every message in an app is relayed to each of its other clients, so the server's work grows
-    // with the square of an app's size: 60 clients in one app at only 3 objects x 30 Hz took the
-    // class load test's server to seconds of latency, where the same clients in groups of four
+    // with the square of an app's size: in a load test, 60 clients in one app at only 3 objects x
+    // 30 Hz took the server to seconds of latency, where the same clients split into apps of four
     // were no trouble at all. Nothing else would tell anyone why - every client is connected and
     // nothing is refused - so this is said in the log, counted across both transports.
     private checkAppSize(app: string, size: number): void {
@@ -343,8 +343,8 @@ export class ConnectionPool extends Service {
         this.logWarning(
             `App '${app}' now has ${size} clients, more than ${this.appClientWarningThreshold} (APP_CLIENT_WARNING_THRESHOLD). ` +
                 'Every message is relayed to every other client of the same app, so the server\'s work grows with the square of ' +
-                'an app\'s size. If separate groups are sharing this app by accident - e.g. all kept the same default App Name - ' +
-                'give each group an app name of its own.'
+                'an app\'s size. If separate projects are sharing this app by accident - e.g. all kept the same default App Name - ' +
+                'give each project an app name of its own.'
         );
     }
 }

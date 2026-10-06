@@ -319,7 +319,7 @@ describe('ConnectionPool', () => {
         });
     });
 
-    // Fan-out within an app is O(n^2): a class whose groups all kept one app name overloads the
+    // Fan-out within an app is O(n^2): separate projects that all kept one app name overload the
     // server with every client connected and nothing refused, so nothing else would say why.
     describe('the shared-app warning', () => {
         let logs: LogMessage[];
@@ -377,7 +377,7 @@ describe('ConnectionPool', () => {
             const server = new FakeServer();
             pool(3, server);
 
-            for (let i = 0; i < 12; i++) server.connectClient(makeClient(`c${i}`, `group-${i % 4}`));
+            for (let i = 0; i < 12; i++) server.connectClient(makeClient(`c${i}`, `app-${i % 4}`));
 
             expect(appWarnings()).toEqual([]);
         });
@@ -516,7 +516,7 @@ describe('ConnectionPool', () => {
             expect(unhandled()).toEqual([]);
         });
 
-        // A student who runs the app again after a fix that did not work wants to be told again.
+        // A developer who runs the app again after a fix that did not work wants to be told again.
         it('is warned about again once the app\'s last client has left and it is back', () => {
             const server = new FakeServer();
             new ConnectionPool(server);
