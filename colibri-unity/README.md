@@ -285,6 +285,28 @@ private void MyListener(JToken jtoken) {
 }
 ```
 
+Unity's own types are the exception: Newtonsoft cannot convert a `Vector3`, `Quaternion` or `Color`
+inside your class, so `JToken.FromObject` throws a `JsonSerializationException` (for a `Vector3`:
+`Self referencing loop detected for property 'normalized'`). Keep such values as `float` fields or
+arrays, or build the `JObject` yourself with Colibri's conversions:
+
+```c#
+using HCIKonstanz.Colibri.Synchronization; // ToJson(), ToVector3(), ToQuaternion(), ToColor()
+
+Sync.Send("spawn", new JObject
+{
+    { "Id", 1234 },
+    { "Position", transform.position.ToJson() }
+});
+
+private void OnSpawn(JToken jtoken) {
+    Vector3 position = jtoken["Position"].ToVector3();
+}
+```
+
+Sending a `Vector3`, `Quaternion` or `Color` on its own, and a `[Sync]` member of one of these
+types, is not affected: Colibri converts those itself.
+
 Limitations:
 
 - You have to register the listener *before* sending out data
@@ -322,7 +344,7 @@ Limitations:
 
 ### Remote Store
 
-Colibri offers persistent data storage on the server, so that data can be saved easily between sessions. Anything Newtonsoft JSON can serialize — an object of your own class, a list, or a plain number or string — can be uploaded via a RESTful interface of the `Store` object, up to 5 MiB of JSON per name. Data is kept per *app name*:
+Colibri offers persistent data storage on the server, so that data can be saved easily between sessions. Anything Newtonsoft JSON can serialize — an object of your own class (without Unity types in it, see below), a list, or a plain number or string — can be uploaded via a RESTful interface of the `Store` object, up to 5 MiB of JSON per name. Data is kept per *app name*:
 
 ```c#
 // Create example object
@@ -354,7 +376,9 @@ else
 Limitations:
 
 - Data fetching happens manually (data won’t be automatically updated!)
-- Values are converted with Newtonsoft JSON, which saves the public fields and properties of your class; `[Serializable]` is not needed
+- Values are converted with Newtonsoft JSON, which saves the public fields and properties of your class; `[Serializable]` is not needed, and a private `[SerializeField]` field is not saved
+- A `Vector3`, `Quaternion` or `Color` inside your class cannot be converted (see [Sending Data between Clients](#sending-data-between-clients)): `await Store.Put(…)` throws a `JsonSerializationException` instead of returning `false`. Save a `JObject` built with `ToJson()` instead, and load it with `Store.Get<JObject>`
+- `await Store.Get<T>(…)` throws a Newtonsoft `JsonException` when the saved value does not fit `T`. It returns `default`, and logs why, only when the request itself fails — for a name that was never saved, for example
 
 ### SyncBehaviour
 
