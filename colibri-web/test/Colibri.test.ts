@@ -38,6 +38,9 @@ function makeFakeSocket() {
         // Read when the old-server timer expires: a socket that is already down explains the
         // silence by itself, so the check must not fire on it.
         connected: true,
+        // Whether Socket.IO will retry after a failed connection attempt, which it does unless
+        // told not to.
+        active: true,
         // The Manager, which is what actually owns the retry policy - a protocol rejection
         // has to switch it off there, not on the socket.
         io: { reconnection: vi.fn<(on: boolean) => void>() }
@@ -707,6 +710,87 @@ describe('catching up on models after a reconnect', () => {
         expect(models).toHaveLength(1);
         expect(models[0]).toBe(widget);
         expect(widget.label).toBe('during the outage');
+    });
+});
+
+// Socket.IO retries a connection that fails, for as long as it takes, and a wrong address or a
+// server that is down used to look like nothing more than a slow connection.
+describe('reporting a server that cannot be reached', () => {
+    const fire = (event: string, ...args: unknown[]) => {
+        for (const [e, handler] of fakeSocket.on.mock.calls) {
+            if (e === event) handler(...args);
+        }
+    };
+
+    // What Socket.IO hands over under Node: a TransportError whose own message says little, and
+    // whose description is the underlying error.
+    const transportError = (cause?: string) =>
+        Object.assign(new Error('websocket error'), cause ? { description: new Error(cause) } : {});
+
+    let warnSpy: ReturnType<typeof vi.spyOn>;
+    let debugSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+        warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+        debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => undefined);
+    });
+
+    afterEach(() => {
+        warnSpy.mockRestore();
+        debugSpy.mockRestore();
+    });
+
+    it('warns once per outage, naming the address and the error, however often it retries', () => {
+        new Colibri('app', 'colibri.example.org', 44011);
+
+        for (let i = 0; i < 5; i++) fire('connect_error', transportError('connect ECONNREFUSED 10.0.0.1:44011'));
+
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+        const [message] = warnSpy.mock.calls[0] as [string];
+        expect(message).toContain('ws://colibri.example.org:44011');
+        expect(message).toContain('websocket error: connect ECONNREFUSED 10.0.0.1:44011');
+        expect(message).toContain('Retrying');
+    });
+
+    it('uses the message alone when the error has no underlying cause, as in a browser', () => {
+        new Colibri('app', 'localhost', 9011);
+
+        fire('connect_error', transportError());
+
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+        expect(warnSpy.mock.calls[0][0]).toContain('(websocket error)');
+    });
+
+    it('warns again for the next outage, once connected in between', () => {
+        new Colibri('app', 'localhost', 9011);
+
+        fire('connect_error', transportError('first'));
+        fire('connect');
+        fire('connect_error', transportError('second'));
+        fire('connect_error', transportError('second'));
+
+        expect(warnSpy).toHaveBeenCalledTimes(2);
+        expect(warnSpy.mock.calls[1][0]).toContain('second');
+    });
+
+    it('says nothing when the connection simply comes up', () => {
+        new Colibri('app', 'localhost', 9011);
+
+        fire('connect');
+        fire('connect');
+
+        expect(warnSpy).not.toHaveBeenCalled();
+    });
+
+    it('does not promise a retry that Socket.IO will not make', () => {
+        new Colibri('app', 'localhost', 9011);
+        fakeSocket.active = false;
+
+        fire('connect_error', new Error('refused by the server'));
+
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+        expect(warnSpy.mock.calls[0][0]).toContain('Not retrying');
+        expect(warnSpy.mock.calls[0][0]).not.toContain('Retrying');
     });
 });
 

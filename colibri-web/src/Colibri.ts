@@ -186,6 +186,10 @@ export class Colibri {
     // Whether any connect has happened yet, so that the next one is known to be a reconnect.
     private hasConnected = false;
 
+    // Whether the current outage - from a failed connection attempt to the next connect - has
+    // been reported yet.
+    private hasReportedOutage = false;
+
     /**
      * Connects to a Colibri server. Only one instance may exist.
      * @param app the application name; clients only see each other's messages within one app
@@ -228,6 +232,7 @@ export class Colibri {
             transports: ['websocket']
         });
         this.socket.on('connect', this.onSocketConnect.bind(this));
+        this.socket.on('connect_error', this.onSocketConnectError.bind(this));
         this.socket.onAny(this.onSocketAny.bind(this));
 
         // latency statistics
@@ -248,6 +253,7 @@ export class Colibri {
 
     private onSocketConnect() {
         console.debug(`Connected to colibri server on ${this.server}`);
+        this.hasReportedOutage = false;
         this.waitForServerHello();
 
         // The server relays, it does not replay: whatever it relayed while this client was away
@@ -255,6 +261,27 @@ export class Colibri {
         // already sent what this client queued while disconnected, so a catch-up sees that too.
         if (this.hasConnected) colibriReconnected(this);
         this.hasConnected = true;
+    }
+
+    // Socket.IO retries a failed connection by itself, for as long as it takes, and said nothing
+    // about it: a mistyped address, a server that is down and a firewall all looked like a
+    // connection that was merely slow. Reported once per outage, on its first failed attempt -
+    // not on every retry, which comes every few seconds for as long as the outage lasts.
+    private onSocketConnectError(error: Error & { description?: unknown }) {
+        if (this.hasReportedOutage) return;
+        this.hasReportedOutage = true;
+
+        // Under Node the message is only 'websocket error', and what went wrong (ECONNREFUSED,
+        // ENOTFOUND) is the underlying error's; a browser hides that, and has only the message.
+        const cause = (error.description as { message?: unknown } | undefined)?.message;
+        const reason = typeof cause === 'string' && cause.length > 0 ? `${error.message}: ${cause}` : error.message;
+
+        console.warn(
+            `Colibri: could not connect to ${this.uri} (${reason}). ` +
+                (this.socket.active
+                    ? 'Retrying until it answers - check the server address and that the server is running.'
+                    : 'Not retrying.')
+        );
     }
 
     /*

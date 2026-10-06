@@ -26,6 +26,7 @@ function rawSocket(client: Colibri) {
             socket: {
                 connected: boolean;
                 disconnect(): void;
+                on(event: string, cb: () => void): void;
                 once(event: string, cb: () => void): void;
                 io: { engine: { close(): void } };
             };
@@ -70,7 +71,30 @@ export function isConnected(client: Colibri): boolean {
     return rawSocket(client).connected;
 }
 
+/** Resolves once `client` has failed `count` connection attempts. */
+export function connectErrors(client: Colibri, count: number): Promise<void> {
+    const socket = rawSocket(client);
+    let seen = 0;
+    return new Promise(resolve => {
+        socket.on('connect_error', () => {
+            seen += 1;
+            if (seen === count) resolve();
+        });
+    });
+}
+
 const activeClients: Colibri[] = [];
+
+/**
+ * Creates a client for `server` and `port` without waiting for it to connect - for an address
+ * that is not expected to answer. Disconnected by {@link disconnectAll} like any other.
+ */
+export function createUnconnectedClient(app: string, server: string, port: number): Colibri {
+    resetSingleton();
+    const client = new Colibri(app, server, port);
+    activeClients.push(client);
+    return client;
+}
 
 /** Creates a standalone client against the real server, becoming the current singleton. */
 export async function createClient(app: string): Promise<Colibri> {

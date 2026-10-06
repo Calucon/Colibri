@@ -1,7 +1,20 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { connect } from 'socket.io-client';
 import { PROTOCOL_VERSION } from '../src/Colibri';
-import { HOST, PORT, createClient, disconnectAll, nextMessage, uniqueApp } from './helpers';
+import {
+    HOST,
+    PORT,
+    connectErrors,
+    createClient,
+    createUnconnectedClient,
+    disconnectAll,
+    nextMessage,
+    uniqueApp
+} from './helpers';
+
+// A host name that cannot resolve, anywhere: '.invalid' is reserved for exactly that (RFC 2606).
+// Unlike a port nothing listens on, it cannot turn out to be some other process's server.
+const UNRESOLVABLE_HOST = 'colibri-e2e.invalid';
 
 afterEach(() => {
     disconnectAll();
@@ -28,6 +41,38 @@ describe('connecting to a real colibri-server', () => {
 
         expect(msgA.command).toBe('latency');
         expect(msgB.command).toBe('latency');
+    });
+
+    // A wrong address used to retry forever without a word, which looks exactly like a slow
+    // connection. Now the first failed attempt says so, and the retries after it do not.
+    it('warns once about an address nothing answers on, however often it retries', async () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+        try {
+            const client = createUnconnectedClient(uniqueApp('connection-wrong-host'), UNRESOLVABLE_HOST, PORT);
+
+            await connectErrors(client, 3);
+
+            expect(warnSpy).toHaveBeenCalledTimes(1);
+            const [message] = warnSpy.mock.calls[0] as [string];
+            expect(message).toContain(`ws://${UNRESOLVABLE_HOST}:${PORT}`);
+            // The underlying error (ENOTFOUND, or EAI_AGAIN without a resolver), not just Socket.IO's.
+            expect(message).toMatch(/websocket error: \S/);
+            expect(message).toContain('Retrying');
+        } finally {
+            warnSpy.mockRestore();
+        }
+    });
+
+    it('does not warn about a server that answers', async () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+        try {
+            const client = await createClient(uniqueApp('connection-quiet'));
+            await nextMessage(client, { channel: 'colibri', command: 'latency' }, 3000);
+
+            expect(warnSpy).not.toHaveBeenCalled();
+        } finally {
+            warnSpy.mockRestore();
+        }
     });
 
     // The signal a client uses to tell this server from one predating the version check. A raw
