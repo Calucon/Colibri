@@ -137,6 +137,9 @@ this is the server's full detail.
 - **`broadcast::` traffic is logged**, at Debug level and tagged `broadcastTraffic`, so the
   admin UI can show sync traffic between clients when asked to; see [Admin UI](#admin-ui).
 - dotenv no longer prints its `injected env ... // tip` line on every start.
+- The `Web server listening on` startup line is printed once the web server is listening. It used
+  to be printed before the server had even tried its port, so it appeared when the port was taken
+  too.
 
 ### Runtime, build & tooling
 
