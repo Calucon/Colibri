@@ -337,6 +337,14 @@ copy the two files you actually wanted.
 Prefabs are unaffected. `[RemoteLogger]` and `[SyncTransformManager]` are still draggable straight
 out of `Packages/Colibri/Prefabs`.
 
+### Breaking: `LockFreeQueue` is gone
+
+`LockFreeQueue<T>`, `LockFreeLinkPool<T>`, `SingleLinkNode<T>` and `SyncMethods` were public in
+`HCIKonstanz.Colibri.Networking`. Colibri no longer uses them, and they were only safe with a single
+producer, so they were deleted. If your code used them, use
+`System.Collections.Concurrent.ConcurrentQueue<T>`, which is safe with any number of producers and
+consumers.
+
 ---
 
 ## Behaviour changes that will not fail to compile
