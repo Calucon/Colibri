@@ -66,15 +66,15 @@ to be done by hand because a UPM `dependencies` entry cannot express a NuGet pac
 **After** — one URL:
 
 ```
-https://github.com/hcigroupkonstanz/Colibri.git?path=colibri-unity/Assets/Colibri#v2.0.0
+https://github.com/hcigroupkonstanz/Colibri.git?path=colibri-unity/Assets/Colibri
 ```
 
 `com.unity.nuget.newtonsoft-json` is the only remaining dependency, and it is declared in
 `Assets/Colibri/package.json`, so the Package Manager resolves it automatically.
 
-The `#v2.0.0` is not optional. Without it the URL resolves to whatever the repository's default
-branch holds at the time. If that is 1.3.1, it does not compile without UniRx and UniTask, which its
-asmdef references, and it speaks the v1 protocol.
+Without a `#ref` the URL resolves to the repository's default branch; appending a release tag
+(e.g. `#v2.0.0`) pins one version. A 1.x package installed this way does not compile without UniRx
+and UniTask, which its asmdef references, and it speaks the v1 protocol.
 
 What was removed along the way:
 
