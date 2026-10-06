@@ -8,11 +8,29 @@ Colibri relays real-time object synchronization between two kinds of clients:
   apply to them; the version check and everything about channels, commands and payloads does.
 
 Both transports carry the same logical `{ channel, command, payload }` message shape into the
-server's `ConnectionPool`, which is transport-agnostic - a message received on one transport can be
-broadcast to clients on the other. The server never needs to look inside a message's payload
+server's `ConnectionPool`, which is transport-agnostic - a message the server relays reaches the
+clients of the app on both transports. The server never needs to look inside a message's payload
 except in a handful of hooks (`ModelSynchronization`, `MeasureLatency`, `WebLog`,
 `ClientLogger`) that explicitly parse it via the `Payload` abstraction
 (`src/server/modules/core/payload.ts`).
+
+## What the server relays
+
+The server does not forward messages in general. Of what a client sends, it relays exactly two
+kinds, to the other clients of the sender's app - Unity and web alike, the sender excluded:
+
+- every message whose `command` starts with `broadcast::`, unchanged (see
+  [`broadcast::` commands](#broadcast-commands));
+- `model::update` and `model::delete`, which also change the server's copy of the model (see
+  [Model synchronization](#model-synchronization)).
+
+It also answers `model::request`, and handles the messages on its own channels (see
+[Server messages](#server-messages)). Any other message reaches no other client, and nothing is
+logged about it: a command such as `myCommand`, sent with colibri-web's
+`SendMessage(channel, 'myCommand', …)` or colibri-unity's `WebServerConnection.SendCommand`, is
+dropped. To send the other clients a message of your own, give it a command that starts with
+`broadcast::`, e.g. `broadcast::myCommand`, and receive it with colibri-web's `RegisterChannel` or
+colibri-unity's `OnMessageReceived`.
 
 ## v3 TCP framing (breaking change from v1)
 
@@ -235,16 +253,19 @@ sends it while still speaking the old protocol. Detecting an out-of-date server 
 ### Message
 
 Carries an application message: `channel` and `command` identify the message (e.g. channel
-`myApp::position`, command `model::update`), and `payload` is an opaque byte range - the server
-relays it verbatim to other TCP clients without ever decoding it as a string, and only decodes it
+`myApp::position`, command `model::update`), and `payload` is an opaque byte range - when the
+server relays the message (see [What the server relays](#what-the-server-relays)), it passes the
+payload on verbatim to other TCP clients without ever decoding it as a string, and only decodes it
 (via `Payload.fromBytes(...).asValue()`) when a hook needs to inspect it or when relaying
 cross-transport to a Socket.IO client.
 
 ### `broadcast::` commands
 
-`command`s prefixed `broadcast::` are a convention, not a protocol-level concept: they identify
-app-to-its-own-clients sync traffic (state/position ticks and similar) relayed through the server,
-as opposed to one-off application messages. `BroadcastLogger`
+The `broadcast::` prefix of a `command` is what makes the server relay the message to the other
+clients of the sender's app (see [What the server relays](#what-the-server-relays)). Nothing else
+on the wire marks such a message: the prefix is part of the `command` string. colibri-unity's
+`Sync.Send` and colibri-web's `Sync.send*` use it for state, position and similar continuous
+updates, with the commands below. `BroadcastLogger`
 (`src/server/modules/command-hooks/broadcast-logger.ts`) matches on that prefix and logs each one
 at Debug level, tagged `metadata.broadcastTraffic = true`. The admin log page's "Sync traffic"
 toggle filters on that tag specifically - independent of the Error/Warn/Info/Debug level
@@ -344,8 +365,9 @@ logs `Dropping unencodable message` instead.
 
 ## Server messages
 
-Besides relaying, the server speaks on a few channels of its own. Applications should not use
-these channel names, or the app name `colibri`.
+Besides relaying (see [What the server relays](#what-the-server-relays)), the server speaks on a
+few channels of its own. Applications should not use these channel names, or the app name
+`colibri`.
 
 | channel | command | sent | payload |
 | --- | --- | --- | --- |

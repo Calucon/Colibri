@@ -1,8 +1,9 @@
 # Colibri - Server
 
-The server relays messages between the Unity clients (TCP) and web clients (Socket.IO) of each
-app, keeps the app's synchronized models, stores values through a small REST API, relays voice
-over UDP, and serves an admin UI showing what every client logs.
+The server connects the Unity clients (TCP) and web clients (Socket.IO) of each app: it relays
+their `broadcast::` messages and model changes to each other and keeps the app's synchronized
+models. It also stores values through a small REST API, relays voice over UDP, and serves an
+admin UI showing what every client logs.
 
 Colibri has no authentication: anyone who can reach these ports can join any app, read and change
 its data, and read the log. Run it on a network you trust.
@@ -111,7 +112,8 @@ the server at startup, with a message naming the variable.
   continuous `broadcast::` messages. The *Statistics* page shows the connected clients and their
   latency.
 - **Model synchronization** and **broadcasts** between the Unity and web clients of an app, see
-  [docs/protocol.md](docs/protocol.md).
+  [docs/protocol.md](docs/protocol.md). Only `broadcast::` messages and model changes are passed
+  on to other clients; see [What the server relays](docs/protocol.md#what-the-server-relays).
 - **REST store** at `/api/store` on the web port, saved to `store.json` in the data directory, see
   [REST store](docs/protocol.md#rest-store).
 - **Voice relay** on UDP port 9013. It does not separate apps: every voice packet goes to every
