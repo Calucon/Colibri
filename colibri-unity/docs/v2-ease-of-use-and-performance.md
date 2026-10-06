@@ -186,7 +186,7 @@ and press Save Config. (Every client that should see each other has to use the s
 Get connected but see nobody, and the connect log already names the reason:
 
 ```
-Colibri: connected to colibri.hci.uni-konstanz.de:9012 as app 'my-seminar-project'.
+Colibri: connected to 192.168.0.10:9012 as app 'my-seminar-project'.
 Only clients using the same App Name can see each other.
 ```
 
@@ -655,7 +655,7 @@ produces a perfectly healthy connection on which no other client is ever seen â€
 from a working setup. It now reads:
 
 ```
-Colibri: connected to colibri.hci.uni-konstanz.de:9012 as app 'my-seminar-project'.
+Colibri: connected to 192.168.0.10:9012 as app 'my-seminar-project'.
 Only clients using the same App Name can see each other.
 ```
 
