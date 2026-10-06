@@ -336,8 +336,29 @@ namespace HCIKonstanz.Colibri.E2E
         /// </summary>
         [UnityTest]
         public IEnumerator WhatTheLimitHoldsIsSentWhenTheAppQuits()
+            => AssertTheLastChangesGoOutOn(ticker => ticker.SendMessage("OnApplicationQuit", SendMessageOptions.DontRequireReceiver));
+
+        /// <summary>
+        /// On Android, and so on Quest, Unity may never call OnApplicationQuit: taking the headset
+        /// off or leaving the app pauses it, and the system may end it without another frame.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator WhatTheLimitHoldsIsSentWhenTheAppIsPaused()
+            => AssertTheLastChangesGoOutOn(ticker => ticker.SendMessage("OnApplicationPause", true, SendMessageOptions.DontRequireReceiver));
+
+        /// <summary>Losing focus is the exit Unity's documentation says to rely on for Android.</summary>
+        [UnityTest]
+        public IEnumerator WhatTheLimitHoldsIsSentWhenTheAppLosesFocus()
+            => AssertTheLastChangesGoOutOn(ticker => ticker.SendMessage("OnApplicationFocus", false, SendMessageOptions.DontRequireReceiver));
+
+        /// <summary>
+        /// Holds one change back, makes another that no poll has seen yet - as a script running
+        /// after the ticker in the app's last frame does - and expects both at once, as one update,
+        /// when <paramref name="stop"/> tells the ticker that the app is going away.
+        /// </summary>
+        private IEnumerator AssertTheLastChangesGoOutOn(Action<Component> stop)
         {
-            var model = SpawnConfigured<E2ESyncModel>("held-at-quit", _ => { });
+            var model = SpawnConfigured<E2ESyncModel>("last-changes", _ => { });
             yield return LetInitialStateArrive();
 
             SyncSettings.MaxSendRate = 1;
@@ -350,12 +371,15 @@ namespace HCIKonstanz.Colibri.E2E
                 yield return null;
                 yield return null;
 
-                var ticker = Resources.FindObjectsOfTypeAll<SyncTicker>().Single();
-                ticker.SendMessage("OnApplicationQuit", SendMessageOptions.DontRequireReceiver);
+                model.Count = 5;
+                stop(Resources.FindObjectsOfTypeAll<SyncTicker>().Single());
 
-                yield return Peer.Expect(Channel, "model::update",
-                    frame => Assert.That(TcpPeer.Json(frame)["label"].Value<string>(), Is.EqualTo("held")),
-                    timeoutSeconds: 0.5f);
+                yield return Peer.Expect(Channel, "model::update", frame =>
+                {
+                    var payload = TcpPeer.Json(frame);
+                    Assert.That(payload["label"]?.Value<string>(), Is.EqualTo("held"), $"The held change did not go out at once: {payload}");
+                    Assert.That(payload["_count"]?.Value<int>(), Is.EqualTo(5), $"The change made in the last frame did not go out with it: {payload}");
+                }, timeoutSeconds: 0.5f);
             }
             finally
             {

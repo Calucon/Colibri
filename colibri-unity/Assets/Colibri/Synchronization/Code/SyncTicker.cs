@@ -159,18 +159,60 @@ namespace HCIKonstanz.Colibri.Synchronization
                 Compact();
         }
 
-        /// <summary>
-        /// Leaving Play mode or the app: send what the send-rate limit is still holding back, or
-        /// the last moves before quitting never reach the server, which keeps the objects for the
-        /// clients that stay. Unity sends OnApplicationQuit to every active object before it
-        /// tears any of them down, so the connection is still there - and this object is always
-        /// active, which the synced objects themselves need not be.
-        /// </summary>
-        private void OnApplicationQuit() => FlushHeldUpdates();
+        /*
+         *  The last changes before the app stops. The server keeps the objects for the clients
+         *  that stay, so whatever the send-rate limit is still holding back - up to one interval
+         *  of the last motion - has to go out now, or they keep the object where it was a moment
+         *  earlier. This object is always active, which the synced objects themselves need not be,
+         *  so it receives these messages for all of them.
+         */
 
-        /// <summary>Sends every object's waiting update now, whatever the send-rate limit says.</summary>
-        internal static void FlushHeldUpdates()
+        /// <summary>
+        /// Leaving Play mode or a desktop app. Unity sends this to every active object before it
+        /// tears any of them down.
+        /// </summary>
+        /// <remarks>
+        /// Best effort: this hands the updates to the connection, whose socket writes complete on
+        /// a worker thread, and the connection closes its socket in its own OnDisable during the
+        /// same teardown. An update can still be lost in between.
+        /// </remarks>
+        private void OnApplicationQuit() => SendPendingChanges();
+
+        /// <summary>
+        /// The way out on Android, and so on Quest, where Unity may never call OnApplicationQuit:
+        /// taking the headset off or leaving the app pauses it, no further frame runs to send what
+        /// is held, and the system may end the paused process later. The process is still alive
+        /// while paused, and the socket writes run on a worker thread, so what is handed to the
+        /// connection here does go out.
+        /// </summary>
+        private void OnApplicationPause(bool paused)
         {
+            if (paused)
+                SendPendingChanges();
+        }
+
+        /// <summary>
+        /// Losing focus is what Unity's documentation says to rely on as the exit on Android. It
+        /// also happens while the app goes on running - a Quest's system menu, another window
+        /// clicked on a desktop - and then the early send has merely skipped the limit once.
+        /// </summary>
+        private void OnApplicationFocus(bool focused)
+        {
+            if (!focused)
+                SendPendingChanges();
+        }
+
+        /// <summary>
+        /// Polls every object and sends each one's waiting update now, whatever the send-rate
+        /// limit says. Polled first, because a change made in this frame after the ticker's own
+        /// Update - by a script that runs later, or in LateUpdate - would otherwise only be seen
+        /// in a next frame that may never come.
+        /// </summary>
+        internal static void SendPendingChanges()
+        {
+            for (var i = 0; i < _tickables.Count; i++)
+                _tickables[i]?.PollChanges();
+
             var now = Time.unscaledTimeAsDouble;
             for (var i = 0; i < _tickables.Count; i++)
                 _tickables[i]?.FlushUpdate(now, 0);
