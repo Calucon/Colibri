@@ -563,6 +563,46 @@ describe('TCPServerWorker', () => {
         });
     });
 
+    // colibri-unity counts a session as connected from the first frame it decodes. A heartbeat
+    // sent before the handshake was checked made a client about to be refused fire OnConnected
+    // first, and ProtocolMismatch a moment later.
+    describe('heartbeats before the handshake', () => {
+        const framesWrittenTo = function (socket: FakeSocket) {
+            const reader = new FrameReader();
+            return socket.written.flatMap(chunk => reader.append(chunk));
+        };
+
+        it('are not sent to a client that has not handshaked yet', () => {
+            const { socket } = connect();
+
+            internals.handleHeartbeat();
+            internals.handleHeartbeat();
+
+            expect(socket.written).toEqual([]);
+        });
+
+        it('start once the handshake is accepted', () => {
+            const { socket } = connect();
+            internals.handleHeartbeat();
+            socket.emit('data', encodeHandshakeFrame(PROTOCOL_VERSION, 'appA', 'a'));
+
+            internals.handleHeartbeat();
+
+            expect(framesWrittenTo(socket).map(f => f.type)).toEqual([FrameType.Heartbeat]);
+        });
+
+        it('never reach a refused client: the first frame it sees is the refusal', () => {
+            const { socket } = connect();
+            internals.handleHeartbeat();
+            socket.emit('data', encodeHandshakeFrame('1', 'appA', 'old-client'));
+            internals.handleHeartbeat();
+
+            const frames = framesWrittenTo(socket);
+            expect(frames).toHaveLength(1);
+            expect(frames[0]?.type === FrameType.Message && frames[0].command).toBe('protocol::rejected');
+        });
+    });
+
     describe('heartbeat replies', () => {
         it('relays an echoed ping timestamp as a colibri/latency message', () => {
             const { socket } = connect();

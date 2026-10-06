@@ -562,9 +562,15 @@ export class TCPServerWorker extends WorkerService {
         }
     }
 
+    // Only clients whose handshake was accepted. A heartbeat is the server saying "you are
+    // connected": colibri-unity counts a session as connected from the first frame it decodes, so
+    // heartbeating a client still waiting for its handshake to be checked made one this server was
+    // about to refuse fire OnConnected first, and ProtocolMismatch a moment later. Now the first
+    // frame a client sees is either protocol::rejected or a heartbeat after acceptance. Nothing
+    // else needed the early ones: a waiting client's echo was discarded (handlePong) anyway.
     private handleHeartbeat(): void {
         const packet = encodeHeartbeatFrame(process.hrtime.bigint());
-        for (const client of [...this.clients.values(), ...this.waitingClients.values()]) {
+        for (const client of this.clients.values()) {
             this.writeToClient(client, packet);
         }
     }
