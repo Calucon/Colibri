@@ -888,12 +888,26 @@ export class TCPServerWorker extends WorkerService {
         }
     }
 
-    // Only clients whose handshake was accepted. A heartbeat is the server saying "you are
-    // connected": colibri-unity counts a session as connected from the first frame it decodes, so
-    // heartbeating a client still waiting for its handshake to be checked made one this server was
-    // about to refuse fire OnConnected first, and ProtocolMismatch a moment later. Now the first
-    // frame a client sees is either protocol::rejected or a heartbeat after acceptance. Nothing
-    // else needed the early ones: a waiting client's echo was discarded (handlePong) anyway.
+    // Only clients whose handshake was accepted. colibri-unity counts a session as connected from
+    // the first frame it decodes, so heartbeating a client still waiting for its handshake to be
+    // checked made one this server was about to refuse fire OnConnected first, and
+    // ProtocolMismatch a moment later. Nothing else needed the early ones: a waiting client's echo
+    // was discarded (handlePong) anyway.
+    //
+    // So nothing at all is written to a client before its handshake is accepted: it is neither
+    // heartbeated nor in any app's recipients. A client refused for its protocol version is sent
+    // protocol::rejected and nothing else; one cut off for a malformed frame, nothing at all. An
+    // accepted one is sent, first, whichever of these comes first - any of them means "connected",
+    // which is all colibri-unity needs:
+    // - its own colibri::clients / client::connected, which ClientBroadcast sends the whole app,
+    //   the joiner included, once the main thread has the clientConnected$ posted from assignApp -
+    //   usually first, a few milliseconds after acceptance;
+    // - another client's broadcast::* or model message relayed to the app: assignApp adds the
+    //   client to the app's recipients here at once, before the main thread knows about it, so
+    //   with other TCP clients in the app this can arrive ahead of client::connected;
+    // - the next heartbeat, within 100 ms.
+    // Answers to its own model::request or client::request come after client::connected, since the
+    // main thread handles its clientConnected$ before anything it sends.
     private handleHeartbeat(): void {
         const packet = encodeHeartbeatFrame(process.hrtime.bigint());
         for (const client of this.clients.values()) {
