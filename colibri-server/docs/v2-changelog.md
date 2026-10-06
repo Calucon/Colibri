@@ -211,6 +211,10 @@ this is the server's full detail.
   connection. See [Known limits](#known-limits) for what the buffer does not do.
 - TCP payloads relay as raw bytes; `toString('utf8')` only happens where a hook actually needs the
   string, so TCP→TCP `broadcast::` traffic never becomes a JS string.
+- A payload crosses between the TCP thread and the main thread, in either direction, in a buffer
+  of exactly its own size. A small `Buffer` is usually a view into Node's shared 64 KiB pool, and
+  `postMessage` copies the whole pool behind a view, so without this a 30-byte update would cross,
+  and be kept alive on the other side, as 64 KiB.
 - Egress now writes the header in place into one pre-sized `Buffer` — no separate `TextEncoder`, no
   merged `Uint8Array`, no FlatBuffer builder. The `flatbuffers` dependency and
   `modules/networking/message.ts` were deleted. Egress is bounds-checked like ingress: a message
