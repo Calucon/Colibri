@@ -1,81 +1,166 @@
-// What the server may shed on the way in when it is taking in more than it can process, and the
-// bookkeeping that makes shedding visible in the log instead of silent.
+// What the server does with incoming messages when it, or one client, is taking in more than it can
+// process - and the bookkeeping that makes that visible in the log instead of silent.
 import { COLIBRI_CHANNEL } from './protocol.js';
 
 // The channel ClientLogger listens on.
 const LOG_CHANNEL = 'log';
 
-// Whether a message may be dropped under overload. Only the two commands that make up the bulk of
-// a sync loop's traffic are:
+export const MODEL_UPDATE_COMMAND = 'model::update';
+
+// Whether a message is subject to the inbound limits (the TCP backlog limit and the per-client rate
+// limit). Only the two commands that make up the bulk of a sync loop's traffic are:
 //
-// - model::update carries an object's whole synced state, and the store and every client keep only
-//   the last one (last write wins), so a dropped update costs a stale moment that the object's next
-//   update corrects.
-// - broadcast::* is fire-and-forget application traffic with no reply and no stored state.
+// - model::update is held back and merged per object, never dropped (see HeldUpdates): it is a
+//   delta of the fields that changed, not an object's whole state, so a dropped one could lose a
+//   field change for good - in every other client and in the server's store alike.
+// - broadcast::* is fire-and-forget application traffic with no stored state, so there is nothing
+//   to merge it into, and it is dropped.
 //
-// Everything else is never dropped, because nothing later would repair the loss: the handshake and
-// heartbeats (not messages at all), model::request (a client waiting for its initial state),
-// model::delete (an object that would never go away), a client's log lines, and anything on the
-// 'colibri' channel (latency replies, protocol messages, the admin UI).
-export const isDroppable = function (channel: string, command: string): boolean {
+// Nothing else is ever held back or dropped, because nothing later would repair the loss: the
+// handshake and heartbeats (not messages at all), model::request (a client waiting for its initial
+// state), model::delete (an object that would never go away), a client's log lines, and anything on
+// the 'colibri' channel (latency replies, protocol messages, the admin UI).
+export const isLimitable = function (channel: string, command: string): boolean {
     if (channel === COLIBRI_CHANNEL || channel === LOG_CHANNEL) return false;
-    return command === 'model::update' || command.startsWith('broadcast::');
+    return command === MODEL_UPDATE_COMMAND || command.startsWith('broadcast::');
 };
 
-// An episode is over once nothing has been dropped for this long. Long enough that a load sitting
-// right at the limit - dropping in bursts with gaps between them - is one episode with one pair of
-// log lines rather than a pair every few hundred milliseconds.
+// What happened to a message over a limit.
+export type Limited = 'held' | 'dropped';
+
+// An episode is over once nothing has been over the limit for this long. Long enough that a load
+// sitting right at the limit - over it in bursts with gaps between them - is one episode with one
+// pair of log lines rather than a pair every few hundred milliseconds.
 export const EPISODE_QUIET_MILLIS = 1000;
 
 export interface EpisodeSummary {
+    // model::update messages held back (and merged per object) rather than passed on at once.
+    held: number;
+    // Messages lost: broadcasts, and updates there was nothing to merge into.
     dropped: number;
-    // From the first drop to the last.
+    // From the first message over the limit to the last.
     seconds: number;
 }
 
-// One stretch of dropping, from the first message dropped until EPISODE_QUIET_MILLIS pass without
-// another. The caller logs a warning when recordDrop() says an episode started, and a summary when
-// endIfQuiet() or end() hands one back - two lines per episode however much is dropped in between,
-// the same way the egress 'dropping' state in TCPServerWorker.writeToClient logs only transitions.
-export class DropEpisode {
+// One stretch of being over a limit, from the first message held back or dropped until
+// EPISODE_QUIET_MILLIS pass without another. The caller logs a warning when record() says an
+// episode started, and a summary when endIfQuiet() or end() hands one back - two lines per
+// episode however much happens in between, the same way the egress 'dropping' state in
+// TCPServerWorker.writeToClient logs only transitions.
+export class LimitEpisode {
+    private held = 0;
     private dropped = 0;
     private startedAt = 0;
-    private lastDropAt = 0;
+    private lastAt = 0;
 
     public get active(): boolean {
-        return this.dropped > 0;
+        return this.held + this.dropped > 0;
     }
 
-    // Returns true for the drop that started the episode.
-    public recordDrop(now: number): boolean {
-        this.lastDropAt = now;
-        this.dropped += 1;
-        if (this.dropped > 1) return false;
+    // Returns true for the message that started the episode.
+    public record(now: number, limited: Limited): boolean {
+        const started = !this.active;
+        if (started) this.startedAt = now;
+        this.lastAt = now;
 
-        this.startedAt = now;
-        return true;
+        if (limited === 'held') this.held += 1;
+        else this.dropped += 1;
+        return started;
     }
 
     public endIfQuiet(now: number): EpisodeSummary | undefined {
-        if (!this.active || now - this.lastDropAt < EPISODE_QUIET_MILLIS) return undefined;
+        if (!this.active || now - this.lastAt < EPISODE_QUIET_MILLIS) return undefined;
         return this.end();
     }
 
     public end(): EpisodeSummary | undefined {
         if (!this.active) return undefined;
 
-        const summary = { dropped: this.dropped, seconds: (this.lastDropAt - this.startedAt) / 1000 };
+        const summary = { held: this.held, dropped: this.dropped, seconds: (this.lastAt - this.startedAt) / 1000 };
+        this.held = 0;
         this.dropped = 0;
         return summary;
     }
 }
 
 export const describeEpisode = function (summary: EpisodeSummary): string {
-    return `dropped ${summary.dropped} message(s) over ${summary.seconds.toFixed(1)} s`;
+    const parts: string[] = [];
+    if (summary.held > 0) parts.push(`held back ${summary.held} model::update(s), merged per object`);
+    if (summary.dropped > 0) parts.push(`dropped ${summary.dropped} message(s)`);
+    return `${parts.join(' and ')} over ${summary.seconds.toFixed(1)} s`;
 };
 
+// A model::update payload the server can apply: a JSON object with a string id, the same test
+// ModelSynchronization makes. Anything else is passed on or dropped as it is, never merged.
+export type ModelUpdate = Record<string, unknown> & { id: string };
+
+export const asModelUpdate = function (value: unknown): ModelUpdate | undefined {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+    return typeof (value as { id?: unknown }).id === 'string' ? (value as ModelUpdate) : undefined;
+};
+
+export interface HeldUpdate {
+    channel: string;
+    model: ModelUpdate;
+}
+
+// How many objects one client may have updates held back for at once. Far beyond any lab scene;
+// it only bounds the memory a client creating new objects in a runaway loop can take up.
+export const MAX_HELD_OBJECTS = 1000;
+
+// The model updates one client sent while over a limit, merged per object and kept in the order
+// each object was first held, until there is room to pass them on.
+//
+// A model::update is a delta: colibri-unity and colibri-web both send only the fields that changed.
+// The store merges each into the object field by field (DataStore.updateModel) and so does every
+// receiving client, so applying two deltas in turn is the same as applying their field-by-field
+// merge once. Holding updates back and merging them therefore skips intermediate states but never
+// loses a field: the latest value of every field still arrives, just later. Dropping a delta
+// instead - say the one that set a synced bool - would have lost that change for every other
+// client and in the store, with nothing ever sending it again.
+export class HeldUpdates {
+    private readonly byObject = new Map<string, HeldUpdate>();
+
+    public get size(): number {
+        return this.byObject.size;
+    }
+
+    // Merges `model` into whatever is held for its object. Returns false, holding nothing, if that
+    // would be one object more than MAX_HELD_OBJECTS.
+    public hold(channel: string, model: ModelUpdate): boolean {
+        const key = `${channel}\u0000${model.id}`;
+        let held = this.byObject.get(key);
+        if (!held) {
+            if (this.byObject.size >= MAX_HELD_OBJECTS) return false;
+            // No prototype, so a field called __proto__ is merged as data like any other.
+            held = { channel, model: Object.create(null) as ModelUpdate };
+            this.byObject.set(key, held);
+        }
+
+        for (const field of Object.keys(model)) {
+            held.model[field] = model[field];
+        }
+        return true;
+    }
+
+    // The update held the longest.
+    public shift(): HeldUpdate | undefined {
+        for (const [key, held] of this.byObject) {
+            this.byObject.delete(key);
+            return held;
+        }
+        return undefined;
+    }
+
+    public takeAll(): HeldUpdate[] {
+        const all = Array.from(this.byObject.values());
+        this.byObject.clear();
+        return all;
+    }
+}
+
 export interface RateLimit {
-    // Droppable messages a second a single client may send, sustained. 0 turns the limit off.
+    // Limitable messages a second a single client may send, sustained. 0 turns the limit off.
     messagesPerSecond: number;
     // How many it may send at once, after a quieter stretch.
     burst: number;
@@ -116,45 +201,42 @@ export interface RateLimitReporter<K> {
     ended(client: K, summary: EpisodeSummary, left: boolean): void;
 }
 
-// A token bucket per client, for droppable messages only (see isDroppable), plus one drop episode
-// per client so each stretch of dropping is reported once rather than per message. Shared by both
-// transports; K is whatever object the transport keeps per client.
+// A token bucket per client, for limitable messages only (see isLimitable), plus one episode per
+// client so each stretch over the limit is reported once rather than per message. Shared by both
+// transports; K is whatever object the transport keeps per client. Taking a token and recording
+// what became of a message that could not have one are separate, because a held-back update
+// retried later must not be counted again.
 export class InboundRateLimiter<K> {
-    private readonly clients = new Map<K, { bucket: TokenBucket; episode: DropEpisode }>();
+    private readonly clients = new Map<K, { bucket: TokenBucket; episode: LimitEpisode }>();
     // Only these can have an episode to end, so sweep() never walks every connected client.
-    private readonly dropping = new Set<K>();
+    private readonly limited = new Set<K>();
 
     public constructor(
         public readonly limit: RateLimit,
         private readonly reporter: RateLimitReporter<K>
     ) {}
 
-    // Whether a droppable message from this client may pass.
-    public admit(client: K, now: number): boolean {
+    // Whether this client may pass on one more limitable message now.
+    public take(client: K, now: number): boolean {
         if (this.limit.messagesPerSecond <= 0) return true;
+        return this.stateOf(client, now).bucket.take(now);
+    }
 
-        let state = this.clients.get(client);
-        if (!state) {
-            state = { bucket: new TokenBucket(this.limit, now), episode: new DropEpisode() };
-            this.clients.set(client, state);
-        }
-
-        if (state.bucket.take(now)) return true;
-
-        if (state.episode.recordDrop(now)) {
-            this.dropping.add(client);
+    // What became of a message from this client that take() refused.
+    public record(client: K, now: number, limited: Limited): void {
+        if (this.stateOf(client, now).episode.record(now, limited)) {
+            this.limited.add(client);
             this.reporter.started(client);
         }
-        return false;
     }
 
     // Reports the end of every episode that has gone quiet. Call it periodically.
     public sweep(now: number): void {
-        for (const client of this.dropping) {
+        for (const client of this.limited) {
             const summary = this.clients.get(client)?.episode.endIfQuiet(now);
             if (!summary) continue;
 
-            this.dropping.delete(client);
+            this.limited.delete(client);
             this.reporter.ended(client, summary, false);
         }
     }
@@ -163,16 +245,30 @@ export class InboundRateLimiter<K> {
     public forget(client: K): void {
         const summary = this.clients.get(client)?.episode.end();
         this.clients.delete(client);
-        this.dropping.delete(client);
+        this.limited.delete(client);
         if (summary) this.reporter.ended(client, summary, true);
     }
+
+    private stateOf(client: K, now: number): { bucket: TokenBucket; episode: LimitEpisode } {
+        let state = this.clients.get(client);
+        if (!state) {
+            state = { bucket: new TokenBucket(this.limit, now), episode: new LimitEpisode() };
+            this.clients.set(client, state);
+        }
+        return state;
+    }
 }
+
+// What a client over a limit is told happens to its messages, in both limits' warnings.
+export const LIMITED_TRAFFIC =
+    'its model updates are held back and merged per object - intermediate states are skipped, but the latest ' +
+    'value of every field still arrives - and its broadcast::* messages are dropped';
 
 export const rateLimitStartWarning = function (who: string, limit: RateLimit): string {
     return (
         `${who} is sending more than ${limit.messagesPerSecond} model::update and broadcast::* messages a second ` +
-        `(CLIENT_MESSAGE_RATE_LIMIT, bursts up to CLIENT_MESSAGE_RATE_BURST=${limit.burst}); dropping what is over the limit ` +
-        'until it slows down. The usual cause is something sending every frame without a rate cap.'
+        `(CLIENT_MESSAGE_RATE_LIMIT, bursts up to CLIENT_MESSAGE_RATE_BURST=${limit.burst}). Until it slows down, ${LIMITED_TRAFFIC}. ` +
+        'The usual cause is something sending every frame without a rate cap.'
     );
 };
 

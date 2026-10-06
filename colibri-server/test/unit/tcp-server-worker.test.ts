@@ -621,9 +621,9 @@ describe('TCPServerWorker', () => {
             worker.configure({ ...options, inboundBacklog: backlog });
         };
 
-        const handshaked = function (): FakeSocket {
+        const handshaked = function (name = 'quest-1'): FakeSocket {
             const { socket } = connect();
-            socket.emit('data', encodeHandshakeFrame(PROTOCOL_VERSION, 'appA', 'quest-1'));
+            socket.emit('data', encodeHandshakeFrame(PROTOCOL_VERSION, 'appA', name));
             posted = [];
             return socket;
         };
@@ -632,8 +632,17 @@ describe('TCPServerWorker', () => {
             socket.emit('data', encodeMessageFrame(wireMessage(channel, command, payload)));
         };
 
+        // What TCPServerProxy does once it has dispatched everything.
+        const caughtUp = function (): void {
+            Atomics.store(backlog, 0, 0);
+        };
+
         const relayed = (): string[] =>
             posted.filter(p => p.channel === 'clientMessage$').map(p => `${String(p.content.channel)} ${String(p.content.command)}`);
+        const relayedUpdates = (): unknown[] =>
+            posted
+                .filter(p => p.channel === 'clientMessage$' && p.content.command === 'model::update')
+                .map(p => JSON.parse((p.content.payload as Buffer).toString('utf8')) as unknown);
         const warnings = (): string[] =>
             posted.filter(p => p.channel === 'log' && p.content.level === LogLevel.Warn).map(p => String(p.content.msg));
 
@@ -649,21 +658,79 @@ describe('TCPServerWorker', () => {
             expect(Atomics.load(backlog, 0)).toBe(3);
         });
 
-        it('drops model::update and broadcast::* while the main thread is at the limit', () => {
+        // A model::update is a delta of the fields that changed: dropping one could lose a field
+        // change for good, in every other client and in the store.
+        it('holds model updates back while the main thread is at the limit, merged per object, and passes them on once it caught up', () => {
             configure({ inboundBacklogLimit: 2 });
             const socket = handshaked();
-            send(socket, 'objects', 'model::update');
-            send(socket, 'objects', 'model::update');
-            expect(relayed()).toHaveLength(2);
+            send(socket, 'objects', 'model::update', '{"id":"a","x":1}');
+            send(socket, 'objects', 'model::update', '{"id":"a","x":2}');
 
-            send(socket, 'objects', 'model::update');
-            send(socket, 'myChannel', 'broadcast::json', '{"x":1}');
-
+            send(socket, 'objects', 'model::update', '{"id":"a","isOn":true}');
+            send(socket, 'objects', 'model::update', '{"id":"b","x":1}');
+            send(socket, 'objects', 'model::update', '{"id":"a","x":3}');
             expect(relayed()).toHaveLength(2);
             expect(Atomics.load(backlog, 0)).toBe(2);
+
+            caughtUp();
+            internals.tick();
+
+            expect(relayedUpdates()).toEqual([
+                { id: 'a', x: 1 },
+                { id: 'a', x: 2 },
+                { id: 'a', isOn: true, x: 3 },
+                { id: 'b', x: 1 },
+            ]);
         });
 
-        it('never drops a request, a delete, a log line, latency or anything on the colibri channel', () => {
+        it('passes held updates on ahead of the next message once there is room', () => {
+            configure({ inboundBacklogLimit: 1 });
+            const socket = handshaked();
+            send(socket, 'objects', 'model::update', '{"id":"a","x":1}');
+            send(socket, 'objects', 'model::update', '{"id":"b","x":1}');
+
+            caughtUp();
+            send(socket, 'objects', 'model::update', '{"id":"c","x":1}');
+
+            expect(relayedUpdates()).toEqual([{ id: 'a', x: 1 }, { id: 'b', x: 1 }]);
+            caughtUp();
+            internals.tick();
+            expect(relayedUpdates()).toEqual([{ id: 'a', x: 1 }, { id: 'b', x: 1 }, { id: 'c', x: 1 }]);
+        });
+
+        it('drops broadcasts while the main thread is at the limit', () => {
+            configure({ inboundBacklogLimit: 1 });
+            const socket = handshaked();
+            send(socket, 'objects', 'model::update');
+
+            send(socket, 'myChannel', 'broadcast::json', '{"x":1}');
+            caughtUp();
+            internals.tick();
+
+            expect(relayed()).toEqual(['objects model::update']);
+        });
+
+        it('drops an update it could not merge: not a JSON object with an id', () => {
+            vi.useFakeTimers();
+            try {
+                configure({ inboundBacklogLimit: 1 });
+                const socket = handshaked();
+                send(socket, 'objects', 'model::update');
+
+                send(socket, 'objects', 'model::update', 'not json');
+                send(socket, 'objects', 'model::update', '{"x":1}');
+                caughtUp();
+                vi.advanceTimersByTime(1000);
+                internals.tick();
+
+                expect(relayed()).toEqual(['objects model::update']);
+                expect(warnings()[1]).toContain('dropped 2 message(s)');
+            } finally {
+                vi.useRealTimers();
+            }
+        });
+
+        it('never limits a request, a delete, a log line, latency or anything on the colibri channel', () => {
             configure({ inboundBacklogLimit: 1 });
             const socket = handshaked();
             send(socket, 'objects', 'model::update');
@@ -686,28 +753,64 @@ describe('TCPServerWorker', () => {
             ]);
         });
 
-        it('relays again once the main thread has caught up', () => {
+        // A delete overtaking a held update to the same object would have that update bring the
+        // object back, in the store and in every other client.
+        it('lets nothing overtake a held update: it goes before the client\'s next request or delete', () => {
             configure({ inboundBacklogLimit: 1 });
             const socket = handshaked();
-            send(socket, 'objects', 'model::update');
-            send(socket, 'objects', 'model::update');
-            expect(relayed()).toHaveLength(1);
+            send(socket, 'objects', 'model::update', '{"id":"other"}');
+            send(socket, 'objects', 'model::update', '{"id":"cube","x":5}');
 
-            // What TCPServerProxy does once it has dispatched a message.
-            Atomics.sub(backlog, 0, 1);
-            send(socket, 'objects', 'model::update', '{"id":"after"}');
+            send(socket, 'objects', 'model::delete', '{"id":"cube"}');
 
-            expect(relayed()).toHaveLength(2);
+            expect(posted.filter(p => p.channel === 'clientMessage$').map(p => `${String(p.content.command)} ${(p.content.payload as Buffer).toString()}`)).toEqual([
+                'model::update {"id":"other"}',
+                'model::update {"id":"cube","x":5}',
+                'model::delete {"id":"cube"}',
+            ]);
         });
 
-        it('warns once when it starts dropping and sums up once it has stopped', () => {
+        it('passes on what a client held back before reporting it gone', () => {
+            configure({ inboundBacklogLimit: 1 });
+            const socket = handshaked();
+            send(socket, 'objects', 'model::update', '{"id":"a"}');
+            send(socket, 'objects', 'model::update', '{"id":"last-state","x":9}');
+
+            socket.emit('close');
+
+            expect(posted.filter(p => p.channel !== 'log').map(p => p.channel)).toEqual([
+                'clientMessage$',
+                'clientMessage$',
+                'clientDisconnected$',
+            ]);
+            expect(relayedUpdates()[1]).toEqual({ id: 'last-state', x: 9 });
+        });
+
+        it('shares out the room that frees up evenly between the clients holding updates', () => {
+            configure({ inboundBacklogLimit: 2 });
+            const first = handshaked('first');
+            const second = handshaked('second');
+            send(first, 'objects', 'model::update', '{"id":"f0"}');
+            send(first, 'objects', 'model::update', '{"id":"f1"}');
+            for (let i = 2; i < 5; i++) send(first, 'objects', 'model::update', `{"id":"f${i}"}`);
+            for (let i = 0; i < 3; i++) send(second, 'objects', 'model::update', `{"id":"s${i}"}`);
+            posted = [];
+
+            caughtUp();
+            internals.tick();
+
+            expect(relayedUpdates()).toEqual([{ id: 'f2' }, { id: 's0' }]);
+        });
+
+        it('warns once when it starts holding back and sums up once it has stopped', () => {
             vi.useFakeTimers();
             try {
                 configure({ inboundBacklogLimit: 1 });
                 const socket = handshaked();
                 send(socket, 'objects', 'model::update');
+                send(socket, 'myChannel', 'broadcast::json', '{}');
                 for (let i = 0; i < 50; i++) {
-                    send(socket, 'objects', 'model::update');
+                    send(socket, 'objects', 'model::update', `{"id":"a","x":${i}}`);
                     vi.advanceTimersByTime(10);
                     internals.tick();
                 }
@@ -715,18 +818,21 @@ describe('TCPServerWorker', () => {
                 expect(warnings()).toHaveLength(1);
                 expect(warnings()[0]).toContain('fallen 1 TCP messages behind');
                 expect(warnings()[0]).toContain('TCP_INBOUND_BACKLOG_LIMIT');
+                expect(warnings()[0]).toContain('held back and merged per object');
 
-                // The last drop was 10 ms ago; the episode ends a second after it.
-                Atomics.store(backlog, 0, 0);
+                // Nothing has been over the limit for 10 ms; the episode ends a second after it.
+                caughtUp();
                 vi.advanceTimersByTime(989);
                 internals.tick();
                 expect(warnings()).toHaveLength(1);
+                // ...but what was held back went on as soon as there was room.
+                expect(relayedUpdates()).toEqual([{ id: 'a' }, { id: 'a', x: 49 }]);
 
                 vi.advanceTimersByTime(1);
                 internals.tick();
                 expect(warnings()).toHaveLength(2);
                 expect(warnings()[1]).toContain('caught up');
-                expect(warnings()[1]).toContain('dropped 50 message(s) over 0.5 s');
+                expect(warnings()[1]).toContain('held back 50 model::update(s), merged per object and dropped 1 message(s) over 0.5 s');
 
                 internals.tick();
                 expect(warnings()).toHaveLength(2);
@@ -735,7 +841,31 @@ describe('TCPServerWorker', () => {
             }
         });
 
-        it('never drops with the limit off', () => {
+        // A token taken for an update the backlog then held back, and another when it went on,
+        // would put a client at a legitimate rate over its own limit whenever the server is behind.
+        it('does not spend a client\'s rate limit on what the backlog holds back', () => {
+            vi.useFakeTimers();
+            try {
+                configure({ inboundBacklogLimit: 2, rateLimit: { messagesPerSecond: 10, burst: 5 } });
+                const socket = handshaked();
+                send(socket, 'objects', 'model::update', '{"id":"first"}');
+                send(socket, 'objects', 'model::update', '{"id":"second"}');
+
+                // Held back by the backlog alone: three tokens are left for them afterwards.
+                for (let i = 0; i < 20; i++) send(socket, 'objects', 'model::update', `{"id":"o${i}"}`);
+                for (let i = 0; i < 3; i++) {
+                    caughtUp();
+                    internals.tick();
+                }
+
+                expect(relayed()).toHaveLength(5);
+                expect(warnings().filter(w => w.includes('is sending more than'))).toEqual([]);
+            } finally {
+                vi.useRealTimers();
+            }
+        });
+
+        it('never limits anything with the limit off', () => {
             configure({ inboundBacklogLimit: 0 });
             const socket = handshaked();
 
@@ -764,7 +894,7 @@ describe('TCPServerWorker', () => {
     });
 
     // A backstop for one client's runaway send loop, which on its own could push the main thread
-    // past the backlog limit and cost every other client its updates too.
+    // past the backlog limit and slow every other client down too.
     describe('per-client rate limit', () => {
         const handshaked = function (name: string): { socket: FakeSocket; id: string } {
             const client = connect();
@@ -772,12 +902,15 @@ describe('TCPServerWorker', () => {
             return client;
         };
 
-        const burstOf = function (count: number, command = 'model::update', channel = 'objects'): Buffer {
-            return Buffer.concat(Array.from({ length: count }, (_, i) => encodeMessageFrame(wireMessage(channel, command, `{"id":"${i}"}`))));
+        // `count` updates (or other commands), each to an object of its own, ids from `from` on.
+        const burstOf = function (count: number, command = 'model::update', channel = 'objects', from = 0): Buffer {
+            return Buffer.concat(Array.from({ length: count }, (_, i) => encodeMessageFrame(wireMessage(channel, command, `{"id":"${from + i}"}`))));
         };
 
-        const relayedFrom = (id: string): number =>
-            posted.filter(p => p.channel === 'clientMessage$' && (p.content.origin as { id: string }).id === id).length;
+        const relayedFrom = (id: string, command?: string): number =>
+            posted.filter(p => p.channel === 'clientMessage$'
+                && (p.content.origin as { id: string }).id === id
+                && (command === undefined || p.content.command === command)).length;
         const warnings = (): string[] =>
             posted.filter(p => p.channel === 'log' && p.content.level === LogLevel.Warn).map(p => String(p.content.msg));
 
@@ -790,31 +923,36 @@ describe('TCPServerWorker', () => {
             vi.useRealTimers();
         });
 
-        it('drops a client\'s model::update and broadcast::* past its burst, and warns once naming it', () => {
+        it('holds back a client\'s updates and drops its broadcasts past its burst, and warns once naming it', () => {
             const runaway = handshaked('runaway-quest');
 
             runaway.socket.emit('data', burstOf(150));
             runaway.socket.emit('data', burstOf(150, 'broadcast::json', 'myChannel'));
+            runaway.socket.emit('data', burstOf(100, 'model::update', 'objects', 150));
 
-            expect(relayedFrom(runaway.id)).toBe(200);
+            expect(relayedFrom(runaway.id, 'model::update')).toBe(150);
+            expect(relayedFrom(runaway.id, 'broadcast::json')).toBe(50);
             expect(warnings()).toHaveLength(1);
             expect(warnings()[0]).toContain('Unity client \'runaway-quest\'');
             expect(warnings()[0]).toContain(runaway.id);
             expect(warnings()[0]).toContain('more than 100');
         });
 
-        it('lets the client through again at its sustained rate', () => {
+        it('passes what it held back on at the client\'s sustained rate', () => {
             const runaway = handshaked('runaway-quest');
             runaway.socket.emit('data', burstOf(250));
             expect(relayedFrom(runaway.id)).toBe(200);
 
             vi.advanceTimersByTime(100);
-            runaway.socket.emit('data', burstOf(20));
-
+            internals.tick();
             expect(relayedFrom(runaway.id)).toBe(210);
+
+            vi.advanceTimersByTime(400);
+            internals.tick();
+            expect(relayedFrom(runaway.id)).toBe(250);
         });
 
-        it('never limits a request, a delete, a log line or a heartbeat reply', () => {
+        it('never limits a request, a delete, a log line or a heartbeat reply - and lets none overtake a held update', () => {
             const runaway = handshaked('runaway-quest');
             runaway.socket.emit('data', burstOf(300));
             const before = relayedFrom(runaway.id);
@@ -826,7 +964,8 @@ describe('TCPServerWorker', () => {
                 encodeHeartbeatFrame(1n),
             ]));
 
-            expect(relayedFrom(runaway.id) - before).toBe(151);
+            // The 100 held updates first, then all 151 others.
+            expect(relayedFrom(runaway.id) - before).toBe(251);
         });
 
         it('does not hold one client\'s loop against another', () => {
@@ -851,16 +990,17 @@ describe('TCPServerWorker', () => {
             internals.tick();
             expect(warnings()).toHaveLength(2);
             expect(warnings()[1]).toContain('Unity client \'runaway-quest\'');
-            expect(warnings()[1]).toContain('back under the message rate limit; dropped 50 message(s)');
+            expect(warnings()[1]).toContain('back under the message rate limit; held back 50 model::update(s)');
         });
 
-        it('sums up the episode of a client that disconnects while over the limit', () => {
+        it('passes on what it held back, and sums up the episode, when the client disconnects over the limit', () => {
             const runaway = handshaked('runaway-quest');
             runaway.socket.emit('data', burstOf(250));
 
             runaway.socket.emit('close');
 
-            expect(warnings()[1]).toContain('disconnected while over the message rate limit; dropped 50 message(s)');
+            expect(relayedFrom(runaway.id)).toBe(250);
+            expect(warnings()[1]).toContain('disconnected while over the message rate limit; held back 50 model::update(s)');
         });
 
         it('limits nothing when turned off', () => {
@@ -881,7 +1021,7 @@ describe('TCPServerWorker', () => {
             expect(relayedFrom(client.id)).toBe(2000);
 
             vi.advanceTimersByTime(500);
-            client.socket.emit('data', burstOf(600));
+            internals.tick();
             expect(relayedFrom(client.id)).toBe(2500);
         });
     });

@@ -16,13 +16,20 @@ import {
 } from './protocol.js';
 import {
     DEFAULT_RATE_LIMIT,
-    EPISODE_QUIET_MILLIS,
+    HeldUpdate,
+    HeldUpdates,
     InboundRateLimiter,
+    MODEL_UPDATE_COMMAND,
     RateLimit,
-    isDroppable,
+    asModelUpdate,
+    isLimitable,
     rateLimitEndWarning,
     rateLimitStartWarning,
 } from './inbound-limits.js';
+
+// How often held-back updates are passed on as a limited client's tokens refill, and finished
+// episodes reported.
+const RATE_LIMIT_SWEEP_MILLIS = 100;
 
 export interface SocketIoServerOptions {
     // Per client; see InboundRateLimiter.
@@ -59,15 +66,16 @@ export class SocketIOServer extends Service implements NetworkServer {
     private readonly clientDisconnectedStream = new Subject<SocketIoClient>();
     private readonly messageStream = new Subject<NetworkMessage>();
 
-    // The same per-client backstop as the TCP worker's, against a web client's runaway send loop.
+    // The same per-client backstop as the TCP worker's, against a web client's runaway send loop,
+    // with the same treatment of what is over it: updates held back and merged, broadcasts dropped.
     private rateLimiter = this.createRateLimiter(DEFAULT_RATE_LIMIT);
+    private readonly heldUpdates = new Map<SocketIoClient, HeldUpdates>();
     private rateLimitSweep: NodeJS.Timeout | undefined;
 
     public start(server: HttpServer, options: SocketIoServerOptions = {}): void {
         this.rateLimiter = this.createRateLimiter(options.rateLimit ?? DEFAULT_RATE_LIMIT);
-        // Ends the episodes of clients that have slowed down again. Never the reason the process
-        // stays alive.
-        this.rateLimitSweep = setInterval(() => this.rateLimiter.sweep(performance.now()), EPISODE_QUIET_MILLIS / 2);
+        // Never the reason the process stays alive.
+        this.rateLimitSweep = setInterval(() => this.sweepRateLimit(performance.now()), RATE_LIMIT_SWEEP_MILLIS);
         this.rateLimitSweep.unref();
 
         this.ioServer = new SocketIoServer(server, {
@@ -101,6 +109,65 @@ export class SocketIOServer extends Service implements NetworkServer {
             started: (client) => this.logWarning(rateLimitStartWarning(describe(client), limit)),
             ended: (client, summary, left) => this.logWarning(rateLimitEndWarning(describe(client), summary, left)),
         });
+    }
+
+    // A model::update or broadcast::* (see isLimitable) from a client: on at once while it is
+    // under its rate limit and has nothing held back, otherwise an update is held back and merged
+    // per object (see HeldUpdates) and a broadcast dropped. Mirrors TCPServerWorker, minus the
+    // backlog limit: a Socket.IO message is handled as it is read, so there is no queue to bound.
+    private acceptLimitable(msg: NetworkMessage & { origin: SocketIoClient }, value: unknown, now: number): void {
+        const client = msg.origin;
+        if (this.drainHeld(client, now) && this.rateLimiter.take(client, now)) {
+            this.messageStream.next(msg);
+            return;
+        }
+
+        const model = msg.command === MODEL_UPDATE_COMMAND ? asModelUpdate(value) : undefined;
+        let held = this.heldUpdates.get(client);
+        if (model && !held) {
+            held = new HeldUpdates();
+            this.heldUpdates.set(client, held);
+        }
+
+        this.rateLimiter.record(client, now, model && held?.hold(msg.channel, model) ? 'held' : 'dropped');
+    }
+
+    // Passes on as many of the client's held updates as its rate limit allows, oldest first.
+    // True once nothing is held any more.
+    private drainHeld(client: SocketIoClient, now: number): boolean {
+        const held = this.heldUpdates.get(client);
+        if (!held) return true;
+
+        while (held.size > 0) {
+            if (!this.rateLimiter.take(client, now)) return false;
+            this.emitHeld(client, held.shift()!);
+        }
+        this.heldUpdates.delete(client);
+        return true;
+    }
+
+    // Every held update regardless of the limit: before something from the same client that must
+    // not overtake them, and when it leaves.
+    private releaseHeld(client: SocketIoClient): void {
+        const held = this.heldUpdates.get(client);
+        if (!held) return;
+
+        this.heldUpdates.delete(client);
+        for (const update of held.takeAll()) this.emitHeld(client, update);
+    }
+
+    private emitHeld(client: SocketIoClient, update: HeldUpdate): void {
+        this.messageStream.next({
+            origin: client,
+            channel: update.channel,
+            command: MODEL_UPDATE_COMMAND,
+            payload: Payload.fromValue(update.model),
+        });
+    }
+
+    private sweepRateLimit(now: number): void {
+        for (const client of Array.from(this.heldUpdates.keys())) this.drainHeld(client, now);
+        this.rateLimiter.sweep(now);
     }
 
     public get clients$(): Observable<SocketIoClient[]> {
@@ -247,18 +314,20 @@ export class SocketIOServer extends Service implements NetworkServer {
                 return;
             }
 
-            if (isDroppable(channel, body.command) && !this.rateLimiter.admit(client, performance.now())) {
-                next();
-                return;
-            }
-
-            const msg: NetworkMessage = {
+            const msg = {
                 origin: client,
                 channel: channel,
                 command: body.command,
                 payload: Payload.fromValue(body.payload)
             };
-            this.messageStream.next(msg);
+            if (isLimitable(channel, body.command)) {
+                this.acceptLimitable(msg, body.payload, performance.now());
+            } else {
+                // Held-back updates first: a model::delete must not arrive ahead of an update
+                // to the same object and have that update bring it back.
+                this.releaseHeld(client);
+                this.messageStream.next(msg);
+            }
             next();
         });
 
@@ -282,6 +351,9 @@ export class SocketIOServer extends Service implements NetworkServer {
 
         for (const rc of removedClients) {
             this.removeFromAppIndex(rc);
+            // Before clientDisconnected$: the last state a client sent is applied even if it was
+            // held back when it left.
+            this.releaseHeld(rc);
             this.rateLimiter.forget(rc);
             if (rc.app !== 'colibri') { // ignore colibri web interface clients
                 this.logDebug(`Colibri client '${rc.name}' (${rc.id}) disconnected`, {

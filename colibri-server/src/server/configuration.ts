@@ -72,8 +72,8 @@ export const Config = {
     // still being enough to see past RxJS's internal call chain into application code.
     STACK_TRACE_LIMIT: parsePositiveInt('STACK_TRACE_LIMIT', process.env.STACK_TRACE_LIMIT, 30),
 
-    // How many TCP messages may wait for the main thread before the TCP worker drops incoming
-    // model::update and broadcast::* messages (see DEFAULT_INBOUND_BACKLOG_LIMIT). 0: never drop.
+    // How many TCP messages may wait for the main thread before the TCP worker holds back incoming
+    // model::update and drops broadcast::* messages (see DEFAULT_INBOUND_BACKLOG_LIMIT). 0: no limit.
     TCP_INBOUND_BACKLOG_LIMIT: parseNonNegativeInt('TCP_INBOUND_BACKLOG_LIMIT', process.env.TCP_INBOUND_BACKLOG_LIMIT, 2000),
 
     // Seconds a TCP client may send nothing at all before it is disconnected as gone (see
@@ -81,8 +81,8 @@ export const Config = {
     TCP_IDLE_TIMEOUT_SECONDS: parseNonNegativeInt('TCP_IDLE_TIMEOUT_SECONDS', process.env.TCP_IDLE_TIMEOUT_SECONDS, 10),
 
     // How many model::update and broadcast::* messages a second one client may send, on either
-    // transport, before the rest are dropped (see DEFAULT_RATE_LIMIT); 0: no limit. The burst is
-    // how many it may send at once after a quieter stretch.
+    // transport, before the rest are held back or dropped (see DEFAULT_RATE_LIMIT); 0: no limit.
+    // The burst is how many it may send at once after a quieter stretch.
     CLIENT_MESSAGE_RATE_LIMIT: parseNonNegativeInt('CLIENT_MESSAGE_RATE_LIMIT', process.env.CLIENT_MESSAGE_RATE_LIMIT, 1000),
     CLIENT_MESSAGE_RATE_BURST: parsePositiveInt('CLIENT_MESSAGE_RATE_BURST', process.env.CLIENT_MESSAGE_RATE_BURST || undefined, 2000),
 

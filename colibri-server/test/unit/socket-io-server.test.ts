@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createServer, Server as HttpServer } from 'http';
 import { AddressInfo } from 'net';
-import { Subscription, filter, firstValueFrom } from 'rxjs';
+import { Subscription, filter, firstValueFrom, tap } from 'rxjs';
 import { io as connectClient, Socket as ClientSocket } from 'socket.io-client';
 import { SocketIOServer } from '../../src/server/modules/networking/socket-io-server.js';
 import { MAX_FRAME_LENGTH, PROTOCOL_VERSION, encodeMessageFrame } from '../../src/server/modules/networking/protocol.js';
@@ -258,22 +258,46 @@ describe('SocketIOServer rate limit', () => {
         received.filter(m => m.origin?.id === socket.id && m.command === command).length;
     const warnings = (): string[] => logs.filter(l => l.level === LogLevel.Warn).map(l => l.message);
 
-    it('drops a client\'s model::update and broadcast::* past its burst, and warns once naming it', async () => {
+    const eventually = async function (condition: () => boolean, timeoutMillis = 2000): Promise<void> {
+        const deadline = Date.now() + timeoutMillis;
+        while (!condition()) {
+            if (Date.now() > deadline) throw new Error('condition not met in time');
+            await new Promise(resolve => setTimeout(resolve, 10));
+        }
+    };
+
+    // flush() sends a message that is never limited, so it also passes on whatever is held back
+    // first: what arrives before it is everything not dropped.
+    it('holds back a client\'s model updates past its burst, merged per object, drops its broadcasts, and warns once', async () => {
         await start({ messagesPerSecond: 1, burst: 5 });
         const socket = await connect();
 
-        for (let i = 0; i < 20; i++) socket.emit('objects', { command: 'model::update', payload: { id: `o${i}` } });
-        for (let i = 0; i < 20; i++) socket.emit('myChannel', { command: 'broadcast::json', payload: { i } });
+        for (let i = 0; i < 5; i++) socket.emit('objects', { command: 'model::update', payload: { id: `o${i}` } });
+        socket.emit('objects', { command: 'model::update', payload: { id: 'cube', x: 1 } });
+        socket.emit('objects', { command: 'model::update', payload: { id: 'cube', x: 2 } });
+        socket.emit('objects', { command: 'model::update', payload: { id: 'cube', isOn: true } });
+        for (let i = 0; i < 10; i++) socket.emit('myChannel', { command: 'broadcast::json', payload: { i } });
         await flush(socket);
 
-        expect(from(socket, 'model::update') + from(socket, 'broadcast::json')).toBe(5);
+        const updates = received.filter(m => m.command === 'model::update').map(m => m.payload?.asValue());
+        expect(updates).toEqual([{ id: 'o0' }, { id: 'o1' }, { id: 'o2' }, { id: 'o3' }, { id: 'o4' }, { id: 'cube', x: 2, isOn: true }]);
+        expect(from(socket, 'broadcast::json')).toBe(0);
         const limited = warnings().filter(w => w.includes('more than 1 model::update'));
         expect(limited).toHaveLength(1);
         expect(limited[0]).toContain(`Web client ${socket.id}`);
         expect(limited[0]).toContain('app \'appA\'');
     });
 
-    it('never limits a request or a delete, and not another client', async () => {
+    it('passes held updates on as the client\'s rate allows', async () => {
+        await start({ messagesPerSecond: 20, burst: 1 });
+        const socket = await connect();
+
+        for (let i = 0; i < 3; i++) socket.emit('objects', { command: 'model::update', payload: { id: `o${i}` } });
+
+        await eventually(() => from(socket, 'model::update') === 3);
+    });
+
+    it('never limits a request or a delete - nor lets one overtake a held update - and not another client', async () => {
         await start({ messagesPerSecond: 1, burst: 2 });
         const runaway = await connect();
         const neighbour = await connect();
@@ -286,7 +310,8 @@ describe('SocketIOServer rate limit', () => {
         await flush(runaway);
         await flush(neighbour);
 
-        expect(from(runaway, 'model::update')).toBe(2);
+        const commands = received.filter(m => m.origin?.id === runaway.id).map(m => m.command);
+        expect(commands.slice(0, 10)).toEqual(Array(10).fill('model::update'));
         expect(from(runaway, 'model::request')).toBe(10);
         expect(from(runaway, 'model::delete')).toBe(10);
         expect(from(neighbour, 'model::update')).toBe(2);
@@ -303,16 +328,20 @@ describe('SocketIOServer rate limit', () => {
         expect(warnings().filter(w => w.includes('rate limit'))).toEqual([]);
     });
 
-    it('sums up the episode of a client that disconnects while over the limit', async () => {
+    it('passes on what a client held back, and sums up its episode, when it disconnects over the limit', async () => {
         await start({ messagesPerSecond: 1, burst: 1 });
         const socket = await connect();
-        for (let i = 0; i < 4; i++) socket.emit('objects', { command: 'model::update', payload: { id: `o${i}` } });
-        await flush(socket);
+        const id = socket.id;
+        const events: string[] = [];
+        server.messages$.subscribe(m => events.push(`${m.command} ${String(m.payload?.asValue<{ id: string }>().id)}`));
+        const gone = firstValueFrom(server.clientDisconnected$.pipe(tap(() => events.push('disconnected'))));
 
-        const gone = firstValueFrom(server.clientDisconnected$);
+        for (let i = 0; i < 4; i++) socket.emit('objects', { command: 'model::update', payload: { id: `o${i}` } });
         socket.disconnect();
         await gone;
 
-        expect(warnings().some(w => w.includes('disconnected while over the message rate limit; dropped 3 message(s)'))).toBe(true);
+        expect(events).toEqual(['model::update o0', 'model::update o1', 'model::update o2', 'model::update o3', 'disconnected']);
+        expect(received.every(m => m.origin?.id === id)).toBe(true);
+        expect(warnings().some(w => w.includes('disconnected while over the message rate limit; held back 3 model::update(s)'))).toBe(true);
     });
 });

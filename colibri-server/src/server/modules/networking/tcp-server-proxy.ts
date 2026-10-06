@@ -35,7 +35,8 @@ export class TCPServerProxy
     // How many clientMessage$ the worker has posted that have not been dispatched here yet: the
     // worker adds one per post, this side takes one off per message handled. Shared memory rather
     // than a message, because it has to be readable while the very queue it measures is full. The
-    // worker drops droppable messages while it is over the limit; see InboundBacklog.
+    // worker holds back model updates and drops broadcasts while it is over the limit; see
+    // InboundBacklog.
     private readonly inboundBacklog = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
 
     // What the worker needs to know beyond the port: everything in TcpServerOptions except the
@@ -91,7 +92,7 @@ export class TCPServerProxy
                         });
                     } finally {
                         // Even if a subscriber threw: a message counted and never taken off again
-                        // would leave the worker that much closer to dropping, for good.
+                        // would leave the worker that much closer to its limit, for good.
                         Atomics.sub(this.inboundBacklog, 0, 1);
                     }
                     break;
@@ -142,7 +143,7 @@ export class TCPServerProxy
 
         // Node delivers every message a worker posted before it reports the worker's exit, so
         // the backlog is back to 0 by now. Reset all the same: a count left behind by a thread
-        // that no longer exists would have the next one dropping messages from the start.
+        // that no longer exists would have the next one limiting messages from the start.
         Atomics.store(this.inboundBacklog, 0, 0);
 
         // No startOptions means we were never started, or are being shut down on purpose.
