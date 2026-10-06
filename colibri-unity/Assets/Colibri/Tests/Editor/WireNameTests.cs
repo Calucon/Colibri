@@ -21,8 +21,10 @@ namespace HCIKonstanz.Colibri.Tests
         // Both names contain a capital I, the one letter that lowercases differently.
         private class InventoryItem : SyncBehaviour<InventoryItem>
         {
+            // Only ever written by the sync layer, through reflection, which the compiler cannot
+            // see: initialised so it does not warn that the field is never assigned (CS0649).
             [Sync]
-            public int ItemIndex;
+            public int ItemIndex = 0;
 
             [Sync]
             public bool IsVisible { get; set; }
