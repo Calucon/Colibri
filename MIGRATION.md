@@ -480,9 +480,9 @@ Honest about the edges. The test suites:
 
 What none of them covers:
 
-- **Voice chat**, beyond the server's relay and the Unity client's choice of server address. The
-  rest needs a microphone; the client's socket and its shutdown were reviewed and compiled, not
-  exercised.
+- **Voice chat**, beyond the server's relay, the Unity client's choice of server address, and the
+  queue that hands received packets to the main thread. The rest needs a microphone; the client's
+  socket and its shutdown were reviewed and compiled, not exercised.
 - **Android and Meta Quest.** No suite builds for Android or runs on a headset. The code that only
   runs there — the IL2CPP `[Sync]` accessors — and the Android settings check are tested in the
   Editor.
