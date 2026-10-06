@@ -140,7 +140,8 @@ belongs in the [Store](#keep-data-between-sessions).
 
 Each of the four is a separate tick box on the component. Only values that change are sent, so
 turning off the ones you do not need saves little traffic — but it stops a stray rotation from
-fighting with someone else's, because an unticked value is neither sent nor applied when it arrives.
+fighting with someone else's: with the box unticked, this client neither reads that value from its
+transform nor applies one that arrives.
 
 Destroying a synced object, or unloading its scene, removes it on every client. Leaving Play mode
 or quitting the app does not: the object stays on the server for everyone else.
