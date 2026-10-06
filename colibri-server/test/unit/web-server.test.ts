@@ -119,6 +119,53 @@ describe('WebServer over HTTP', () => {
         });
     });
 
+    // express.json() only parses a body sent as application/json, and leaves req.body
+    // undefined otherwise. That undefined used to be stored: the name was listed under its
+    // app, while GET and DELETE of it answered 404. Both clients send JSON (see above).
+    describe('a PUT without a JSON body', () => {
+        const putRaw = (name: string, init: { headers?: Record<string, string>; body?: string }) =>
+            fetch(storeUrl('RawApp', name), { method: 'PUT', ...init });
+
+        const expectRefused = async (response: Response) => {
+            expect(response.status).toBe(400);
+            expect(response.headers.get('content-type')).toMatch(/^application\/json/);
+            expect(await response.json()).toEqual({ error: expect.stringMatching(/JSON body.*Content-Type: application\/json/) });
+        };
+
+        it.each([
+            [ 'no body and no Content-Type', {} ],
+            [ 'a text/plain body', { headers: { 'Content-Type': 'text/plain' }, body: '"text"' } ],
+            [ 'a body without a Content-Type of its own', { body: '42' } ],
+            [ 'an empty application/json body', { headers: { 'Content-Type': 'application/json' }, body: '' } ],
+        ])('answers 400 for %s, and stores nothing', async (_, init) => {
+            await expectRefused(await putRaw('value', init));
+
+            expect((await fetch(`${baseUrl}/api/store/RawApp`)).status).toBe(404);
+            expect((await fetch(storeUrl('RawApp', 'value'))).status).toBe(404);
+            expect(logs.filter(l => l.origin === 'RestAPI' && l.level === LogLevel.Warn)).toHaveLength(1);
+        });
+
+        it('leaves a value that is already stored as it was', async () => {
+            expect((await unityPut('value', '42')).status).toBe(201);
+
+            await expectRefused(await putRaw('value', { headers: { 'Content-Type': 'text/plain' }, body: '43' }));
+
+            await expect(unityGet('value')).resolves.toEqual({ status: 200, text: '42' });
+        });
+
+        // What setRestObject(key, undefined) sends: JSON.stringify(undefined) is no body at all.
+        it('answers 400 to the web client for an undefined value, so setRestObject returns false', async () => {
+            const response = await fetch(storeUrl('WebApp', 'value'), {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(undefined),
+            });
+
+            expect(response.status).toBe(400);
+            expect((await webGet('value')).status).toBe(404);
+        });
+    });
+
     describe('body size', () => {
         // A JSON string literal whose encoded body is exactly `length` bytes.
         const jsonStringOfLength = (length: number) => JSON.stringify('x'.repeat(length - 2));

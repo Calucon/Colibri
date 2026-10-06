@@ -69,6 +69,17 @@ export class RestAPI extends Service {
                 }
             })
             .put('/:app/:value', (req, res) => {
+                // express.json() leaves req.body undefined for a body that isn't
+                // application/json, or no body at all, and makes {} of an empty JSON body.
+                // The undefined used to be stored: a name listed under its app that GET and
+                // DELETE then answered 404 for. Both clients always send a JSON body.
+                if (req.body === undefined || req.headers['content-length'] === '0') {
+                    const error = `Value with name ${req.params.value} not saved: send the value as a JSON body, with Content-Type: application/json`;
+                    this.logWarning(`PUT /api/store/${req.params.app}/${req.params.value} answered 400: ${error}`);
+                    res.status(400).json({ error });
+                    return;
+                }
+
                 let statusCode = 200;
                 // If app name not exist create app name
                 let app = this.data.get(req.params.app);
