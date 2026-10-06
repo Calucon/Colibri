@@ -164,6 +164,7 @@ Open **Window → Colibri Status** while the game is running. It shows, at a gla
 - whether you are connected, to which server, and **as which app name** — a typo there gives a
   perfectly healthy connection on which no other client is ever seen
 - whether the server's heartbeat is still arriving, and how long the silence has been if not
+- while not connected, why the last attempt failed
 - every channel that has listeners, and the type each one expects
 - the last 20 messages sent and received
 
@@ -173,12 +174,18 @@ Colibri also reports the common mistakes in the console rather than failing quie
 |---|---|
 | Nothing arrives, no errors | `a float arrived on channel 'chat', but the listener registered there expects string…` — the channel *and* the type have to match |
 | Nothing connects, no errors | `Colibri is not configured yet. Open Window → Colibri Configuration…` |
+| Never connects, and nothing answers at all | `Colibri: 192.168.0.10:9012 did not answer within 5 s. Check the server address, and that this device is on the same network as the server.` — a wrong IP, a server on another network or subnet, a Wi-Fi with client isolation, or a firewall dropping the packets: fix the address or the network |
+| Never connects, and the connection is refused | `Colibri: connection to 192.168.0.10 failed (ConnectionRefused), retrying...` — the machine is reachable, but nothing listens on that TCP port: start colibri-server, or check the *TCP server Port* |
 | Two clients don't see each other | The connect log names the app name in use; both clients must show the same one |
 | A `[Sync]` field never syncs | Its type is reported at startup if Colibri cannot put it on the wire |
 | Connected, but one client is silent | That client's Editor window is in the background and *Run In Background* is off — see step 5 of the Quickstart |
 | `Store.Get`/`Put` reports a failure | The log names the operation, the object, the URL, the transport error and the HTTP status; requests give up after 10 s rather than hanging |
 | Never connects, although something answers on the port | `invalid frame from server` errors if the server sends anything, then `3 connections in a row were accepted but ended before a single frame could be read. This usually means a protocol mismatch…` — the server is probably 1.x, or the address is not a colibri-server |
 | Works in the Editor, not on the Quest | With the Android target active: `Colibri (Android build): …` in the console, and the *Android / Meta Quest* section of *Window → Colibri Configuration* |
+
+On a headset there is no Status window and no console. For a status display in your app,
+`WebServerConnection.Instance.LastConnectFailure` holds why the last attempt to connect failed —
+such as the timeout or the refusal above — and is `null` once a connection has opened.
 
 ## Documentation
 
@@ -484,13 +491,15 @@ configuration window warns about it. A configuration saved before this setting e
 
 Colibri opens the connection by itself the first time anything calls `Sync.Send` or
 `Sync.Receive`, or a `SyncBehaviour` wakes up. When the connection drops, it reconnects on its
-own, waiting 0.5 s, then 1 s, 2 s and so on, up to 10 s, between attempts.
-`WebServerConnection.Instance` tells you where it stands:
+own, waiting 0.5 s, then 1 s, 2 s and so on, up to 10 s, between attempts. An attempt that nothing
+answers is given up after 5 s. `WebServerConnection.Instance` tells you where it stands:
 
 - `Status` is `Connecting`, `Connected`, `Reconnecting`, `Disconnected` or `ProtocolMismatch`.
 - `OnConnected` is raised on the main thread once the server has actually sent something — an
   accepted TCP connection is not enough. `OnDisconnected` is raised exactly once for every
   `OnConnected`, when that connection ends. An attempt that never got connected raises neither.
+- `LastConnectFailure` says why the last attempt to open the connection failed — for example
+  `… did not answer within 5 s`, or a refusal — and is `null` once one has opened.
 - `await connection.Connected` waits until the connection is up. It is cancelled when the server
   refuses this client's protocol version or the component is disabled, so the `await` then throws
   a `TaskCanceledException`.

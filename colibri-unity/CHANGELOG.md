@@ -195,6 +195,17 @@ rationale, migration steps, and what the Editor verification did and did not cov
 - **Reconnect.** A single connection task with exponential backoff (0.5 s → 10 s), cancelled by a
   `CancellationTokenSource` in `OnDisable`, replaces `Update()` re-entering `Connect()` every frame
   while disconnected.
+- **A connection attempt nothing answers is given up after 5 s.** The socket has no connect timeout
+  of its own, so an address nothing answered on — a mistyped IP, a server on another subnet — held
+  the attempt in `Connecting` until the operating system gave up, about two minutes on Android, with
+  no retry and nothing in the log to say why (in 1.3.1 too). The attempt is now abandoned after
+  5 s and retried with the usual backoff, and the console says `<host>:<port> did not answer within
+  5 s. Check the server address, and that this device is on the same network as the server.
+  Retrying...`. A refusal is still reported at once, as `connection to <host> failed
+  (ConnectionRefused)`. New `WebServerConnection.LastConnectFailure` says why the last attempt
+  failed — the timeout, a refusal or another socket error — and is `null` once a connection has
+  opened; *Window → Colibri Status* shows it under *Not connected* as *Last attempt: …*. None of
+  these counts towards a suspected protocol mismatch, since nothing was ever accepted.
 - **Connected means the server has spoken.** A session becomes `Connected` on the first frame the
   server sends, not when the TCP connection opens. Only then is the backoff reset, `OnConnected`
   raised and the queued messages sent, so against something that accepts connections and then

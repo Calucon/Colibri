@@ -539,7 +539,7 @@ changes. The second asserts the receive loop's managed thread id is not the main
 
 ### Connected, and sending while disconnected
 
-Two later changes to the same file are worth knowing alongside the threading above.
+Later changes to the same file are worth knowing alongside the threading above.
 
 **`Connected` means the server has spoken.** A session becomes `Connected` on the first frame the
 server sends, not when the TCP connection opens — anything can accept a connection, a 1.x server
@@ -549,6 +549,19 @@ frame as proof of life, so something that accepts and says nothing is dropped. `
 raised exactly once per `OnConnected`. Both events are raised from `Update`, each handler in its own
 `try`/`catch`, because `Sync`'s re-request of the models after a reconnect is one of those handlers
 and a student's throwing handler must not skip it.
+
+**A connect that nothing answers is given up.** The socket has no connect timeout of its own, so an
+address nothing answered on held an attempt in `Connecting` for the operating system's own SYN
+timeout, about two minutes on Android. `RunSession` now opens the connection through
+`ConnectAsync(socket, host, port, CONNECT_TIMEOUT_MS, token)`, which races `Socket.ConnectAsync`
+against a 5 s delay. Closing the socket is the only way to abandon a pending connect on this API
+surface, so that is what giving up does; the abandoned task's exception is observed there, so it
+never surfaces later as unobserved, and a `TimeoutException` goes to the reconnect loop, which logs
+it with advice — check the address, and that the device is on the server's network — and backs off
+as after any other failure. A refusal still fails at once with a `SocketException`. Either one is
+kept in `LastConnectFailure` until a connection opens, because the two want different fixes: the
+address or the network for a timeout, the server or its port for a refusal. On a local network a
+connection opens in milliseconds, and 5 s still leaves room for two lost SYNs on bad Wi-Fi.
 
 **The outbox.** Sends used to wait on the `Connected` gate: each one issued during an outage parked
 a task, and on reconnect the parked continuations resumed together on the thread pool and raced for
@@ -775,6 +788,8 @@ members whose lowercased names collide are each reported by name with the fix.
   can wait before user code sees it. Below 20 fps it warns, and names the usual cause: an Editor in
   the background, which Unity throttles. This is the number that separates "the network is slow"
   from "this client is slow", and until it existed the two were indistinguishable from here (§2).
+- while not connected, why the last attempt failed (`LastConnectFailure`), such as an address that
+  did not answer within 5 s or a refusal, which want different fixes (§2)
 - every channel with listeners, and the type each one expects, from the registry above
 - the last 20 messages in and out, dropping anything older than ten seconds. The list is meant to
   answer "what is happening right now"; entries had no expiry at first, so a burst from a minute ago
@@ -862,6 +877,7 @@ Two things that follow from the design rather than from the harness:
 | `ConnectionStatus.ProtocolMismatch` | Terminal: the server refused this client's protocol version |
 | `WebServerConnection.ServerVersion` / `.ProtocolMismatchReason` | Set only with a refusal |
 | `WebServerConnection.SuspectedProtocolMismatch` | Set after several sessions in a row end before a frame; a guess, retried |
+| `WebServerConnection.LastConnectFailure` | Why the last attempt to open the connection failed (a 5 s timeout, a refusal, another socket error); `null` once one opened |
 | `ProtocolMismatchException` | Unwinds a refused session; public so tests and applications can identify it |
 | `SyncSettings.MaxSendRate` | Updates per second one synced object may send; starts as the configured value, can be changed for the current run |
 | `ColibriConfig.MaxSendRate` / `.DEFAULT_MAX_SEND_RATE` | The configured send-rate limit, 30 by default; 0 = no limit |
