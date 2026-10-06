@@ -74,9 +74,8 @@ path, the error and the uid it runs as - and in the admin UI's log. It keeps run
 nothing: `store.json` and voice recordings stay in memory until it stops.
 
 Settings from [Configuration](#configuration) go into an `environment:` section, e.g.
-`CONSOLE_LOG_LEVEL: debug`. To use other ports, change the host side of `ports:`
-(`"8011:9011"`) rather than `WEBSERVER_PORT`, since the image's health check requests
-`http://127.0.0.1:9011/` inside the container every 30 s.
+`CONSOLE_LOG_LEVEL: debug`. To use other ports, change only the host side of `ports:`, e.g.
+`"8011:9011"`, and leave the ports inside the container as they are.
 
 The image sets `NODE_ENV=production` and runs the server as PID 1, so `docker stop` shuts it down
 cleanly and writes any pending store changes first.
@@ -92,7 +91,7 @@ Clone this repository, then in `colibri-server` install with `npm ci`, build wit
 
 The server reads its settings from environment variables, and from a `.env` file in the
 directory it is started from (`colibri-server` for `npm start`); a variable that is already set
-in the environment wins. [`.env.example`](.env.example) lists them with their defaults:
+in the environment wins. [`.env.example`](.env.example) lists every one with its default. In short:
 
 | variable | default | |
 | --- | --- | --- |

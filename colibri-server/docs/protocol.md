@@ -65,10 +65,10 @@ null-terminated - there is no delimiter scanning anywhere in the parser.
 
 A client must send a `handshake` frame immediately after connecting, before sending anything
 else. `version`, `app`, and `name` are `::`-joined into the body as plain utf8 text. None of the
-three may contain `::`, or start or end with `:` - `"2::app:::name"` splits into the app `app`
-and the name `:name`. The server only checks that the body splits into exactly three fields, and
-closes the connection if it does not; colibri-unity replaces a `::` and a colon at either end of
-its app and device name with `_`, and warns about a changed app name. The server assigns the
+three may contain `::`, or start or end with `:`, since a body like `"2::app:::name"` cannot be
+split back into the fields that were meant. A body that does not split into exactly three fields
+closes the connection. colibri-unity replaces a `::` and a colon at either end of its app and
+device name with `_`, and warns about a changed app name. The server assigns the
 connection to `app` and begins including it in that app's broadcasts; any `message` frame
 received before the handshake is ignored and logged.
 
@@ -229,10 +229,9 @@ about naming the cause rather than deciding whether to continue.
 
 ### Heartbeat / latency
 
-The server sends a `heartbeat` frame to every connection, from the moment it is accepted until
-it is closed or refused, every 100ms, carrying `process.hrtime.bigint()` as the ping timestamp. A
-client is expected to echo the frame back verbatim (an echo before the handshake is ignored). The
-server relays an echoed heartbeat into the normal message pipeline as a synthetic
+The server sends a `heartbeat` frame every 100ms to each TCP client whose handshake it accepted,
+until the connection closes, carrying `process.hrtime.bigint()` as the ping timestamp. A client is
+expected to echo the frame back verbatim. The server relays an echoed heartbeat into the normal message pipeline as a synthetic
 `colibri`/`latency` message so `MeasureLatency`'s round-trip accounting handles it the same way it
 handles a web client's latency ping - this is the only place a `heartbeat` frame travels
 client→server. Merging the heartbeat and the latency ping into one frame halves the idle

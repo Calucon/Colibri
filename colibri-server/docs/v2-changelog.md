@@ -94,9 +94,9 @@ this is the server's full detail.
   never following a symlink - and then runs the server as `node`. So a bind-mounted directory that
   Docker creates, or a root-owned `data/` left by 1.x, works as it is; before, writing
   `store.json` failed with `EACCES` while `PUT /api/store` kept answering 201. Started with
-  `--user`, the container cannot do this, and the server's own startup check says what to fix
-  (see [Logging](#logging)). A `DATA_ROOT` outside `/srv/colibri/data` is not touched, and
-  `docker exec` opens a root shell by default.
+  `--user`, the container cannot do this, and the server's own startup check reports that it
+  cannot write there (see [Logging](#logging)). A `DATA_ROOT` outside `/srv/colibri/data` is not
+  touched, and `docker exec` opens a root shell by default.
 - `node` itself is PID 1 (`CMD` is `node --enable-source-maps dist/server/main.js`, not
   `npm start`), so `docker stop`'s `SIGTERM` reaches the server and it shuts down cleanly.
 - The image sets `NODE_ENV=production`.
@@ -116,9 +116,10 @@ this is the server's full detail.
   escaped and continuation lines indented, so text from a client cannot pass for a server line,
   and a message over 8 KiB is cut.
 - **The server checks at startup that `DATA_ROOT` is writable.** If it is not, it prints a
-  banner on stderr naming the path, its uid and the fix, and logs an error in the admin UI. It
-  keeps running without persistence, but no longer silently: before, `PUT /api/store` answered
-  201 and the only sign that nothing was saved was an `EACCES` in the admin UI's log.
+  banner on stderr naming the path, the error and its uid, with a suggested fix, and logs an
+  error in the admin UI. It keeps running without persistence, but no longer silently: before,
+  `PUT /api/store` answered 201 and the only sign that nothing was saved was an `EACCES` in the
+  admin UI's log.
 - **`broadcast::` traffic is logged**, at Debug level and tagged `broadcastTraffic`, so the
   admin UI can show sync traffic between clients when asked to; see [Admin UI](#admin-ui).
 - dotenv no longer prints its `injected env ... // tip` line on every start.
