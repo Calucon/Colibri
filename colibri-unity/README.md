@@ -9,9 +9,10 @@
   talk to a 2.0.0 server. What a mismatch looks like depends on which side is old:
   - **This package against a 1.x server.** Neither side can read the other's framing, so no
     refusal can be sent. After three connections in a row that end before the server has sent
-    anything this client can read, the console reports a *suspected* protocol mismatch and `Window → Colibri Status` shows it as a
-    yellow warning. The client keeps retrying, waiting longer each time (up to 10 s), because the
-    same symptom also fits an address that is not a Colibri server at all.
+    anything this client can read, the console reports a *suspected* protocol mismatch and
+    `Window → Colibri Status` shows it as a yellow warning. The client keeps retrying, waiting
+    longer each time (up to 10 s), because the same symptom also fits an address that is not a
+    Colibri server at all.
   - **Colibri Unity 1.x against a 2.0.0 server.** The old client cannot be told either. The
     server's log names the client's address and says it looks like a Colibri 1.x client.
   - **Same framing, different protocol version** (a future server). The server refuses the
@@ -247,7 +248,7 @@ private void MyListener(JToken jtoken) {
 }
 ```
 
-Serializable classes can automatically serialized and deserialized:
+Your own classes can be serialized and deserialized automatically (by Newtonsoft JSON, so `[Serializable]` is optional):
 
 ```c#
 using System;
@@ -405,8 +406,8 @@ own, waiting 0.5 s, then 1 s, 2 s and so on, up to 10 s, between attempts.
 `WebServerConnection.Instance` tells you where it stands:
 
 - `Status` is `Connecting`, `Connected`, `Reconnecting`, `Disconnected` or `ProtocolMismatch`.
-- `OnConnected` is raised on the main thread once the server has actually spoken — its first
-  message, not merely an accepted TCP connection. `OnDisconnected` is raised exactly once for every
+- `OnConnected` is raised on the main thread once the server has actually sent something — an
+  accepted TCP connection is not enough. `OnDisconnected` is raised exactly once for every
   `OnConnected`, when that connection ends. An attempt that never got connected raises neither.
 - `await connection.Connected` waits until the connection is up. It is cancelled when the server
   refuses this client's protocol version or the component is disabled, so the `await` then throws
