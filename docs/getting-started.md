@@ -48,7 +48,8 @@ It works the other way round too: **every group needs its own app name.** Two gr
 same one — both use `test`, or both keep the name from an example — end up in the same app. Each
 sees the other's objects and messages, and the server sends every message to both groups' clients,
 which slows it down for everyone using it. Pick something nobody else will:
-`ana-thesis-prototype`, not `test`.
+`ana-thesis-prototype`, not `test`. The configuration window warns about the names people try
+first, such as `test`, `demo` or `myAppName`, but it cannot know which names other groups chose.
 
 ### 2. Turn on Run In Background
 
