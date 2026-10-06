@@ -28,9 +28,9 @@ https://github.com/hcigroupkonstanz/Colibri.git?path=colibri-unity/Assets/Colibr
 ```
 
 The Package Manager should then list **Colibri 2.0.0** or newer. Errors about UniRx or UniTask mean
-it installed a Colibri 1.x, which could not talk to a 2.x server anyway. If your course or study
-gives you an install URL, use that one. To stay on one exact version, append a release tag from the
-[Releases page](https://github.com/hcigroupkonstanz/Colibri/releases) to the URL, e.g. `#v2.0.0`.
+it installed a Colibri 1.x, which could not talk to a 2.x server anyway. To stay on one exact
+version, append a release tag from the [Releases
+page](https://github.com/hcigroupkonstanz/Colibri/releases) to the URL, e.g. `#v2.0.0`.
 The Package Manager also records the commit it installed, so a project only moves to a newer
 Colibri when you update it there.
 
@@ -47,7 +47,7 @@ Alternatively, import the `.unitypackage` attached to the 2.0.0 release on the [
 2. Enter an **App Name** — every client that should see each other has to use the *same* one, and
    nobody else on the server should use it — and the **Server Address** of your colibri-server,
    then press *Save Config*. The window warns about names many people pick, such as `test` or
-   `myAppName`. Use the server your course or study gives you, or run your own colibri-server 2.x
+   `myAppName`. The server can be a shared colibri-server 2.x instance or one you run yourself
    ([Docker setup](../colibri-server/README.md#docker-recommended)). The address is preset to the
    public test server `colibri.hci.uni-konstanz.de`, which this package can only use while it runs
    colibri-server 2.x: against a 1.x server, *Window → Colibri Status* reports a suspected protocol
@@ -75,7 +75,7 @@ Upon installation, a configuration window should show up:
 
 <img src="img/config.png" alt="Config Screen" width=400/>
 
-- Enter the address of your (shared) [server](../colibri-server): a host name or an IP address, without `http://`. The preset is the public test server `colibri.hci.uni-konstanz.de`, which this package can only use while it runs colibri-server 2.x (see [Requirements](#requirements)). Otherwise run your own colibri-server 2.x, or use the one your course gives you.
+- Enter the address of your (shared) [server](../colibri-server): a host name or an IP address, without `http://`. The preset is the public test server `colibri.hci.uni-konstanz.de`, which this package can only use while it runs colibri-server 2.x (see [Requirements](#requirements)). Otherwise run your own colibri-server 2.x, or connect to another 2.x instance you have access to.
 - On a headset or phone, `localhost` is the device itself. Enter the IPv4 address of the machine running the server on your local network instead.
 - Choose a unique *app name*. Though a server supports multiple clients, data is only synchronized between clients with identical *app names*!
 - Unique means that nobody else on the server uses it. Everyone with the same app name is in one app: they see each other's objects and messages, and since every update goes to every other client in the app, the server's work grows with the square of their number. The window warns about names many people use: `myAppName`, which the web client's samples use, and names such as `test`, `demo`, `app` or `colibri`.
@@ -464,8 +464,8 @@ Limitations:
 
 A synced object — a `SyncTransform` or any other `SyncBehaviour` — sends at most **30 updates a
 second** by default, however fast the app runs. A headset renders 72 to 120 frames a second, and
-without a limit every moving object sends that many messages: a class of headsets moving a few
-objects each is more than one server and one Wi-Fi network keep up with.
+without a limit every moving object sends that many messages: dozens of headsets moving a few
+objects each produce more traffic than one server and one Wi-Fi network can keep up with.
 
 What the limit holds back, and what it does not:
 
