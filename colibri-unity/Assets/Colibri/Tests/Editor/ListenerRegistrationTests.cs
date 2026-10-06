@@ -31,7 +31,7 @@ namespace HCIKonstanz.Colibri.Tests
 
         private static void StaticHandler(int value) => _staticReceived++;
 
-        /// <summary>The listener as a student writes it in Start: a lambda that captures nothing.</summary>
+        /// <summary>The listener as it is typically written in Start: a lambda that captures nothing.</summary>
         private static Action<int> CaptureFreeLambda() => value => _staticReceived++;
 
         private readonly List<Action> _cleanup = new List<Action>();

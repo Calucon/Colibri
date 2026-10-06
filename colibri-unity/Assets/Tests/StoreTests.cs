@@ -84,8 +84,8 @@ namespace HCIKonstanz.Colibri.E2E
 
         /// <summary>
         /// UnityWebRequest defaults to no timeout at all, so a wrong server address used to leave
-        /// the call outstanding forever: no result, no error, nothing in the console, and a student
-        /// with no way to tell a slow server from a typo.
+        /// the call outstanding forever: no result, no error, nothing in the console, and no way to
+        /// tell a slow server from a typo.
         /// </summary>
         [UnityTest]
         public IEnumerator GivesUpAndSaysSoWhenTheServerIsNotThere()

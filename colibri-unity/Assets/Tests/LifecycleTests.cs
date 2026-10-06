@@ -102,7 +102,7 @@ namespace HCIKonstanz.Colibri.E2E
 
         /*
          *  Surviving Play mode with domain reload disabled - which the v2 docs recommend turning
-         *  on, so this is the configuration students actually run.
+         *  on, so this is the configuration that projects following them actually run.
          *
          *  Ending a Play session destroys the singleton's GameObject but leaves the static field
          *  pointing at it. The next session has to notice that and build a new one. When it did

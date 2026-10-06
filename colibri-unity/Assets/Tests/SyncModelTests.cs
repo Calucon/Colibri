@@ -10,7 +10,7 @@ using UnityEngine.TestTools;
 
 namespace HCIKonstanz.Colibri.E2E
 {
-    /// <summary>A model with one [Sync] member of each shape a student is likely to reach for.</summary>
+    /// <summary>A model with one [Sync] member of each shape application code is likely to reach for.</summary>
     public class E2ESyncModel : SyncBehaviour<E2ESyncModel>
     {
         [Sync]
@@ -34,7 +34,7 @@ namespace HCIKonstanz.Colibri.E2E
     {
     }
 
-    /// <summary>A model with a [Sync] setter that throws for one value, as a student's setter can.</summary>
+    /// <summary>A model with a [Sync] setter that throws for one value, as a setter in application code can.</summary>
     public class E2EFragileModel : SyncBehaviour<E2EFragileModel>
     {
         public const string Refused = "refused";
