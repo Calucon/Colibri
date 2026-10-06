@@ -794,7 +794,6 @@ describe('sending its own models again after a reconnect', () => {
         connectSocket();
         expect(sent('model::request')).toEqual([
             ['own', {}],
-            ['own', {}],
             ['own', { id: 'w1' }],
             ['own', { id: 'w2' }]
         ]);
@@ -881,6 +880,151 @@ describe('sending its own models again after a reconnect', () => {
         deliver('own-early', { command: 'model::update', payload: { id: 'early' } });
 
         expect(sent('model::update')).toEqual([['own-early', { id: 'early', label: 'mine' }]]);
+    });
+
+    const disconnectSocket = () => {
+        for (const [event, handler] of fakeSocket.on.mock.calls) {
+            if (event === 'disconnect') handler('transport close');
+        }
+    };
+
+    /** Everything emitted, as [command, payload], in the order it was. */
+    const sentInOrder = () =>
+        fakeSocket.emit.mock.calls.map(([, msg]) => [(msg as Message).command, (msg as Message).payload]);
+
+    class Pair extends SyncModel<Pair> {
+        @Synced() accessor a = '';
+        @Synced() accessor b = '';
+    }
+
+    /** A Colibri with one own model, 'p1', that has been connected and is now disconnected. */
+    const disconnectedWithOwnPair = () => {
+        new Colibri('app', 'localhost', 9011);
+        const [models$, registerModel] = RegisterModelSync({ name: 'own', type: Pair });
+        const pair = new Pair('p1');
+        pair.a = 'A';
+        pair.b = 'B';
+        registerModel(pair);
+        connectSocket();
+        disconnectSocket();
+        fakeSocket.emit.mockClear();
+        return { models$, pair };
+    };
+
+    it('asks for everything else once its own models are answered, not before', () => {
+        new Colibri('app', 'localhost', 9011);
+        const [, registerModel] = RegisterModelSync({ name: 'own', type: Widget });
+        registerModel(new Widget('w1'));
+        registerModel(new Widget('w2'));
+        connectSocket();
+        connectSocket();
+        fakeSocket.emit.mockClear();
+
+        deliver('own', { command: 'model::update', payload: { id: 'w1', label: 'kept' } });
+        expect(sent('model::request')).toEqual([]);
+
+        deliver('own', { command: 'model::update', payload: { id: 'w2' } });
+        expect(sentInOrder()).toEqual([
+            ['model::update', { id: 'w2', label: '' }],
+            ['model::request', {}]
+        ]);
+    });
+
+    // Socket.IO buffers what is sent while disconnected and sends it on the reconnect, ahead of the
+    // request for the model. A server that had forgotten the model kept that one change as all of
+    // it, answered with it rather than a bare id, and the rest was never sent again.
+    it('holds back a change made while disconnected, and sends it with the rest when the server forgot the model', async () => {
+        const { pair } = disconnectedWithOwnPair();
+
+        pair.a = 'A2';
+        await settle();
+        expect(sent('model::update')).toEqual([]);
+
+        connectSocket();
+        deliver('own', { command: 'model::update', payload: { id: 'p1' } });
+        await settle();
+
+        expect(sentInOrder()).toEqual([
+            ['model::request', { id: 'p1' }],
+            ['model::update', { id: 'p1', a: 'A2', b: 'B' }],
+            ['model::request', {}]
+        ]);
+    });
+
+    it('sends only the change it made while disconnected when the server has the model, and takes the rest', async () => {
+        const { models$, pair } = disconnectedWithOwnPair();
+
+        pair.a = 'A2';
+        await settle();
+        connectSocket();
+        // Another client changed b meanwhile; a is still what this client last sent.
+        deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A', b: 'B2' } });
+        await settle();
+
+        expect([pair.a, pair.b]).toEqual(['A2', 'B2']);
+        expect(latest(models$)).toEqual([pair]);
+        // Sent before everything else is asked for, so that that answer already has it.
+        expect(sentInOrder()).toEqual([
+            ['model::request', { id: 'p1' }],
+            ['model::update', { id: 'p1', a: 'A2' }],
+            ['model::request', {}]
+        ]);
+
+        // Answered, so from now on a change goes out as it is made.
+        fakeSocket.emit.mockClear();
+        pair.b = 'B3';
+        await settle();
+        expect(sent('model::update')).toEqual([['own', { id: 'p1', b: 'B3' }]]);
+    });
+
+    // Sent at once, it would reach the server after the request, whose answer - without it - would
+    // then undo it here.
+    it('holds back a change made after the reconnect until the answer has come', async () => {
+        const { pair } = disconnectedWithOwnPair();
+        connectSocket();
+
+        pair.b = 'B2';
+        await settle();
+        expect(sent('model::update')).toEqual([]);
+
+        deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A', b: 'B' } });
+        await settle();
+
+        expect([pair.a, pair.b]).toEqual(['A', 'B2']);
+        expect(sent('model::update')).toEqual([['own', { id: 'p1', b: 'B2' }]]);
+    });
+
+    it('still sends a held change when the connection drops again before the answer', async () => {
+        const { pair } = disconnectedWithOwnPair();
+        pair.a = 'A2';
+        await settle();
+
+        connectSocket();
+        disconnectSocket();
+        connectSocket();
+        deliver('own', { command: 'model::update', payload: { id: 'p1' } });
+        await settle();
+
+        expect(sentInOrder()).toEqual([
+            ['model::request', { id: 'p1' }],
+            ['model::request', { id: 'p1' }],
+            ['model::update', { id: 'p1', a: 'A2', b: 'B' }],
+            ['model::request', {}]
+        ]);
+    });
+
+    it('does not send a change held for an own model deleted before the answer came', async () => {
+        const { models$, pair } = disconnectedWithOwnPair();
+        pair.a = 'A2';
+        await settle();
+
+        connectSocket();
+        deliver('own', { command: 'model::delete', payload: { id: 'p1' } });
+        deliver('own', { command: 'model::update', payload: { id: 'p1' } });
+        await settle();
+
+        expect(sent('model::update')).toEqual([]);
+        expect(latest(models$)).toEqual([]);
     });
 });
 

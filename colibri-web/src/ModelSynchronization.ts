@@ -1,6 +1,6 @@
 import { BehaviorSubject, Observable } from 'rxjs';
 import { Colibri, Message, RegisterChannel, SendMessage } from './Colibri';
-import { onColibriReconnected, whenColibriCreated } from './lifecycle';
+import { onColibriDisconnected, onColibriReconnected, whenColibriCreated } from './lifecycle';
 import { SyncModel } from './SyncModel';
 
 interface ModelSyncMsg<T extends SyncModel<T>> extends Message {
@@ -67,6 +67,14 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
     // instance that asked, which is the one to answer through.
     const awaitingAnswer = new Map<string, Colibri>();
 
+    // Changes to own models held back instead of sent, by the property names SyncModel reports
+    // them under: made while the connection was down, or since the reconnect but before the
+    // server answered for the model (see registerModel).
+    const heldChanges = new WeakMap<T, Set<string>>();
+
+    // From a disconnect until the next connect.
+    let disconnected = false;
+
     // initial data fetch - and the same again after every reconnect, since an update relayed while
     // this client was disconnected is gone for it, and only asking again brings it back. The
     // server answers with one model::update per model it has, which onUpdate applies to the
@@ -74,22 +82,30 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
     //
     // The server may have lost this client's own models meanwhile, though: it forgets every model
     // of an app when the app's last client leaves, and when it restarts. Nothing sent them again,
-    // so a client that joined later never saw them. So each own model is also asked for by id,
+    // so a client that joined later never saw them. So each own model is asked for by id first,
     // which the server answers with what it has - or, for a model it does not have, a bare { id }.
-    // Only then does onUpdate send the model's full state; what the server does have is newer than
-    // this client's, and is applied rather than overwritten.
+    // Only then does onUpdate send the model's full state. What the server does have, another
+    // client may have changed meanwhile, so it is applied rather than overwritten - except what
+    // this client changed itself while it waited, which it sends instead. Everything else is asked
+    // for once every own model has its answer, so that that answer has what was sent in between.
     //
     // The server keeps no record of deletes, so a model another client deleted while this one was
     // away looks the same as one the server forgot, and is sent again too.
     withColibri(colibri => {
         colibri.sendMessage(name, 'model::request');
+        onColibriDisconnected(colibri, () => {
+            disconnected = true;
+        });
         onColibriReconnected(colibri, () => {
-            colibri.sendMessage(name, 'model::request');
+            disconnected = false;
+            // Whatever was asked on the connection before this one is not going to be answered.
+            awaitingAnswer.clear();
             for (const model of models.value) {
                 if (!ownModels.has(model)) continue;
                 awaitingAnswer.set(model.id, colibri);
                 colibri.sendMessage(name, 'model::request', { id: model.id });
             }
+            if (awaitingAnswer.size === 0) colibri.sendMessage(name, 'model::request');
         });
     });
 
@@ -110,19 +126,34 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
 
         // The first update for an own model after its request settles it. One with fields in it
         // means the server has the model - the server stores an update before it relays it - and
-        // is applied below like any other. A bare one means the server has nothing for it: send
-        // all of it. No model any more - deleted since it was asked for - means nothing to send,
-        // and the bare id must not become a model of its own either.
+        // is applied like any other, save for what this client changed while it waited: that is
+        // sent instead, once the rest is applied, as it would have been when it was made. A bare
+        // one means the server has nothing for it: send all of it. No model any more - deleted
+        // since it was asked for - means nothing to send, and the bare id must not become a model
+        // of its own either.
         const id = modelData.id;
         const asker = id === undefined ? undefined : awaitingAnswer.get(id);
         if (id !== undefined && asker) {
             awaitingAnswer.delete(id);
+            const held = model ? releaseHeldChanges(model) : [];
+
             if (isBare(modelData)) {
                 if (model) asker.sendMessage(name, 'model::update', model.toJson());
-                return;
+            } else if (model) {
+                applyUpdate(model, withoutChanges(modelData, model, held));
+                if (held.length > 0) asker.sendMessage(name, 'model::update', model.toJson(held));
+            } else {
+                applyUpdate(model, modelData);
             }
+
+            if (awaitingAnswer.size === 0) asker.sendMessage(name, 'model::request');
+            return;
         }
 
+        applyUpdate(model, modelData);
+    };
+
+    const applyUpdate = (model: T | undefined, modelData: Partial<T>) => {
         if (model) {
             // Update existing model
             model.update(modelData);
@@ -140,8 +171,29 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
         }
     };
 
+    const holdChanges = (model: T, changes: string[]) => {
+        const held = heldChanges.get(model);
+        if (held) for (const change of changes) held.add(change);
+        else heldChanges.set(model, new Set(changes));
+    };
+
+    const releaseHeldChanges = (model: T): string[] => {
+        const held = [...(heldChanges.get(model) ?? [])];
+        heldChanges.delete(model);
+        return held;
+    };
+
+    // `modelData` without the fields that `changes` - property names, as SyncModel reports them -
+    // are sent as.
+    const withoutChanges = (modelData: Partial<T>, model: T, changes: string[]): Partial<T> => {
+        if (changes.length === 0) return modelData;
+        const changed = new Set(Object.keys(model.toJson(changes)).filter(key => key !== 'id'));
+        return Object.fromEntries(Object.entries(modelData).filter(([key]) => !changed.has(key))) as Partial<T>;
+    };
+
     const onDelete = (id: string) => {
         const model = models.value.find(m => m.id === id);
+        if (model) heldChanges.delete(model);
         model?.delete();
         models.next(models.value.filter(m => m.id !== id));
     };
@@ -150,7 +202,19 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
         model.modelChanges$.subscribe(changes => {
             // Before `new Colibri()` a change has nowhere to go, and needs nowhere: the full
             // model below is read when it is sent, so it already carries the change.
-            Colibri.getInstance(false)?.sendMessage(name, 'model::update', model.toJson(changes));
+            const colibri = Colibri.getInstance(false);
+            if (!colibri) return;
+
+            // Socket.IO would buffer a change made while disconnected and send it on the reconnect
+            // ahead of the request for the model. To a server that had forgotten the model, that
+            // change alone became all of it: the answer had fields in it, so the rest was never
+            // sent again. So it is held back until the answer has come - as is one made after the
+            // reconnect but before the answer, which the answer would otherwise undo.
+            if (disconnected || awaitingAnswer.has(model.id)) {
+                holdChanges(model, changes);
+                return;
+            }
+            colibri.sendMessage(name, 'model::update', model.toJson(changes));
         });
 
         // send initial model - as it is when it can be sent, not as it was when registered

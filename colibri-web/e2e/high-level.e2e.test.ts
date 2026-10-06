@@ -247,6 +247,93 @@ describe('RegisterModelSync own models after a reconnect', () => {
         // the newer value in reply to those would have been applied before it answers this.
         expect(await storedOn(singleton, channel, 'own-2')).toEqual({ id: 'own-2', value: 'newer' });
     });
+
+    class PairModel extends SyncModel<PairModel> {
+        @Synced()
+        accessor a = '';
+
+        @Synced()
+        accessor b = '';
+    }
+
+    // Longer than SyncModel's 1ms buffer, so a change has been reported - and sent, or not - by then.
+    const reported = () => new Promise(resolve => setTimeout(resolve, 20));
+
+    /**
+     * Resolves once the server has handled everything `client` sent before this, and `client` has
+     * been handed everything the server sent it until then. On a channel of its own, so that no
+     * RegisterModelSync mistakes the answer for a model.
+     */
+    const roundTrip = async (client: Colibri) => {
+        const fence = uniqueApp('fence');
+        const answer = nextMessage(client, { channel: fence, command: 'model::update' });
+        client.sendMessage(fence, 'model::request', { id: 'fence' });
+        await answer;
+    };
+
+    it('sends every field again after the server forgot its own model, also one it changed while away', async () => {
+        const app = uniqueApp('modelsync-own-changed-away');
+        const channel = uniqueApp('own');
+        // Alone in its app, so the server forgets the app's models when it drops.
+        const singleton = await createClient(app);
+
+        const [, registerModel] = RegisterModelSync<PairModel>({ name: channel, type: PairModel });
+        const model = new PairModel('own-3');
+        model.a = 'A';
+        model.b = 'B';
+        registerModel(model);
+        expect(await storedOn(singleton, channel, 'own-3')).toEqual({ id: 'own-3', a: 'A', b: 'B' });
+
+        const admin = await connectAsAdminUi();
+        const gone = admin.disconnected(app);
+        const reconnect = await dropConnectionUntilReleased(singleton);
+        await gone;
+
+        model.a = 'A2';
+        await reported();
+
+        const peer = await createPeer(app);
+        const sentAgain = nextMessage(peer, { channel, command: 'model::update' });
+        await reconnect();
+        expect((await sentAgain).payload).toEqual({ id: 'own-3', a: 'A2', b: 'B' });
+
+        const late = await createPeer(app);
+        expect(await storedOn(late, channel, 'own-3')).toEqual({ id: 'own-3', a: 'A2', b: 'B' });
+        expect([model.a, model.b]).toEqual(['A2', 'B']);
+    });
+
+    it('keeps the change it made while away, and takes the one another client made meanwhile', async () => {
+        const app = uniqueApp('modelsync-own-both-changed');
+        const channel = uniqueApp('own');
+        // The peer stays connected throughout, so the server keeps the app's models.
+        const { singleton, peer } = await createSingletonWithPeer(app);
+
+        const [, registerModel] = RegisterModelSync<PairModel>({ name: channel, type: PairModel });
+        const model = new PairModel('own-4');
+        model.a = 'A';
+        model.b = 'B';
+        const arrived = nextMessage(peer, { channel, command: 'model::update' });
+        registerModel(model);
+        await arrived;
+
+        const reconnect = await dropConnectionUntilReleased(singleton);
+        model.a = 'A2';
+        await reported();
+        peer.sendMessage(channel, 'model::update', { id: 'own-4', b: 'B2' });
+        expect(await storedOn(peer, channel, 'own-4')).toEqual({ id: 'own-4', a: 'A', b: 'B2' });
+
+        const sent = nextMessage(peer, { channel, command: 'model::update' });
+        await reconnect();
+        // Only what changed while it was away: b on the server is newer than its own.
+        expect((await sent).payload).toEqual({ id: 'own-4', a: 'A2' });
+
+        // Twice: the first only once the server has answered what the reconnect asked for, after
+        // which the client sends what it has to; the second once that has been answered too.
+        await roundTrip(singleton);
+        await roundTrip(singleton);
+        expect([model.a, model.b]).toEqual(['A2', 'B2']);
+        expect(await storedOn(peer, channel, 'own-4')).toEqual({ id: 'own-4', a: 'A2', b: 'B2' });
+    });
 });
 
 describe('RemoteLogger high-level API', () => {

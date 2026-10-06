@@ -5,7 +5,8 @@ import type { Colibri } from './Colibri';
  *
  *  Internal, and deliberately not exported from index.ts. RegisterModelSync and RemoteLogger
  *  can be called before `new Colibri()`, and this is how they find out when it happens - and how
- *  RegisterModelSync finds out about a reconnect, after which it has catching up to do.
+ *  RegisterModelSync finds out about a disconnect, after which it holds its own models' changes
+ *  back, and a reconnect, after which it has catching up to do.
  *
  *  Only a type is imported from Colibri, so the two modules do not depend on each other at
  *  runtime. That is also why nothing here checks whether an instance already exists: callers
@@ -44,24 +45,46 @@ export const colibriCreated = (colibri: Colibri): void => {
 // Per instance, not global: an action is bound to the connection it catches up, and a WeakMap
 // lets both go once the instance does.
 const reconnectActions = new WeakMap<Colibri, InstanceAction[]>();
+const disconnectActions = new WeakMap<Colibri, InstanceAction[]>();
+
+const addAction = (actions: WeakMap<Colibri, InstanceAction[]>, colibri: Colibri, action: InstanceAction) => {
+    const forInstance = actions.get(colibri);
+    if (forInstance) forInstance.push(action);
+    else actions.set(colibri, [action]);
+};
+
+const runActions = (actions: WeakMap<Colibri, InstanceAction[]>, colibri: Colibri, failure: string) => {
+    for (const action of actions.get(colibri) ?? []) {
+        try {
+            action(colibri);
+        } catch (error) {
+            console.error(failure, error);
+        }
+    }
+};
 
 /**
  * Runs `action` every time `colibri` reconnects: on each connect after its first, which is when
  * whatever the server relayed in the meantime has been missed.
  */
 export const onColibriReconnected = (colibri: Colibri, action: InstanceAction): void => {
-    const actions = reconnectActions.get(colibri);
-    if (actions) actions.push(action);
-    else reconnectActions.set(colibri, [action]);
+    addAction(reconnectActions, colibri, action);
 };
 
 /** Runs, in order, everything {@link onColibriReconnected} registered for `colibri`. Called by Colibri. */
 export const colibriReconnected = (colibri: Colibri): void => {
-    for (const action of reconnectActions.get(colibri) ?? []) {
-        try {
-            action(colibri);
-        } catch (error) {
-            console.error('Colibri: catching up after a reconnect failed.', error);
-        }
-    }
+    runActions(reconnectActions, colibri, 'Colibri: catching up after a reconnect failed.');
+};
+
+/**
+ * Runs `action` every time `colibri` loses its connection. Until the next connect, whatever is sent
+ * waits in Socket.IO's buffer, which sends it on that connect ahead of anything a catch-up sends.
+ */
+export const onColibriDisconnected = (colibri: Colibri, action: InstanceAction): void => {
+    addAction(disconnectActions, colibri, action);
+};
+
+/** Runs, in order, everything {@link onColibriDisconnected} registered for `colibri`. Called by Colibri. */
+export const colibriDisconnected = (colibri: Colibri): void => {
+    runActions(disconnectActions, colibri, 'Colibri: handling a disconnect failed.');
 };

@@ -1,7 +1,7 @@
 import { Subject } from 'rxjs';
 import { Socket, connect } from 'socket.io-client';
 import { ColibriError, ProtocolMismatchError } from './ColibriError';
-import { colibriCreated, colibriReconnected } from './lifecycle';
+import { colibriCreated, colibriDisconnected, colibriReconnected } from './lifecycle';
 
 /**
  * The wire protocol this client speaks, announced in the Socket.IO handshake query. Must
@@ -246,6 +246,7 @@ export class Colibri {
             transports: ['websocket']
         });
         this.socket.on('connect', this.onSocketConnect.bind(this));
+        this.socket.on('disconnect', this.onSocketDisconnect.bind(this));
         this.socket.on('connect_error', this.onSocketConnectError.bind(this));
         this.socket.onAny(this.onSocketAny.bind(this));
 
@@ -275,6 +276,12 @@ export class Colibri {
         // already sent what this client queued while disconnected, so a catch-up sees that too.
         if (this.hasConnected) colibriReconnected(this);
         this.hasConnected = true;
+    }
+
+    // From here until the next connect, whatever is sent waits in Socket.IO's buffer - and goes out
+    // on that connect ahead of anything a catch-up sends, which is the wrong order for some of it.
+    private onSocketDisconnect() {
+        colibriDisconnected(this);
     }
 
     // Socket.IO retries a failed connection by itself, for as long as it takes, and said nothing
