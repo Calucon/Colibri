@@ -57,8 +57,9 @@ new Colibri('app_name', '<your-server>', 9011);
   the Colibri server itself speaks plain HTTP, so they only work behind a proxy that adds TLS. Anything after the host
   and port, such as the admin UI's `/log` path, a query or a fragment, throws a `ColibriError`, and so does any other
   scheme. An IPv6 address goes in brackets: `http://[::1]:9011`.
-- **Port:** the one in the address, otherwise the third argument, otherwise 9011. If both have one they must agree,
-  otherwise `new Colibri()` throws. The scheme never implies a port: `https://<your-server>` still means port 9011,
+- **Port:** the one in the address, otherwise the third argument, otherwise 9011. The third argument may also be a
+  string of digits, such as `'9011'` read from a query string. If both have one they must agree, otherwise
+  `new Colibri()` throws. The scheme never implies a port: `https://<your-server>` still means port 9011,
   not 443. `colibri.port` tells you which port is used.
 - Without a server address, Colibri connects to the host that served the page. Outside a browser (Node) the address is
   required.
