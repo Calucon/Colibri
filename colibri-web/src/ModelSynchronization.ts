@@ -199,22 +199,31 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
     };
 
     const registerModel = (model: T) => {
-        model.modelChanges$.subscribe(changes => {
-            // Before `new Colibri()` a change has nowhere to go, and needs nowhere: the full
-            // model below is read when it is sent, so it already carries the change.
-            const colibri = Colibri.getInstance(false);
-            if (!colibri) return;
+        model.modelChanges$.subscribe({
+            next: changes => {
+                // Before `new Colibri()` a change has nowhere to go, and needs nowhere: the full
+                // model below is read when it is sent, so it already carries the change.
+                const colibri = Colibri.getInstance(false);
+                if (!colibri) return;
 
-            // Socket.IO would buffer a change made while disconnected and send it on the reconnect
-            // ahead of the request for the model. To a server that had forgotten the model, that
-            // change alone became all of it: the answer had fields in it, so the rest was never
-            // sent again. So it is held back until the answer has come - as is one made after the
-            // reconnect but before the answer, which the answer would otherwise undo.
-            if (disconnected || awaitingAnswer.has(model.id)) {
-                holdChanges(model, changes);
-                return;
+                // Socket.IO would buffer a change made while disconnected and send it on the
+                // reconnect ahead of the request for the model. To a server that had forgotten the
+                // model, that change alone became all of it: the answer had fields in it, so the
+                // rest was never sent again. So it is held back until the answer has come - as is
+                // one made after the reconnect but before the answer, which the answer would
+                // otherwise undo.
+                if (disconnected || awaitingAnswer.has(model.id)) {
+                    holdChanges(model, changes);
+                    return;
+                }
+                colibri.sendMessage(name, 'model::update', model.toJson(changes));
+            },
+            // delete() ends the stream: this client sends nothing more for the model - so neither
+            // a held change, nor the whole model again after a reconnect.
+            complete: () => {
+                ownModels.delete(model);
+                heldChanges.delete(model);
             }
-            colibri.sendMessage(name, 'model::update', model.toJson(changes));
         });
 
         // send initial model - as it is when it can be sent, not as it was when registered

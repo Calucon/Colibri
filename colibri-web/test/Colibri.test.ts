@@ -1013,6 +1013,29 @@ describe('sending its own models again after a reconnect', () => {
         ]);
     });
 
+    // delete() stops this client sending the model's changes; the whole model is one of them.
+    it('does not ask for or send again an own model whose delete() was called', async () => {
+        new Colibri('app', 'localhost', 9011);
+        const [models$, registerModel] = RegisterModelSync({ name: 'own', type: Widget });
+        const widget = new Widget('w1');
+        widget.label = 'mine';
+        registerModel(widget);
+        connectSocket();
+        disconnectSocket();
+        widget.label = 'changed';
+        await settle();
+        widget.delete();
+        await settle();
+        fakeSocket.emit.mockClear();
+
+        connectSocket();
+        deliver('own', { command: 'model::update', payload: { id: 'w1' } });
+        await settle();
+
+        expect(sentInOrder()).toEqual([['model::request', {}]]);
+        expect(latest(models$)).toEqual([widget]);
+    });
+
     it('does not send a change held for an own model deleted before the answer came', async () => {
         const { models$, pair } = disconnectedWithOwnPair();
         pair.a = 'A2';
