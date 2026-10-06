@@ -69,11 +69,12 @@ null-terminated - there is no delimiter scanning anywhere in the parser.
 A client must send a `handshake` frame immediately after connecting, before sending anything
 else. `version`, `app`, and `name` are `::`-joined into the body as plain utf8 text. None of the
 three may contain `::`, or start or end with `:`, since a body like `"2::app:::name"` cannot be
-split back into the fields that were meant. A body that does not split into exactly three fields
-closes the connection. colibri-unity replaces a `::` and a colon at either end of its app and
-device name with `_`, and warns about a changed app name. The server assigns the connection to
-`app` and begins including it in that app's broadcasts; any `message` frame received before the
-handshake is ignored and logged.
+split back into the fields that were meant. The server logs a body that breaks this rule, or does
+not split into exactly three fields, as a malformed handshake frame and closes the connection; a
+`:` inside a field is fine. colibri-unity replaces a `::` and a colon at either end of its app
+and device name with `_`, and warns about a changed app name. The server assigns the connection
+to `app` and begins including it in that app's broadcasts; any `message` frame received before
+the handshake is ignored and logged.
 
 A client may send another handshake on the same connection. The server then moves it to the new
 app: the old app sees `client::disconnected` and loses its models if that was its last client, and

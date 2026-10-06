@@ -211,7 +211,9 @@ this is the server's full detail.
   `0x00` heartbeat), halving idle TCP packet rate. colibri-unity 2.0.0 echoes it, so the admin UI
   shows the latency of Unity clients too.
 - A handshake body with more than three `::`-separated fields is rejected rather than silently
-  truncated.
+  truncated, and so is one with a field that starts or ends with `:`. App `app:` and name `name`
+  make the body `2::app:::name`, which split back into app `app` and name `:name`, so the client
+  joined another app than the one it announced without an error anywhere.
 - Web clients may send messages as large as TCP clients: the Socket.IO server accepts packets of
   about 5.13 MiB (a 5 MiB payload plus channel and command), where engine.io's 1 MB default used to
   disconnect them.
