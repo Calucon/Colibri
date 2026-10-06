@@ -262,20 +262,25 @@ private void Update()
 
 private void LateUpdate()
 {
+    var now = Time.unscaledTimeAsDouble;
+    var interval = SyncSettings.SendInterval;
+
     for (var i = 0; i < _tickables.Count; i++)
-        _tickables[i]?.FlushUpdate();
+        _tickables[i]?.FlushUpdate(now, interval);
 
     if (_hasEmptySlots)
         Compact();
 }
 ```
 
-An index loop over the raw `List<>`, so no enumerator and no defensive copy. Registration is
-`Awake`, deregistration `OnDestroy`. Deregistration is **O(1)**: each tickable stores its own slot
-index, `Deregister` nulls that slot, and the list is compacted once per frame if anything was
-removed — removing entries during iteration would otherwise shift indices under the running loop.
-Statics are reset from a `[RuntimeInitializeOnLoadMethod(SubsystemRegistration)]` hook, so entering
-Play mode with domain reload disabled does not inherit destroyed components from the last session.
+An index loop over the raw `List<>`, so no enumerator and no defensive copy. (`now` and `interval`
+are for the send-rate limit described below.) Registration is `Awake`, deregistration `OnDestroy`
+— or a delete from another client, whichever comes first. Deregistration is **O(1)**: each tickable
+stores its own slot index, `Deregister` nulls that slot, and the list is compacted once per frame
+if anything was removed — removing entries during iteration would otherwise shift indices under the
+running loop. Statics are reset from a `[RuntimeInitializeOnLoadMethod(SubsystemRegistration)]`
+hook, so entering Play mode with domain reload disabled does not inherit destroyed components from
+the last session.
 
 `SingletonBehaviour<T>` needed the same treatment and could not use the same mechanism: Unity only
 scans **non-generic** types for `[RuntimeInitializeOnLoadMethod]`, so a hook written on the generic
@@ -325,20 +330,19 @@ it actually changed, in order to hand it to `AddUpdate`.
 `LateUpdate` sends it:
 
 ```csharp
-void SyncTicker.ITickable.FlushUpdate()
+void SyncTicker.ITickable.FlushUpdate(double now, double interval)
 {
-    if (_nextUpdate == null)
-        return;
-
-    Sync.SendModelUpdate(Channel, _nextUpdate);
-    _nextUpdate = null;
+    var update = TakeDueUpdate(now, interval);
+    if (update != null)
+        Sync.SendModelUpdate(Channel, update);
 }
 ```
 
 This preserves the previous behaviour — all of one frame's attribute changes travel in a single
 message — while removing the `async void` state machine that used to implement it. It also makes
 the ordering explicit rather than a side effect of a player-loop timing constant: every
-`PollChanges` runs, then every `FlushUpdate`.
+`PollChanges` runs, then every `FlushUpdate`. `TakeDueUpdate` is where the send-rate limit decides
+whether that message leaves in this frame or waits.
 
 ### Cost, before and after
 
@@ -360,6 +364,91 @@ polling *is*; what the rewrite removed is the allocation and the per-attribute m
 not the comparison itself. At 100 objects × 5 attributes that is 500 typed comparisons a frame. It
 is a fixed, predictable cost rather than a growing one, but a scene with thousands of synced objects
 would want an explicit dirty flag instead of a poll, and that is a different design.
+
+### The send-rate limit
+
+Polling is per frame, and so was sending: an object that moved sent a `model::update` in every
+frame. A headset renders 72 to 120 frames a second, so a class of headsets moving a few objects
+each produced more traffic than one server and one Wi-Fi network keep up with. Each object now
+sends at most `SyncSettings.MaxSendRate` updates a second: 30 unless `ColibriConfig.MaxSendRate`
+says otherwise, and 0 for no limit. The ticker reads the clock (`Time.unscaledTimeAsDouble`, so
+`timeScale = 0` does not stop sending) and the interval once per `LateUpdate`, and each object
+decides in `TakeDueUpdate`:
+
+```csharp
+internal JObject TakeDueUpdate(double now, double interval)
+{
+    var sendAtOnce = _sendAtOnce;
+    _sendAtOnce = false;
+
+    if (_nextUpdate == null)
+        return null;
+
+    if (interval > 0 && now < _nextSendTime && !sendAtOnce)
+        return null;
+
+    var late = now - _nextSendTime;
+    _nextSendTime = late >= 0 && late < interval ? _nextSendTime + interval : now + interval;
+
+    var update = _nextUpdate;
+    _nextUpdate = null;
+    return update;
+}
+```
+
+- **Leading edge.** `_nextSendTime` starts at negative infinity and is in the past after any quiet
+  spell, so a one-off change goes out in the frame it was made, exactly as quickly as without a
+  limit.
+- **Trailing flush.** Changes inside the interval accumulate in `_nextUpdate`, a newer value
+  replacing an older one per member. The ticker flushes every registered object in every frame,
+  changed or not, so the held update leaves in the first frame after the interval is up: the last
+  values of a burst arrive even if nothing changes after them. Only intermediate values are
+  skipped, which a last-write-wins receiver would have overwritten anyway.
+- **The next slot counts from the previous slot.** Frames rarely land on the interval: at 72 fps
+  a 30 Hz limit is passed about 8 ms late, and counting the next slot from `now` would round every
+  interval up to three frames, which is 24 Hz. Carried over, the lateness is made up in the next
+  interval. After a pause, or a send forced early, `late` is a whole interval or more, or negative,
+  and the next slot starts afresh from `now`, so no backlog of sends builds up.
+- **Showing and hiding skip it.** `PollChanges` compares `activeSelf` with the previous poll, and
+  when it switched sets `_sendAtOnce`, which sends whatever is waiting in this frame — for a
+  `SyncTransform`, its `Active` member among it. Hiding is a one-off event rather than motion, and
+  often the last thing that happens to an object.
+- **Deletes are never overtaken.** `OnDestroy` deregisters first, which drops a held update, and
+  sends `model::delete` at once. The server creates a model on its first update, so an update that
+  arrived after the delete would bring the object back. A delete from another client
+  (`OnModelDelete`) drops `_nextUpdate` and deregisters at once for the same reason: until its
+  `OnDestroy` a moment later, the object could still send a held update and resurrect itself on
+  every client.
+- **A value from the server wins over a waiting local change.** `UpdateAttribute` removes the member
+  it has just applied from `_nextUpdate`, and drops the update if only the id is left. Sent
+  afterwards, the older local value would overwrite the server's on the server and on every other
+  client while this client shows the server's, and the copies would disagree for good. Without a
+  limit this covers a change polled earlier in the same frame; with one, anything held.
+
+**When the app stops.** The limit can hold back up to one interval of an object's last motion,
+and on Android, and so on a Quest, no further frame may come to send it: taking the headset off or
+leaving the app pauses it, the system may end the paused process later, and Unity may never call
+`OnApplicationQuit`. So `SyncTicker` — always active, which the synced objects need not be, so it
+receives these messages for all of them — sends everything waiting, past the limit, from
+`OnApplicationPause(true)`, `OnApplicationFocus(false)` and `OnApplicationQuit`. It polls every
+object first, so a change made in this frame after the ticker's own `Update` is included. While
+paused the process is still alive and socket writes complete on a worker thread, so those updates
+do go out. On quit it is best effort: the connection closes its socket in its own `OnDisable`
+during the same teardown. Losing focus while the app keeps running — a Quest's system menu,
+another window on a desktop — merely skips the limit once.
+
+**The setting.** `ColibriConfig.MaxSendRate` is a serialized field initialized to
+`DEFAULT_MAX_SEND_RATE` (30), so a configuration asset saved before it existed gets 30 without
+being saved again. The setup window shows it as *Max Send Rate (Hz)* under *Optional Config*,
+refuses to save a negative value, and warns outside the foldout when it is 0, since the foldout is
+closed whenever the window opens. `SyncSettings.MaxSendRate` reads it and can override it for the
+current run without touching the asset; it throws on a negative value, and the override is reset at
+`SubsystemRegistration`, so a value set in one Play session does not carry into the next with
+domain reload disabled.
+
+An idle object costs the limit one null check per frame. `SendRateTests` run `TakeDueUpdate` on a
+clock of their own, including the rate an object changing in every frame reaches at 72, 90 and
+120 fps: 30 a second each time, with its last value still arriving.
 
 ### What did *not* change
 
@@ -723,7 +812,10 @@ screen behind sliders. Run it in two editors side by side — that is the config
 a real scene generates traffic. But state sync is last-write-wins and coalesces per frame: if a
 value changes three times between two flushes, two of those never go on the wire, and that is the
 design working rather than the network failing. So the load cannot measure loss, and the panel calls
-its gap figure **coalesced**, not lost.
+its gap figure **coalesced**, not lost. With the send-rate limit (§2) changes are coalesced per
+interval as well, so *Coalesced* rises by design, and the panel's *Out* row, which counts the
+changes the sample drives, is no longer the number of messages that leave. Set *Max Send Rate* to 0
+to measure the raw per-frame load.
 
 *Latency and loss* therefore ride on a separate low-rate probe channel, where every message is meant
 to arrive exactly once. It is a round trip, so no clock is shared between the two ends and the
@@ -771,6 +863,8 @@ Two things that follow from the design rather than from the harness:
 | `WebServerConnection.ServerVersion` / `.ProtocolMismatchReason` | Set only with a refusal |
 | `WebServerConnection.SuspectedProtocolMismatch` | Set after several sessions in a row end before a frame; a guess, retried |
 | `ProtocolMismatchException` | Unwinds a refused session; public so tests and applications can identify it |
+| `SyncSettings.MaxSendRate` | Updates per second one synced object may send; starts as the configured value, can be changed for the current run |
+| `ColibriConfig.MaxSendRate` / `.DEFAULT_MAX_SEND_RATE` | The configured send-rate limit, 30 by default; 0 = no limit |
 
 ### Changed
 
@@ -784,6 +878,7 @@ Two things that follow from the design rather than from the harness:
 | `WebServerConnection.Connected` completes when TCP connects | Completes on the server's first frame; cancelled on a protocol refusal |
 | `OnDisconnected` raised for every failed attempt | Raised exactly once per `OnConnected` |
 | `SendCommandAsync` waits on the `Connected` gate | Queued in the outbox; `true` once written, `false` only if it will never be sent |
+| A synced object sends in every frame in which it changed | At most `SyncSettings.MaxSendRate` updates a second, 30 by default; the latest values of a burst still go out |
 
 ### Unchanged
 
@@ -839,6 +934,11 @@ the v3 wire protocol.
    keep such values as `float` fields or arrays, or save a `JObject` built with `ToJson()`. A
    private `[SerializeField]` field is neither saved nor loaded any more; make it public or add
    `[JsonProperty]`. Values 1.x saved still load.
+
+10. **Synced objects send at most 30 updates a second.** A `[Sync]` setter that counts or reacts to
+    every value it receives now sees gaps. Send events that must each arrive with `Sync.Send`, or
+    set *Max Send Rate* to 0 (or `SyncSettings.MaxSendRate = 0`) to send every frame's change as
+    before.
 
 ---
 
@@ -1150,10 +1250,11 @@ poll stopped the moment the object was switched off, so `false` was never sent a
 copies never disappeared. Disabling only the component stops it syncing without hiding the copies.
 Teardown sends nothing through the poll: destroying an object and unloading its scene leave
 `activeSelf` alone and remove the object from the ticker in `OnDestroy`, before another poll, so
-they send only `model::delete`. Leaving Play mode or quitting sends nothing at all, whether the
-object is active or not: `OnDestroy` skips the delete when `OnApplicationQuit` ran, which Unity sends
-only to active objects, and when `Application.quitting` was raised (`SingletonLifetime.IsQuitting`),
-which covers the inactive ones.
+they send only `model::delete`. Leaving Play mode or quitting deletes nothing, whether the object
+is active or not: `OnDestroy` skips the delete when `OnApplicationQuit` ran, which Unity sends only
+to active objects, and when `Application.quitting` was raised (`SingletonLifetime.IsQuitting`),
+which covers the inactive ones. All that goes out on the way is what the send-rate limit still held
+(§2).
 
 **Only the traffic log is reset at `SubsystemRegistration`, not `Sync`'s listener dictionaries.**
 Those are statics too, and they survive Play mode with domain reload disabled just as readily. A

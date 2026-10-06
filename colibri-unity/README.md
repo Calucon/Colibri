@@ -93,12 +93,15 @@ active, Colibri checks this for you (see [Meta Quest and Android](#meta-quest-an
 
 When using the voice chat, Colibri allows to adjust the sampling rate on the server. In this case, clients need to manually set the `Voice Sampling Rate` setting in the configuration.
 
+`Max Send Rate (Hz)` caps how many updates per second each synced object sends — see [How often synced objects send](#how-often-synced-objects-send).
+
 Default values:
 
 - Web server Port: `9011`
 - TCP server Port: `9012`
 - Voice server Port: `9013`
 - Voice Sampling Rate: `48000`
+- Max Send Rate: `30` (updates per second per synced object; `0` = no limit)
 
 ## Meta Quest and Android
 
@@ -324,6 +327,8 @@ For synchronizing the location of an object, Colibri provides a `SyncTransform` 
 
 Information about the object's state is stored on the server. When a new client connects, the location is automatically updated to its current state.
 
+A moving object sends at most 30 updates a second by default — see [How often synced objects send](#how-often-synced-objects-send).
+
 Showing, hiding and deleting:
 
 - Deactivating the GameObject (`SetActive(false)`) hides its copies on the other clients, and reactivating it shows them again. Only the object's own active flag (`activeSelf`) is synced: deactivating a parent changes nothing elsewhere. Turn `SyncActive` off to keep the active state local.
@@ -429,6 +434,45 @@ Limitations:
 
 - Only one client can update each attribute of the object simultaneously
 - Scene will be reset once all clients disconnect
+
+### How often synced objects send
+
+A synced object — a `SyncTransform` or any other `SyncBehaviour` — sends at most **30 updates a
+second** by default, however fast the app runs. A headset renders 72 to 120 frames a second, and
+without a limit every moving object sends that many messages: a class of headsets moving a few
+objects each is more than one server and one Wi-Fi network keep up with.
+
+What the limit holds back, and what it does not:
+
+- A single change goes out in the frame it is made, as without a limit.
+- Changes that come quicker are collected, and their latest values go out together as soon as the
+  interval (1/30 s) is up — even if nothing changes afterwards. The values in between are never
+  sent: a synced object shares its current state, not every step on the way there, so a `[Sync]`
+  setter on another client does not see every value either. Use `Sync.Send` for events that must
+  each arrive.
+- Switching the object off or on (`SetActive`) sends whatever is waiting at once — for a
+  `SyncTransform`, that includes being hidden or shown.
+- Destroying the object sends its delete at once; a change still waiting is dropped with it.
+- When the app pauses or loses focus — on a Quest: taking the headset off, opening the system
+  menu, leaving the app — whatever is waiting goes out at once. When the app quits or Play mode
+  ends it is sent too, but only as a best effort, because the connection closes in the same
+  teardown.
+- A value that arrives from another client replaces a local change of the same member that has
+  not gone out yet, so every copy ends up with the same value.
+
+Change the limit under *Optional Config → Max Send Rate (Hz)* in *Window → Colibri
+Configuration*, or from code while the app runs:
+
+```c#
+using HCIKonstanz.Colibri.Synchronization;
+
+SyncSettings.MaxSendRate = 60; // updates per second per synced object; 0 = no limit
+```
+
+Set from code, it applies to this run of the app only (in the Editor: this Play session) and leaves
+the configuration alone; a negative value throws an `ArgumentOutOfRangeException`. `0` turns the
+limit off — an update in every frame in which something changed, as in Colibri 1.x — and the
+configuration window warns about it. A configuration saved before this setting existed uses 30.
 
 ### Connection and outages
 

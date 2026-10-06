@@ -50,6 +50,11 @@ rationale, migration steps, and what the Editor verification did and did not cov
   `Assets/Samples/`, in `Assembly-CSharp`. Code that referenced a sample type without importing the
   sample no longer compiles. The `Prefabs` folder is unaffected and stays live: `[RemoteLogger]` and
   `[SyncTransformManager]` are still draggable straight out of `Packages/Colibri/Prefabs`.
+- **Synced objects send at most 30 updates a second** by default, where 1.3.1 sent one in every
+  frame in which something changed. The values in between are skipped, so a `[Sync]` setter on
+  another client that counts or reacts to every value now sees gaps. A *Max Send Rate* of `0`
+  sends every frame's change as before; see [SyncBehaviour and
+  SyncTransform](#syncbehaviour-and-synctransform).
 
 ## v3 wire protocol
 
@@ -239,6 +244,37 @@ rationale, migration steps, and what the Editor verification did and did not cov
 
 ## SyncBehaviour and SyncTransform
 
+- **A send-rate limit, per object.** A headset renders 72 to 120 frames a second, and every moving
+  synced object sent an update in each of them: a class of headsets moving a few objects each was
+  more than one server and one Wi-Fi network keep up with. Each object now sends at most
+  `SyncSettings.MaxSendRate` updates a second, 30 unless configured otherwise, without losing what
+  a last-write-wins client needs. A change after a quiet spell goes out in the same frame. Changes
+  within the next interval are merged, and their latest values go out as soon as it is up, even if
+  nothing changes afterwards, because `SyncTicker` flushes every object in every frame. The next
+  slot is counted from the previous one rather than from the frame that sent, so 72 fps still gives
+  30 updates a second, not 24. Switching an object off or on skips the limit and sends what is
+  waiting at once, and destroying it still sends `model::delete` at once, dropping what was held.
+  The setting is `ColibriConfig.MaxSendRate`, shown as *Max Send Rate (Hz)* under *Optional
+  Config* in *Window → Colibri Configuration*, which warns when it is `0` (no limit) and refuses a
+  negative value; a configuration saved before the field existed gets 30 without being saved again.
+  `SyncSettings.MaxSendRate` changes it while the app runs, for that run only, and throws on a
+  negative value.
+- **What the limit holds is sent when the app stops.** `SyncTicker` sends everything waiting, past
+  the limit, when the app pauses or loses focus — on Android and so on Quest the usual way out,
+  where Unity may never call `OnApplicationQuit` — and from `OnApplicationQuit`. It polls every
+  object first, so a change made late in the last frame is included. The send on quit or at the end
+  of Play mode is best effort: the connection closes its socket in the same teardown. Losing focus
+  while the app goes on running, as with a Quest's system menu, skips the limit once.
+- **A value from another client replaces a local change still waiting.** A member applied from the
+  server is removed from this object's update that has not gone out yet — one polled earlier in the
+  frame, or held by the limit. Sent afterwards, the older local value overwrote the newer one on the
+  server and on every other client while this client showed the server's, and the copies disagreed
+  for good.
+- **A deleted object stays deleted.** A delete from another client now drops what this client's copy
+  holds and takes it off the ticker at once, rather than at its `OnDestroy` a moment later. An
+  update it sent in between reached the server after the delete, and since the server creates a
+  model on its first update, the object came back — on every other client too, with nobody left to
+  delete it.
 - **Showing and hiding.** Deactivating a `SyncTransform`'s GameObject hides its copies on the other
   clients, and reactivating it shows them again, as in 1.3.1: its `Active` member reads
   `activeSelf`, and the poll keeps running while the object is inactive, since being inactive is
@@ -343,7 +379,10 @@ an hour they do not spend on their prototype, so:
   It carries two separate instruments on purpose. The **load** is synchronized objects, which is how
   a real scene generates traffic — but state sync is last-write-wins and coalesces per frame, so a
   value that never went out is the design working and cannot be counted as loss. The panel calls
-  that figure *coalesced*, not *lost*. **Latency and loss** ride on a separate low-rate probe
+  that figure *coalesced*, not *lost*. With the send-rate limit an object's changes are coalesced
+  per interval too, so *Coalesced* rises by design, and the panel's *Out* figure counts the changes
+  the sample drives rather than the messages that leave; set *Max Send Rate* to `0` to measure the
+  raw per-frame load. **Latency and loss** ride on a separate low-rate probe
   channel where every message is meant to arrive exactly once, measured as a round trip so no clock
   is shared between the two ends. That channel is the only thing here that can honestly report a
   dropped message — and it is what makes the server's own backpressure discard visible from inside
@@ -372,7 +411,9 @@ an hour they do not spend on their prototype, so:
   unaffected.
 - Poll (`Update`) and flush (`LateUpdate`) are separate phases, which keeps the existing
   one-message-per-frame coalescing while removing the `async void` + `UniTask.Yield(PostLateUpdate)`
-  state machine that used to allocate once per change.
+  state machine that used to allocate once per change. The flush is also where the send-rate limit
+  applies (see [SyncBehaviour and SyncTransform](#syncbehaviour-and-synctransform)), so an object
+  that changes in every frame sends at most 30 messages a second by default, not one per frame.
 - Neither library was ever on the network path: `WebServerConnection` used raw `Socket`, `Task`,
   `SemaphoreSlim` and `FrameCodec` throughout, so removing them changed nothing there. What did
   change latency is the `ConfigureAwait(false)` work above — the socket no longer waits for the
