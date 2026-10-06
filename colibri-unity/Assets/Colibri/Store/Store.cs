@@ -57,12 +57,7 @@ namespace HCIKonstanz.Colibri.Store
                 await SendAsync(request);
 
                 if (request.result == UnityWebRequest.Result.Success && request.responseCode == 200)
-                {
-                    // Newtonsoft rather than JsonUtility: JsonUtility cannot round-trip
-                    // dictionaries, properties, or top-level arrays, so Get/Put silently
-                    // disagreed with everything Sync can carry.
-                    return JsonConvert.DeserializeObject<T>(request.downloadHandler.text, JsonSettings);
-                }
+                    return TryFromJson<T>(objectName, request.downloadHandler.text, out var value) ? value : default;
 
                 LogFailure("load", objectName, request, url);
             }
@@ -71,7 +66,9 @@ namespace HCIKonstanz.Colibri.Store
 
         public static async Task<bool> Put(string objectName, object putObject)
         {
-            string jsonData = JsonConvert.SerializeObject(putObject, JsonSettings);
+            if (!TryToJson(objectName, putObject, out var jsonData))
+                return false;
+
             var url = ColibriConfig.GetWebUrl($"api/store/{ColibriConfig.Load().AppName}/{objectName}");
             using (UnityWebRequest request = UnityWebRequest.Put(url, jsonData))
             {
@@ -105,6 +102,63 @@ namespace HCIKonstanz.Colibri.Store
                 LogFailure("delete", objectName, request, url);
             }
             return false;
+        }
+
+
+        /*
+         *  Conversion. Newtonsoft rather than JsonUtility: JsonUtility cannot round-trip
+         *  dictionaries, properties, or top-level arrays, so Get/Put silently disagreed with
+         *  everything Sync can carry.
+         *
+         *  A value Newtonsoft cannot convert used to throw a JsonException out of Put, or out of
+         *  Get after a successful request - past the await, into code written against a Store
+         *  that reports a failure and returns false or default. Now it does exactly that. An
+         *  exception thrown by the class itself - its constructor, a callback - still comes
+         *  through, with its own stack trace.
+         */
+
+        internal static bool TryToJson(string objectName, object value, out string json)
+        {
+            try
+            {
+                json = JsonConvert.SerializeObject(value, JsonSettings);
+                return true;
+            }
+            catch (JsonException e)
+            {
+                Debug.LogError($"Colibri: could not save \"{objectName}\" - {TypeName(value?.GetType())} cannot be converted to JSON: {e.Message}");
+                json = null;
+                return false;
+            }
+        }
+
+        internal static bool TryFromJson<T>(string objectName, string json, out T value)
+        {
+            try
+            {
+                value = JsonConvert.DeserializeObject<T>(json, JsonSettings);
+                return true;
+            }
+            catch (JsonException e)
+            {
+                Debug.LogError($"Colibri: could not load \"{objectName}\" as {TypeName(typeof(T))} - what the server holds does not fit it: {e.Message}");
+                value = default;
+                return false;
+            }
+        }
+
+        /// <summary>"List&lt;Score&gt;" rather than "List`1".</summary>
+        private static string TypeName(System.Type type)
+        {
+            if (type == null)
+                return "null";
+            if (!type.IsGenericType)
+                return type.Name;
+
+            // No backtick on a type nested in a generic one, which is generic all the same.
+            var tick = type.Name.IndexOf('`');
+            var name = tick < 0 ? type.Name : type.Name.Substring(0, tick);
+            return $"{name}<{string.Join(", ", System.Array.ConvertAll(type.GetGenericArguments(), TypeName))}>";
         }
     }
 }
