@@ -487,6 +487,51 @@ namespace HCIKonstanz.Colibri.Synchronization
          *  Listeners
          */
 
+        /// <summary>
+        /// A Play session starts without the previous one's listeners. With domain reload disabled
+        /// these dictionaries survive from one session to the next, and so did every listener in
+        /// them that belongs to no Unity object - a static method, a lambda that captures nothing.
+        /// One the new session never registers kept being called, and the types of the old
+        /// session's listeners kept counting for the type-mismatch warning. Listeners owned by an
+        /// object went with it (see <see cref="ListenerOwner"/>), but only once the next message on
+        /// their channel swept them out.
+        /// </summary>
+        /// <remarks>
+        /// What this clears was registered in an earlier Play session or in edit mode; entering Play
+        /// mode with domain reload enabled, the default, starts without those too. Only another
+        /// SubsystemRegistration callback could register before this runs - they come before any
+        /// other RuntimeInitializeOnLoadMethod, any scene load and any Awake - and none in Colibri
+        /// does. In a player it runs once, at startup, on empty dictionaries. Internal for the
+        /// EditMode tests, which stand in for the start of a session with it.
+        /// </remarks>
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        internal static void ResetListeners()
+        {
+            _boolListeners.Clear();
+            _intListeners.Clear();
+            _floatListeners.Clear();
+            _stringListeners.Clear();
+            _vector2Listeners.Clear();
+            _vector3Listeners.Clear();
+            _quaternionListeners.Clear();
+            _colorListeners.Clear();
+            _boolArrayListeners.Clear();
+            _intArrayListeners.Clear();
+            _floatArrayListeners.Clear();
+            _stringArrayListeners.Clear();
+            _vector2ArrayListeners.Clear();
+            _vector3ArrayListeners.Clear();
+            _quaternionArrayListeners.Clear();
+            _colorArrayListeners.Clear();
+            _jsonListeners.Clear();
+            _modelUpdateListeners.Clear();
+            _modelDeleteListeners.Clear();
+
+            // The per-channel counts behind the type-mismatch warning, which describe the same
+            // listeners.
+            ChannelListenerRegistry.Clear();
+        }
+
         // `track` is off for the model channels: they are Colibri's own SyncBehaviour plumbing,
         // they never go through Invoke<T>, and listing them would only bury the channels the
         // student actually wrote.

@@ -191,6 +191,76 @@ namespace HCIKonstanz.Colibri.Tests
 
 
         /*
+         *  A new Play session. With domain reload disabled, Sync's statics outlive the session that
+         *  filled them; Sync.ResetListeners is what Unity calls at the start of the next one.
+         */
+
+        /// <summary>
+        /// The previous session's static listener, which this session does not register: it used
+        /// to be called all the same, and its type still counted for the mismatch warning.
+        /// </summary>
+        [Test]
+        public void ANewPlaySessionDoesNotCallThePreviousSessionsListeners()
+        {
+            var channel = NewChannel();
+            Register<int>(channel, StaticHandler);
+
+            Sync.ResetListeners();
+
+            // A float on the channel the old int listener was on is nobody's business now: no
+            // mismatch warning (any log would fail the test).
+            Sync.OnServerMessage(channel, "broadcast::int", new JValue(1));
+            Sync.OnServerMessage(channel, "broadcast::float", new JValue(1.5f));
+
+            Assert.That(_staticReceived, Is.Zero, "A listener from the previous Play session was called in this one");
+            Assert.That(ChannelListenerRegistry.ListenerCount(channel, typeof(int)), Is.Zero,
+                "The previous Play session's listener still counts for the type-mismatch warning");
+        }
+
+        [Test]
+        public void AListenerRegisteredAgainInANewPlaySessionIsCalledOnce()
+        {
+            var channel = NewChannel();
+            Register(channel, CaptureFreeLambda());
+
+            Sync.ResetListeners();
+            Register(channel, CaptureFreeLambda());
+            Sync.OnServerMessage(channel, "broadcast::int", new JValue(1));
+
+            Assert.That(_staticReceived, Is.EqualTo(1));
+            Assert.That(ChannelListenerRegistry.ListenerCount(channel, typeof(int)), Is.EqualTo(1));
+        }
+
+        /// <summary>
+        /// A listener owned by an object still goes with the object in the new session, and takes
+        /// its count with it.
+        /// </summary>
+        [Test]
+        public void InANewPlaySessionAListenerStillGoesWithItsObject()
+        {
+            var channel = NewChannel();
+
+            // The previous session, which ends by destroying its objects.
+            var previous = Spawn();
+            Register<int>(channel, previous.OnValue);
+            Object.DestroyImmediate(previous.gameObject);
+
+            Sync.ResetListeners();
+
+            var listening = Spawn();
+            Register<int>(channel, listening.OnValue);
+            Register<int>(channel, StaticHandler);
+            Object.DestroyImmediate(listening.gameObject);
+
+            Sync.OnServerMessage(channel, "broadcast::int", new JValue(1));
+
+            Assert.That((listening.Received, _staticReceived), Is.EqualTo((0, 1)));
+            Assert.That(ChannelListenerRegistry.ListenerCount(channel, typeof(int)), Is.EqualTo(1),
+                "The destroyed object's listener was not dropped, or took the other listener's count with it");
+        }
+
+
+        /*
          *  Helpers
          */
 
