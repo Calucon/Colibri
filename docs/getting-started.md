@@ -56,7 +56,8 @@ nothing is sent and nothing that arrived is delivered, because none of that happ
 runs again.
 
 If you are testing two clients on one machine — and you will be — one of them is always in the
-background. Turn it on now.
+background. Turn it on now. (On a Quest this setting does nothing; see
+[Building for Meta Quest](#building-for-meta-quest).)
 
 ---
 
@@ -201,6 +202,33 @@ a browser. Your `Debug.Log` output appears there.
 
 ---
 
+## Building for Meta Quest
+
+A Quest app is an Android build: *File → Build Settings* (*Build Profiles* in Unity 6) *→ Android →
+Switch Platform*. Quest builds use the IL2CPP scripting backend and ARM64 (*Project Settings →
+Player → Other Settings*), and Colibri works with both; `[Sync]` members survive code stripping
+without any extra step.
+
+Then open *Window → Colibri Configuration* again. With the Android target active, it has an
+**Android / Meta Quest** section for two settings that let a build install and start normally and
+then fail on the headset, where there is no console to tell you. Each comes with a button that fixes
+it, and the console warns about them too:
+
+- **Internet Access** has to be *Require*. On *Auto*, the app may be built without permission to
+  open a network connection, and it never connects.
+- **Allow downloads over HTTP** has to let plain HTTP through (the button sets *Always allowed*),
+  unless your server uses SSL. Otherwise every `Store` call fails on the headset with "Insecure
+  connection not allowed".
+
+Two things the window cannot check for you:
+
+- **The server address has to be one the headset can reach**: the server's IP address or host name
+  on your network. `localhost` on a headset is the headset itself.
+- ***Run In Background* has no effect on Android.** While the app is paused, none of your scripts
+  run, so nothing is sent or delivered until it resumes.
+
+---
+
 ## The samples
 
 *Window → Package Manager → Colibri → Samples → Import*. Each one lands in `Assets/Samples/` and is
@@ -264,6 +292,7 @@ what type each expects, and the last twenty messages in and out.
 | --- | --- |
 | Two clients ignore each other, both connected | Different app names. The Status window shows the one in use — compare them. |
 | Objects or messages you did not create show up | Another group uses the same app name. Pick one nobody else uses. |
+| Works in the Editor, nothing happens on the Quest | See [Building for Meta Quest](#building-for-meta-quest): Internet Access, plain HTTP, and the server address. |
 | A message never arrives, no errors | The listener expects a different type than the sender sent. Check the console; Colibri names both. |
 | One client goes quiet when you click away | *Run In Background* is off on that client. |
 | Nothing connects at all | Console says `Colibri is not configured yet` — open *Window → Colibri Configuration* and set an app name. |
