@@ -31,6 +31,7 @@ namespace HCIKonstanz.Colibri.E2E
     {
         private FakeV1Server _fakeServer;
         private FakeColibriServer _scriptedServer;
+        private UnansweredPort _unansweredPort;
 
         [UnitySetUp]
         public IEnumerator ReplaceTheConnection()
@@ -46,6 +47,8 @@ namespace HCIKonstanz.Colibri.E2E
             _fakeServer = null;
             _scriptedServer?.Dispose();
             _scriptedServer = null;
+            _unansweredPort?.Dispose();
+            _unansweredPort = null;
 
             // Put the singleton back the way the rest of the suite expects to find it: pointed at
             // the real server and freshly built, so the next fixture's Instance does not hand back
@@ -264,6 +267,49 @@ namespace HCIKonstanz.Colibri.E2E
             Assert.That(Connection.Status, Is.Not.EqualTo(ConnectionStatus.ProtocolMismatch),
                 "A guess must not settle into the status reserved for a refusal the server actually sent");
         }
+
+        /*
+         *  An address nothing answers on.
+         */
+
+        /// <summary>
+        /// A wrong address, or a server on another network: nothing refuses the connection, and
+        /// nothing answers it. The attempt used to stay in Connecting for the OS's SYN timeout -
+        /// about two minutes on a Quest - without a retry or a word in the log. It is given up after
+        /// 5 s now, says why, and the backoff carries on as after any other failed attempt.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator AnAttemptNothingAnswersIsGivenUpAfterFiveSecondsAndRetried()
+        {
+            IgnoreTheExpectedFailures();
+
+            _unansweredPort = new UnansweredPort();
+            if (!_unansweredPort.Hangs)
+                Assert.Ignore("This system refuses a connection to a full backlog instead of leaving it unanswered, "
+                    + "so there is no port here that never answers. Check the timeout by hand: an unreachable server address "
+                    + "should leave Connecting after 5 s.");
+
+            var started = Time.realtimeSinceStartup;
+            ConnectionTo(_unansweredPort.Port);
+            Assert.That(Connection.Status, Is.EqualTo(ConnectionStatus.Connecting));
+
+            yield return E2EServer.WaitUntil(() => Connection.LastConnectFailure != null,
+                "The attempt to reach a port that never answers was never given up", 15f);
+            var gaveUpAfter = Time.realtimeSinceStartup - started;
+
+            Assert.That(gaveUpAfter, Is.GreaterThanOrEqualTo(4.5f).And.LessThan(10f),
+                "The attempt should be given up after the connect timeout of 5 s");
+            Assert.That(Connection.LastConnectFailure, Does.Contain($":{_unansweredPort.Port} did not answer within 5 s"));
+            Assert.That(Connection.Status, Is.Not.EqualTo(ConnectionStatus.Connecting));
+
+            yield return E2EServer.WaitUntil(() => Connection.Status == ConnectionStatus.Reconnecting,
+                "The client did not try again after giving up an attempt", 5f);
+
+            // Nothing was accepted, so this says nothing about protocol versions.
+            Assert.That(Connection.SuspectedProtocolMismatch, Is.Null);
+            Assert.That(Connection.ConsecutiveEarlyFrameFailures, Is.Zero);
+        }
+
 
         /*
          *  A refusal the server actually sent: final, and it has to look final to user code too.

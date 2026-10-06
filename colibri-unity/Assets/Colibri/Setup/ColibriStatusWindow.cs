@@ -160,7 +160,13 @@ namespace HCIKonstanz.Colibri.Setup
             }
             else
             {
-                EditorGUILayout.HelpBox("Not connected. Check that colibri-server is running and that the server address above is reachable.", MessageType.Warning);
+                // A timeout and a refusal want different fixes - the address or the network, against
+                // the server or its port - so the last one is shown rather than left to the console.
+                var failure = connection.LastConnectFailure;
+                EditorGUILayout.HelpBox(
+                    "Not connected. Check that colibri-server is running and that the server address above is reachable."
+                    + (failure == null ? "" : $"\n\nLast attempt: {failure}."),
+                    MessageType.Warning);
             }
         }
 

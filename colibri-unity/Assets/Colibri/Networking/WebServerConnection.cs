@@ -6,6 +6,7 @@ using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
@@ -64,6 +65,16 @@ namespace HCIKonstanz.Colibri.Networking
         private const int RECEIVE_BUFFER_SIZE = 64 * 1024;
         private const int RECONNECT_DELAY_MIN_MS = 500;
         private const int RECONNECT_DELAY_MAX_MS = 10 * 1000;
+
+        /// <summary>
+        /// How long one attempt to open the TCP connection may take before it is given up and
+        /// retried after the usual backoff. The socket has no timeout of its own: an address that
+        /// nothing answers on - a server switched off on another subnet, a mistyped IP - used to
+        /// hold the attempt in Connecting for the OS's own SYN timeout, about two minutes on
+        /// Android, without a retry or a word in the log. On a local network a connection opens in
+        /// milliseconds; 5 s still leaves room for two lost SYNs on bad Wi-Fi.
+        /// </summary>
+        private const int CONNECT_TIMEOUT_MS = 5000;
 
         /// <summary>
         /// How many broadcasts and other messages that are not model state may wait for the
@@ -594,6 +605,12 @@ namespace HCIKonstanz.Colibri.Networking
                     // to resynchronize on - so the connection is dropped and rebuilt.
                     Debug.LogError($"Colibri: invalid frame from server, dropping connection: {e.Message}");
                 }
+                catch (TimeoutException e)
+                {
+                    // Nothing refused the connection - nothing answered at all, which is usually
+                    // the wrong address, or a device on another network than the server.
+                    Debug.Log($"Colibri: {e.Message}. Check the server address, and that this device is on the same network as the server. Retrying...");
+                }
                 catch (SocketException e)
                 {
                     Debug.Log($"Colibri: connection to {address} failed ({e.SocketErrorCode}), retrying...");
@@ -711,8 +728,23 @@ namespace HCIKonstanz.Colibri.Networking
             // no cancellation token overload for either on this API surface.
             using (token.Register(() => CloseSocket(socket)))
             {
-                await socket.ConnectAsync(host, port).ConfigureAwait(false);
+                try
+                {
+                    await ConnectAsync(socket, host, port, CONNECT_TIMEOUT_MS, token).ConfigureAwait(false);
+                }
+                catch (TimeoutException e)
+                {
+                    _lastConnectFailure = e.Message;
+                    throw;
+                }
+                catch (SocketException e) when (!token.IsCancellationRequested)
+                {
+                    _lastConnectFailure = $"connecting to {host}:{port} failed ({e.SocketErrorCode})";
+                    throw;
+                }
+
                 token.ThrowIfCancellationRequested();
+                _lastConnectFailure = null;
 
                 // Accepted, but nothing is known about what accepted it yet. The watchdog gives
                 // it as long to say something as a connected server gets between heartbeats.
@@ -727,6 +759,45 @@ namespace HCIKonstanz.Colibri.Networking
 
                 await ReceiveLoop(socket, host, port, app, token).ConfigureAwait(false);
             }
+        }
+
+        /// <summary>
+        /// Opens the TCP connection, or gives up after <paramref name="timeoutMs"/>. Closing the
+        /// socket is the only way to abandon a pending connect on this API surface, so that is
+        /// what giving up does; the socket cannot be used again afterwards.
+        /// </summary>
+        /// <exception cref="TimeoutException">Nothing answered in time.</exception>
+        /// <exception cref="OperationCanceledException"><paramref name="token"/> was cancelled first.</exception>
+        /// <exception cref="SocketException">The attempt failed before the time was up - refused, say.</exception>
+        /// <remarks>Internal for the EditMode tests, which time it against a port that never answers.</remarks>
+        internal static async Task ConnectAsync(Socket socket, string host, int port, int timeoutMs, CancellationToken token)
+        {
+            var connecting = socket.ConnectAsync(host, port);
+
+            using (var timer = CancellationTokenSource.CreateLinkedTokenSource(token))
+            {
+                if (await Task.WhenAny(connecting, Task.Delay(timeoutMs, timer.Token)).ConfigureAwait(false) == connecting)
+                {
+                    timer.Cancel();
+
+                    // Rethrows a connect that failed by itself.
+                    await connecting.ConfigureAwait(false);
+                    return;
+                }
+            }
+
+            CloseSocket(socket);
+
+            // The abandoned connect now fails with the closed socket. Nothing is waiting for it any
+            // more, so its exception is observed here rather than surfacing as unobserved later.
+            _ = connecting.ContinueWith(attempt => { _ = attempt.Exception; }, CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+
+            token.ThrowIfCancellationRequested();
+            // Invariant: this ends up in the log and on screen, and "0,5 s" in one locale and
+            // "0.5 s" in another is one more thing to puzzle over.
+            throw new TimeoutException(
+                $"{host}:{port} did not answer within {(timeoutMs / 1000f).ToString("0.#", CultureInfo.InvariantCulture)} s");
         }
 
         /// <summary>
@@ -962,6 +1033,15 @@ namespace HCIKonstanz.Colibri.Networking
         /// <see cref="Status"/> is unaffected. Cleared as soon as any frame decodes.
         /// </summary>
         public string SuspectedProtocolMismatch => _suspectedProtocolMismatch;
+
+        /// <summary>
+        /// Why the last attempt to open the TCP connection failed - "192.168.0.10:9012 did not
+        /// answer within 5 s", say, or a refusal - or null once one has opened. For showing why the
+        /// client is still not connected; each failure is logged as well. Unaffected by anything
+        /// that happens after the connection opened.
+        /// </summary>
+        public string LastConnectFailure => _lastConnectFailure;
+        private volatile string _lastConnectFailure;
 
 
         /*
