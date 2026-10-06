@@ -37,8 +37,9 @@ Alternatively, download the latest [Colibri release](https://github.com/hcigroup
 
 1. Install Colibri (above). A configuration window opens on its own.
 2. Enter an **App Name** — any word you like, but every client that should see each other has to
-   use the *same* one — and press *Save Config*. The default server
-   (`colibri.hci.uni-konstanz.de`) works out of the box.
+   use the *same* one — and the **Server Address** of your colibri-server, then press *Save
+   Config*. The address is preset to the public test server `colibri.hci.uni-konstanz.de`; for a
+   course or a study, use the server you were given.
 3. Import the **SendData** sample: *Window → Package Manager → Colibri → Samples → Import*.
 4. Open the sample scene and press Play. Tick `SendProperties` on the `SendMessages` object and
    watch the console. (The scene needs TextMeshPro's essential resources — see
@@ -48,7 +49,8 @@ Alternatively, download the latest [Colibri release](https://github.com/hcigroup
    moment its window loses focus. The connection stays up and the status window still says
    *Connected* — but nothing is sent and nothing that arrived is delivered, because none of that
    happens until `Update` runs again. It is the single most confusing way for two clients on one
-   machine to appear broken.
+   machine to appear broken. (Unity ignores this setting on Android, so it does not matter for
+   the Quest build itself.)
 6. To see two clients talk to each other, build the scene and run the build alongside the Editor —
    or open the project a second time from the Unity Hub.
 
@@ -61,7 +63,8 @@ Upon installation, a configuration window should show up:
 
 <img src="img/config.png" alt="Config Screen" width=400/>
 
-- Enter the URL of your (shared) [server](../colibri-server). A public test server can be found at `colibri.hci.uni-konstanz.de` (beware of network latency!)
+- Enter the address of your (shared) [server](../colibri-server): a host name or an IP address, without `http://`. A public test server can be found at `colibri.hci.uni-konstanz.de` (beware of network latency!)
+- On a headset or phone, `localhost` is the device itself. Enter the IPv4 address of the machine running the server on your local network instead.
 - Choose a unique *app name*. Though a server supports multiple clients, data is only synchronized between clients with identical *app names*!
 - To adjust the Colibri Configuration you can reopen the window in Unity under "Window" -> "Colibri Configuration" 
 - All changes are saved to `Resources/ColibriConfig`
@@ -74,9 +77,10 @@ Do not modify port numbers unless you know what you are doing!
 The Remote Store talks to the server over REST. With the `SSL/TLS` toggle off those requests go
 out as plain `http`, and Unity blocks cleartext HTTP by default. **Loopback is exempt**, so a
 server on `localhost` needs no change at all — this only comes up once the server is a real
-remote host that is not on HTTPS. In that case set *Project Settings → Player → Other Settings →
-**Insecure HTTP Option*** to *Always allowed*, or put the server behind HTTPS and turn `SSL/TLS`
-back on.
+remote host that is not on HTTPS (and from a headset, every server is a remote host). In that case
+set *Project Settings → Player → Other Settings → **Allow downloads over HTTP*** to *Always
+allowed*, or put the server behind HTTPS and turn `SSL/TLS` back on. With the Android target
+active, Colibri checks this for you (see [Meta Quest and Android](#meta-quest-and-android)).
 
 When using the voice chat, Colibri allows to adjust the sampling rate on the server. In this case, clients need to manually set the `Voice Sampling Rate` setting in the configuration.
 
@@ -86,6 +90,39 @@ Default values:
 - TCP server Port: `9012`
 - Voice server Port: `9013`
 - Voice Sampling Rate: `48000`
+
+## Meta Quest and Android
+
+A Meta Quest app is an Android build: switch the platform to Android under *File → Build
+Settings* (*File → Build Profiles* on Unity 6). Quest needs the ARM64 architecture, which on
+Android requires the IL2CPP scripting backend.
+
+With the Android target active, Colibri checks two Player settings that otherwise only fail on the
+headset, where there is no console to say why. It warns in the console after every script reload,
+and *Window → Colibri Configuration* lists the problems in an **Android / Meta Quest** section, each
+with a button that fixes it:
+
+- **Internet Access** must be *Require* (*Player → Other Settings*). Colibri connects with plain
+  sockets, and with *Auto* the build may lack Android's INTERNET permission: the app starts and
+  never connects.
+- **Allow downloads over HTTP** must be *Always allowed* while the `SSL/TLS` toggle is off and the
+  server is not `localhost`. Otherwise every `Store` call fails with "Insecure connection not
+  allowed".
+
+Also worth knowing:
+
+- **Server address.** On the headset, `localhost` is the headset. Enter the IPv4 address of the
+  machine running the server on your local network; voice chat only works over IPv4 anyway.
+- **Run In Background** has no effect on Android.
+- **Managed code stripping.** `[Sync]` members are kept by Unity's managed code stripping on
+  their own. Your own classes that only Newtonsoft JSON touches — sent with `JToken.FromObject`,
+  read with `ToObject<T>`, or saved with `Store` — are only reached through reflection, so
+  stripping may remove their members once *Managed Stripping Level* is above *Minimal*. Keep it
+  at *Minimal*, or preserve those classes yourself with `[Preserve]` or a `link.xml`.
+- **`[Sync]` fields on IL2CPP.** A `[Sync]` property is read through a direct delegate, but a
+  `[Sync]` field is read through reflection, which allocates for a value type (`int`, `float`,
+  `Vector3`, …) every frame. With many synced objects, make such members properties.
+  `SyncTransform` only uses properties.
 
 ## Samples
 
@@ -128,6 +165,8 @@ Colibri also reports the common mistakes in the console rather than failing quie
 | A `[Sync]` field never syncs | Its type is reported at startup if Colibri cannot put it on the wire |
 | Connected, but one client is silent | That client's Editor window is in the background and *Run In Background* is off — see step 5 of the Quickstart |
 | `Store.Get`/`Put` reports a failure | The log names the operation, the object, the URL, the transport error and the HTTP status; requests give up after 10 s rather than hanging |
+| Never connects, although something answers on the port | `3 connections in a row were accepted but ended before a single frame could be read. This usually means a protocol mismatch…` — the server is probably 1.x, or the address is not a colibri-server |
+| Works in the Editor, not on the Quest | With the Android target active: `Colibri (Android build): …` in the console, and the *Android / Meta Quest* section of *Window → Colibri Configuration* |
 
 ## Documentation
 
