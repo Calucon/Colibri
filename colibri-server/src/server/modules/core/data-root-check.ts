@@ -73,24 +73,58 @@ export class DataRootCheck extends Service {
             lines.push(
                 'This server cannot save anything there: store.json and voice recordings stay in',
                 'memory and are lost when it stops. It keeps running anyway.',
-                '',
-                'Fix: make that directory writable for the user running the server, then restart it.',
             );
         } else {
-            const owner = `${uid}:${gid ?? uid}`;
             lines.push(
                 `This server runs as uid ${uid} (gid ${gid ?? '?'}) and cannot save anything there:`,
                 'store.json and voice recordings stay in memory and are lost when it stops.',
                 'It keeps running anyway.',
-                '',
-                `Fix: give the directory to uid ${uid}, then restart the server:`,
-                `    chown -R ${owner} ${dir}`,
-                `With Docker, run that on the host directory mounted at ${dir}, or mount a`,
-                'named volume there instead of a host directory (-v colibri-data:<that path>).',
             );
         }
 
-        lines.push(RULE);
+        lines.push('', ...DataRootCheck.advise(dir, (error as NodeJS.ErrnoException).code, uid, gid), RULE);
         return lines.join('\n');
+    }
+
+    // By error code: this used to advise `chown -R` whatever went wrong, which does nothing for
+    // a read-only mount, a file where the directory should be, or a full disk.
+    private static advise(dir: string, code: string | undefined, uid: number | undefined, gid: number | undefined): string[] {
+        switch (code) {
+            case 'EACCES':
+            case 'EPERM':
+                if (uid === undefined) {
+                    return [ 'Fix: make that directory writable for the user running the server, then restart it.' ];
+                }
+                return [
+                    `Fix: give the directory to uid ${uid}, then restart the server:`,
+                    `    chown -R ${uid}:${gid ?? uid} ${dir}`,
+                    `With Docker, run that on the host directory mounted at ${dir}, or mount a`,
+                    'named volume there instead of a host directory (-v colibri-data:<that path>).',
+                ];
+            case 'EROFS':
+                return [
+                    'Fix: it is on a read-only file system. Mount something writable there (with',
+                    'Docker: drop ":ro" from the volume mounted there), or point DATA_ROOT at a',
+                    'writable directory, then restart the server.',
+                ];
+            case 'ENOTDIR':
+            case 'EEXIST':
+                return [
+                    'Fix: that path, or one of the directories above it, is a file, not a directory.',
+                    'Move the file out of the way or point DATA_ROOT at a directory, then restart the',
+                    'server. With Docker, check that what is mounted there is a directory.',
+                ];
+            case 'ENOSPC':
+            case 'EDQUOT':
+                return [
+                    'Fix: the disk (or the disk quota) it is on is full. Free some space there, then',
+                    'restart the server. Voice recordings (rec_*.wav) are saved there too.',
+                ];
+            default:
+                return [
+                    'Fix: make sure that path is a directory, and that the user running the server',
+                    'can write to it, or point DATA_ROOT at one that is. Then restart the server.',
+                ];
+        }
     }
 }

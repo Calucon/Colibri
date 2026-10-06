@@ -88,6 +88,21 @@ describe('DataRootCheck', () => {
 
         expect(ok).toBe(false);
         expect(printed[0]).toContain(`DATA_ROOT is not writable: ${file}`);
+        expect(printed[0]).toContain('EEXIST');
+        expect(printed[0]).toContain('is a file, not a directory');
+        expect(printed[0]).not.toContain('chown');
+    });
+
+    it('reports a path below a file', async () => {
+        const file = path.join(tmp, 'store.json');
+        await writeFile(file, '{}');
+
+        const { ok, printed } = await run(path.join(file, 'data'));
+
+        expect(ok).toBe(false);
+        expect(printed[0]).toContain('ENOTDIR');
+        expect(printed[0]).toContain('is a file, not a directory');
+        expect(printed[0]).not.toContain('chown');
     });
 
     it('names no uid where there is none to name', () => {
@@ -96,5 +111,72 @@ describe('DataRootCheck', () => {
         expect(text).toContain('DATA_ROOT is not writable: C:\\colibri\\data');
         expect(text).not.toContain('chown');
         expect(text).not.toContain('uid');
+    });
+
+    // It used to advise `chown -R` whatever went wrong - no help at all for a read-only mount,
+    // a file where the directory should be, or a full disk.
+    describe('advises a fix for what actually went wrong', () => {
+        const DIR = '/srv/colibri/data';
+
+        // A uid of 1000 as in the image, unless there is none (Windows).
+        const describeCode = (code: string | undefined, withUid = true) => {
+            const error: NodeJS.ErrnoException = new Error(`${code ?? 'Unknown'}: something, open '${DIR}/.colibri-write-check-1'`);
+            if (code !== undefined) error.code = code;
+            return withUid ? DataRootCheck.describe(DIR, error, 1000, 1000) : DataRootCheck.describe(DIR, error, undefined, undefined);
+        };
+
+        it.each([ 'EACCES', 'EPERM' ])('%s: give the directory to the server\'s uid, or use a named volume', code => {
+            const text = describeCode(code);
+
+            expect(text).toContain('runs as uid 1000 (gid 1000)');
+            expect(text).toContain(`chown -R 1000:1000 ${DIR}`);
+            expect(text).toContain('named volume');
+        });
+
+        it.each([ 'EACCES', 'EPERM' ])('%s without a uid: make it writable for whoever runs the server', code => {
+            const text = describeCode(code, false);
+
+            expect(text).toContain('make that directory writable for the user running the server');
+            expect(text).not.toContain('chown');
+        });
+
+        it('EROFS: the mount is read-only', () => {
+            const text = describeCode('EROFS');
+
+            expect(text).toContain('read-only file system');
+            expect(text).toContain(':ro');
+            expect(text).not.toContain('chown');
+        });
+
+        it.each([ 'ENOTDIR', 'EEXIST' ])('%s: a file is in the way', code => {
+            const text = describeCode(code);
+
+            expect(text).toContain('is a file, not a directory');
+            expect(text).not.toContain('chown');
+        });
+
+        it.each([ 'ENOSPC', 'EDQUOT' ])('%s: the disk is full', code => {
+            const text = describeCode(code);
+
+            expect(text).toContain('is full');
+            expect(text).toContain('Free some space');
+            expect(text).not.toContain('chown');
+        });
+
+        it.each([ 'EIO', undefined ])('%s: says what to make sure of, without guessing', code => {
+            const text = describeCode(code);
+
+            expect(text).toContain('make sure that path is a directory, and that the user running the server');
+            expect(text).not.toContain('chown');
+        });
+
+        it('says in every case that nothing will be saved, and that the server keeps running', () => {
+            for (const code of [ 'EACCES', 'EROFS', 'ENOTDIR', 'ENOSPC', 'EIO' ]) {
+                const text = describeCode(code);
+                expect(text).toContain(`DATA_ROOT is not writable: ${DIR}`);
+                expect(text).toContain('store.json and voice recordings stay in memory');
+                expect(text).toContain('It keeps running anyway.');
+            }
+        });
     });
 });

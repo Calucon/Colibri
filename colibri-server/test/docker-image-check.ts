@@ -174,6 +174,9 @@ interface Deployment {
     // Seeded by mount(): a symlink out of the data directory, whose target must stay root's.
     symlinkOut?: string;
     writable: boolean;
+    // When not writable: the error the server must name, and a phrase of the fix it must
+    // advise for that error. EACCES and the chown command unless given.
+    failure?: { code: string; advice: string };
 }
 
 const runDeployment = async function (image: string, deployment: Deployment): Promise<void> {
@@ -254,11 +257,15 @@ const runDeployment = async function (image: string, deployment: Deployment): Pr
         check('writes store.json', stored.includes(deployment.name), stored || '(no store.json)');
         check('logs no permission error', !/EACCES|EPERM|not writable/.test(logs), logs.slice(-1500));
     } else {
+        const failure = deployment.failure ?? { code: 'EACCES', advice: 'chown -R 1000:1000' };
         check('does not pretend to have written store.json', !stored.includes(deployment.name));
-        check('says on stderr that DATA_ROOT is not writable, naming the path and the uid',
-            logs.includes(`DATA_ROOT is not writable: ${DATA_DIR}`) && logs.includes('uid 1000') && logs.includes('chown -R 1000:1000'),
+        check(`says on stderr that DATA_ROOT is not writable, naming the path, the uid, ${failure.code} and its fix`,
+            logs.includes(`DATA_ROOT is not writable: ${DATA_DIR}`) && logs.includes('uid 1000') && logs.includes(failure.code) && logs.includes(failure.advice),
             logs.slice(-2500));
-        check('reports the failed save in the log', /EACCES/.test(logs), logs.slice(-1500));
+        if (failure.code !== 'EACCES') {
+            check(`does not advise chown for ${failure.code}`, !logs.includes('chown -R'), logs.slice(-2500));
+        }
+        check('reports the failed save in the log', new RegExp(`${failure.code}: .*store\\.json\\.tmp`).test(logs), logs.slice(-1500));
         const get = await fetch(`${web}/api/store/image-check/value`);
         check('keeps serving the value from memory', get.status === 200 && JSON.stringify(await get.json()) === JSON.stringify(value));
     }
@@ -315,6 +322,7 @@ const main = async function (): Promise<void> {
     };
 
     const legacy = { app: 'legacy-app', key: 'greeting', value: 'stored by colibri 1.x' };
+    const legacyStore = { 'store.json': JSON.stringify({ [legacy.app]: { [legacy.key]: legacy.value } }) };
     const deployments: Deployment[] = [
         {
             name: 'bind-missing-dir',
@@ -323,7 +331,7 @@ const main = async function (): Promise<void> {
         },
         {
             name: 'bind-root-owned-1x',
-            mount: img => rootOwnedDir('bind-root-owned-1x', { 'store.json': JSON.stringify({ [legacy.app]: { [legacy.key]: legacy.value } }) }, img, '/etc/shadow'),
+            mount: img => rootOwnedDir('bind-root-owned-1x', legacyStore, img, '/etc/shadow'),
             legacy,
             symlinkOut: '/etc/shadow',
             writable: true,
@@ -346,6 +354,15 @@ const main = async function (): Promise<void> {
             mount: img => rootOwnedDir('user-1000-root-owned-dir', {}, img),
             user: '1000:1000',
             writable: false,
+        },
+        {
+            // The 1.x data mounted read-only: chown fails, and so does every save. A chown
+            // command would be no help, so the server must name the read-only mount instead.
+            name: 'bind-read-only',
+            mount: async img => `${await rootOwnedDir('bind-read-only', legacyStore, img)}:ro`,
+            legacy,
+            writable: false,
+            failure: { code: 'EROFS', advice: 'drop ":ro"' },
         },
     ];
 
