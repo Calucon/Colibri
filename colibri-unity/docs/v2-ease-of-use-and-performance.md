@@ -1256,6 +1256,15 @@ to active objects, and when `Application.quitting` was raised (`SingletonLifetim
 which covers the inactive ones. All that goes out on the way is what the send-rate limit still held
 (§2).
 
+**A copy of a disabled `Template` is switched on before it gets its state.** `Instantiate` gives a
+copy its template's active state, and a manager's template is often kept switched off in the scene
+so that it does not sync as an object of its own. A copy that is off never runs `Awake`, so — with
+registration where it is — it never registered for its own updates or with the ticker, and stayed
+as its first update left it. `SyncBehaviourManager.OnModelUpdate` therefore switches the copy on
+first: `Awake` latches the template's values, the state applied next is latched as well, so none
+of it is echoed back, and a `SyncTransform`'s synced `Active` then decides whether it ends up
+visible. Since it stays registered while inactive, a later `active: true` shows it again.
+
 **Only the traffic log is reset at `SubsystemRegistration`, not `Sync`'s listener dictionaries.**
 Those are statics too, and they survive Play mode with domain reload disabled just as readily. A
 listener belonging to a Unity object is dropped once that object is destroyed — lazily, the next

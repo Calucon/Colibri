@@ -294,6 +294,14 @@ rationale, migration steps, and what the Editor verification did and did not cov
   the component was disabled — and then silently dropped the next genuine local change. Received
   values are now latched as the known state instead, and `TriggerSync` sends the full state in one
   message.
+- **Objects built from a disabled `Template` come to life.** A copy starts out as its template is,
+  and a manager's template is often kept switched off in the scene. A copy that is switched off
+  never runs `Awake`, so it never registered for its own updates or with the ticker: it stayed as
+  its first update left it, never sent a change, and a `SyncTransform` hidden elsewhere could never
+  be shown again (in 1.3.1 too). The manager now switches the copy on before applying the state,
+  so `Awake` runs, and the state decides whether it stays visible. The member table is also built
+  when the first update arrives, not only in `Awake`, so an update that reaches a model before any
+  object of its type has woken is applied instead of being dropped with `Unable to sync attribute`.
 - **Wire names are lowercased the same way on every machine.** Model channels and `[Sync]` member
   names used `ToLower()`, which on Turkish and Azerbaijani systems turns `I` into a dotless `ı` —
   `PhysicsId` went out under a name no other client uses, and stopped syncing. They now use

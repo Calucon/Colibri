@@ -338,7 +338,7 @@ Showing, hiding and deleting:
 
 `SyncTransform` also supports physics. `PhysicsAuthority` defines which client is currently controlling the physics. Only one client can control the physics of an object at a time. If the `PhysicsAuthority` is set to `true` on one client it is automatically set to `false` on all other clients. If the `PhysicsAuthority` is checked by default, the first client receives the physics authority. The `isKinematic` field of the attached `Rigidbody` will be overwritten by the `isKinematic` field of the `SyncTransform`. Therefore, if you want to change this field, always (additionally) set the `isKinematic` field of the `SyncTransform`.
 
-For dynamically created objects, add a `[SyncTransformManager]` prefab to the scene. Create a prefab of the object you'll dynamically instantiate and add it to the `Template` attribute. Set the `ModelId` (in the `SyncTransform`) of the prefab to a custom value that identifies the prefab. When a client instantiates an object with `SyncTransform` and the same `ModelId`, the Manager will automatically create an object using this prefab and synchronize it. Make sure to leave the `Id` field of the prefab blank!
+For dynamically created objects, add a `[SyncTransformManager]` prefab to the scene. Create a prefab of the object you'll dynamically instantiate and add it to the `Template` attribute. Set the `ModelId` (in the `SyncTransform`) of the prefab to a custom value that identifies the prefab. When a client instantiates an object with `SyncTransform` and the same `ModelId`, the Manager will automatically create an object using this prefab and synchronize it. Make sure to leave the `Id` field of the prefab blank! Instead of a prefab, the `Template` can also be an object in the scene that you keep switched off — see [SyncBehaviour](#syncbehaviour).
 
 <img src="img/synctransformmanager.png" alt="SyncTransformManager" width=400/>
 
@@ -417,6 +417,12 @@ public class MyClassManager : SyncBehaviourManager<MyClass>
 ```
 
 The manager should be added to your scene (e.g., on an empty GameObject), and the manager requires a Prefab with the model script for synchronizing different objects. 
+
+The manager's `Template` can be a prefab, or an object in the scene that you keep switched off (an
+active one would also be synced as an object in its own right). Every copy the manager builds is
+switched on, so its scripts run `Awake`, and then takes the synced state. A `SyncTransform` copy of
+an object that is hidden elsewhere is therefore switched off again at once, and shown as soon as
+the original is.
 
 By the way: `SyncTransform` is also a `SyncBehaviour`. What it says above about disabling, destroying and quitting applies to every `SyncBehaviour`; only the active state is specific to `SyncTransform`.
 
