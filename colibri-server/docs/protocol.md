@@ -351,10 +351,15 @@ as `Invalid frame length: 1744830464` (`0x68000000`, `'h' << 24`).
 
 Before writing a frame to a client's socket, the server checks `socket.writableLength` against a
 1MB high-water mark. If the client's write buffer already exceeds it, the frame is dropped (not
-queued). The server logs a warning when a client starts falling behind, and another, with the
-number of frames dropped, once it has caught up. For a last-write-wins synchronization server,
-dropping a stale update for a client that cannot keep up is the correct behavior - buffering
-without bound would only grow process memory for data that is about to be superseded anyway.
+queued), whatever it carries: a heartbeat, a `broadcast::` message, a `model::update` or
+`model::delete`, a `client::connected`. The server logs a warning when a client starts falling
+behind, and another, with the number of frames dropped, once it has caught up. That keeps the
+server's memory bounded for a client that cannot keep up, but the client is not told what it
+missed. A continuous `broadcast::` stream gets over a dropped message with the next one, while a
+one-off broadcast is lost. A `model::update` usually carries only the fields that changed, so a
+dropped one can leave a field out of date on that client until it changes again, and a dropped
+`model::delete` leaves the object in place. A client that reconnects asks for the current models
+again (see [Known limits](#known-limits)).
 
 This is the outgoing side. For what the server does when clients send more than it can process,
 see [Inbound limits](#inbound-limits).
