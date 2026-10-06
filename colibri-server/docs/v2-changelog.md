@@ -346,11 +346,11 @@ The endpoints are documented under [REST store](./protocol.md#rest-store).
 
 ### Documentation
 
-- Added `docs/protocol.md`: the v3 framing, version checking and detecting an out-of-date server,
-  the payload shape of every `broadcast::` command, size limits, the server's own channels, model
-  synchronization and the REST store.
+- Added `docs/protocol.md`: which messages the server relays, the v3 framing, version checking and
+  detecting an out-of-date server, the payload shape of every `broadcast::` command, size limits,
+  the server's own channels, model synchronization and the REST store.
 - README updated for the Node 24 requirement, the v3 protocol, a Docker setup that works outside a
-  checkout, every configuration variable, where logs go, and the npm scripts.
+  checkout, the configuration variables, where logs go, and the npm scripts.
 
 ### Known limits
 
