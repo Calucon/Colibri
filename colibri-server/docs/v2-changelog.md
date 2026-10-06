@@ -1,51 +1,61 @@
 # colibri-server v2.0.0 — Change Log
 
-Summary of everything that changed in the `1.3.1` → `2.0.0` modernization, derived from
-[`colibri-server-v2-plan.md`](./colibri-server-v2-plan.md) and the post-implementation review in
-[`review-the-overview-repository-colibri-s-effervescent-spark.md`](./review-the-overview-repository-colibri-s-effervescent-spark.md),
-cross-checked against the commit history.
-
-**Not included in this release:** batched `model::request` replies (plan item 23) and all of Phase 5
-(security hardening) were deliberately deferred — see [Deferred work](#deferred-work) below. 30 of the
-32 remaining in-scope plan items shipped clean; 2 shipped partial and were closed out in follow-up
-fixes (noted inline).
+Everything that changed in colibri-server from `1.3.1` to `2.0.0`. To upgrade a project built on
+Colibri 1.x, start with [MIGRATION.md](../../MIGRATION.md), which covers all three components;
+this is the server's full detail.
 
 ---
 
-## Unreleased
+## 2.0.0 — unreleased
 
-- **Protocol version checking.** `PROTOCOL_VERSION` in
-  [`protocol.ts`](../src/server/modules/networking/protocol.ts) is now the single source of truth
-  for both transports, and both check it. Until now the version was parsed off the TCP handshake
-  and the Socket.IO query, stored, logged, shown in the admin UI — and compared against nothing,
-  so a client built against the wrong protocol reconnected forever against a server that said
-  nothing unusual.
+**Breaking changes**
+
+- **New TCP framing.** The 1.x FlatBuffer framing is replaced by a fixed binary header (see
+  [v3 TCP protocol](#v3-tcp-protocol-breaking-change)). colibri-unity 1.x cannot connect to this
+  server; use colibri-unity 2.x.
+- **Protocol version check.** Every client has to announce protocol version `2`, and anything
+  else is refused. That includes colibri-web 1.x, which announces `1` although its Socket.IO
+  envelope still works; use colibri-web 2.x. See
+  [Protocol version checking](#protocol-version-checking).
+- **Node 24 and native ESM** to run from source.
+- **Docker image.** The server runs as the non-root `node` user, started through a new
+  `colibri-entrypoint.sh` that replaces the node base image's entrypoint; `CMD` is
+  `node --enable-source-maps dist/server/main.js` instead of `npm start`. See
+  [Docker](#docker).
+
+**Not in this release:** batched `model::request` replies, and any security hardening - see
+[Deferred work](#deferred-work).
+
+### Protocol version checking
+
+- **Both transports check the protocol version.** `PROTOCOL_VERSION` in
+  [`protocol.ts`](../src/server/modules/networking/protocol.ts) is the single source of truth
+  for the TCP handshake and the Socket.IO query. Until now the version was parsed, stored and
+  logged - and compared against nothing, so a client built against the wrong protocol reconnected
+  forever against a server that said nothing unusual.
 
   A mismatched client is refused: it is told why with a `colibri` / `protocol::rejected` message
   (`{ reason, serverVersion, clientVersion }`) and then disconnected, and it never enters the app
-  index or `clientConnected$`, so no half-connected ghost reaches the admin UI. The admin UI
-  itself is exempt — it ships with the server, and a check that can lock you out of your own
-  console is worse than the mismatch it detects — and its own query was bumped from the stale
-  `'1'` to `'2'`. Documented under
-  [Version checking](./protocol.md#version-checking).
+  index or `clientConnected$`, so no half-connected ghost reaches the admin UI. The server logs
+  every refusal with the client's address and both versions. The admin UI itself is exempt - it
+  ships with the server, and a check that can lock you out of your own console is worse than the
+  mismatch it detects - and its own query was bumped from the stale `'1'` to `'2'`. `clientVersion`
+  is always a string: `''` when a Socket.IO client sent no version, with a reason that says
+  `'(none)'`. Documented under [Version checking](./protocol.md#version-checking).
 
-  This is a check, not a negotiation, and it cannot reach a client whose *framing* differs: a real
-  v1 client cannot decode the refusal. For that case the server-side error naming the peer and
-  both versions is the diagnostic, and the clients cover the rest heuristically.
+- **A refused TCP client is dropped at once.** The refusal frame is queued ahead of the FIN, and
+  the client leaves every index straight away. Before, the next heartbeat logged a
+  `write after end` warning and error and could cut off the refusal frame, and frames sent behind
+  a refused handshake were logged as `Ignoring message ... without app`. A peer that never closes
+  its side is disconnected after 5 s. The same goes for a client cut off for an invalid frame.
 
-- `npm run test:tcpclient` now takes an optional version argument (`-- 1`) so the refusal can be
-  driven by hand against a live server.
+- **A Colibri 1.x Unity client is named in the log.** The refusal cannot reach it - it cannot
+  decode the new framing, and its own handshake fails to parse before its version is read. The
+  server now recognises the 1.x framing and logs one warning naming the client's address, the
+  protocol version the server speaks and the Unity package to upgrade, at most once a minute per
+  address, instead of an anonymous `Invalid frame length: 1744830464` every time it reconnected.
 
-- **Fixed: a web client's log lines reached the admin UI with JSON quotes around them.**
-  `ClientLogger` read the payload with `asString()`, which for a Socket.IO message is
-  `JSON.stringify` — so `console.log('hello')` in a browser showed up as `[client] "hello"`, and a
-  stack trace's newlines were flattened to literal `\n`. colibri-unity had already worked around
-  this by shipping the `log` channel as raw utf8; the server now unwraps a JSON string value
-  instead, which fixes both transports and every colibri-web version already published, without
-  needing a client release. Covered by the new `test/unit/client-logger.test.ts` — that hook had
-  no tests at all.
-
-- **The server now announces its protocol version on connect**, as `colibri` /
+- **The server announces its protocol version on connect**, as `colibri` /
   `protocol::accepted` with `{ serverVersion }`, to every Socket.IO client it accepts. The version
   check runs on the server, so it can only ever catch a stale *client*; this is what lets a client
   catch a stale *server*, which otherwise neither refuses it nor says what it speaks.
@@ -61,16 +71,59 @@ fixes (noted inline).
   TCP clients are sent no announcement and need none — the framing changed incompatibly in 2.0.0,
   so an old server is already unmistakable to them.
 
-- **Documented the payload shape of every `broadcast::` command**, under
-  [Payload shapes](./protocol.md#payload-shapes). The server never inspects these payloads, so
-  their shape is an agreement between the clients — one that had never been written down, which is
-  how colour ended up with two incompatible forms. Also recorded there: that `broadcast::int` is
-  send-side Unity-only, that `log` is the one channel that is not JSON, and that no client
-  re-requests model state after a reconnect.
+- **A TCP client that handshakes again leaves its old app properly.** It is reported as
+  disconnected from the old app and connected to the new one, the old app's synchronized models
+  are cleared if it was the last client there, and the admin UI no longer lists it twice.
 
----
+- `npm run test:tcpclient` takes an optional version argument (`-- 1`) so the refusal can be
+  driven by hand against a live server. It prints the server's reason and exits with code 2 on a
+  refusal, instead of blaming missing heartbeats.
 
-## Runtime, build & tooling
+- `npm run test:vectors`, which CI runs, fails when colibri-web, the Unity package or the admin UI
+  announce a protocol version different from the server's.
+
+### Docker
+
+- The Dockerfile is multi-stage: the builder runs `npm ci` and the full build (admin UI and
+  server); the runtime image ships `dist/` and the production `node_modules` only, and has a
+  `HEALTHCHECK` against the web port. The admin UI's build-only packages (Angular, PrimeNG, d3,
+  zone.js, socket.io-client, fonts) are dev dependencies now and stay out of it, which shrinks
+  the image from 338 MB to 206 MB.
+- The server runs as the non-root `node` user (uid 1000). The image starts as root only long
+  enough to give `/srv/colibri/data` to `node` - when something in it belongs to someone else, and
+  never following a symlink - and then runs the server as `node`. So a bind-mounted directory that
+  Docker creates, or a root-owned `data/` left by 1.x, works as it is; before, writing
+  `store.json` failed with `EACCES` while `PUT /api/store` kept answering 201. Started with
+  `--user`, the container cannot do this, and the server's own startup check says what to fix
+  (see [Logging](#logging)). A `DATA_ROOT` outside `/srv/colibri/data` is not touched, and
+  `docker exec` opens a root shell by default.
+- `node` itself is PID 1 (`CMD` is `node --enable-source-maps dist/server/main.js`, not
+  `npm start`), so `docker stop`'s `SIGTERM` reaches the server and it shuts down cleanly.
+- The image sets `NODE_ENV=production`.
+- `docker-compose.yml` caps the container log at 5 × 10 MB, since client log lines now reach
+  `docker logs` and Docker's default log never rotates.
+- New `npm run test:docker` runs the image against a fresh bind mount, a root-owned 1.x data
+  directory, a named volume, and as `--user 1000:1000`.
+
+### Logging
+
+- **Service log messages are printed to stdout and stderr**, one line each
+  (`<ISO time> <LEVEL> [group/service] message`, errors and warnings on stderr), so they appear
+  in `docker logs`: refused clients, `store.json` write failures, TCP worker crashes and restarts,
+  and client log lines at their level. Before, they reached only the admin UI's in-memory log. New
+  `CONSOLE_LOG_LEVEL` (`error`, `warn`, `info` or `debug`; default `info`, and an invalid value
+  stops startup) and `CONSOLE_LOG_BROADCAST_TRAFFIC` (default `false`). Control characters are
+  escaped and continuation lines indented, so text from a client cannot pass for a server line,
+  and a message over 8 KiB is cut.
+- **The server checks at startup that `DATA_ROOT` is writable.** If it is not, it prints a
+  banner on stderr naming the path, its uid and the fix, and logs an error in the admin UI. It
+  keeps running without persistence, but no longer silently: before, `PUT /api/store` answered
+  201 and the only sign that nothing was saved was an `EACCES` in the admin UI's log.
+- **`broadcast::` traffic is logged**, at Debug level and tagged `broadcastTraffic`, so the
+  admin UI can show sync traffic between clients when asked to; see [Admin UI](#admin-ui).
+- dotenv no longer prints its `injected env ... // tip` line on every start.
+
+### Runtime, build & tooling
 
 - Migrated `src/server` to native ESM (`"type": "module"`, explicit `.js` import extensions,
   `fileURLToPath` in place of `__filename`); the Angular UI build keeps working unaffected.
@@ -79,25 +132,24 @@ fixes (noted inline).
   `strict`, `noUncheckedIndexedAccess`, `nodenext` module resolution, Node 24 target.
 - Runtime bumped from `node:20-alpine` (EOL) to `node:24-alpine`; `@types/node` refreshed;
   `source-map-support/register` replaced with `--enable-source-maps`.
+- Dependencies updated: Angular 17 → 22.1, Express 4 → 5, dotenv 16 → 17. engine.io 6.6.11 and
+  qs 6.16.0 fix the advisories `npm audit` reported against them (GHSA-2gc4-cqfq-p2gv,
+  GHSA-x5fp-wj9c-mxmx, GHSA-4mjr-xmp4-gh2g).
 - `package-lock.json` un-ignored and committed; Docker build uses `npm ci` instead of `npm install`.
-- Dockerfile rewritten as multi-stage: builder runs `npm ci` + full build (UI and server), runtime
-  image ships `dist/` and production `node_modules` only, runs as the non-root `node` user, and adds a
-  `HEALTHCHECK` against the web port.
 - Added Vitest (`test`/`bench` scripts), a `test/` unit suite, and a `bench/` harness
-  (`connection-pool.bench.ts`, `data-store.bench.ts`, framing benchmarks); captured a Phase 0 baseline
-  before any hot-path changes landed.
-- Added `.github/workflows/lint-server.yml` (Node 24, build → lint → test), mirroring the existing
-  `colibri-web` workflow, path-filtered on `colibri-server/**`.
+  (`connection-pool.bench.ts`, `data-store.bench.ts`, `framing.bench.ts`). Benchmark results are
+  not committed: they depend on the machine and the Node version, so they belong in the pull
+  request that claims them.
+- Added `.github/workflows/lint-server.yml` (Node 24: build, lint, unit tests, admin UI tests and
+  `test:vectors`), path-filtered on `colibri-server/**` and on the files `test:vectors` checks in
+  colibri-unity and colibri-web.
 - Removed `body-parser` (→ `express.json()`/`express.urlencoded()`), `uuid` (→
-  `crypto.randomUUID()`), `source-map-support`, and `flatbuffers` (removed once the v3 TCP protocol
-  landed). `lodash` was removed from all server-side code; the dependency itself stayed in
-  `package.json` because `src/ui` (out of scope) still imported it — closed out in the UI
-  modernization pass below.
+  `crypto.randomUUID()`), `source-map-support`, `flatbuffers` (removed once the v3 TCP protocol
+  landed) and `lodash` (also from the admin UI, see [Admin UI](#admin-ui)).
 - Version bumped `1.3.1` → `2.0.0`; dropped the blanket `eslint-disable no-unused-vars` in `main.ts`
   and cleaned up its unused imports.
-- Documented the v3 wire protocol in `docs/protocol.md`.
 
-## Hot-path performance
+### Hot-path performance
 
 - **`Payload` abstraction** (`modules/core/payload.ts`): holds whichever representation (string or
   parsed value) arrived and memoizes the other on first access, replacing the double
@@ -113,10 +165,9 @@ fixes (noted inline).
 - **No more UUID arrays across the worker boundary**: the `m:broadcast` message now carries
   `{ msg, app, exclude }`; the worker resolves recipients from its own per-app index instead of
   structured-cloning a full client-id array per broadcast.
-- **App-scoped broadcasts resolve from the worker's own index** (closes out the item-11 gap flagged in
-  review §5): both the TCP and Socket.IO sides now cheaply check whether an app has any clients of that
-  transport before touching the payload, instead of paying a full parse/stringify and encode for apps
-  with zero clients on that transport.
+- **Apps without recipients cost nothing**: both the TCP and Socket.IO sides check whether an app
+  has any client on that transport before touching the payload, instead of paying a full
+  parse/stringify and encode for apps with zero clients there.
 - **`DataStore` rewritten onto nested `Map`s** (`Map<app, Map<channel, Map<id, SyncModel>>>`),
   replacing the O(n) array `_.find` scan. This also fixes two real bugs structurally: the ambiguous
   `group + channel` string-key collision (app `'ab'` + channel `'c'` vs. app `'a'` + channel `'bc'`),
@@ -127,148 +178,133 @@ fixes (noted inline).
   table instead of seven independent `filter` chains.
 - **Ring buffers** replace `Array.shift()`-based eviction for per-client latency samples
   (`measure-latency.ts`) and the in-memory log buffer (`web-log.ts`, cap reduced from 1,000,000 to
-  ~20,000).
+  20,000).
 - **Log fan-out early-out**: `redirectLogMessage` skips `JSON.stringify` entirely when no `colibri`-app
   client is connected; the log bus is now a shared `Service`-level publish target instead of an
-  init-time snapshot of the service list, so coverage no longer depends on construction order. The SPA
-  fallback's per-unmatched-route warning was demoted to debug level.
+  init-time snapshot of the service list, so coverage no longer depends on construction order.
 
-## v3 TCP protocol (breaking change)
+### v3 TCP protocol (breaking change)
 
 - Replaced the v1 ASCII-length-delimited FlatBuffer framing with a fixed binary header (`u32` length +
   `u8` type + body), removing per-packet `toString('utf8')` and `indexOf('\0', …)` scanning and
   replacing the loose `Number.isFinite` length check with a real bounds check.
 - Replaced per-`data`-event `Buffer.concat` with a persistent, growable read buffer with read/write
-  cursors — removes the O(n²) copy cost on fragmented streams (`maxBufferSize` kill-switch retained).
-  Compaction currently runs on every `append()` rather than past a threshold as originally specced —
-  the O(n²) case is genuinely fixed, but a connection that consistently leaves a partial tail pays a
-  memmove per `data` event and the buffer's steady-state size can sit near ~2× `maxFrameLength` instead
-  of shrinking back down (tracked as a known residual, see review §10).
+  cursors — removes the O(n²) copy cost on fragmented streams. A frame over 5 MiB still ends the
+  connection. See [Known limits](#known-limits) for what the buffer does not do.
 - TCP payloads relay as raw bytes; `toString('utf8')` only happens where a hook actually needs the
   string, so TCP→TCP `broadcast::` traffic never becomes a JS string.
 - Egress now writes the header in place into one pre-sized `Buffer` — no separate `TextEncoder`, no
   merged `Uint8Array`, no FlatBuffer builder. The `flatbuffers` dependency and
-  `modules/networking/message.ts` were deleted.
+  `modules/networking/message.ts` were deleted. Egress is bounds-checked like ingress: a message
+  whose channel or command exceeds 64 KiB, or whose frame would exceed 5 MiB, is dropped and logged
+  instead of throwing inside the TCP worker.
 - Backpressure: writes are checked against `socket.writableLength`/a high-water mark, and a stale
-  update is dropped (logged) rather than buffered without bound for a client that can't keep up.
+  update is dropped rather than buffered without bound for a client that can't keep up. Only the
+  start and the end of a dropping spell are logged, with the number dropped.
 - Heartbeat and latency ping merged into a single 100 ms frame (the ping timestamp rides in the type
-  `0x00` heartbeat), halving idle TCP packet rate. Confirmed correct for Socket.IO; TCP-side latency
-  was unverifiable at the time of this release because `colibri-unity` was still on v1 framing —
-  since `colibri-unity` 2.0.0 the Unity client echoes the v3 heartbeat verbatim, so the TCP latency
-  path now has a real client behind it.
-- `test/tcp-client-test.ts` updated to speak v3 framing (handshake + writes); it does not yet decode
-  or echo frames back, so it currently only smoke-tests the handshake, not a full round trip.
+  `0x00` heartbeat), halving idle TCP packet rate. colibri-unity 2.0.0 echoes it, so the admin UI
+  shows the latency of Unity clients too.
+- A handshake body with more than three `::`-separated fields is rejected rather than silently
+  truncated.
+- Web clients may send messages as large as TCP clients: the Socket.IO server accepts packets of
+  about 5.13 MiB (a 5 MiB payload plus channel and command), where engine.io's 1 MB default used to
+  disconnect them.
 
-## Correctness & robustness
+Checked end to end against colibri-unity 2.0.0, with a decoding proxy in front of the TCP port:
+
+- **Framing.** The handshake arrived as the documented `version::app::name` body with client
+  version `2`. Message frames carried all 17 payload shapes in both directions, relayed
+  **byte-verbatim**: a `broadcast::string` payload arrives as `"hello from unity round 1"`, 26 bytes
+  for 24 characters, while the `log` channel's `verification log line 1` stays unquoted at 23 bytes
+  for 23 characters. What a client sends is what the other side receives, quoting included, with
+  no re-serialization in between - which is what `Payload` was meant to achieve.
+- **Heartbeat/latency merge.** The 100 ms server heartbeat was echoed continuously by the Unity
+  client; a raw client counted 369 heartbeats in one 40 s session, and the client-side 2 s watchdog
+  never fired across many minutes of connected time.
+- **Reconnect.** Killing the transport mid-session produced exactly one connection-reset message
+  on the client, then a reconnect, a fresh handshake, and queued messages resuming with no gap in
+  their numbering. No `FrameException` reached the client console and there was no retry spin, so
+  neither side was left mid-frame by the drop.
+
+The C# codec stays pinned to this server's encoder by byte-for-byte vectors in colibri-unity's
+EditMode tests, which `npm run test:vectors` checks in CI.
+
+### Correctness & robustness
 
 - **Graceful shutdown**: `SIGTERM`/`SIGINT` now close the HTTP/Socket.IO/UDP servers, terminate the TCP
   worker thread, flush the REST store, and exit 0; `startup()` is awaited with a `.catch`, and
-  `unhandledRejection`/`uncaughtException` handlers log and exit non-zero.
-- **VoiceServer hardening**: removed the `throw err` inside the UDP send callback that used to crash
-  the whole process on a transient send failure; the client key is computed once per packet instead of
-  up to four times; the peer list is precomputed instead of re-scanning the client `Map` per packet;
-  recordings are stored in a growable `Int16Array` instead of a boxed-number array; recording I/O moved
-  to `fs/promises` with recursive `mkdir`.
-- **REST store**: `saveData()` is now debounced (~250 ms) and atomic (write `store.json.tmp`, then
-  rename); `readData()` runs inside `Service.init()` via `fs/promises` so requests can no longer be
-  served before the store has loaded.
+  `unhandledRejection`/`uncaughtException` handlers log, flush the REST store and exit non-zero.
+- **One bad message costs one message.** A command hook that throws on a malformed message logs an
+  error and drops that message; the throw used to shut the whole server down. A Socket.IO event
+  without a `payload` key no longer crashes the process on its way to a TCP client, and one
+  without a `command` is logged and ignored.
+- **The TCP transport recovers.** A TCP worker thread that exits unexpectedly has its clients
+  reported as disconnected and is restarted, up to five times; before, HTTP and Socket.IO kept
+  serving while every TCP client was silently gone.
+- **VoiceServer hardening**:
+  - A datagram shorter than the 7-byte voice header, or one from UDP source port 0, used to crash
+    the server; both are dropped now.
+  - The `throw err` inside the UDP send callback that crashed the whole process on a transient send
+    failure is gone, and a peer that cannot be sent to no longer stops the relay to the others.
+  - Malformed packets and relay failures are logged at most once per source or peer every 10 s.
+  - The client key is computed once per packet instead of up to four times; the peer list is
+    precomputed instead of re-scanning the client `Map` per packet; recordings are stored in a
+    growable `Int16Array` instead of a boxed-number array, and saved with `fs/promises` and a
+    recursive `mkdir`. A recording is no longer saved twice when saving takes longer than the
+    disconnect check's 1 s tick.
+- **Admin log**: a malformed `colibri::log` `requestLog` payload (e.g. `{ levels: 1 }`) from any
+  client no longer crashes the server; invalid fields fall back to their defaults. The index that
+  merges repeated log lines is bounded by the 20,000-entry history instead of growing forever.
+- **Latency**: a `latency` message without a timestamp is skipped instead of being recorded as a
+  sample of several million milliseconds.
 - **TCP disconnect handling**: `'close'` is now subscribed, and `handleSocketDisconnect` is guarded so
   `clientDisconnected$` fires exactly once per client instead of twice.
 - **Config validation**: startup now fails fast on `NaN`/out-of-range environment values instead of
-  silently coercing to `NaN`.
-- **Stack traces**: `Error.stackTraceLimit` is configurable (default ~30) instead of `Infinity`, and
-  `Service.logError` no longer defaults `printStacktrace` to `true` at call sites that already carry
-  context.
-- **Crash-time data loss, closed in follow-up fixes after the initial review:**
-  - `Payload.fromValue(undefined).asBytes()` no longer throws and crashes the process — a web client
-    emitting `broadcast::*` with no `payload` key used to propagate through `Broadcaster` →
-    `ConnectionPool` → `TCPServerProxy.broadcastToApp` → `asBytes()` → an uncaught exception →
-    `process.exit(1)`, even with zero TCP clients connected. Fixed, with `Payload` edge-case tests
-    added (`undefined`/`null`/empty-string/invalid-JSON).
-  - The REST store is now flushed on crash paths, not just on a clean signal-triggered shutdown, and
-    voice recordings are no longer double-saved when a save takes longer than the disconnect-check
-    interval.
-  - App-scoped broadcast recipients are resolved from an index end-to-end (closing the item-11 gap
-    noted above) and verified with dedicated tests covering the TCP worker, the REST store, and these
-    crash edge cases.
+  silently coercing to `NaN`. An absolute `DATA_ROOT` or `WEBSERVER_ROOT` is used as given; it used
+  to end up nested under `dist/server`.
+- **Stack traces**: `Error.stackTraceLimit` is configurable (`STACK_TRACE_LIMIT`, default 30)
+  instead of `Infinity`, and `Service.logError` no longer defaults `printStacktrace` to `true` at
+  call sites that already carry context.
 
-## Deprecations (kept, not deleted)
+### REST store
 
-- Added `@deprecated` JSDoc to `modules/core/serializable.ts`, `modules/core/error-handler.ts`,
-  `modules/core/redirect-console.ts`, and `DataStore.addModel`/`DataStore.clear`.
+- **Any JSON value up to 5 MiB.** `PUT /api/store/:app/:name` takes numbers, strings, booleans and
+  `null` as well as objects and arrays, and bodies up to 5 MiB. colibri-unity's
+  `Store.Put(name, 42)` and colibri-web's `setRestObject(key, 'text')` used to get HTTP 400, and
+  anything over 100 kB got 413.
+- **Any name is an ordinary name.** The store is keyed by `Map`s, so app and value names like
+  `__proto__`, `constructor` or `toString` are stored like any other. Before,
+  `DELETE /api/store/constructor/keys` broke every HTTP route until a restart, and
+  `PUT /api/store/__proto__/x` wrote onto `Object.prototype`. The `store.json` format is unchanged.
+- **Errors are JSON**, `{ "error": … }`, with no stack trace or file path, and are logged. `400`
+  (malformed JSON) and `413` (too large) keep their status, and every response, errors included,
+  carries the CORS headers, so a browser client sees the error rather than a network failure.
+- Overwriting an existing value answers 200 for a falsy value (`0`, `false`, `''`, `null`) too;
+  it used to answer 201.
+- Saving `store.json` is debounced (~250 ms) and atomic (write `store.json.tmp`, then rename), and
+  a save waits for the one still in flight, so two quick writes cannot interleave into a partial
+  file. The store is flushed on crash paths as well as on a clean shutdown.
+- The store is loaded in `Service.init()` via `fs/promises`, so requests can no longer be served
+  before it has loaded. A `store.json` whose top level, or one of whose apps, is not a JSON
+  object is skipped with an error instead of breaking every request.
 
-## Tests added
+The endpoints are documented under [REST store](./protocol.md#rest-store).
 
-- `protocol.test.ts` — v3 frame parser: byte-by-byte and split fragmentation, coalescing,
-  complete-plus-trailing-partial, oversized frames, and four malformed-input variants.
-- `data-store.test.ts` — nested-`Map` behavior plus regressions for both original key bugs.
-- `connection-pool.test.ts` — routing, app isolation, `emit` after disconnect.
-- `payload.test.ts` — single-evaluation/memoization behavior (`JSON.stringify` spy), plus the
-  `undefined`/`null`/empty-string/invalid-JSON edge cases added after the crash fix above.
-- Follow-up suite covering the TCP worker's disconnect dedupe and `clientsByApp` lifecycle, and the
-  REST store's debounce/atomicity/`init()` behavior.
+### Admin UI
 
-## Documentation
-
-- Added `docs/protocol.md` describing the v3 framing.
-- README updated for the Node 24 requirement, the v3 protocol, and the new npm scripts.
-
----
-
-## Deferred work
-
-Not part of this release:
-
-- **Plan item 23 — batched `model::request` reply.** Left as one packet per model
-  (`model-sync.ts` still loops `connectionPool.emit(...)`), specifically to avoid a coordinated
-  breaking change with `colibri-web`'s `ModelSynchronization.ts`/e2e suite and `colibri-unity`. No
-  partial implementation exists. The unbatched path is at least no longer untested against a Unity
-  client: in the 2026-08-05 run a late joiner re-created a model from stored state via
-  `model::request` with every synced member applied, as exactly one instance.
-- **Phase 5 — security hardening**, in full: no shared-secret handshake token, no split between the
-  `colibri` app name and actual admin privilege, no CORS allowlist, no null-prototype model objects,
-  no REST key rejection for `__proto__`/`constructor`/`prototype`, no rate limiting, no connection
-  caps, no TLS. The structural wins Phase 5's costing had already credited as "free" (Socket.IO rooms,
-  `Map` keying in `DataStore`, v3 ingress bounds checks) landed anyway as part of Phases 1–2, since
-  they were justified on performance grounds independent of security.
-- ~~**`colibri-unity`** client rewrite for the v3 protocol — required to actually exercise items
-  17–22 end-to-end (framing, heartbeat/latency merge) over TCP; the client in this repo is still on
-  v1 FlatBuffers, so no TCP client can currently connect.~~ **Landed and now exercised** —
-  `colibri-unity` 2.0.0, see [`colibri-unity/CHANGELOG.md`](../../colibri-unity/CHANGELOG.md). The
-  end-to-end run against a live 2.0.0 server on 2026-08-05 closes this out at the wire level, with a
-  decoding proxy in front of the TCP port:
-  - **Framing.** The handshake was read off the wire as
-    `C->S HANDSHAKE version=2 app=myAppName name=DESKTOP-PUO2MAQ` — the documented
-    `version::app::name` body, client version `2`. Message frames carried all 17 payload shapes in
-    both directions, relayed **byte-verbatim**: a `broadcast::string` payload arrives as
-    `"hello from unity round 1"`, 26 bytes for 24 characters, while the `log` channel's
-    `payload(23B)="verification log line 1"` stays unquoted at 23 bytes for 23 characters. That is
-    the relay being byte-verbatim in the way `Payload` was meant to make it: what a client sends is
-    what the other side receives, quoting included, with no re-serialization in between.
-  - **Heartbeat/latency merge.** The 100 ms server heartbeat was echoed continuously by the Unity
-    client; a raw client counted 369 heartbeats in one 40 s session, and the client-side 2 s watchdog
-    never fired across many minutes of connected time.
-  - **Reconnect.** Killing the transport mid-session produced exactly one
-    `connection to localhost failed (ConnectionReset), retrying...`, then a reconnect, a fresh
-    handshake, and queued messages resuming with no gap in their numbering — the retry queue
-    drained in order. No `FrameException` reached the client console and there was no retry spin, so
-    neither side was left mid-frame by the drop.
-
-  The C# codec remains pinned to this server's encoder by byte-for-byte vectors in its EditMode test
-  suite (52 tests, green against this server's own 102).
-
-## `src/ui` modernization (follow-up pass)
-
-The Angular admin UI was explicitly out of scope for the `2.0.0` release above; it was modernized
-separately in a follow-up pass:
-
+- The Log page filters by level (Error, Warn, Info, Debug) as well as by app, and has a separate
+  *Sync traffic* switch, off by default, for the `broadcast::` messages. The server applies both
+  filters, so the page is only sent what it shows.
+- Repeated log lines are merged into one entry with a count however much other traffic arrives in
+  between, and a merged entry updates on screen.
+- The SPA fallback no longer adds a log entry every time an admin UI page is loaded.
+- The admin UI keeps its dark theme whatever colour scheme the visitor's system prefers.
 - Replaced the dead Karma/Protractor `test`/`server-app-e2e` targets in `angular.json` (both pointed
   at files that never existed) with Angular's first-party `@angular/build:unit-test` builder
-  (Vitest runner) — the UI previously had zero test coverage; an initial `LogService`/`ClientService`/
-  `BroadcastToggleComponent` spec batch now exists under `src/ui`, wired into
-  `.github/workflows/lint-server.yml` as a `gui:test` step.
+  (Vitest runner); specs for `LogService`, `ClientService` and the log filters run in CI as
+  `npm run gui:test`.
 - Replaced `socketio.service.ts`'s `_.throttle` NgZone-batching with RxJS `throttleTime`; `lodash`
-  and `@types/lodash` are now fully removed from `package.json` — the note above is closed.
+  and `@types/lodash` are removed from `package.json`.
 - Fixed the services barrel (`src/ui/app/services/index.ts`) to re-export `ClientService`, matching
   `SocketIOService`/`LogService`.
 - Replaced `RootComponent`'s direct `location.pathname` read with the Angular `Router`, fixing the
@@ -283,20 +319,61 @@ separately in a follow-up pass:
   deliberately — it's a better fit for multiplexed async event streams than for synchronous
   snapshot state. Zoneless change detection was evaluated and deliberately deferred (the D3 latency
   chart renders entirely outside Angular's template bindings, and the zone-throttle mechanism above
-  only exists because zone.js CD is expensive on this app's bursty socket traffic) — this pass makes
+  only exists because zone.js CD is expensive on this app's bursty socket traffic) — this makes
   a future zoneless flip cheaper and safer, but doesn't attempt it.
 
-## Known residuals (not blocking, tracked for follow-up)
+### Deprecations (kept, not deleted)
 
-- Unvalidated egress framing: header field writes for an over-length channel/command string can throw
-  `ERR_OUT_OF_RANGE` inside the TCP worker with no surrounding try/catch, which would currently kill
-  the worker thread (HTTP/Socket.IO keep serving).
-- Re-handshaking a TCP client with a different app leaves it registered under the old app's index.
-- `RestAPI.scheduleSave` doesn't chain onto an in-flight save promise, so two rapid concurrent writes
-  can race on the same `store.json.tmp`.
-- Benchmark before/after numbers in `bench/baseline.md` were captured across two different Node
-  versions (Phase 0 baseline vs. Phase 4 final run), so the headline speedup figures aren't strictly
-  like-for-like; a same-runtime re-run is outstanding.
-- Minor housekeeping: a stale ESLint ignore for the deleted `message.ts`, a benchmark file named
-  differently than the plan text, `protocol.js` not re-exported from the networking barrel, and
-  `.env.example`/README not yet documenting `STACK_TRACE_LIMIT`.
+- Added `@deprecated` JSDoc to `modules/core/serializable.ts`, `modules/core/error-handler.ts`,
+  `modules/core/redirect-console.ts`, and `DataStore.addModel`/`DataStore.clear`.
+
+### Tests added
+
+- Unit tests (`npm test`) for the v3 frame parser and encoder (byte-by-byte and split
+  fragmentation, coalescing, oversized and malformed frames, the 1.x framing), `DataStore`
+  (including both original key bugs), `ConnectionPool`, `Payload` (memoization and the
+  `undefined`/`null`/empty-string/invalid-JSON edge cases), the TCP worker and its proxy, the
+  Socket.IO server against real `socket.io-client` sockets, the REST store and web server, the
+  voice server, `WebLog`, `ClientLogger`, `BroadcastLogger`, the console log, the `DATA_ROOT`
+  check, the configuration, the ring buffer and the deprecated serialization helpers.
+- `npm run test:vectors` checks the cross-implementation protocol vectors in colibri-unity's
+  `ProtocolVectorTests.cs` against this server's encoder.
+- `test/tcp-client-test.ts` (`npm run test:tcpclient`) speaks the v3 framing, decodes frames and
+  echoes heartbeats. Manual probes for end-to-end runs: `test/tcp-wire-tap.ts` (a proxy that
+  decodes every frame in both directions), `test/tcp-crosstalk-check.ts`, `test/model-inject.ts`,
+  `test/broadcast-inject.ts` and `test/stress-echo-peer.ts` (`npm run test:stressecho`).
+
+### Documentation
+
+- Added `docs/protocol.md`: the v3 framing, version checking and detecting an out-of-date server,
+  the payload shape of every `broadcast::` command, size limits, the server's own channels, model
+  synchronization and the REST store.
+- README updated for the Node 24 requirement, the v3 protocol, a Docker setup that works outside a
+  checkout, every configuration variable, where logs go, and the npm scripts.
+
+### Known limits
+
+- The TCP read buffer compacts after every `data` event that leaves a partial frame behind (a copy
+  of that partial frame), rather than only past a threshold, and it never shrinks: a connection
+  that once received a large frame keeps a buffer of up to 8 MiB until it closes.
+- A client that falls more than 1 MB behind on TCP misses messages without being told; see
+  [Backpressure](./protocol.md#backpressure).
+- After a reconnect, clients catch up on model updates but not on deletions; see
+  [Known limits](./protocol.md#known-limits) in the protocol docs.
+
+### Deferred work
+
+Not part of this release:
+
+- **Batched `model::request` reply.** Left as one `model::update` per model (`model-sync.ts` still
+  loops `connectionPool.emit(...)`), to avoid a coordinated breaking change with colibri-web's
+  `ModelSynchronization.ts` and colibri-unity. The unbatched path is exercised against a Unity
+  client: in the end-to-end run a late joiner re-created a model from stored state via
+  `model::request` with every synced member applied, as exactly one instance.
+- **Security hardening**, by design: Colibri is meant for local networks you trust and
+  authenticates nobody. There is no handshake token, the app name `colibri` is what makes a client
+  the admin UI, CORS allows any origin, and there are no rate limits, connection caps or TLS. Model
+  objects are plain objects, not null-prototype ones. The voice relay forwards every voice packet
+  to every other voice client, whatever its app. The structural changes that would have come first
+  (Socket.IO rooms, `Map` keying in `DataStore` and the REST store, bounds checks on TCP ingress
+  and egress) landed anyway, on performance and robustness grounds.
