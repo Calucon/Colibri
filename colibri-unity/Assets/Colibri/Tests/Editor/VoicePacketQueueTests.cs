@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using HCIKonstanz.Colibri.Networking;
@@ -81,6 +82,28 @@ namespace HCIKonstanz.Colibri.Tests
             }
 
             Assert.That((lost, repeated), Is.EqualTo((0, 0)), "Packets were lost or delivered more than once");
+        }
+
+        /// <summary>
+        /// The queue belongs to its connection. It used to be static, so it outlived the component:
+        /// with domain reload disabled, the next Play session's connection delivered the packets
+        /// the previous one had received and not yet delivered.
+        /// </summary>
+        [Test]
+        public void ANewConnectionNeverDeliversTheOldOnesPackets()
+        {
+            _voice.EnqueueReceived(new VoicePacket { Id = 1, Sequence = 7, Codec = Codec.OPUS });
+
+            // The old connection goes away before its next Update; the next one takes over.
+            Object.DestroyImmediate(_gameObject);
+            _gameObject = new GameObject("next-voice-under-test");
+            var next = _gameObject.AddComponent<VoiceServerConnection>();
+
+            var delivered = new List<short>();
+            next.AddVoicePacketListener(1, packet => delivered.Add(packet.Sequence));
+            next.DeliverReceivedPackets();
+
+            Assert.That(delivered, Is.Empty, "A new connection delivered a packet the previous one had received");
         }
     }
 }
