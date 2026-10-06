@@ -190,7 +190,8 @@ describe('WebServer over HTTP', () => {
     });
 
     // Express's default error handler wrote the stack trace, with absolute paths into the
-    // install, into the response whenever NODE_ENV wasn't "production" - as in the image.
+    // install, into the response whenever NODE_ENV wasn't "production" - as it isn't for a
+    // server started from a checkout, and wasn't in the Docker image either until it set it.
     describe('error responses', () => {
         const expectNoInternals = (text: string) => {
             expect(text).not.toMatch(/\n\s+at /);

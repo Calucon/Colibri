@@ -60,8 +60,9 @@ export class WebServer extends Service {
 
         // Last, so it handles the errors of every route and middleware above. Express's
         // default handler writes the stack trace, absolute paths into this install included,
-        // into the response whenever NODE_ENV isn't "production" - and the Docker image
-        // doesn't set it.
+        // into the response whenever NODE_ENV isn't "production". The Docker image sets it,
+        // but a server started from a checkout (npm start, node dist/server/main.js) usually
+        // runs without it, so this must not rely on it.
         this.app.use((err: unknown, req: express.Request, res: express.Response, next: express.NextFunction) => {
             this.handleError(err, req, res, next);
         });
