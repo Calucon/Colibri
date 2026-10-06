@@ -91,9 +91,15 @@ this is the server's full detail.
 
 - The Dockerfile is multi-stage: the builder runs `npm ci` and the full build (admin UI and
   server); the runtime image ships `dist/` and the production `node_modules` only, and has a
-  `HEALTHCHECK` against the web port. The admin UI's build-only packages (Angular, PrimeNG, d3,
-  zone.js, socket.io-client, fonts) are dev dependencies now and stay out of it, which shrinks
-  the image from 338 MB to 206 MB.
+  `HEALTHCHECK`. The admin UI's build-only packages (Angular, PrimeNG, d3, zone.js,
+  socket.io-client, fonts) are dev dependencies now and stay out of it, which shrinks the image
+  from 338 MB to 206 MB.
+- The `HEALTHCHECK` asks `/api/store` on the `WEBSERVER_HOST` and `WEBSERVER_PORT` the server is
+  configured with, read like the server reads them: from the environment, else from a `.env` in
+  `/srv/colibri`. A container with another web port, with `WEBSERVER_HOST=localhost` (which Node
+  binds to `::1` there) or with a `BASE_URL` is healthy, where a check of a fixed
+  `127.0.0.1:9011/` would leave it unhealthy for good, and restarted over and over by anything
+  that acts on health.
 - The server runs as the non-root `node` user (uid 1000). The image starts as root only long
   enough to give `/srv/colibri/data` to `node` - when something in it belongs to someone else, and
   never following a symlink - and then runs the server as `node`. So a bind-mounted directory that
