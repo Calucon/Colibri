@@ -95,7 +95,6 @@ export class VoiceServer extends Service {
         this.udpSocket = dgram.createSocket('udp4');
         this.udpSocket.on('listening', () => {
             const address = this.udpSocket.address() as AddressInfo;
-            console.log(`Voice server listening on ${address.address}:${address.port}`);
             this.logInfo(`Voice server listening on ${address.address}:${address.port}`);
             this.logInfo(`Voice server Sampling Rate: ${this.samplingRate} Hz`);
             if (this.recordingVoiceData) this.logWarning('Warning: Voice recording is enabled');

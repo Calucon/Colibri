@@ -26,8 +26,8 @@ export class WebServer extends Service {
     ) {
         super();
 
-        console.log(`Web server listening on ${this.hostname}:${this.webPort}`);
-
+        // Nothing is listening yet: start() logs 'Web server listening on ...' once listen()
+        // has succeeded, and the console sink prints that line too.
         this.app = express();
         this.app.set('port', this.webPort);
 

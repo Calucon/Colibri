@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { once } from 'events';
 import { mkdtemp, rm, writeFile } from 'fs/promises';
 import * as http from 'http';
@@ -6,7 +6,7 @@ import { AddressInfo } from 'net';
 import { tmpdir } from 'os';
 import * as path from 'path';
 import { Subscription } from 'rxjs';
-import { LogLevel, LogMessage, Service } from '../../src/server/modules/core/index.js';
+import { ConsoleLog, LogLevel, LogMessage, Service } from '../../src/server/modules/core/index.js';
 import { WebServer } from '../../src/server/modules/web/web-server.js';
 import { RestAPI } from '../../src/server/modules/web/rest-api.js';
 import { MAX_FRAME_LENGTH } from '../../src/server/modules/networking/protocol.js';
@@ -233,5 +233,42 @@ describe('WebServer over HTTP', () => {
             expect(body).toEqual({ error: 'Not Found' });
             expectNoInternals(text);
         });
+    });
+});
+
+describe('WebServer startup', () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    // The constructor used to console.log 'Web server listening on ...' before listen() had
+    // even been called, and start() then logged the same line once it was true - which the
+    // console sink prints as well. Every start printed it twice, the first time too early.
+    it('says it is listening exactly once, and only once it is', async () => {
+        const printed: string[] = [];
+        vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => void printed.push(args.map(String).join(' ')));
+        // The sink main.ts attaches, writing here instead of to stdout/stderr.
+        const sink = new ConsoleLog({ minLevel: LogLevel.Debug, broadcastTraffic: false }, {
+            out: line => printed.push(line),
+            err: line => printed.push(line),
+        });
+        const subscription = sink.attach(Service.output$);
+        const listening = () => printed.filter(line => line.includes('Web server listening on'));
+
+        const webRoot = await mkdtemp(path.join(tmpdir(), 'colibri-web-server-startup-'));
+        const webServer = new WebServer('127.0.0.1', 0, webRoot, '');
+        try {
+            expect(listening()).toEqual([]);
+
+            const httpServer = webServer.start();
+            await once(httpServer, 'listening');
+
+            expect(listening()).toHaveLength(1);
+            expect(listening()[0]).toMatch(/ INFO {2}\[web\/WebServer\] Web server listening on 127\.0\.0\.1:/);
+        } finally {
+            subscription.unsubscribe();
+            webServer.stop();
+            await rm(webRoot, { recursive: true, force: true });
+        }
     });
 });

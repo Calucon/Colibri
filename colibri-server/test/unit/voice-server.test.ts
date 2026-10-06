@@ -4,7 +4,7 @@ import { once } from 'events';
 import { AddressInfo } from 'net';
 import { Subscription } from 'rxjs';
 import { VoiceServer } from '../../src/server/modules/web/voice-server.js';
-import { LogLevel, LogMessage, Service } from '../../src/server/modules/core/index.js';
+import { ConsoleLog, LogLevel, LogMessage, Service } from '../../src/server/modules/core/index.js';
 
 // |userId(2)|sequence(2)|frameSize(2)|codec(1)|data|, little-endian, as Unity sends it.
 const voicePacket = function (userId: number, sequence: number, data: number[] = [ 0, 0 ]): Buffer {
@@ -226,5 +226,37 @@ describe('VoiceServer', () => {
         expect(internals.reportedAt.size).toBeLessThanOrEqual(100);
         expect(malformedReports().length).toBeLessThanOrEqual(100);
         expect(internals.clients.size).toBe(0);
+    });
+});
+
+describe('VoiceServer startup', () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    // The 'listening' handler printed 'Voice server listening on ...' with a bare console.log
+    // and then logged the same line, which the console sink prints as well.
+    it('says it is listening exactly once', async () => {
+        const printed: string[] = [];
+        vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => void printed.push(args.map(String).join(' ')));
+        // The sink main.ts attaches, writing here instead of to stdout/stderr.
+        const sink = new ConsoleLog({ minLevel: LogLevel.Debug, broadcastTraffic: false }, {
+            out: line => printed.push(line),
+            err: line => printed.push(line),
+        });
+        const subscription = sink.attach(Service.output$);
+
+        const server = new VoiceServer(48000, '/nonexistent-voice-recordings');
+        try {
+            server.start(0, '127.0.0.1');
+            await once((server as unknown as VoiceServerInternals).udpSocket, 'listening');
+
+            const listening = printed.filter(line => line.includes('Voice server listening on'));
+            expect(listening).toHaveLength(1);
+            expect(listening[0]).toMatch(/ INFO {2}\[web\/VoiceServer\] Voice server listening on 127\.0\.0\.1:\d+$/);
+        } finally {
+            subscription.unsubscribe();
+            server.stop();
+        }
     });
 });
