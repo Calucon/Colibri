@@ -41,6 +41,12 @@ volumes:
 
 The admin UI is then at `http://<your-server-ip>:9011`.
 
+Docker Hub has `hcikn/colibri:2.0.0` only once 2.0.0 is released; until then, pulling it fails
+with `manifest for hcikn/colibri:2.0.0 not found`. Build the image from a checkout of this
+repository instead: run `docker compose up -d` in its `colibri-server` directory, whose own
+`docker-compose.yml` builds the image from source and keeps the data in `./data`, or replace the
+`image:` line above with `build: <path to the checkout>/colibri-server`.
+
 `/srv/colibri/data` holds the REST store's `store.json` and any voice recordings. A named volume,
 like `colibri-data` above, needs no setup. To keep the data in a directory on the host instead,
 mount that directory:
@@ -68,9 +74,7 @@ Settings from [Configuration](#configuration) go into an `environment:` section,
 `http://127.0.0.1:9011/` inside the container every 30 s.
 
 The image sets `NODE_ENV=production` and runs the server as PID 1, so `docker stop` shuts it down
-cleanly and writes any pending store changes first. From a checkout, `docker compose up -d` in
-this directory uses its own `docker-compose.yml`, which builds the image from source and keeps
-the data in `./data`.
+cleanly and writes any pending store changes first.
 
 ### Node
 
