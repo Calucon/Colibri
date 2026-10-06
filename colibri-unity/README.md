@@ -24,15 +24,21 @@
 One URL. In Unity, open *Window → Package Manager → + → Install package from git URL* and paste:
 
 ```
-https://github.com/hcigroupkonstanz/Colibri.git?path=colibri-unity/Assets/Colibri
+https://github.com/hcigroupkonstanz/Colibri.git?path=colibri-unity/Assets/Colibri#v2.0.0
 ```
+
+Keep the `#v2.0.0` at the end: it selects the 2.0.0 release. **2.0.0 is not released yet**, and
+until the `v2.0.0` tag exists, installing from this URL fails with an error. Without the `#…`, the
+URL installs the repository's default branch, which still holds Colibri 1.3.1: it does not compile
+without UniRx and UniTask, and it cannot talk to a 2.0 server. Until 2.0.0 is tagged, use the
+install URL your course or study gives you.
 
 Colibri's only dependency is `com.unity.nuget.newtonsoft-json`, which the Package Manager
 installs by itself.
 
 ### UnityPackage
 
-Alternatively, download the latest [Colibri release](https://github.com/hcigroupkonstanz/Colibri/releases) from GitHub and import it into your project. Installed this way, Newtonsoft JSON has to be added by hand from the Package Manager (`com.unity.nuget.newtonsoft-json`) — a `.unitypackage` cannot declare dependencies.
+Alternatively, import the `.unitypackage` attached to the 2.0.0 release on the [Releases page](https://github.com/hcigroupkonstanz/Colibri/releases). Check the version number: until 2.0.0 is out, every release there is Colibri 1.x, which cannot talk to a 2.0 server. Installed this way, Newtonsoft JSON has to be added by hand from the Package Manager (`com.unity.nuget.newtonsoft-json`) — a `.unitypackage` cannot declare dependencies.
 
 ## Quickstart
 
