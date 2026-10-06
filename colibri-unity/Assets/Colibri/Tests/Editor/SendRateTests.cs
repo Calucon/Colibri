@@ -388,6 +388,54 @@ namespace HCIKonstanz.Colibri.Tests
                 "Ticking the box again should send the position the object has");
         }
 
+        /// <summary>
+        /// While SyncScale is off, Scale reads Vector3.one. A scale set back to one meanwhile read
+        /// the same once the box was ticked again, so it did not count as a change: nothing was
+        /// sent, and the other clients kept showing the object at its old size.
+        /// </summary>
+        [Test]
+        public void TickingABoxAgainSendsTheValueEvenWhenItEqualsThePlaceholder()
+        {
+            var sync = SpawnTransform();
+
+            sync.transform.localScale = new Vector3(2f, 2f, 2f);
+            Assert.That(Frame(sync, Start)?["scale"], Is.Not.Null, "Precondition: the new scale goes out");
+
+            sync.SyncScale = false;
+            sync.transform.localScale = Vector3.one;
+            var sent = new List<JObject>();
+            RunFrames(sync, Start + 1.0, Start + 2.0, 90, sent);
+            Assert.That(sent, Is.Empty, $"Changing the scale with the box unticked sent: {string.Join(" | ", sent)}");
+
+            sync.SyncScale = true;
+            var resumed = Frame(sync, Start + 3.0);
+            Assert.That(resumed?["scale"]?.ToObject<float[]>(), Is.EqualTo(new[] { 1f, 1f, 1f }),
+                "Ticking the box again should send the scale the object has, also when it is one");
+            Assert.That(Frame(sync, Start + 4.0), Is.Null, "Ticking the box should send the value once, not in every frame");
+        }
+
+        /// <summary>
+        /// The same for Active, whose placeholder is true: an object hidden while SyncActive was
+        /// ticked, shown again with the box unticked, stayed hidden on every other client after
+        /// the box was ticked again.
+        /// </summary>
+        [Test]
+        public void TickingSyncActiveAgainSendsThatTheObjectIsShown()
+        {
+            var sync = SpawnTransform();
+
+            sync.gameObject.SetActive(false);
+            Assert.That(Frame(sync, Start)?["active"]?.Value<bool>(), Is.False, "Precondition: hiding the object goes out");
+
+            sync.SyncActive = false;
+            sync.gameObject.SetActive(true);
+            Assert.That(Frame(sync, Start + 1.0), Is.Null, "Showing the object with the box unticked sent something");
+
+            sync.SyncActive = true;
+            Assert.That(Frame(sync, Start + 2.0)?["active"]?.Value<bool>(), Is.True,
+                "Ticking the box again should send that the object is shown");
+        }
+
 
         /*
          *  A value from the server meets a local change that has not gone out yet

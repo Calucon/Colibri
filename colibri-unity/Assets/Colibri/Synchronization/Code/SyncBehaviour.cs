@@ -314,6 +314,9 @@ namespace HCIKonstanz.Colibri.Synchronization
         // Parallel to _attributeList.
         private IChangeTracker[] _trackers;
 
+        // Parallel to _attributeList: whether IsSynced said yes at the last poll.
+        private bool[] _wasSynced;
+
         private JObject _nextUpdate;
 
         // The send-rate limit (SyncSettings.MaxSendRate): when this object may send next, on
@@ -346,6 +349,9 @@ namespace HCIKonstanz.Colibri.Synchronization
         /// object's - SyncTransform's Position reads Vector3.zero while SyncPosition is off. Sent,
         /// that placeholder is applied by every client that has the member switched on: the
         /// object jumps to the origin there.
+        ///
+        /// Asked for every member in every poll, so it must be cheap and must not allocate.
+        /// Switched on again, the member is sent whatever it reads.
         /// </remarks>
         private protected virtual bool IsSynced(string memberName) => true;
 
@@ -361,8 +367,12 @@ namespace HCIKonstanz.Colibri.Synchronization
 
             var self = this as T;
             _trackers = new IChangeTracker[_attributeList.Count];
+            _wasSynced = new bool[_attributeList.Count];
             for (var i = 0; i < _attributeList.Count; i++)
+            {
                 _trackers[i] = _attributeList[i].CreateTracker(self);
+                _wasSynced[i] = IsSynced(_attributeList[i].MemberName);
+            }
             _wasActive = gameObject.activeSelf;
 
             SyncTicker.Register(this);
@@ -442,16 +452,33 @@ namespace HCIKonstanz.Colibri.Synchronization
             var self = this as T;
             for (var i = 0; i < _trackers.Length; i++)
             {
-                // Latched unconditionally, but only reported once the server has sent this
-                // object's state - otherwise the local value would overwrite it on arrival.
-                if (!_trackers[i].CaptureChange(self))
+                var attribute = _attributeList[i];
+                var isSynced = IsSynced(attribute.MemberName);
+                var switchedOn = isSynced && !_wasSynced[i];
+                _wasSynced[i] = isSynced;
+
+                // A member that is switched off reads a placeholder, which is no value to send -
+                // and no value to compare with either, so it is not latched.
+                if (!isSynced)
                     continue;
 
-                // Switching a member off is itself a change of what its getter reads - to a
-                // placeholder - and that is not a value to send. Switched on again, the getter
-                // reads the real value, which differs from the latched placeholder and goes out.
-                if (_hasReceivedFirstUpdate && IsSynced(_attributeList[i].MemberName))
-                    AddUpdate(_attributeList[i], _attributeList[i].GetBoxed(self));
+                // Switched on again, the member goes out whatever it reads: the other clients
+                // still have the value from before it was switched off, and what it reads now
+                // may differ from that while being equal to anything latched here meanwhile -
+                // SyncTransform's scale set back to one while SyncScale was off is just what its
+                // placeholder reads. Compared, that change was never sent.
+                if (switchedOn)
+                {
+                    _trackers[i].Latch(self);
+                    if (_hasReceivedFirstUpdate)
+                        AddUpdate(attribute, attribute.GetBoxed(self));
+                    continue;
+                }
+
+                // Latched unconditionally, but only reported once the server has sent this
+                // object's state - otherwise the local value would overwrite it on arrival.
+                if (_trackers[i].CaptureChange(self) && _hasReceivedFirstUpdate)
+                    AddUpdate(attribute, attribute.GetBoxed(self));
             }
 
             // Switching the object off or on is not held back by the send-rate limit: it is a
