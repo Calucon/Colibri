@@ -330,9 +330,19 @@ EditMode tests, which `npm run test:vectors` checks in CI.
   carries the CORS headers, so a browser client sees the error rather than a network failure.
 - Overwriting an existing value answers 200 for a falsy value (`0`, `false`, `''`, `null`) too;
   it used to answer 201.
+- **A `PUT` without a JSON body is refused.** With no body, an empty one, or another
+  `Content-Type` (`text/plain`, say), `PUT /api/store/:app/:name` answers 400 with an error that
+  names `Content-Type: application/json`, and stores nothing. It used to store `undefined` - a
+  name listed under its app that `GET` and `DELETE` then answered 404 for - or, for an empty JSON
+  body, `{}`. colibri-unity's `Store` and colibri-web's `setRestObject` send a JSON body for every
+  value, `null` included, except that `setRestObject(key, undefined)` sends none: it now gets
+  `false` back and stores nothing, where it used to store `{}`. Store `null` instead.
 - Saving `store.json` is debounced (~250 ms) and atomic (write `store.json.tmp`, then rename), and
   a save waits for the one still in flight, so two quick writes cannot interleave into a partial
-  file. The store is flushed on crash paths as well as on a clean shutdown.
+  file. The store is flushed on crash paths as well as on a clean shutdown, but only when it holds
+  something `store.json` does not, so stopping a server that cannot write its `DATA_ROOT` no
+  longer logs an `EACCES` when nothing changed. A save that failed is tried again at the latest
+  at shutdown.
 - The store is loaded in `Service.init()` via `fs/promises`, so requests can no longer be served
   before it has loaded. A `store.json` whose top level, or one of whose apps, is not a JSON
   object is skipped with an error instead of breaking every request.

@@ -491,7 +491,7 @@ colibri-unity's `Store` and colibri-web's `getRestObject` / `setRestObject` use 
 | `GET /api/store` | `200` with the app names, `["app1", …]` |
 | `GET /api/store/:app` | `200` with the value names of that app; `404` if the app is unknown |
 | `GET /api/store/:app/:name` | `200` with the stored JSON value; `404` if there is none |
-| `PUT /api/store/:app/:name` | stores the request body: any JSON value - an object, an array, a number, a string, `true`, `null` - sent as `Content-Type: application/json`, up to 5 MiB. `201` if it is new, `200` if it replaced a value, each with `{ "result": "…", "data": <the value> }`. `400` for malformed JSON, `413` for a body over 5 MiB. |
+| `PUT /api/store/:app/:name` | stores the request body: any JSON value - an object, an array, a number, a string, `true`, `null` - sent as `Content-Type: application/json`, up to 5 MiB. `201` if it is new, `200` if it replaced a value, each with `{ "result": "…", "data": <the value> }`. `400` for malformed JSON, and for no JSON body at all - none, an empty one, or one sent with another `Content-Type` - in which case nothing is stored; `413` for a body over 5 MiB. |
 | `DELETE /api/store/:app` | `200`, and every value of the app is gone; `404` if the app is unknown |
 | `DELETE /api/store/:app/:name` | `200`; `404` if there is no such value |
 
@@ -500,8 +500,10 @@ allowed, `__proto__` and `constructor` included. Every response allows any origi
 page served from somewhere else can use the store too.
 
 Writes reach `store.json` within 250ms, together with any made in the meantime, and the file is
-replaced atomically (written to `store.json.tmp`, then renamed). When the server shuts down - on
-`docker stop`, Ctrl+C or an uncaught error - it writes whatever is still pending.
+replaced atomically (written to `store.json.tmp`, then renamed). A save that fails is logged and
+tried again with the next one. When the server shuts down - on `docker stop`, Ctrl+C or an
+uncaught error - it writes whatever is not saved yet, and leaves `store.json` alone if that is
+nothing.
 
 ## Cross-transport relaying
 
