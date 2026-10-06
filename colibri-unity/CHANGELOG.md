@@ -580,9 +580,17 @@ The fixes it produced:
 
 ## Known residuals
 
-- A disabled `SyncBehaviour` neither polls nor sends, and picks changes made while it was disabled
-  up as ordinary changes the frame it comes back. That matches UniRx's original `TakeUntilDisable`
-  scoping rather than the `.AddTo(this)` (destroy-scoped) behaviour it had in between.
+- Disabling a `SyncBehaviour` component (`enabled = false`) pauses its syncing: it neither polls
+  nor sends, and changes made while it was disabled go out as ordinary changes the frame it comes
+  back. Deactivating its GameObject does not pause it, since for a `SyncTransform` the active state
+  is itself synced. In 1.3.1, whose change observation ran until the object was destroyed
+  (`TakeUntilDestroy`), a disabled component kept syncing.
+- After a reconnect, the re-requested models bring in what other clients changed, but not what they
+  deleted: an object deleted elsewhere during the outage stays on this client.
+- The server forgets an app's models when the app's last client disconnects — a single client whose
+  connection drops is that last client — and when it restarts. Clients do not send their objects'
+  full state again afterwards, so the server learns each object again only from its next change,
+  and then only the members that changed.
 - `SyncBehaviourManager` must unsubscribe from `SyncBehaviour<T>.ModelCreated` / `ModelDestroyed` in
   `OnDestroy`, since static events do not do it themselves. It does; anything else subscribing to
   them has to as well, or it leaks across Play sessions when domain reload is disabled.
@@ -591,7 +599,15 @@ The fixes it produced:
   has a Unity lifetime to be dropped by. Listeners belonging to a Unity object clean themselves up,
   which covers the ordinary case. Clearing the dictionaries at startup would fix it and break a
   listener registered from a `[RuntimeInitializeOnLoadMethod]` hook, so it is left as it is.
-- `Expression.Compile()` is still used to build the `[Sync]` accessors, so the model layer depends
-  on Unity's expression-tree support on AOT platforms. Attribute construction dispatches through an
-  explicit per-type `if` chain rather than `MakeGenericMethod`, which keeps every instantiation
-  visible to the AOT compiler.
+- A `[Sync]` array changed **in place** is not detected: the comparison is by reference, as it was
+  in 1.3.1. Assign a new array to sync it.
+- On IL2CPP, a value-type `[Sync]` field is read through `FieldInfo.GetValue`, which boxes on every
+  poll; there is no allocation-free way to read a field through reflection without a JIT. A
+  property is read through a delegate and allocates nothing, so a frequently synced value-type
+  member is cheaper as a property. Attribute construction dispatches through an explicit per-type
+  `if` chain rather than `MakeGenericMethod`, which keeps every instantiation visible to the AOT
+  compiler.
+- Every `SyncBehaviour<T>` registers its own listener on its type's channel, so each inbound
+  `model::update` is offered to every instance of that type. With every object changing, the cost
+  of applying a frame's updates therefore grows with the square of the number of objects. The
+  `Network Stress` sample is there to measure where that starts to matter.
