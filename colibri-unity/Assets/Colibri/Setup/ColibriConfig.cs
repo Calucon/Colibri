@@ -66,8 +66,8 @@ namespace HCIKonstanz.Colibri.Setup
         /// </summary>
         /// <remarks>
         /// The server puts every client with the same app name into one app, whoever they are. So
-        /// everyone in a class who settles on the same example name sees everyone else's objects
-        /// and messages, and since each update goes to every other client in the app, the server's
+        /// unrelated projects that settle on the same example name see each other's objects and
+        /// messages, and since each update goes to every other client in the app, the server's
         /// work grows with the square of their number. Nothing says so at runtime: it just works,
         /// for everyone at once.
         /// </remarks>
@@ -82,7 +82,7 @@ namespace HCIKonstanz.Colibri.Setup
 
             return $"'{name}' is a generic App Name that other people are likely to pick too. "
                 + "Everyone on this server who uses the same App Name is in one app: they all see each other's objects and messages, "
-                + "and the server's work grows with the square of their number. Choose a name of your own, such as your group and project.";
+                + "and the server's work grows with the square of their number. Choose a name that is unique to this project or deployment.";
         }
 
         public string AppName = "";

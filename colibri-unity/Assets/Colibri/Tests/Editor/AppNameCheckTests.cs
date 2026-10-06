@@ -5,9 +5,9 @@ namespace HCIKonstanz.Colibri.Tests
 {
     /// <summary>
     /// The setup window's warning about app names that strangers use too. The server puts every
-    /// client with the same app name into one app, so a class that settles on an example name -
-    /// colibri-web's samples use "myAppName" - sees each other's objects, and the server's work
-    /// grows with the square of the clients, with nothing at runtime to say why.
+    /// client with the same app name into one app, so unrelated projects that settle on an example
+    /// name - colibri-web's samples use "myAppName" - see each other's objects, and the server's
+    /// work grows with the square of the clients, with nothing at runtime to say why.
     /// </summary>
     public class AppNameCheckTests
     {
@@ -24,7 +24,7 @@ namespace HCIKonstanz.Colibri.Tests
             Assert.That(warning, Does.Contain($"'{appName.Trim()}'"), "The warning should name the App Name it is about");
         }
 
-        [TestCase("physics-lab-group-3")]
+        [TestCase("vr-annotation-project-3")]
         [TestCase("myAppName2")]
         [TestCase("testing-hand-tracking")]
         public void ANameOfOnesOwnIsNot(string appName)
