@@ -786,6 +786,28 @@ describe('TCPServerWorker', () => {
             expect(relayedUpdates()[1]).toEqual({ id: 'last-state', x: 9 });
         });
 
+        // A held update is posted with the client's app at the time it goes. Left held across a
+        // handshake into another app, it would reach the main thread as the new app's: stored in
+        // the new app's model store and relayed to its clients, while the old app never got it.
+        it('passes on what a client held back in its old app before it handshakes into another', () => {
+            configure({ inboundBacklogLimit: 1 });
+            const socket = handshaked();
+            send(socket, 'objects', 'model::update', '{"id":"first"}');
+            send(socket, 'objects', 'model::update', '{"id":"held","x":1}');
+
+            socket.emit('data', encodeHandshakeFrame(PROTOCOL_VERSION, 'appB', 'quest-1'));
+            caughtUp();
+            internals.tick();
+
+            expect(posted.filter(p => p.channel !== 'log').map(p => p.channel === 'clientMessage$'
+                ? `${(p.content.origin as { app: string }).app} ${(p.content.payload as Buffer).toString()}`
+                : `${p.channel} ${String(p.content.app)}`)).toEqual([
+                'appA {"id":"first"}',
+                'appA {"id":"held","x":1}',
+                'clientConnected$ appB',
+            ]);
+        });
+
         it('shares out the room that frees up evenly between the clients holding updates', () => {
             configure({ inboundBacklogLimit: 2 });
             const first = handshaked('first');
