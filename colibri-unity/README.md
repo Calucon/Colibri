@@ -126,7 +126,10 @@ with a button that fixes it:
 Also worth knowing:
 
 - **Server address.** On the headset, `localhost` is the headset. Enter the IPv4 address of the
-  machine running the server on your local network; voice chat only works over IPv4 anyway.
+  machine running the server on your local network; voice chat only works over IPv4 anyway. A
+  headset that cannot reach that address keeps retrying, and
+  `WebServerConnection.Instance.LastConnectFailure` says why, for example `… did not answer within
+  5 s` (see [Troubleshooting](#troubleshooting)).
 - **Run In Background** has no effect on Android.
 - **Managed code stripping.** `[Sync]` members are kept by Unity's managed code stripping on
   their own. Your own classes that only Newtonsoft JSON touches — sent with `JToken.FromObject`,
@@ -186,7 +189,11 @@ Colibri also reports the common mistakes in the console rather than failing quie
 | Never connects, although something answers on the port | `invalid frame from server` errors if the server sends anything, then `3 connections in a row were accepted but ended before a single frame could be read. This usually means a protocol mismatch…` — the server is probably 1.x, or the address is not a colibri-server |
 | Works in the Editor, not on the Quest | With the Android target active: `Colibri (Android build): …` in the console, and the *Android / Meta Quest* section of *Window → Colibri Configuration* |
 
-On a headset there is no Status window and no console. For a status display in your app,
+Other failures to connect name their socket error the same way, such as `failed (HostUnreachable)`
+or `failed (NetworkUnreachable)`; like the timeout, they point at the address or the network.
+
+On a headset there is no Status window, and while it is not connected the `[RemoteLogger]` cannot
+forward the console either. For a status display in your app,
 `WebServerConnection.Instance.LastConnectFailure` holds why the last attempt to connect failed —
 such as the timeout or the refusal above — and is `null` once a connection has opened.
 
