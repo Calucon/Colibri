@@ -127,6 +127,7 @@ describe('BroadcastLogger', () => {
 
         server.messagesSource.next({ channel: 'app::chan', command: 'model::update' });
 
-        expect(captured).toHaveLength(0);
+        // Nothing from BroadcastLogger itself: the pool says that no hook handled the message.
+        expect(captured.filter(l => l.origin === 'BroadcastLogger')).toHaveLength(0);
     });
 });

@@ -45,6 +45,30 @@ export const DEFAULT_APP_CLIENT_WARNING_THRESHOLD = 8;
 // The app the admin UI joins. However many are open, they are not an application's clients.
 const ADMIN_APP = 'colibri';
 
+// Colibri's own channels: 'colibri' (latency replies, protocol messages) and 'colibri::*' (the
+// client list, and the log requests WebLog takes straight off the Socket.IO server). Messages on
+// them are plumbing, whichever hook does or does not handle them.
+const COLIBRI_CHANNEL = 'colibri';
+const COLIBRI_CHANNEL_PREFIX = 'colibri::';
+
+// How many distinct (app, channel, command) combinations the pool warns about as unhandled before
+// it says it stops - a bound on the memory behind "once per combination", and on the log, for a
+// client that makes up a new command for every message.
+export const MAX_UNHANDLED_COMMAND_WARNINGS = 1000;
+
+// A channel or command may be up to 64 KiB. Only this much of one is remembered or logged, so the
+// bound above bounds memory too; two names that only differ further on count as one.
+const MAX_NAME_IN_WARNING = 200;
+
+const abbreviate = function (name: string): string {
+    return name.length > MAX_NAME_IN_WARNING ? `${name.slice(0, MAX_NAME_IN_WARNING)}...` : name;
+};
+
+interface WildcardHandler {
+    predicate: (message: NetworkMessage) => boolean;
+    handler: MessageHandler;
+}
+
 export class ConnectionPool extends Service {
     public serviceName = 'ConnectionPool';
     public groupName = 'colibri';
@@ -75,7 +99,16 @@ export class ConnectionPool extends Service {
     // handlersByCommand gives hooks that only care about an exact command O(1) routing,
     // and wildcardHandlers covers the few that need a channel filter or command prefix.
     private readonly handlersByCommand = new Map<string, MessageHandler[]>();
-    private readonly wildcardHandlers: MessageHandler[] = [];
+    private readonly wildcardHandlers: WildcardHandler[] = [];
+
+    // Per app, the "channel \0 command" pairs already warned about as unhandled, and how many
+    // that is across every app (see MAX_UNHANDLED_COMMAND_WARNINGS). An app's entries go when its
+    // last client leaves, so the next run of an app that still sends them is told again.
+    private readonly unhandledWarned = new Map<string, Set<string>>();
+    private unhandledWarnedCount = 0;
+    // Set once the count reached the bound and that was said; cleared when apps leaving bring it
+    // back under the bound.
+    private unhandledWarningsStopped = false;
 
     public get clientConnected$(): Observable<NetworkClient> {
         return merge(...this.servers.map(c => c.clientConnected$));
@@ -128,17 +161,22 @@ export class ConnectionPool extends Service {
     // command prefix like 'broadcast::*') - still one shared dispatch loop, just without
     // the further command-indexed lookup.
     public onMessage(predicate: (message: NetworkMessage) => boolean, handler: MessageHandler): void {
-        this.wildcardHandlers.push(message => {
-            if (predicate(message)) handler(message);
-        });
+        this.wildcardHandlers.push({ predicate, handler });
     }
 
     private dispatch(message: NetworkMessage): void {
+        let handled = false;
+
         const handlers = this.handlersByCommand.get(message.command);
         if (handlers) {
+            handled = true;
             for (const handler of handlers) this.runHandler(handler, message);
         }
-        for (const handler of this.wildcardHandlers) this.runHandler(handler, message);
+        for (const wildcard of this.wildcardHandlers) {
+            if (this.runWildcardHandler(wildcard, message)) handled = true;
+        }
+
+        if (!handled) this.reportUnhandled(message);
     }
 
     // Every handler runs on input straight off the network, and a synchronous throw out of the
@@ -151,13 +189,72 @@ export class ConnectionPool extends Service {
         try {
             handler(message);
         } catch (err) {
-            const origin = message.origin ? `client ${message.origin.id} ('${message.origin.name}', app '${message.origin.app}')` : 'an unknown client';
-            this.logError(
-                `Dropped a message (${message.channel} / ${message.command}) from ${origin}: a handler threw ` +
-                    (err instanceof Error ? (err.stack ?? err.message) : String(err)),
-                false
-            );
+            this.logHandlerError(message, err);
         }
+    }
+
+    // Whether the wildcard handler took the message: its predicate matched (or threw, which is
+    // reported as the handler's error, not as a message nobody handles).
+    private runWildcardHandler(wildcard: WildcardHandler, message: NetworkMessage): boolean {
+        try {
+            if (!wildcard.predicate(message)) return false;
+            wildcard.handler(message);
+        } catch (err) {
+            this.logHandlerError(message, err);
+        }
+        return true;
+    }
+
+    private logHandlerError(message: NetworkMessage, err: unknown): void {
+        const origin = message.origin ? `client ${message.origin.id} ('${message.origin.name}', app '${message.origin.app}')` : 'an unknown client';
+        this.logError(
+            `Dropped a message (${message.channel} / ${message.command}) from ${origin}: a handler threw ` +
+                (err instanceof Error ? (err.stack ?? err.message) : String(err)),
+            false
+        );
+    }
+
+    // A message no hook handles reaches nobody: the server relays only broadcast::* and the model
+    // commands. Sent with SendMessage(channel, 'myCommand', ...) - an easy mistake to make, and the
+    // natural way to try messaging the other clients - it used to vanish with nothing logged at
+    // all, so all anybody saw was that it never arrived. Said once per app, channel and command,
+    // not per message: a client making that mistake usually makes it in a loop.
+    private reportUnhandled(message: NetworkMessage): void {
+        const app = message.origin?.app ?? '';
+        // The admin UI's own requests, and Colibri's channels, are answered by whatever owns them -
+        // WebLog takes 'colibri::log' straight off the Socket.IO server, for one.
+        if (app === ADMIN_APP || message.channel === COLIBRI_CHANNEL || message.channel.startsWith(COLIBRI_CHANNEL_PREFIX)) return;
+
+        const channel = abbreviate(message.channel);
+        const command = abbreviate(message.command);
+        let warned = this.unhandledWarned.get(app);
+        const key = `${channel}\u0000${command}`;
+        if (warned?.has(key)) return;
+
+        const name = message.origin ? `Client '${message.origin.name}' (${message.origin.id}, app '${app}')` : 'A client';
+        const text =
+            `${name} sent '${command}' on channel '${channel}', which the server does not handle: it reached no other ` +
+            `client. Only broadcast::<type> messages (e.g. 'broadcast::${command}') and model::update / model::delete are ` +
+            'relayed to the other clients of the app. Logged once per app, channel and command.';
+
+        if (this.unhandledWarnedCount >= MAX_UNHANDLED_COMMAND_WARNINGS) {
+            if (!this.unhandledWarningsStopped) {
+                this.unhandledWarningsStopped = true;
+                this.logWarning(
+                    `Clients have sent ${MAX_UNHANDLED_COMMAND_WARNINGS} different commands the server does not handle; ` +
+                        'no more are reported until some of their apps have no client left.'
+                );
+            }
+            return;
+        }
+
+        if (!warned) {
+            warned = new Set();
+            this.unhandledWarned.set(app, warned);
+        }
+        warned.add(key);
+        this.unhandledWarnedCount += 1;
+        this.logWarning(text);
     }
 
 
@@ -220,7 +317,17 @@ export class ConnectionPool extends Service {
         }
         if (clients.size === 0) {
             this.clientsByApp.delete(client.app);
+            this.forgetUnhandledWarnings(client.app);
         }
+    }
+
+    private forgetUnhandledWarnings(app: string): void {
+        const warned = this.unhandledWarned.get(app);
+        if (!warned) return;
+
+        this.unhandledWarnedCount -= warned.size;
+        this.unhandledWarned.delete(app);
+        if (this.unhandledWarnedCount < MAX_UNHANDLED_COMMAND_WARNINGS) this.unhandledWarningsStopped = false;
     }
 
     // Every message in an app is relayed to each of its other clients, so the server's work grows

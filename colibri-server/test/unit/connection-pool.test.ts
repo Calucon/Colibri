@@ -1,6 +1,19 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Subject, Subscription, config as rxjsConfig } from 'rxjs';
-import { ConnectionPool, NetworkClient, NetworkMessage, NetworkServer } from '../../src/server/modules/command-hooks/connection-pool.js';
+import {
+    ConnectionPool,
+    MAX_UNHANDLED_COMMAND_WARNINGS,
+    NetworkClient,
+    NetworkMessage,
+    NetworkServer,
+} from '../../src/server/modules/command-hooks/connection-pool.js';
+import { BroadcastLogger } from '../../src/server/modules/command-hooks/broadcast-logger.js';
+import { Broadcaster } from '../../src/server/modules/command-hooks/broadcaster.js';
+import { ClientBroadcast } from '../../src/server/modules/command-hooks/client-broadcast.js';
+import { ClientLogger } from '../../src/server/modules/command-hooks/client-logger.js';
+import { DataStore } from '../../src/server/modules/command-hooks/data-store.js';
+import { ModelSynchronization } from '../../src/server/modules/command-hooks/model-sync.js';
+import { Payload } from '../../src/server/modules/core/payload.js';
 import { Service } from '../../src/server/modules/core/service.js';
 import { LogLevel, LogMessage } from '../../src/server/modules/core/log-message.js';
 
@@ -412,6 +425,184 @@ describe('ConnectionPool', () => {
             expect(appWarnings()).toEqual([]);
             server.connectClient(makeClient('c9', 'shared'));
             expect(appWarnings()).toHaveLength(1);
+        });
+    });
+
+    // SendMessage(channel, 'myCommand', ...) reaches no other client - the server relays only
+    // broadcast::* and the model commands - and used to vanish without a word in the log.
+    describe('a command no hook handles', () => {
+        let logs: LogMessage[];
+        let logSubscription: Subscription;
+
+        beforeEach(() => {
+            logs = [];
+            logSubscription = Service.output$.subscribe(msg => logs.push(msg));
+        });
+
+        afterEach(() => {
+            logSubscription.unsubscribe();
+        });
+
+        const unhandled = (level = LogLevel.Warn): string[] =>
+            logs.filter(l => l.level === level && l.message.includes('which the server does not handle')).map(l => l.message);
+
+        const send = function (server: FakeServer, client: NetworkClient, channel: string, command: string): void {
+            server.messagesSource.next({ channel, command, origin: client, payload: Payload.fromValue({}) });
+        };
+
+        it('is warned about once per app, channel and command, naming the client and what is relayed instead', () => {
+            const server = new FakeServer();
+            new ConnectionPool(server);
+            const client = makeClient('quest-1', 'myApp');
+            server.connectClient(client);
+
+            for (let i = 0; i < 5; i++) send(server, client, 'scores', 'myCommand');
+
+            expect(unhandled()).toHaveLength(1);
+            expect(unhandled()[0]).toContain('\'myCommand\' on channel \'scores\'');
+            expect(unhandled()[0]).toContain('quest-1');
+            expect(unhandled()[0]).toContain('app \'myApp\'');
+            expect(unhandled()[0]).toContain('\'broadcast::myCommand\'');
+            expect(unhandled()[0]).toContain('model::update / model::delete');
+        });
+
+        it('is warned about again for another channel, command or app', () => {
+            const server = new FakeServer();
+            new ConnectionPool(server);
+            const a = makeClient('a', 'appA');
+            const b = makeClient('b', 'appB');
+            server.connectClient(a);
+            server.connectClient(b);
+
+            send(server, a, 'scores', 'myCommand');
+            send(server, a, 'other', 'myCommand');
+            send(server, a, 'scores', 'otherCommand');
+            send(server, b, 'scores', 'myCommand');
+            send(server, b, 'scores', 'myCommand');
+
+            expect(unhandled()).toHaveLength(4);
+        });
+
+        it('is not reported when a command handler or a matching wildcard handler takes it', () => {
+            const server = new FakeServer();
+            const pool = new ConnectionPool(server);
+            const client = makeClient('a', 'appA');
+            server.connectClient(client);
+            pool.onCommand('handled', vi.fn());
+            pool.onMessage(msg => msg.command.startsWith('prefix::'), vi.fn());
+            pool.onMessage(() => {
+                throw new Error('a predicate that throws');
+            }, vi.fn());
+
+            send(server, client, 'c', 'handled');
+            send(server, client, 'c', 'prefix::anything');
+
+            expect(unhandled()).toEqual([]);
+        });
+
+        it('is not reported on Colibri\'s own channels, or from the admin UI', () => {
+            const server = new FakeServer();
+            new ConnectionPool(server);
+            const client = makeClient('a', 'appA');
+            const admin = makeClient('admin', 'colibri');
+            server.connectClient(client);
+            server.connectClient(admin);
+
+            send(server, client, 'colibri', 'whatever');
+            send(server, client, 'colibri::log', 'requestLog');
+            send(server, admin, 'colibri::log', 'requestLog');
+            send(server, admin, 'anything', 'whatever');
+
+            expect(unhandled()).toEqual([]);
+        });
+
+        // A student who runs the app again after a fix that did not work wants to be told again.
+        it('is warned about again once the app\'s last client has left and it is back', () => {
+            const server = new FakeServer();
+            new ConnectionPool(server);
+            const first = makeClient('first', 'appA');
+            const other = makeClient('other', 'appA');
+            server.connectClient(first);
+            server.connectClient(other);
+            send(server, first, 'scores', 'myCommand');
+
+            server.disconnectClient(first);
+            send(server, other, 'scores', 'myCommand');
+            expect(unhandled()).toHaveLength(1);
+
+            server.disconnectClient(other);
+            const again = makeClient('again', 'appA');
+            server.connectClient(again);
+            send(server, again, 'scores', 'myCommand');
+
+            expect(unhandled()).toHaveLength(2);
+        });
+
+        it('stops after MAX_UNHANDLED_COMMAND_WARNINGS distinct commands, saying so once, until apps leave', () => {
+            const server = new FakeServer();
+            new ConnectionPool(server);
+            const runaway = makeClient('runaway', 'appA');
+            const other = makeClient('other', 'appB');
+            server.connectClient(runaway);
+            server.connectClient(other);
+
+            for (let i = 0; i < MAX_UNHANDLED_COMMAND_WARNINGS + 10; i++) send(server, runaway, 'c', `command-${i}`);
+            send(server, other, 'c', 'myCommand');
+
+            expect(unhandled()).toHaveLength(MAX_UNHANDLED_COMMAND_WARNINGS);
+            const stopped = logs.filter(l => l.level === LogLevel.Warn && l.message.includes('no more are reported'));
+            expect(stopped).toHaveLength(1);
+            expect(stopped[0]!.message).toContain(`${MAX_UNHANDLED_COMMAND_WARNINGS} different commands`);
+
+            server.disconnectClient(runaway);
+            send(server, other, 'c', 'myCommand');
+
+            expect(unhandled()).toHaveLength(MAX_UNHANDLED_COMMAND_WARNINGS + 1);
+            expect(unhandled().at(-1)).toContain('app \'appB\'');
+        });
+
+        it('names at most 200 characters of a channel or command', () => {
+            const server = new FakeServer();
+            new ConnectionPool(server);
+            const client = makeClient('a', 'appA');
+            server.connectClient(client);
+
+            send(server, client, 'c', 'x'.repeat(60_000));
+            send(server, client, 'c', `${'x'.repeat(60_000)}y`);
+
+            expect(unhandled()).toHaveLength(1);
+            expect(unhandled()[0]!.length).toBeLessThan(1000);
+        });
+
+        // Everything colibri-web, colibri-unity, the TCP worker and the admin UI send, through the
+        // hooks main.ts registers.
+        it('is never reported for anything the clients and the admin UI send', () => {
+            const server = new FakeServer();
+            const pool = new ConnectionPool(server);
+            new ClientLogger(pool);
+            new ModelSynchronization(pool, new DataStore());
+            new Broadcaster(pool);
+            new BroadcastLogger(pool);
+            new ClientBroadcast(pool);
+            const client = makeClient('a', 'appA');
+            const admin = makeClient('admin', 'colibri');
+            server.connectClient(client);
+            server.connectClient(admin);
+
+            const broadcastTypes = ['bool', 'int', 'float', 'string', 'vector2', 'vector3', 'quaternion', 'color', 'json'];
+            for (const type of broadcastTypes) {
+                send(server, client, 'myChannel', `broadcast::${type}`);
+                if (type !== 'json') send(server, client, 'myChannel', `broadcast::${type}[]`);
+            }
+            for (const command of ['model::request', 'model::update', 'model::delete']) send(server, client, 'synctransform', command);
+            for (const level of ['debug', 'info', 'warn', 'warning', 'error']) send(server, client, 'log', level);
+            send(server, client, 'colibri', 'latency');
+            send(server, client, 'colibri::clients', 'client::request');
+            send(server, admin, 'colibri::clients', 'client::request');
+            send(server, admin, 'colibri::log', 'requestLog');
+
+            expect(unhandled()).toEqual([]);
+            expect(unhandled(LogLevel.Debug)).toEqual([]);
         });
     });
 

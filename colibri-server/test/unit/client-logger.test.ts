@@ -122,6 +122,7 @@ describe('ClientLogger', () => {
 
         server.messagesSource.next({ channel: 'position', command: 'info', payload: Payload.fromValue('text') });
 
-        expect(captured).toHaveLength(0);
+        // Nothing from ClientLogger itself: the pool says that no hook handled the message.
+        expect(captured.filter(l => l.origin === 'ClientLogger')).toHaveLength(0);
     });
 });
