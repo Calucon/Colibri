@@ -4,8 +4,8 @@
 
 Summary of everything that changed in the `1.3.1` → `2.0.0` modernization, closing out the v2
 release across all three packages. `colibri-server` 2.0.0 replaced the v1 TCP framing with a fixed
-binary v3 protocol and its changelog listed the Unity client rewrite as
-[deferred work](../colibri-server/docs/v2-changelog.md#deferred-work); this release is that work.
+binary v3 protocol (see its [change log](../colibri-server/docs/v2-changelog.md)); this release is
+the Unity client's side of that change.
 
 The ease-of-use and sync-loop pass that closes the release is written up in more depth — mechanism,
 rationale, migration steps, and what the Editor verification did and did not cover — in
