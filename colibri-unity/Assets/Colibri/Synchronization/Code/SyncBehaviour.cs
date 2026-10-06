@@ -315,8 +315,9 @@ namespace HCIKonstanz.Colibri.Synchronization
         private JObject _nextUpdate;
 
         // The send-rate limit (SyncSettings.MaxSendRate): when this object may send next, on
-        // SyncTicker's clock. Changes before then wait in _nextUpdate.
+        // SyncTicker's clock, and when it last did. Changes before then wait in _nextUpdate.
         private double _nextSendTime = double.NegativeInfinity;
+        private double _lastSendTime = double.NegativeInfinity;
 
         // The object's own active flag as the last poll saw it, and whether that poll saw it
         // switched - which goes out at once, past the limit.
@@ -488,7 +489,13 @@ namespace HCIKonstanz.Colibri.Synchronization
             if (_nextUpdate == null)
                 return null;
 
-            if (interval > 0 && now < _nextSendTime && !sendAtOnce)
+            // The slot was set with the interval of the last send. A limit raised since then -
+            // SyncSettings.MaxSendRate set from code - shortens the wait for what is held now:
+            // otherwise a change held under 1 per second still waited out the full second after
+            // the limit had become 30. A lowered limit takes effect from the next slot on.
+            var due = Math.Min(_nextSendTime, _lastSendTime + interval);
+
+            if (interval > 0 && now < due && !sendAtOnce)
                 return null;
 
             // The next slot is one interval after the previous slot, not after now. Frames rarely
@@ -496,8 +503,9 @@ namespace HCIKonstanz.Colibri.Synchronization
             // now would round every interval up to three frames - 24 Hz. Carried over, the lateness
             // is made up in the next interval. Only while the object keeps sending, though: after a
             // pause, or a send forced early, it starts afresh, so no backlog of sends builds up.
-            var late = now - _nextSendTime;
-            _nextSendTime = late >= 0 && late < interval ? _nextSendTime + interval : now + interval;
+            var late = now - due;
+            _nextSendTime = late >= 0 && late < interval ? due + interval : now + interval;
+            _lastSendTime = now;
 
             var update = _nextUpdate;
             _nextUpdate = null;

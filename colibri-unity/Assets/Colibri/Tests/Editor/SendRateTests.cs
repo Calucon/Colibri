@@ -234,6 +234,56 @@ namespace HCIKonstanz.Colibri.Tests
             Assert.That(sent.Count, Is.EqualTo(10), "Without a limit every frame with a change sends");
         }
 
+        /// <summary>
+        /// SyncSettings.MaxSendRate can be raised while the app runs. The slot for an object's next
+        /// send used to be fixed with the interval of its last send, so what it held then still
+        /// waited out the old, longer interval: a full second after going from 1 to 30 a second.
+        /// </summary>
+        [Test]
+        public void RaisingTheLimitSendsWhatIsHeldOnTheNewInterval()
+        {
+            var model = SpawnModel();
+
+            model.Label = "a";
+            Assert.That(Frame(model, Start, interval: 1.0), Is.Not.Null);
+
+            model.Label = "b";
+            Assert.That(Frame(model, Start + 0.010, interval: 1.0), Is.Null, "Precondition: the change is held");
+
+            // From here on the limit is 30 per second.
+            Assert.That(Frame(model, Start + Interval - 0.001), Is.Null, "Sent before even the new interval was up");
+
+            var held = Frame(model, Start + Interval);
+            Assert.That(held?["label"]?.Value<string>(), Is.EqualTo("b"),
+                "The change held under the old limit waited for the old interval");
+
+            // And the new limit goes on from there, not the old one.
+            model.Label = "c";
+            Assert.That(Frame(model, Start + Interval + 0.010), Is.Null);
+            Assert.That(Frame(model, Start + 2 * Interval + 0.001)?["label"]?.Value<string>(), Is.EqualTo("c"));
+        }
+
+        /// <summary>A lowered limit holds the next change for the new, longer interval.</summary>
+        [Test]
+        public void LoweringTheLimitHoldsTheNextChangeLonger()
+        {
+            var model = SpawnModel();
+
+            model.Label = "a";
+            Assert.That(Frame(model, Start), Is.Not.Null);
+            model.Label = "b";
+            Assert.That(Frame(model, Start + Interval + 0.001), Is.Not.Null, "Precondition: sent once the interval was up");
+
+            // From here on the limit is 1 per second.
+            model.Label = "c";
+            Assert.That(Frame(model, Start + 2 * Interval + 0.002, interval: 1.0)?["label"]?.Value<string>(), Is.EqualTo("c"),
+                "The slot set under the old limit still stands");
+
+            model.Label = "d";
+            Assert.That(Frame(model, Start + 3 * Interval, interval: 1.0), Is.Null, "Sent on the old interval after a lowered limit");
+            Assert.That(Frame(model, Start + 2 * Interval + 1.003, interval: 1.0)?["label"]?.Value<string>(), Is.EqualTo("d"));
+        }
+
         [Test]
         public void EveryObjectIsLimitedOnItsOwn()
         {
