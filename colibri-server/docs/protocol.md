@@ -421,7 +421,10 @@ messages dropped. With the default settings, the warnings read:
 The rate limit is far above what a client needs - one syncing 10 objects 72 times a second sends
 720 updates a second - so it only catches a runaway loop, typically something that sends every
 frame without a rate cap. The backlog limit is reached when the server as a whole is overloaded:
-fewer synced objects, a lower sync rate or fewer clients per app reduce the load.
+fewer synced objects, a lower sync rate or fewer clients per app reduce the load. Since every
+message is relayed to every other client of the app, the server's work grows with the square of
+an app's size. Each time an app grows past `APP_CLIENT_WARNING_THRESHOLD` clients (8 by default,
+Unity and web together), the server logs a warning that starts `App '<app>' now has`.
 
 ## Server messages
 
