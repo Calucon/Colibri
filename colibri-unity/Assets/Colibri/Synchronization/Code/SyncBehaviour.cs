@@ -309,6 +309,15 @@ namespace HCIKonstanz.Colibri.Synchronization
 
         private JObject _nextUpdate;
 
+        // The send-rate limit (SyncSettings.MaxSendRate): when this object may send next, on
+        // SyncTicker's clock. Changes before then wait in _nextUpdate.
+        private double _nextSendTime = double.NegativeInfinity;
+
+        // The object's own active flag as the last poll saw it, and whether that poll saw it
+        // switched - which goes out at once, past the limit.
+        private bool _wasActive;
+        private bool _sendAtOnce;
+
         private bool _isQuitting;
         private bool _hasReceivedDestroyCommand;
         private bool _hasReceivedFirstUpdate;
@@ -332,6 +341,7 @@ namespace HCIKonstanz.Colibri.Synchronization
             _trackers = new IChangeTracker[_attributeList.Count];
             for (var i = 0; i < _attributeList.Count; i++)
                 _trackers[i] = _attributeList[i].CreateTracker(self);
+            _wasActive = gameObject.activeSelf;
 
             SyncTicker.Register(this);
 
@@ -361,6 +371,9 @@ namespace HCIKonstanz.Colibri.Synchronization
 
         protected virtual void OnDestroy()
         {
+            // An update the send-rate limit still holds is dropped with the object, and the
+            // delete below goes out at once: sent after the delete, the update would bring the
+            // object back to life on the server.
             SyncTicker.Deregister(this);
 
             Sync.RemoveModelUpdateListener(Channel, OnModelUpdate);
@@ -415,15 +428,58 @@ namespace HCIKonstanz.Colibri.Synchronization
                 if (_hasReceivedFirstUpdate)
                     AddUpdate(_attributeList[i], _attributeList[i].GetBoxed(self));
             }
+
+            // Switching the object off or on is not held back by the send-rate limit: it is a
+            // one-off event rather than motion, and hiding an object is often the last thing that
+            // happens to it. Whatever is waiting goes out with it, in this frame.
+            var active = gameObject.activeSelf;
+            if (active != _wasActive)
+            {
+                _wasActive = active;
+                _sendAtOnce = true;
+            }
         }
 
-        void SyncTicker.ITickable.FlushUpdate()
+        void SyncTicker.ITickable.FlushUpdate(double now, double interval)
         {
-            if (_nextUpdate == null)
-                return;
+            var update = TakeDueUpdate(now, interval);
+            if (update != null)
+                Sync.SendModelUpdate(Channel, update);
+        }
 
-            Sync.SendModelUpdate(Channel, _nextUpdate);
+        /// <summary>
+        /// The update to send in this frame, if one is due, applying the send-rate limit. The
+        /// deciding half of FlushUpdate; internal so the tests can run it on a clock of their own.
+        /// </summary>
+        /// <remarks>
+        /// Leading edge first: a change after a quiet spell goes out at once, so a one-off change
+        /// is exactly as quick as without a limit. Changes in the interval after that are held,
+        /// merged into one update, and sent as soon as the interval is up - by the ticker, which
+        /// flushes every object in every frame, so the last values of a burst go out whether or
+        /// not anything changes after them.
+        /// </remarks>
+        internal JObject TakeDueUpdate(double now, double interval)
+        {
+            var sendAtOnce = _sendAtOnce;
+            _sendAtOnce = false;
+
+            if (_nextUpdate == null)
+                return null;
+
+            if (interval > 0 && now < _nextSendTime && !sendAtOnce)
+                return null;
+
+            // The next slot is one interval after the previous slot, not after now. Frames rarely
+            // land on the interval: at 72 fps a 30 Hz limit is passed 8 ms late, and counting from
+            // now would round every interval up to three frames - 24 Hz. Carried over, the lateness
+            // is made up in the next interval. Only while the object keeps sending, though: after a
+            // pause, or a send forced early, it starts afresh, so no backlog of sends builds up.
+            var late = now - _nextSendTime;
+            _nextSendTime = late >= 0 && late < interval ? _nextSendTime + interval : now + interval;
+
+            var update = _nextUpdate;
             _nextUpdate = null;
+            return update;
         }
 
 
@@ -486,7 +542,8 @@ namespace HCIKonstanz.Colibri.Synchronization
                 _nextUpdate.Add(attribute.Name, value.ToJson());
 
             // The message itself goes out in FlushUpdate(), so all of this frame's changes
-            // travel together in one message.
+            // travel together in one message - together with the next frames' too, while the
+            // send-rate limit holds it back.
         }
 
         private void UpdateAttribute(string name, JToken value)

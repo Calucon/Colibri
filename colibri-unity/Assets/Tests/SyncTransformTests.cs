@@ -127,6 +127,39 @@ namespace HCIKonstanz.Colibri.E2E
         }
 
         /// <summary>
+        /// The send-rate limit holds back the moves that follow one another, but not this: hiding
+        /// an object is often the last thing that happens to it, and it goes out at once, carrying
+        /// the move that was being held.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator HidingAMovingObjectIsNotHeldBackByTheSendRateLimit()
+        {
+            var sync = SpawnConfigured<SyncTransform>("moved-then-hidden", _ => { });
+            yield return LetInitialStateArrive();
+
+            SyncSettings.MaxSendRate = 1;
+            try
+            {
+                sync.transform.position = new Vector3(1f, 0f, 0f);
+                yield return Peer.Expect(Channel, "model::update", timeoutSeconds: 0.5f);
+
+                sync.transform.position = new Vector3(2f, 0f, 0f);
+                yield return null;
+                sync.gameObject.SetActive(false);
+
+                yield return Peer.Expect(Channel, "model::update", frame =>
+                {
+                    AssertActive(frame, sync.Id, false);
+                    Assert.That(TcpPeer.Json(frame)["position"].ToString(Newtonsoft.Json.Formatting.None), Is.EqualTo("[2.0,0.0,0.0]"));
+                }, timeoutSeconds: 0.5f);
+            }
+            finally
+            {
+                SyncSettings.ResetMaxSendRate();
+            }
+        }
+
+        /// <summary>
         /// Switching the component off stops it syncing; it does not mean the object has gone.
         /// </summary>
         [UnityTest]

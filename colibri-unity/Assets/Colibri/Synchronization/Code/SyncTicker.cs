@@ -12,6 +12,10 @@ namespace HCIKonstanz.Colibri.Synchronization
     /// synced attribute for changes, <c>LateUpdate</c> flushes each object's accumulated changes
     /// as a single message. Splitting the two guarantees that a frame's changes are all collected
     /// before any of them go out.
+    ///
+    /// The flush is also where the send-rate limit (<see cref="SyncSettings.MaxSendRate"/>) is
+    /// applied, per object: every registered object is flushed in every frame, so changes it holds
+    /// back go out once their interval is up even if the object never changes again.
     /// </summary>
     internal sealed class SyncTicker : MonoBehaviour
     {
@@ -24,7 +28,13 @@ namespace HCIKonstanz.Colibri.Synchronization
             int TickIndex { get; set; }
 
             void PollChanges();
-            void FlushUpdate();
+
+            /// <param name="now">The ticker's clock, in seconds.</param>
+            /// <param name="interval">
+            /// The send-rate limit as an interval, 1 / <see cref="SyncSettings.MaxSendRate"/>
+            /// seconds; 0 for no limit.
+            /// </param>
+            void FlushUpdate(double now, double interval);
         }
 
         private static readonly List<ITickable> _tickables = new List<ITickable>();
@@ -136,8 +146,14 @@ namespace HCIKonstanz.Colibri.Synchronization
 
         private void LateUpdate()
         {
+            // Read once per frame, so every object is flushed against the same clock and limit.
+            // Unscaled, or a game paused with timeScale = 0 would stop sending; and the double,
+            // which still resolves milliseconds after the app has been running for days.
+            var now = Time.unscaledTimeAsDouble;
+            var interval = SyncSettings.SendInterval;
+
             for (var i = 0; i < _tickables.Count; i++)
-                _tickables[i]?.FlushUpdate();
+                _tickables[i]?.FlushUpdate(now, interval);
 
             if (_hasEmptySlots)
                 Compact();

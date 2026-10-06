@@ -58,6 +58,20 @@ namespace HCIKonstanz.Colibri.Setup
         public bool IsSSL = false;
         public int VoiceServerSamplingRate = 48000;
 
+        /// <summary>The value <see cref="MaxSendRate"/> starts out with.</summary>
+        public const int DEFAULT_MAX_SEND_RATE = 30;
+
+        /// <summary>
+        /// The most updates per second one synced object sends, 0 for no limit. What
+        /// <c>SyncSettings.MaxSendRate</c> starts out as - see there for what the limit does.
+        /// </summary>
+        /// <remarks>
+        /// A configuration asset saved before this field existed has no value for it, and Unity
+        /// leaves such a field at its initializer. So existing projects get the default without
+        /// saving their configuration again.
+        /// </remarks>
+        public int MaxSendRate = DEFAULT_MAX_SEND_RATE;
+
         /// <summary>
         /// Generates a URL for the WebRequest
         /// </summary>

@@ -204,6 +204,113 @@ namespace HCIKonstanz.Colibri.E2E
                 UnityEngine.Object.Destroy(instance.gameObject);
         }
 
+
+        /*
+         *  The send-rate limit (SyncSettings.MaxSendRate). Set low here, so that what it holds
+         *  back is plain to see at any frame rate; the default is 30 per second.
+         */
+
+        [UnityTest]
+        public IEnumerator ABurstOfChangesSendsTheFirstAtOnceAndThenOnlyTheLatestValues()
+        {
+            var model = SpawnConfigured<E2ESyncModel>("burst", _ => { });
+            yield return LetInitialStateArrive();
+
+            SyncSettings.MaxSendRate = 1;
+            try
+            {
+                model.Label = "first";
+
+                // Well inside the interval: a change after a quiet spell is not held back.
+                yield return Peer.Expect(Channel, "model::update",
+                    frame => Assert.That(TcpPeer.Json(frame)["label"].Value<string>(), Is.EqualTo("first")),
+                    timeoutSeconds: 0.5f);
+
+                model.Label = "between";
+                yield return null;
+                model.Count = 3;
+                yield return null;
+                model.Label = "last";
+
+                // Nothing changes after this, and the held values still have to arrive - as one
+                // update, without the value in between.
+                yield return Peer.Expect(Channel, "model::update", frame =>
+                {
+                    var payload = TcpPeer.Json(frame);
+                    Assert.That(payload["label"].Value<string>(), Is.EqualTo("last"));
+                    Assert.That(payload["_count"].Value<int>(), Is.EqualTo(3));
+                });
+
+                yield return Peer.ExpectNothing(Channel, 1.5f);
+            }
+            finally
+            {
+                SyncSettings.ResetMaxSendRate();
+            }
+        }
+
+        [UnityTest]
+        public IEnumerator ALimitOfZeroSendsEveryFramesChange()
+        {
+            var model = SpawnConfigured<E2ESyncModel>("unlimited", _ => { });
+            yield return LetInitialStateArrive();
+
+            SyncSettings.MaxSendRate = 0;
+            try
+            {
+                model.Label = "a";
+                yield return null;
+                model.Label = "b";
+                yield return null;
+                model.Label = "c";
+
+                foreach (var expected in new[] { "a", "b", "c" })
+                {
+                    yield return Peer.Expect(Channel, "model::update",
+                        frame => Assert.That(TcpPeer.Json(frame)["label"].Value<string>(), Is.EqualTo(expected)));
+                }
+            }
+            finally
+            {
+                SyncSettings.ResetMaxSendRate();
+            }
+        }
+
+        /// <summary>
+        /// The delete goes out at once, and what the limit was holding goes nowhere: sent after the
+        /// delete, it would bring the object back on the server and on every other client.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator DestroyingAnObjectDeletesItAtOnceAndDropsWhatWasHeld()
+        {
+            var model = SpawnConfigured<E2ESyncModel>("destroyed-while-held", _ => { });
+            yield return LetInitialStateArrive();
+
+            SyncSettings.MaxSendRate = 1;
+            try
+            {
+                model.Label = "sent";
+                yield return Peer.Expect(Channel, "model::update");
+
+                model.Label = "held";
+                yield return null;
+                yield return null;
+
+                var id = model.Id;
+                UnityEngine.Object.Destroy(model.gameObject);
+
+                yield return Peer.Expect(Channel, "model::delete",
+                    frame => Assert.That(TcpPeer.Json(frame)["id"].Value<string>(), Is.EqualTo(id)),
+                    timeoutSeconds: 0.5f);
+
+                yield return Peer.ExpectNothing(Channel, 1.5f);
+            }
+            finally
+            {
+                SyncSettings.ResetMaxSendRate();
+            }
+        }
+
         private static E2ESyncModel[] Instances(string id)
             => UnityEngine.Object.FindObjectsByType<E2ESyncModel>(FindObjectsInactive.Include, FindObjectsSortMode.None)
                 .Where(m => m.Id == id)
