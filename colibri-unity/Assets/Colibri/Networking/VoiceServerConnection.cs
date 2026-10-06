@@ -1,6 +1,5 @@
 ﻿using System;
 using System.Collections;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
@@ -19,14 +18,48 @@ namespace HCIKonstanz.Colibri.Networking
         private Thread udpThread;
         private CancellationTokenSource shutdown;
 
+        /// <summary>
+        /// The most audio, per sender, that waits for the main thread. Packets keep arriving while
+        /// Update does not run - a Quest paused with the headset off, a long scene load - and used
+        /// to queue without limit, to be played back all at once, long stale, when it ran again.
+        /// Past this the oldest of that sender's packets are dropped. Settable for the tests.
+        /// </summary>
+        internal float MaxQueuedSeconds = 1f;
+
+        /// <summary>
+        /// The shortest audio a packet counts as, in parts of a second: 2.5 ms, Opus's shortest
+        /// frame. Only a packet claiming a frame size of zero or less is that short, and this keeps
+        /// a stream of those bounded too.
+        /// </summary>
+        private const int MIN_PACKET_DIVISOR = 400;
+
+        private const int DEFAULT_SAMPLING_RATE = 48000;
+
+        // The voice server's, which a packet's FrameSize is counted in. Written by Connect, on the
+        // main thread, before the receive thread starts.
+        private volatile int samplingRate = DEFAULT_SAMPLING_RATE;
+
         // Receive thread in, main thread out - and there can be two receive threads at once:
         // OnDisable waits only 500 ms for the old one, so after a quick disable and enable it may
-        // still be handing over a packet while the new one starts. A ConcurrentQueue, because the
-        // LockFreeQueue this used to be loses or duplicates items with more than one producer.
-        // Per instance rather than static, so a new connection never delivers an old one's packets.
-        private readonly ConcurrentQueue<VoicePacket> queuedVoicePackets = new ConcurrentQueue<VoicePacket>();
+        // still be handing over a packet while the new one starts. Everything in the queues is
+        // under queueLock. Per instance rather than static, so a new connection never delivers an
+        // old one's packets.
+        private readonly object queueLock = new object();
+        private readonly Dictionary<short, SenderQueue> queuedVoicePackets = new Dictionary<short, SenderQueue>();
+
+        // Main thread only: the packets being delivered, taken out of the queues in one go.
+        private readonly List<VoicePacket> deliveringPackets = new List<VoicePacket>();
+
         private readonly Dictionary<int, List<Action<VoicePacket>>> voicePacketListeners = new Dictionary<int, List<Action<VoicePacket>>>();
         private bool isConnected = false;
+
+        private sealed class SenderQueue
+        {
+            public readonly Queue<VoicePacket> Packets = new Queue<VoicePacket>();
+
+            // The audio in Packets, in samples at the voice server's sampling rate.
+            public long Samples;
+        }
 
 
         private void OnEnable()
@@ -63,24 +96,69 @@ namespace HCIKonstanz.Colibri.Networking
                 DeliverReceivedPackets();
         }
 
-        /// <summary>Hands a received packet to the main thread, where <see cref="Update"/> delivers it.</summary>
+        /// <summary>
+        /// Hands a received packet to the main thread, where <see cref="Update"/> delivers it,
+        /// keeping no more than <see cref="MaxQueuedSeconds"/> of each sender's audio.
+        /// </summary>
         /// <remarks>Called from the receive thread; internal so the EditMode tests can be several of them.</remarks>
-        internal void EnqueueReceived(VoicePacket packet) => queuedVoicePackets.Enqueue(packet);
+        internal void EnqueueReceived(VoicePacket packet)
+        {
+            var rate = samplingRate;
+            var maxSamples = (long)(MaxQueuedSeconds * rate);
+            var minSamples = rate / MIN_PACKET_DIVISOR;
+
+            lock (queueLock)
+            {
+                if (!queuedVoicePackets.TryGetValue(packet.Id, out var queue))
+                {
+                    queue = new SenderQueue();
+                    queuedVoicePackets.Add(packet.Id, queue);
+                }
+
+                queue.Packets.Enqueue(packet);
+                queue.Samples += Math.Max(packet.FrameSize, minSamples);
+
+                // The newest is what is worth playing. The packet just queued always stays.
+                while (queue.Samples > maxSamples && queue.Packets.Count > 1)
+                    queue.Samples -= Math.Max(queue.Packets.Dequeue().FrameSize, minSamples);
+            }
+        }
 
         /// <remarks>Internal so the EditMode tests can drive it without a player loop.</remarks>
         internal void DeliverReceivedPackets()
         {
-            while (queuedVoicePackets.TryDequeue(out var packet))
-                Invoke(packet);
+            lock (queueLock)
+            {
+                // A struct enumerator, and queues that keep their arrays: nothing allocated per frame.
+                foreach (var queue in queuedVoicePackets.Values)
+                {
+                    while (queue.Packets.Count > 0)
+                        deliveringPackets.Add(queue.Packets.Dequeue());
+                    queue.Samples = 0;
+                }
+            }
+
+            // Outside the lock, so a listener never holds up the receive thread.
+            try
+            {
+                foreach (var packet in deliveringPackets)
+                    Invoke(packet);
+            }
+            finally
+            {
+                deliveringPackets.Clear();
+            }
         }
 
         private void Connect()
         {
-            var host = ColibriConfig.Load().ServerAddress;
+            var config = ColibriConfig.Load();
+            var host = config.ServerAddress;
             var address = ResolveServerAddress(host);
             if (address != null)
             {
-                sendIPEndPoint = new IPEndPoint(address, ColibriConfig.Load().VoiceServerPort);
+                sendIPEndPoint = new IPEndPoint(address, config.VoiceServerPort);
+                samplingRate = config.VoiceServerSamplingRate > 0 ? config.VoiceServerSamplingRate : DEFAULT_SAMPLING_RATE;
 
                 udpClient = new UdpClient();
                 // Port 0 lets the OS pick an ephemeral port. The server replies to whatever

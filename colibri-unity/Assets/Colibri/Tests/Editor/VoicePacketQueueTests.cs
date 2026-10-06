@@ -47,6 +47,10 @@ namespace HCIKonstanz.Colibri.Tests
             const int threads = 4;
             const int packetsPerThread = 30000;
 
+            // This is about handing packets over, not about how much audio is kept: a main thread
+            // that falls behind the producers here must not make the bound drop any.
+            _voice.MaxQueuedSeconds = 3600f;
+
             var delivered = new int[threads + 1, packetsPerThread];
             for (short id = 1; id <= threads; id++)
                 _voice.AddVoicePacketListener(id, packet => delivered[packet.Id, packet.Sequence]++);
@@ -82,6 +86,59 @@ namespace HCIKonstanz.Colibri.Tests
             }
 
             Assert.That((lost, repeated), Is.EqualTo((0, 0)), "Packets were lost or delivered more than once");
+        }
+
+        /// <summary>
+        /// Packets keep coming while the main thread does not run - a Quest paused with the headset
+        /// off, a long scene load. They used to queue without limit and were all played back, stale,
+        /// when Update ran again. Each sender keeps its newest second of audio now, and a quiet
+        /// sender loses nothing to a busy one.
+        /// </summary>
+        [Test]
+        public void WhileNothingIsDeliveredEachSenderKeepsOnlyItsNewestSecondOfAudio()
+        {
+            var busy = new List<short>();
+            var quiet = new List<short>();
+            _voice.AddVoicePacketListener(1, packet => busy.Add(packet.Sequence));
+            _voice.AddVoicePacketListener(2, packet => quiet.Add(packet.Sequence));
+
+            // 20 ms frames at the voice server's 48 kHz: three seconds from one sender, a fifth of a
+            // second from the other.
+            for (short sequence = 0; sequence < 150; sequence++)
+                _voice.EnqueueReceived(new VoicePacket { Id = 1, Sequence = sequence, FrameSize = 960, Codec = Codec.OPUS });
+            for (short sequence = 0; sequence < 10; sequence++)
+                _voice.EnqueueReceived(new VoicePacket { Id = 2, Sequence = sequence, FrameSize = 960, Codec = Codec.OPUS });
+
+            _voice.DeliverReceivedPackets();
+
+            Assert.That(busy, Is.EqualTo(Enumerable.Range(100, 50).Select(i => (short)i)),
+                "Not exactly the newest second of the busy sender's audio was delivered");
+            Assert.That(quiet, Is.EqualTo(Enumerable.Range(0, 10).Select(i => (short)i)),
+                "The quiet sender lost audio");
+
+            // Delivered is gone: the next second queues afresh.
+            for (short sequence = 150; sequence < 160; sequence++)
+                _voice.EnqueueReceived(new VoicePacket { Id = 1, Sequence = sequence, FrameSize = 960, Codec = Codec.OPUS });
+            _voice.DeliverReceivedPackets();
+
+            Assert.That(busy.Skip(50), Is.EqualTo(Enumerable.Range(150, 10).Select(i => (short)i)));
+        }
+
+        /// <summary>
+        /// A packet that claims a frame size of zero counts as Opus's shortest frame, 2.5 ms, so a
+        /// stream of those is bounded too: 400 to a second.
+        /// </summary>
+        [Test]
+        public void PacketsThatClaimNoLengthAreBoundedToo()
+        {
+            var delivered = 0;
+            _voice.AddVoicePacketListener(1, _ => delivered++);
+
+            for (var sequence = 0; sequence < 2000; sequence++)
+                _voice.EnqueueReceived(new VoicePacket { Id = 1, Sequence = (short)sequence, FrameSize = 0, Codec = Codec.OPUS });
+            _voice.DeliverReceivedPackets();
+
+            Assert.That(delivered, Is.EqualTo(400));
         }
 
         /// <summary>
