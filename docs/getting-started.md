@@ -38,7 +38,12 @@ see each other has to use exactly the same one.**
 
 This is the single most common reason two clients ignore each other. Both say *Connected*, both
 look perfectly healthy, and nothing crosses between them, because the server keeps each app name
-completely separate. If you are working in a shared lab, pick something nobody else will:
+completely separate.
+
+It works the other way round too: **every group needs its own app name.** Two groups that pick the
+same one — both use `test`, or both keep the name from an example — end up in the same app. Each
+sees the other's objects and messages, and the server sends every message to both groups' clients,
+which slows it down for everyone using it. Pick something nobody else will:
 `ana-thesis-prototype`, not `test`.
 
 ### 2. Turn on Run In Background
@@ -258,6 +263,7 @@ what type each expects, and the last twenty messages in and out.
 | What you see | What it usually is |
 | --- | --- |
 | Two clients ignore each other, both connected | Different app names. The Status window shows the one in use — compare them. |
+| Objects or messages you did not create show up | Another group uses the same app name. Pick one nobody else uses. |
 | A message never arrives, no errors | The listener expects a different type than the sender sent. Check the console; Colibri names both. |
 | One client goes quiet when you click away | *Run In Background* is off on that client. |
 | Nothing connects at all | Console says `Colibri is not configured yet` — open *Window → Colibri Configuration* and set an app name. |
@@ -272,7 +278,8 @@ name or the type.
 
 ## Rules of thumb
 
-1. **Same app name everywhere.** Check it in the Status window before debugging anything else.
+1. **Same app name everywhere, and one nobody else uses.** Check it in the Status window before
+   debugging anything else.
 2. **Register listeners in `Start`, before anyone sends.** Colibri unregisters them when their
    component is destroyed; only a listener that belongs to no component, such as a static method,
    needs `Sync.Unregister`.
