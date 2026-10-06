@@ -15,8 +15,9 @@ colibri-web 2.x needs colibri-server 2.x: a 2.x server refuses 1.x web clients, 
 server (see [Protocol version](#protocol-version)). Keep the `@2` in the install command, so that you never get a 1.x
 release by accident.
 
-If npm answers `No matching version found for @hcikn/colibri@2` (yarn: `Couldn't find any versions`), 2.0 is not on npm
-yet. Build the package from a checkout of this repository instead, with Node.js 22 or newer:
+If npm answers `No matching version found for @hcikn/colibri@2` (yarn: `Couldn't find any versions`), or you need a
+version that is not on npm, such as a commit newer than the latest release, build the package from a checkout of this
+repository instead, with Node.js 22 or newer:
 
 ```sh
 cd colibri-web
@@ -25,7 +26,8 @@ npm run build
 npm pack
 ```
 
-`npm pack` writes `hcikn-colibri-2.0.0.tgz`. Copy it into your project, install it with
+`npm pack` writes `hcikn-colibri-<version>.tgz`, with the version from `package.json`, such as
+`hcikn-colibri-2.0.0.tgz`. Copy it into your project, install it with
 `npm install ./hcikn-colibri-2.0.0.tgz` (or `yarn add ./hcikn-colibri-2.0.0.tgz`), and commit it with your project,
 because `package.json` refers to the file by its path. In a download without Git history, the `.git can't be found`
 message these commands print is harmless.
