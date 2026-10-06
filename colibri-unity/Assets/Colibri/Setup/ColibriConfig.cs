@@ -68,8 +68,8 @@ namespace HCIKonstanz.Colibri.Setup
         /// The server puts every client with the same app name into one app, whoever they are. So
         /// unrelated projects that settle on the same example name see each other's objects and
         /// messages, and since each update goes to every other client in the app, the server's
-        /// work grows with the square of their number. Nothing says so at runtime: it just works,
-        /// for everyone at once.
+        /// work grows with the square of the number of clients in it. Nothing says so at runtime:
+        /// it just works, for everyone at once.
         /// </remarks>
         internal static string SharedAppNameWarning(string appName)
         {
