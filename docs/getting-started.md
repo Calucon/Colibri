@@ -91,7 +91,15 @@ private void OnTemperature(float value)
 ```
 
 That is the whole thing — there is no matching line to write in `OnDestroy`. Colibri notices when
-the component a listener belongs to is destroyed and stops calling it.
+the component a listener belongs to is destroyed and stops calling it. A listener belongs to a
+component when it is one of the component's methods, like `OnTemperature` here, or a lambda that
+uses something of it: a field, a method, `transform`.
+
+A listener that uses nothing of a component belongs to none: a static method, or a lambda that only
+works with its parameter, `Debug.Log` or a static such as `GameManager.Instance`. It stays
+registered until you call `Sync.Unregister`. Every time `Start` runs again — after a scene reload,
+say — it is added once more, and each message then reaches it once per registration. When in
+doubt, use a method of the component, as above.
 
 Three things worth knowing straight away:
 
@@ -124,10 +132,12 @@ public class Reading
 
 Sync.Send("Readings", JToken.FromObject(new Reading { Sensor = "left", Value = 7 }));
 
-Sync.Receive<JToken>("Readings", token =>
+Sync.Receive<JToken>("Readings", OnReading);
+
+private void OnReading(JToken token)
 {
     Reading reading = token.ToObject<Reading>();
-});
+}
 ```
 
 ---
@@ -338,9 +348,9 @@ name or the type.
 
 1. **Same app name everywhere, and one nobody else uses.** Check it in the Status window before
    debugging anything else.
-2. **Register listeners in `Start`, before anyone sends.** Colibri unregisters them when their
-   component is destroyed; only a listener that belongs to no component, such as a static method,
-   needs `Sync.Unregister`.
+2. **Register listeners in `Start`, before anyone sends.** Colibri unregisters a listener when the
+   component it uses is destroyed. A static method, or a lambda that uses nothing of its component,
+   stays registered until `Sync.Unregister`.
 3. **One client owns each object.** Shared control of the same thing fights with itself.
 4. **Watch the console.** Colibri reports the common mistakes by name instead of failing quietly —
    but only if you are looking.
