@@ -98,6 +98,15 @@ namespace HCIKonstanz.Colibri.Networking
         private const int MAX_OUTBOX_MESSAGES = 10000;
 
         /// <summary>
+        /// How long the end of Play mode, or quitting the app, waits for what is still in the outbox
+        /// to be written to the socket before it is closed. The app is closing, so the wait is
+        /// short: on a working connection, writing what is queued then - the updates the send-rate
+        /// limit was holding, flushed by SyncTicker - only hands a few frames to the operating
+        /// system.
+        /// </summary>
+        private const int QUIT_DRAIN_TIMEOUT_MS = 100;
+
+        /// <summary>
         /// ClientLogger (<c>client-logger.ts</c>) reads this channel's payload with
         /// <c>asString()</c>, so it is the one channel that ships raw text instead of JSON -
         /// quoting it would put stray quotes in the admin UI's log page.
@@ -380,6 +389,13 @@ namespace HCIKonstanz.Colibri.Networking
 
         private void OnDisable()
         {
+            // Play mode ending, or the app quitting: SyncTicker has just handed over what the
+            // send-rate limit was holding, and on Mono and IL2CPP a socket write completes a moment
+            // later on a worker thread. Closing the socket straight away could lose it. An ordinary
+            // disable does not wait: whatever is queued stays queued for the next enable.
+            if (SingletonLifetime.IsQuitting)
+                WaitForOutboxToDrain(QUIT_DRAIN_TIMEOUT_MS);
+
             _lifetime?.Cancel();
             _lifetime?.Dispose();
             _lifetime = null;
@@ -1193,6 +1209,38 @@ namespace HCIKonstanz.Colibri.Networking
             {
                 _outboxSocket = null;
                 _outboxToken = CancellationToken.None;
+
+                // Nothing more will be written to that session: see WaitForOutboxToDrain.
+                Monitor.PulseAll(_outboxLock);
+            }
+        }
+
+        /// <summary>
+        /// Blocks until everything in the outbox has been written to the current session's socket,
+        /// the session has ended, or <paramref name="timeoutMs"/> has passed - whichever comes
+        /// first. Returns at once while not connected.
+        /// </summary>
+        /// <returns>True if the outbox is empty.</returns>
+        /// <remarks>
+        /// Safe to call from the main thread: the drainer never needs it, since every await on the
+        /// way to the socket is ConfigureAwait(false).
+        /// </remarks>
+        private bool WaitForOutboxToDrain(int timeoutMs)
+        {
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            lock (_outboxLock)
+            {
+                // Woken by the drainer after each message it has written, and when the session ends.
+                while (_outbox.Count > 0 && _outboxSocket != null)
+                {
+                    var remaining = timeoutMs - clock.ElapsedMilliseconds;
+                    if (remaining <= 0)
+                        break;
+
+                    Monitor.Wait(_outboxLock, (int)remaining);
+                }
+
+                return _outbox.Count == 0;
             }
         }
 
@@ -1493,6 +1541,7 @@ namespace HCIKonstanz.Colibri.Networking
                         {
                             _outboxSocket = null;
                             _outboxToken = CancellationToken.None;
+                            Monitor.PulseAll(_outboxLock);
                         }
                     }
 
@@ -1510,6 +1559,9 @@ namespace HCIKonstanz.Colibri.Networking
                     // the outbox last closed are folded into, and this one was queued before that.)
                     if (node.List == _outbox)
                         RemoveFromOutbox(node);
+
+                    // One message further: see WaitForOutboxToDrain.
+                    Monitor.PulseAll(_outboxLock);
                 }
 
                 next.Sent?.TrySetResult(true);
