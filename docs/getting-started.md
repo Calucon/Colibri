@@ -81,7 +81,7 @@ private void OnTemperature(float value)
 ```
 
 That is the whole thing — there is no matching line to write in `OnDestroy`. Colibri notices when
-the object that registered a listener is destroyed and stops calling it.
+the component a listener belongs to is destroyed and stops calling it.
 
 Three things worth knowing straight away:
 
@@ -273,7 +273,9 @@ name or the type.
 ## Rules of thumb
 
 1. **Same app name everywhere.** Check it in the Status window before debugging anything else.
-2. **Register listeners in `Start`, unregister in `OnDestroy`.** Colibri will not do it for you.
+2. **Register listeners in `Start`, before anyone sends.** Colibri unregisters them when their
+   component is destroyed; only a listener that belongs to no component, such as a static method,
+   needs `Sync.Unregister`.
 3. **One client owns each object.** Shared control of the same thing fights with itself.
 4. **Watch the console.** Colibri reports the common mistakes by name instead of failing quietly —
    but only if you are looking.
