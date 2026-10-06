@@ -27,7 +27,10 @@ rationale, migration steps, and what the Editor verification did and did not cov
   as `IObservable<>` has to be rewritten as `+=` / `-=` — and, unlike a UniRx subscription, a static
   event does **not** unsubscribe itself when the component is destroyed.
 - **`WebServerConnection.Connected`** is a `Task` gate instead of an `IObservable<bool>`.
-  `await connection.Connected` is unchanged; anything that subscribed to it is not.
+  `await connection.Connected` is unchanged; anything that subscribed to it is not. It completes
+  once the server has sent its first frame, not when TCP connects, and it is cancelled when the
+  server refuses this client's protocol version or the component is disabled — awaiting it then
+  throws `TaskCanceledException`.
 - **`ObservableModel<T>`, `ObservableManager<T>` and `Samples/ObservableModel` are deleted.**
 - **Vendored `Newtonsoft.Json.dll` is gone**, replaced by the `com.unity.nuget.newtonsoft-json`
   package, which is declared as a real dependency — so installing Colibri is one git URL and
@@ -115,7 +118,8 @@ rationale, migration steps, and what the Editor verification did and did not cov
   Status window reported missed heartbeats, all of it over localhost. Every await on the connection
   path now carries `ConfigureAwait(false)`. The `volatile` fields, `Interlocked`, `LockFreeQueue`
   and `_msgQueueLock` this file already had were written for exactly this threading; the missing
-  `ConfigureAwait` had quietly been preventing it. `_socket`, `_status` and the connected gate join
+  `ConfigureAwait` had quietly been preventing it. (The receive queue has since become a
+  `ConcurrentQueue`, and `_msgQueue` the outbox described below.) `_socket`, `_status` and the connected gate join
   them, and the `Status` setter — a read-modify-write over four fields now genuinely reachable from
   the connection loop and `Update`'s watchdog at once — is serialized. The main-thread handoff user
   code depends on is unchanged: received messages still arrive via `_queuedCommands` and are
@@ -153,10 +157,21 @@ rationale, migration steps, and what the Editor verification did and did not cov
   synchronously) never raises `Completed`, so `await signal.WaitAsync()` never returned. Replaced
   with `Socket.SendAsync(ArraySegment<byte>, SocketFlags)`, which also drops a
   `SocketAsyncEventArgs` + `SemaphoreSlim` allocation per send.
-- **Unsynchronized retry queue.** `_msgQueue` was written from the send path and drained from the
-  connect path with no synchronization. It is now locked, and bounded — for a last-write-wins sync
-  client, buffering an unbounded backlog during an outage only preserves updates that are already
-  superseded.
+- **Messages sent during an outage.** `_msgQueue` was written from the send path and drained from
+  the connect path with no synchronization. Every message now goes through one outbox: a FIFO
+  written to the socket by a single drainer, so messages leave in the order they were sent —
+  across an outage too, and ahead of anything sent after reconnecting. A write that fails stays at
+  the head of the queue for the next session. While disconnected it holds at most 256 broadcasts
+  and log lines, dropping the oldest with one warning per outage: for a last-write-wins sync
+  client, an unbounded backlog only preserves updates that are already superseded. Model messages
+  are never dropped, because nothing would repair the loss. `model::request` and `model::delete`
+  wait as they are, and the `model::update`s for one object during one outage are folded into one,
+  newer fields winning — but never past another message about that object, so an older value
+  cannot overtake a newer one.
+- **`SendCommandAsync` says what happened.** It completes `true` once the message is written to the
+  socket, stays pending while disconnected, and completes `false` only when the message will never
+  be sent: it could not be encoded, the outage bound dropped it, the server refused this client, or
+  the component was destroyed. It never returns `false` for a message it is still going to send.
 - **Receive loop that died silently.** The `BeginReceive`/`AsyncCallback` machinery ended in
   `catch (Exception) { /* ignore */ }`, so any hiccup killed reception permanently while the client
   still looked connected. Replaced with an `await socket.ReceiveAsync(...)` loop feeding
@@ -167,6 +182,37 @@ rationale, migration steps, and what the Editor verification did and did not cov
 - **Reconnect.** A single connection task with exponential backoff (0.5 s → 10 s), cancelled by a
   `CancellationTokenSource` in `OnDisable`, replaces `Update()` re-entering `Connect()` every frame
   while disconnected.
+- **Connected means the server has spoken.** A session becomes `Connected` on the first frame the
+  server sends, not when the TCP connection opens. Only then is the backoff reset, `OnConnected`
+  raised and the queued messages sent, so against something that accepts connections and then
+  fails — a 1.x server, a port that is not Colibri — the backoff grows instead of staying at 0.5 s.
+  The 2 s heartbeat watchdog covers the time before that first frame too: a server that accepts
+  the connection and never says anything is dropped.
+- **`OnConnected` and `OnDisconnected` come in pairs.** `OnDisconnected` is raised exactly once for
+  every `OnConnected`, when that connection ends, a refusal included, and never for an attempt
+  that did not connect. A refusal in the very first frame raises neither. Each handler runs on its
+  own, so one that throws is logged and no longer skips the others or the rest of `Update`.
+- **Models are requested again after a reconnect.** `model::request` was sent once, when a model
+  listener registered, so after a Wi-Fi blip a client kept showing old state until each object
+  happened to change again. On every reconnect `Sync` now repeats the requests for every model
+  channel it listens on — by id for each `SyncBehaviour`, for the whole channel for a
+  `SyncBehaviourManager` — behind the messages queued during the outage, so the server answers with
+  this client's own offline changes already applied. The manager updates the objects it already
+  has rather than spawning duplicates.
+- **One bad message no longer takes the rest of the frame with it.** A payload that cannot be read
+  as the type its command names — a malformed `bool`, `int`, `float` or `string`, or an array
+  command whose payload is not a JSON array — is reported once, naming the channel, the command
+  and the payload, and is not delivered. A listener or `OnMessageReceived` handler that throws is
+  logged, and the other listeners and the messages queued behind it are still delivered. Both
+  used to throw out of `WebServerConnection.Update`.
+- **A receive-only client keeps working in the next Play session.** With domain reload disabled, a
+  channel registered in an earlier Play session kept its entry in `Sync` after its listeners'
+  objects were gone, and registering on it again never asked for the connection, so a client that
+  only listened had none. Every registration now does.
+- **A colon at either end of the App Name.** It merged with the handshake's `::` separator, so app
+  `app:` silently joined app `app` with the colon moved onto the client name. Such a colon is now
+  replaced with `_`, with a warning for the App Name, and `FrameCodec` rejects such handshake
+  fields.
 - **Main-thread config reads.** `ColibriConfig.Load()` goes through `Resources.Load`; the connection
   path used to call it from a worker thread. It is now snapshotted on the main thread.
 - **Voice chat.** `udpThread.Abort()` (unsupported on .NET Core / IL2CPP) is replaced with a
@@ -174,6 +220,11 @@ rationale, migration steps, and what the Editor verification did and did not cov
   `Receive()`. `OnDisable` no longer NREs when `Connect()` bailed out. The receive socket binds to
   port **0** instead of the hardcoded 9014 — the server replies to the datagram's source port
   (`voice-server.ts`), so the fixed port bought nothing and capped a machine at one Unity client.
+  Voice now goes to an IPv4 address of the server, since both voice sockets are IPv4: on Windows
+  `localhost` resolved to `::1` first and every send failed. An IP address is no longer
+  reverse-resolved (`Dns.GetHostEntry` threw for a LAN address without a DNS name), and an address
+  that cannot be resolved, or has no IPv4 address, turns voice off with a clear error instead of
+  throwing from `OnEnable`.
 - **`Store`** serializes with Newtonsoft instead of `JsonUtility`, which cannot handle dictionaries,
   properties, or top-level arrays and so silently disagreed with what `Sync` can carry.
 
@@ -268,10 +319,11 @@ an hour they do not spend on their prototype, so:
 - **UniRx removed, not replaced.** `IObservable<T>` subscriptions became plain methods and static
   events; `this.ObserveEveryValueChanged(f)` became the typed change tracking above;
   `RemoteLogging`'s `Observable.Start` + `WhenAll` + `ObserveOnMainThread` + `Sample()` became a
-  volatile flag set from Unity's threaded log callback and a one-second timer in `Update`. Its retry
-  is still re-armed only after clearing the in-flight flag, and a send that throws is now caught and
-  reported once instead of escaping as an unhandled `async void` exception — it cannot be reported
-  repeatedly, because logging from inside the log sender feeds back into this queue.
+  `ConcurrentQueue` filled from Unity's threaded log callback — several threads may log at once —
+  and drained by a one-second timer in `Update`. Each line is handed to the connection exactly
+  once, and the connection's outbox keeps it across an outage, so nothing is retried here and no
+  line is sent twice. While not connected it keeps the newest 1000 lines, and after a protocol
+  refusal it discards them.
 - **UniTask removed.** `UniTaskCompletionSource` → `TaskCompletionSource` (which also tolerates
   several pending awaiters); `await request.SendWebRequest()` → a three-line `TaskCompletionSource`
   wrapper over `UnityWebRequestAsyncOperation.completed`, completing inline so the caller stays on
