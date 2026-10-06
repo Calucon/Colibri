@@ -103,12 +103,15 @@ namespace HCIKonstanz.Colibri.Setup
             // The Android section at the bottom can run past the edge of the window.
             _scroll = EditorGUILayout.BeginScrollView(_scroll);
 
+            // Stretched to the width there is, not fixed to the window's 500 px: inside the scroll
+            // view, a vertical scrollbar takes some of those, and a fixed-width title then added
+            // a horizontal one as well.
             GUILayout.Label("Colibri Setup", new GUIStyle(EditorStyles.largeLabel)
             {
                 fontSize = 22,
                 fontStyle = FontStyle.Bold,
                 alignment = TextAnchor.MiddleCenter,
-                fixedWidth = 500
+                stretchWidth = true
             });
 
             GUILayout.Space(15f);
