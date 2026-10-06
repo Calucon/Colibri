@@ -10,6 +10,7 @@ namespace HCIKonstanz.Colibri.Synchronization
     public static class SyncSettings
     {
         private static int? _maxSendRate;
+        private static bool _hasWarnedAboutConfiguredRate;
 
         /// <summary>
         /// The most updates per second one synced object - a <c>SyncTransform</c> or any other
@@ -35,12 +36,14 @@ namespace HCIKonstanz.Colibri.Synchronization
         /// <para>
         /// Starts out as <see cref="ColibriConfig.MaxSendRate"/> (Window -> Colibri Configuration).
         /// Setting it here applies to this run of the app only and leaves the configuration alone.
+        /// A negative value in the configuration is a mistake rather than a rate: it is reported
+        /// once and the default, <see cref="ColibriConfig.DEFAULT_MAX_SEND_RATE"/>, is used.
         /// </para>
         /// </remarks>
         /// <exception cref="ArgumentOutOfRangeException">On a negative value.</exception>
         public static int MaxSendRate
         {
-            get => _maxSendRate ?? Math.Max(0, ColibriConfig.Load().MaxSendRate);
+            get => _maxSendRate ?? ConfiguredRate();
             set
             {
                 if (value < 0)
@@ -49,6 +52,29 @@ namespace HCIKonstanz.Colibri.Synchronization
 
                 _maxSendRate = value;
             }
+        }
+
+        /// <summary>
+        /// The configuration's rate. A negative one used to be clamped to 0 - no limit at all, every
+        /// moving object sending in every frame - without a word. The setup window refuses to save
+        /// one, but the configuration asset's own Inspector and a hand edit let it through.
+        /// </summary>
+        private static int ConfiguredRate()
+        {
+            var configured = ColibriConfig.Load().MaxSendRate;
+            if (configured >= 0)
+                return configured;
+
+            // Read every frame, so said once per run rather than every time.
+            if (!_hasWarnedAboutConfiguredRate)
+            {
+                _hasWarnedAboutConfiguredRate = true;
+                Debug.LogWarning($"Colibri: Max Send Rate in the Colibri configuration is {configured}, which is not a rate. "
+                    + $"Using the default, {ColibriConfig.DEFAULT_MAX_SEND_RATE} updates per second per synced object. "
+                    + "Set it in Window -> Colibri Configuration: 0 turns the limit off.");
+            }
+
+            return ColibriConfig.DEFAULT_MAX_SEND_RATE;
         }
 
         /// <summary>Seconds between two updates of one object, or 0 without a limit.</summary>
@@ -63,9 +89,14 @@ namespace HCIKonstanz.Colibri.Synchronization
 
         /// <summary>
         /// Back to the configuration's value. Statics survive Play mode when domain reload is
-        /// disabled, and a rate set from code in one session must not carry into the next.
+        /// disabled, and a rate set from code in one session must not carry into the next - nor
+        /// must having reported a negative configured rate keep the next session quiet about it.
         /// </summary>
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
-        internal static void ResetMaxSendRate() => _maxSendRate = null;
+        internal static void ResetMaxSendRate()
+        {
+            _maxSendRate = null;
+            _hasWarnedAboutConfiguredRate = false;
+        }
     }
 }

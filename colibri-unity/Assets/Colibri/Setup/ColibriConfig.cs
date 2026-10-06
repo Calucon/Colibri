@@ -104,7 +104,11 @@ namespace HCIKonstanz.Colibri.Setup
         /// A configuration asset saved before this field existed has no value for it, and Unity
         /// leaves such a field at its initializer. So existing projects get the default without
         /// saving their configuration again.
+        ///
+        /// [Min] keeps the asset's own Inspector from taking a negative value; one that gets in
+        /// anyway, by a hand edit, is reported and replaced with the default at runtime.
         /// </remarks>
+        [Min(0)]
         public int MaxSendRate = DEFAULT_MAX_SEND_RATE;
 
         /// <summary>

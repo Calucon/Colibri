@@ -452,25 +452,94 @@ namespace HCIKonstanz.Colibri.Tests
             }
         }
 
+        /// <summary>
+        /// Runs <paramref name="test"/> with the configuration's rate set to <paramref name="rate"/>,
+        /// and puts the project's own value back afterwards.
+        /// </summary>
+        private static void WithConfiguredRate(int rate, Action test)
+        {
+            var config = ColibriConfig.Load();
+            var configured = config.MaxSendRate;
+            config.MaxSendRate = rate;
+            try
+            {
+                SyncSettings.ResetMaxSendRate();
+                test();
+            }
+            finally
+            {
+                config.MaxSendRate = configured;
+                SyncSettings.ResetMaxSendRate();
+            }
+        }
+
         [Test]
         public void TheLimitStartsOutAsTheConfiguredOne()
         {
-            Assert.That(SyncSettings.MaxSendRate, Is.EqualTo(Math.Max(0, ColibriConfig.Load().MaxSendRate)));
+            WithConfiguredRate(12, () => Assert.That(SyncSettings.MaxSendRate, Is.EqualTo(12)));
         }
 
         [Test]
         public void SettingTheLimitFromCodeLeavesTheConfigurationAlone()
         {
-            var configured = ColibriConfig.Load().MaxSendRate;
+            WithConfiguredRate(12, () =>
+            {
+                SyncSettings.MaxSendRate = 10;
 
-            SyncSettings.MaxSendRate = 10;
+                Assert.That(SyncSettings.MaxSendRate, Is.EqualTo(10));
+                Assert.That(SyncSettings.SendInterval, Is.EqualTo(0.1).Within(1e-9));
+                Assert.That(ColibriConfig.Load().MaxSendRate, Is.EqualTo(12));
 
-            Assert.That(SyncSettings.MaxSendRate, Is.EqualTo(10));
-            Assert.That(SyncSettings.SendInterval, Is.EqualTo(0.1).Within(1e-9));
-            Assert.That(ColibriConfig.Load().MaxSendRate, Is.EqualTo(configured));
+                SyncSettings.ResetMaxSendRate();
+                Assert.That(SyncSettings.MaxSendRate, Is.EqualTo(12));
+            });
+        }
 
-            SyncSettings.ResetMaxSendRate();
-            Assert.That(SyncSettings.MaxSendRate, Is.EqualTo(Math.Max(0, configured)));
+        /// <summary>
+        /// The setup window refuses a negative rate, but the configuration asset's own Inspector
+        /// and a hand edit did not, and one used to be clamped to 0 - no limit at all, every moving
+        /// object sending in every frame - without a word. The limit is read every frame, so the
+        /// warning has to come once, not with every read.
+        /// </summary>
+        [Test]
+        public void ANegativeConfiguredRateIsReportedOnceAndTheDefaultIsUsed()
+        {
+            WithConfiguredRate(-5, () =>
+            {
+                var warnings = 0;
+                Application.LogCallback count = (message, stackTrace, type) =>
+                {
+                    if (type == LogType.Warning && message.StartsWith("Colibri: Max Send Rate in the Colibri configuration is -5"))
+                        warnings++;
+                };
+
+                LogAssert.Expect(LogType.Warning, new Regex("^Colibri: Max Send Rate in the Colibri configuration is -5"));
+                Application.logMessageReceived += count;
+                try
+                {
+                    for (var frame = 0; frame < 3; frame++)
+                    {
+                        Assert.That(SyncSettings.MaxSendRate, Is.EqualTo(ColibriConfig.DEFAULT_MAX_SEND_RATE));
+                        Assert.That(SyncSettings.SendInterval, Is.EqualTo(1.0 / ColibriConfig.DEFAULT_MAX_SEND_RATE).Within(1e-9));
+                    }
+                }
+                finally
+                {
+                    Application.logMessageReceived -= count;
+                }
+
+                Assert.That(warnings, Is.EqualTo(1));
+            });
+        }
+
+        [Test]
+        public void TheConfigurationAssetsInspectorTakesNoNegativeRate()
+        {
+            var field = typeof(ColibriConfig).GetField(nameof(ColibriConfig.MaxSendRate));
+            var min = (MinAttribute)Attribute.GetCustomAttribute(field, typeof(MinAttribute));
+
+            Assert.That(min, Is.Not.Null);
+            Assert.That(min.min, Is.EqualTo(0f));
         }
 
         [Test]
