@@ -52,8 +52,9 @@ new Colibri('app_name', '<your-server>', 9011);
 ```
 
 - **App name:** clients only see each other's messages, synchronized models and stored data within the same app name,
-  so every client of your prototype, web and Unity alike, must use the same one. `colibri` is taken by the server's
-  admin UI.
+  so every client of your prototype, web and Unity alike, must use the same one. It works the other way round too:
+  everyone on the server who uses the same name is in one app and sees the others' messages and objects, so choose a
+  name nobody else uses, not a placeholder like `app_name`. `colibri` is taken by the server's admin UI.
 - **Server address:** a host name or IP address, optionally after `http://` or `ws://`, and optionally followed by
   `:port` and a trailing `/`. `https://` and `wss://` work too and encrypt both the socket and the REST requests, but
   the Colibri server itself speaks plain HTTP, so they only work behind a proxy that adds TLS. Anything after the host
