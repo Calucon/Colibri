@@ -114,9 +114,9 @@ Colibri component from 1.x.
   passed, else 9011. A `ColibriError` is now thrown for anything that cannot connect: a port
   in the address that disagrees with the one passed, a path, query or fragment after the host
   (such as the admin UI's `/log`), any other scheme, an IPv6 address without brackets, and a
-  port that is not a whole number from 1 to 65535 (`NaN` used to get through). A port passed
-  as a string of digits, such as `'9011'` read from a query string, still means that port, as
-  it did in 1.x.
+  port that is not a whole number from 1 to 65535 (`NaN` used to get through). The `port`
+  parameter stays typed `number`, but untyped (JavaScript) callers that pass a string of
+  digits such as `'9011'` still get that port, as they did in 1.x.
 - `new Colibri(app)` without a server address outside a browser throws a `ColibriError`
   instead of `ReferenceError: window is not defined`.
 - `ColibriError` is now a named export, fixing `import { ColibriError } from '@hcikn/colibri'`,
