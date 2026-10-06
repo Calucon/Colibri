@@ -10,6 +10,10 @@ clients, and share your first value.
 **Coming from Colibri 1.x?** [MIGRATION.md](MIGRATION.md) covers what changed across all three
 components, and which of it will not fail to compile.
 
+**Working on Colibri itself?** `npm test` runs the unit tests in `colibri-server/` and
+`colibri-web/`; `node colibri-unity/run-tests.mjs` runs the Unity client's tests, the end-to-end
+ones against a real server ([details](colibri-unity/README.md#for-maintainers)).
+
 ## Supported Environments
 
 Clients
