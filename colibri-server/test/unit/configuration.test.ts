@@ -81,6 +81,11 @@ describe('Config', () => {
             expect(config.CLIENT_MESSAGE_RATE_BURST).toBe(500);
         });
 
+        it('default to warning about an app of more than 8 clients, and take 0 to never warn', async () => {
+            expect((await loadConfig({ APP_CLIENT_WARNING_THRESHOLD: undefined })).APP_CLIENT_WARNING_THRESHOLD).toBe(8);
+            expect((await loadConfig({ APP_CLIENT_WARNING_THRESHOLD: '0' })).APP_CLIENT_WARNING_THRESHOLD).toBe(0);
+        });
+
         // A bucket that can never hold a token would drop every update.
         it('refuse a burst of 0', async () => {
             await expect(loadConfig({ CLIENT_MESSAGE_RATE_BURST: '0' })).rejects.toThrow('CLIENT_MESSAGE_RATE_BURST');

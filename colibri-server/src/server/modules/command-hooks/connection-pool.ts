@@ -37,9 +37,23 @@ export abstract class NetworkServer {
 
 export type MessageHandler = (message: NetworkMessage) => void;
 
+// Past this many clients in one app, the pool warns that the app may be shared by accident. A lab
+// group is a handful of devices plus a browser or two; a class whose groups all kept the same App
+// Name (a sample's default, say) ends up as one app of dozens of clients instead.
+export const DEFAULT_APP_CLIENT_WARNING_THRESHOLD = 8;
+
+// The app the admin UI joins. However many are open, they are not an application's clients.
+const ADMIN_APP = 'colibri';
+
 export class ConnectionPool extends Service {
     public serviceName = 'ConnectionPool';
     public groupName = 'colibri';
+
+    // See DEFAULT_APP_CLIENT_WARNING_THRESHOLD; 0 turns the warning off.
+    public appClientWarningThreshold = DEFAULT_APP_CLIENT_WARNING_THRESHOLD;
+    // Apps warned about since they last had appClientWarningThreshold clients or fewer, so the
+    // warning is given once each time an app grows past the threshold, not once per client.
+    private readonly appsOverThreshold = new Set<string>();
 
     private readonly servers: NetworkServer[];
     // Maintained from clientConnected$/clientDisconnected$ so emit() can find a client's
@@ -193,6 +207,7 @@ export class ConnectionPool extends Service {
             this.clientsByApp.set(client.app, clients);
         }
         clients.add(client);
+        this.checkAppSize(client.app, clients.size);
     }
 
     private removeFromAppIndex(client: NetworkClient): void {
@@ -200,8 +215,29 @@ export class ConnectionPool extends Service {
         if (!clients) return;
 
         clients.delete(client);
+        if (clients.size <= this.appClientWarningThreshold) {
+            this.appsOverThreshold.delete(client.app);
+        }
         if (clients.size === 0) {
             this.clientsByApp.delete(client.app);
         }
+    }
+
+    // Every message in an app is relayed to each of its other clients, so the server's work grows
+    // with the square of an app's size: 60 clients in one app at only 3 objects x 30 Hz took the
+    // class load test's server to seconds of latency, where the same clients in groups of four
+    // were no trouble at all. Nothing else would tell anyone why - every client is connected and
+    // nothing is refused - so this is said in the log, counted across both transports.
+    private checkAppSize(app: string, size: number): void {
+        if (this.appClientWarningThreshold <= 0 || size <= this.appClientWarningThreshold) return;
+        if (app === ADMIN_APP || this.appsOverThreshold.has(app)) return;
+
+        this.appsOverThreshold.add(app);
+        this.logWarning(
+            `App '${app}' now has ${size} clients, more than ${this.appClientWarningThreshold} (APP_CLIENT_WARNING_THRESHOLD). ` +
+                'Every message is relayed to every other client of the same app, so the server\'s work grows with the square of ' +
+                'an app\'s size. If separate groups are sharing this app by accident - e.g. all kept the same default App Name - ' +
+                'give each group an app name of its own.'
+        );
     }
 }

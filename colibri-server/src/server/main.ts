@@ -31,6 +31,7 @@ const voiceServer = new colibri.VoiceServer(Config.VOICE_SAMPLING_RATE, Config.D
 const tcpServer = new colibri.TCPServerProxy();
 const socketioServer = new colibri.SocketIOServer();
 const connectionPool = new colibri.ConnectionPool(tcpServer, socketioServer);
+connectionPool.appClientWarningThreshold = Config.APP_CLIENT_WARNING_THRESHOLD;
 
 /**
  *    APIs

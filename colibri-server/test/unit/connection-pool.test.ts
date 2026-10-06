@@ -306,6 +306,115 @@ describe('ConnectionPool', () => {
         });
     });
 
+    // Fan-out within an app is O(n^2): a class whose groups all kept one app name overloads the
+    // server with every client connected and nothing refused, so nothing else would say why.
+    describe('the shared-app warning', () => {
+        let logs: LogMessage[];
+        let logSubscription: Subscription;
+
+        beforeEach(() => {
+            logs = [];
+            logSubscription = Service.output$.subscribe(msg => logs.push(msg));
+        });
+
+        afterEach(() => {
+            logSubscription.unsubscribe();
+        });
+
+        const appWarnings = (): string[] =>
+            logs.filter(l => l.level === LogLevel.Warn && l.message.includes('clients, more than')).map(l => l.message);
+
+        const pool = function (threshold: number, ...servers: FakeServer[]): ConnectionPool {
+            const connectionPool = new ConnectionPool(...servers);
+            connectionPool.appClientWarningThreshold = threshold;
+            return connectionPool;
+        };
+
+        it('warns once when an app grows past the threshold, naming it', () => {
+            const server = new FakeServer();
+            pool(3, server);
+
+            for (let i = 1; i <= 3; i++) server.connectClient(makeClient(`c${i}`, 'myAppName'));
+            expect(appWarnings()).toEqual([]);
+
+            server.connectClient(makeClient('c4', 'myAppName'));
+            server.connectClient(makeClient('c5', 'myAppName'));
+            server.connectClient(makeClient('c6', 'myAppName'));
+
+            expect(appWarnings()).toHaveLength(1);
+            expect(appWarnings()[0]).toContain('App \'myAppName\' now has 4 clients, more than 3');
+            expect(appWarnings()[0]).toContain('app name of its own');
+        });
+
+        it('counts the clients of both transports together', () => {
+            const tcp = new FakeServer();
+            const web = new FakeServer(true);
+            pool(3, tcp, web);
+
+            tcp.connectClient(makeClient('u1', 'shared'));
+            tcp.connectClient(makeClient('u2', 'shared'));
+            web.connectClient(makeClient('w1', 'shared'));
+            expect(appWarnings()).toEqual([]);
+
+            web.connectClient(makeClient('w2', 'shared'));
+            expect(appWarnings()).toHaveLength(1);
+        });
+
+        it('only counts each app\'s own clients', () => {
+            const server = new FakeServer();
+            pool(3, server);
+
+            for (let i = 0; i < 12; i++) server.connectClient(makeClient(`c${i}`, `group-${i % 4}`));
+
+            expect(appWarnings()).toEqual([]);
+        });
+
+        it('warns again only after the app has shrunk back to the threshold and grown past it again', () => {
+            const server = new FakeServer();
+            pool(2, server);
+            const clients = [1, 2, 3, 4].map(i => makeClient(`c${i}`, 'shared'));
+            for (const client of clients) server.connectClient(client);
+            expect(appWarnings()).toHaveLength(1);
+
+            server.disconnectClient(clients[3]!);
+            server.connectClient(clients[3]!);
+            expect(appWarnings()).toHaveLength(1);
+
+            server.disconnectClient(clients[3]!);
+            server.disconnectClient(clients[2]!);
+            server.connectClient(clients[2]!);
+            expect(appWarnings()).toHaveLength(2);
+        });
+
+        it('leaves the admin UI\'s app out', () => {
+            const server = new FakeServer();
+            pool(2, server);
+
+            for (let i = 0; i < 5; i++) server.connectClient(makeClient(`admin${i}`, 'colibri'));
+
+            expect(appWarnings()).toEqual([]);
+        });
+
+        it('says nothing when turned off', () => {
+            const server = new FakeServer();
+            pool(0, server);
+
+            for (let i = 0; i < 50; i++) server.connectClient(makeClient(`c${i}`, 'shared'));
+
+            expect(appWarnings()).toEqual([]);
+        });
+
+        it('defaults to more than 8 clients', () => {
+            const server = new FakeServer();
+            new ConnectionPool(server);
+
+            for (let i = 1; i <= 8; i++) server.connectClient(makeClient(`c${i}`, 'shared'));
+            expect(appWarnings()).toEqual([]);
+            server.connectClient(makeClient('c9', 'shared'));
+            expect(appWarnings()).toHaveLength(1);
+        });
+    });
+
     describe('currentClients', () => {
         it('aggregates clients across every registered server', () => {
             const serverA = new FakeServer();

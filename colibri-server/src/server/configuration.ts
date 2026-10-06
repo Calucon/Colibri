@@ -81,4 +81,8 @@ export const Config = {
     // how many it may send at once after a quieter stretch.
     CLIENT_MESSAGE_RATE_LIMIT: parseNonNegativeInt('CLIENT_MESSAGE_RATE_LIMIT', process.env.CLIENT_MESSAGE_RATE_LIMIT, 1000),
     CLIENT_MESSAGE_RATE_BURST: parsePositiveInt('CLIENT_MESSAGE_RATE_BURST', process.env.CLIENT_MESSAGE_RATE_BURST || undefined, 2000),
+
+    // Warn when one app has more clients than this, across both transports (see
+    // DEFAULT_APP_CLIENT_WARNING_THRESHOLD); 0: never.
+    APP_CLIENT_WARNING_THRESHOLD: parseNonNegativeInt('APP_CLIENT_WARNING_THRESHOLD', process.env.APP_CLIENT_WARNING_THRESHOLD, 8),
 };
