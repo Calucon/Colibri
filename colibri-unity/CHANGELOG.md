@@ -119,11 +119,11 @@ rationale, migration steps, and what the Editor verification did and did not cov
   path now carries `ConfigureAwait(false)`. The `volatile` fields, `Interlocked`, `LockFreeQueue`
   and `_msgQueueLock` this file already had were written for exactly this threading; the missing
   `ConfigureAwait` had quietly been preventing it. (The receive queue has since become a
-  `ConcurrentQueue`, and `_msgQueue` the outbox described below.) `_socket`, `_status` and the connected gate join
-  them, and the `Status` setter — a read-modify-write over four fields now genuinely reachable from
-  the connection loop and `Update`'s watchdog at once — is serialized. The main-thread handoff user
-  code depends on is unchanged: received messages still arrive via `_queuedCommands` and are
-  delivered from `Update`.
+  `ConcurrentQueue`, and `_msgQueue` the outbox described below.) `_socket`, `_status` and the
+  connected gate join them, and the `Status` setter — a read-modify-write over four fields now
+  genuinely reachable from the connection loop and `Update`'s watchdog at once — is serialized. The
+  main-thread handoff user code depends on is unchanged: received messages still arrive via
+  `_queuedCommands` and are delivered from `Update`.
 - **"Recent messages" stops counting up forever.** The Status window's traffic log was a static
   buffer with no expiry and no reset, timestamped with `realtimeSinceStartup` — a clock that keeps
   running after Play stops. Entries therefore aged indefinitely on screen, and with domain reload
@@ -185,9 +185,9 @@ rationale, migration steps, and what the Editor verification did and did not cov
 - **Connected means the server has spoken.** A session becomes `Connected` on the first frame the
   server sends, not when the TCP connection opens. Only then is the backoff reset, `OnConnected`
   raised and the queued messages sent, so against something that accepts connections and then
-  fails — a 1.x server, a port that is not Colibri — the backoff grows instead of staying at 0.5 s.
-  The 2 s heartbeat watchdog covers the time before that first frame too: a server that accepts
-  the connection and never says anything is dropped.
+  fails — a 1.x server, a port that is not Colibri — the backoff grows instead of staying at
+  0.5 s. The 2 s heartbeat watchdog covers the time before that first frame too: a server that
+  accepts the connection and never says anything is dropped.
 - **`OnConnected` and `OnDisconnected` come in pairs.** `OnDisconnected` is raised exactly once for
   every `OnConnected`, when that connection ends, a refusal included, and never for an attempt
   that did not connect. A refusal in the very first frame raises neither. Each handler runs on its
@@ -269,13 +269,13 @@ rationale, migration steps, and what the Editor verification did and did not cov
   permission out of the build, and *Allow downloads over HTTP* blocking plain HTTP to a server that
   is not `localhost` while SSL is off, which fails every `Store` call on the headset. The Setup
   window's body now scrolls.
-- **No expression trees on IL2CPP.** The `[Sync]` accessors were built with `Expression.Compile()`
-  (in 1.3.1 too), which IL2CPP does not compile but interprets — slowly, and for value types through
-  generic code IL2CPP may not have generated. Under `ENABLE_IL2CPP` a property now gets
-  open-instance delegates bound to its get and set methods, which allocate nothing, and a field goes
-  through `FieldInfo.GetValue`/`SetValue`, which boxes a value type on every poll. Mono — the Editor
-  and Mono players — keeps the compiled expressions. An accessor that cannot be built is reported
-  per member instead of escaping from `Awake`.
+- **No expression trees on IL2CPP.** The `[Sync]` accessors were built with
+  `Expression.Compile()` (in 1.3.1 too), which IL2CPP does not compile but interprets — slowly,
+  and for value types through generic code IL2CPP may not have generated. Under `ENABLE_IL2CPP` a
+  property now gets open-instance delegates bound to its get and set methods, which allocate
+  nothing, and a field goes through `FieldInfo.GetValue`/`SetValue`, which boxes a value type on
+  every poll. Mono — the Editor and Mono players — keeps the compiled expressions. An accessor that
+  cannot be built is reported per member instead of escaping from `Awake`.
 - **`[Sync]` members survive managed code stripping.** Nothing references them except through
   reflection, which is exactly what stripping removes above the *Minimal* level. `SyncAttribute`
   now derives from `UnityEngine.Scripting.PreserveAttribute`, which the linker honours, and on a
