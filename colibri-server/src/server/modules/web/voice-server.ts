@@ -109,7 +109,18 @@ export class VoiceServer extends Service {
             // reached readInt16LE(2)/readInt8(6), and the ERR_OUT_OF_RANGE thrown out of this
             // listener was an uncaught exception that shut the whole server down.
             if (message.length < HEADER_LENGTH) {
-                this.reportMalformedPacket(clientKey, message.length, nowMillis);
+                this.reportMalformedPacket(clientKey, `${message.length} bytes is shorter than the ${HEADER_LENGTH}-byte header`, nowMillis);
+                return;
+            }
+
+            // Source port 0 means the sender named no port to reply to (RFC 768), and nothing
+            // can be sent back to it: udpSocket.send() rejects port 0 synchronously with
+            // ERR_SOCKET_BAD_PORT.
+            // Such a sender used to register like any other, and the next packet from anyone
+            // else threw out of this listener while relaying to it and shut the server down.
+            // Only a raw socket can send one, but that is one packet from any machine on the LAN.
+            if (remote.port === 0) {
+                this.reportMalformedPacket(clientKey, 'its source port is 0, so nothing can be relayed back to it', nowMillis);
                 return;
             }
 
@@ -185,13 +196,13 @@ export class VoiceServer extends Service {
         if (this.udpSocket) this.udpSocket.close();
     }
 
-    private reportMalformedPacket(source: string, length: number, nowMillis: number): void {
+    private reportMalformedPacket(source: string, reason: string, nowMillis: number): void {
         const reportedAt = this.malformedReportedAt.get(source);
         if (reportedAt !== undefined && nowMillis - reportedAt < MALFORMED_REPORT_INTERVAL_MILLIS) return;
         if (reportedAt === undefined && this.malformedReportedAt.size >= MALFORMED_REPORT_MAX_SOURCES) return;
 
         this.malformedReportedAt.set(source, nowMillis);
-        this.logError(`Ignoring malformed voice packet from ${source}: ${length} bytes is shorter than the ${HEADER_LENGTH}-byte header`
+        this.logError(`Ignoring malformed voice packet from ${source}: ${reason}`
             + ` (further ones from this source are not reported for ${MALFORMED_REPORT_INTERVAL_MILLIS / 1000}s)`, false);
     }
 

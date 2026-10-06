@@ -139,6 +139,27 @@ describe('VoiceServer', () => {
         expect(malformedReports()).toHaveLength(3);
     });
 
+    it('drops a datagram from source port 0 instead of crashing on the next relay', async () => {
+        const a = await openClient();
+        const b = await openClient();
+
+        // Only a raw socket can send from port 0, so this delivery is synthetic. A valid
+        // packet from port 0 used to register a peer that udpSocket.send() rejects
+        // synchronously (ERR_SOCKET_BAD_PORT), so relaying the next packet from anyone else
+        // threw out of the 'message' listener: an uncaught exception that stops the server.
+        internals.udpSocket.emit('message', voicePacket(9, 1), { address: '127.0.0.1', port: 0, family: 'IPv4', size: 9 });
+        expect(internals.clients.size).toBe(0);
+
+        // a and b register and relay to each other as if nothing had happened.
+        await send(a, voicePacket(1, 1));
+        expect(await roundTrip(b, a, 2)).toEqual(voicePacket(2, 1));
+        expect(await roundTrip(a, b, 1)).toEqual(voicePacket(1, 1));
+
+        expect(internals.clients.size).toBe(2);
+        expect(malformedReports()).toHaveLength(1);
+        expect(malformedReports()[0]!.message).toContain('127.0.0.1:0');
+    });
+
     it('bounds what it remembers about malformed senders', () => {
         // Synthetic deliveries from many distinct sources, as from a flood of spoofed
         // addresses - no real socket can send from that many ports quickly.
