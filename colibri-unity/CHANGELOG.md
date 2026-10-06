@@ -183,16 +183,19 @@ rationale, migration steps, and what the Editor verification did and did not cov
   written to the socket by a single drainer, so messages leave in the order they were sent —
   across an outage too, and ahead of anything sent after reconnecting. A write that fails stays at
   the head of the queue for the next session. While disconnected it holds at most 256 broadcasts
-  and log lines, dropping the oldest with one warning per outage: for a last-write-wins sync
-  client, an unbounded backlog only preserves updates that are already superseded. Model messages
-  are not dropped by that bound, because nothing would repair the loss. `model::request` and
-  `model::delete` wait as they are, and the `model::update`s for one object during one outage are
-  folded into one, newer fields winning — but never past another message about that object, so an
-  older value cannot overtake a newer one. Behind both sits a hard cap of 10 000 messages on the
-  whole outbox, during an outage and while connected over a link that cannot keep up, since
-  requests, deletes and updates that cannot be folded otherwise queued without limit. Past it the
-  oldest broadcasts and log lines go first and then the oldest model messages, never the one being
-  written, with one warning per connection.
+  and other messages that are not about synced objects, dropping the oldest with one warning per
+  outage: for a last-write-wins sync client, an unbounded backlog only preserves updates that are
+  already superseded. Log lines wait in `RemoteLogging` instead, which keeps the newest 1000 while
+  disconnected (see [Dependencies](#dependencies-and-api-modernization)); only lines already handed
+  over when the connection dropped count towards the 256. Model messages are not dropped by that
+  bound, because nothing would repair the loss. `model::request` and `model::delete` wait as they
+  are, and the `model::update`s for one object during one outage are folded into one, newer fields
+  winning — but never past another message about that object, so an older value cannot overtake a
+  newer one. Behind both sits a hard cap of 10 000 messages on the whole outbox, during an outage
+  and while connected over a link that cannot keep up, since requests, deletes and updates that
+  cannot be folded otherwise queued without limit. Past it the oldest broadcasts and log lines go
+  first and then the oldest model messages, never the one being written, with one warning per
+  connection.
 - **`SendCommandAsync` says what happened.** It completes `true` once the message is written to the
   socket, stays pending while disconnected, and completes `false` only when the message will never
   be sent: it could not be encoded, a bound on the queue dropped it, the server refused this client,

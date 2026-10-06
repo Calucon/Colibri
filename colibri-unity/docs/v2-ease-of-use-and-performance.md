@@ -578,12 +578,15 @@ now goes into one FIFO (a `LinkedList` under `_outboxLock`) that a single `Drain
 the socket, re-reading the live session for every frame. While connected it is just the way to the
 socket. While not, it is the retry queue, opened again (`OpenOutbox`) before `Status` says
 `Connected`, so anything that reacts to `Connected` lines up behind the outage's messages. A failed
-write leaves its frame at the head for the next session. During an outage, broadcasts and log lines
-are capped at 256, oldest first; model messages are not dropped by that cap, and the un-awaited
-`model::update`s for one object are folded into one copied `JObject` — newer members winning, the
-result moving to the back — unless something else about that object (an awaited update, a request
-for it or for its channel, a delete) is queued in between. Reconnecting ends every fold. Nothing in
-the send path awaits the `Connected` gate any more; only user code does.
+write leaves its frame at the head for the next session. During an outage, broadcasts and the other
+messages that are not model state are capped at 256 (`MAX_QUEUED_MESSAGES`), oldest first. Log lines
+rarely count towards that: `RemoteLogging` sends nothing while disconnected and keeps up to 1000
+lines itself (§3), so only lines it handed over before the connection dropped are in the outbox.
+Model messages are not dropped by that cap, and the un-awaited `model::update`s for one object are
+folded into one copied `JObject` — newer members winning, the result moving to the back — unless
+something else about that object (an awaited update, a request for it or for its channel, a delete)
+is queued in between. Reconnecting ends every fold. Nothing in the send path awaits the `Connected`
+gate any more; only user code does.
 
 Folding bounds model updates by the number of objects, but requests, deletes and updates that
 cannot be folded were still unbounded, and so was the outbox of a connection whose writes fall

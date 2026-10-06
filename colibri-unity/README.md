@@ -520,8 +520,10 @@ answers is given up after 5 s. `WebServerConnection.Instance` tells you where it
 While the connection is down, whatever you send waits, and goes out in the order it was sent as
 soon as the connection is back — ahead of anything sent afterwards:
 
-- Broadcasts (`Sync.Send`) and log lines: at most 256 are kept. Past that the oldest are dropped,
-  with one warning per outage.
+- Broadcasts (`Sync.Send`): at most 256 are kept. Past that the oldest are dropped, with one
+  warning per outage. Log lines wait in `[RemoteLogger]` instead, which keeps the newest 1000 (see
+  [Web Interface for Logging](#web-interface-for-logging)); only lines it had already handed over
+  when the connection dropped count towards the 256.
 - Changes to synced objects (`SyncBehaviour`, `SyncTransform`) are not dropped by that bound.
   Several changes to the same object during one outage are merged into one update, newer values
   winning.
