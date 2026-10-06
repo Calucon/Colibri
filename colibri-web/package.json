@@ -47,7 +47,8 @@
     "homepage": "https://github.com/hcigroupkonstanz/colibri",
     "repository": {
         "type": "git",
-        "url": "https://github.com/hcigroupkonstanz/colibri.git"
+        "url": "https://github.com/hcigroupkonstanz/colibri.git",
+        "directory": "colibri-web"
     },
     "files": [
         "/dist"
