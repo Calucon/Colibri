@@ -128,16 +128,21 @@ namespace HCIKonstanz.Colibri.Networking
         /// happened, so the last one raised always tells the truth: a connection that drops and
         /// comes back between two frames - a long frame during a Wi-Fi blip - raises
         /// <see cref="OnDisconnected"/> and then <see cref="OnConnected"/> in the next frame.
+        /// Disabling or destroying this component raises what is still due there and then, from
+        /// <c>OnDisable</c>, so a connection open at that moment ends with its
+        /// <see cref="OnDisconnected"/> too. The one exception is the end of Play mode or of the
+        /// app, which raises neither: the objects the handlers belong to may already be gone.
         /// </remarks>
         public event Action OnConnected;
 
         /// <summary>
         /// Raised on the main thread once for every <see cref="OnConnected"/>, after it, when that
-        /// connection ends - dropped, timed out, or refused by the server. An attempt that never got
-        /// as far as Connected raises neither event. That includes a server that refuses this client
-        /// in its very first frame: it is reported by <see cref="Status"/> becoming
-        /// <see cref="ConnectionStatus.ProtocolMismatch"/> and by <see cref="Connected"/> being
-        /// cancelled.
+        /// connection ends - dropped, timed out, refused by the server, or closed by disabling or
+        /// destroying this component (see <see cref="OnConnected"/> for the one exception). An
+        /// attempt that never got as far as Connected raises neither event. That includes a server
+        /// that refuses this client in its very first frame: it is reported by
+        /// <see cref="Status"/> becoming <see cref="ConnectionStatus.ProtocolMismatch"/> and by
+        /// <see cref="Connected"/> being cancelled.
         /// </summary>
         public event Action OnDisconnected;
 
@@ -411,6 +416,13 @@ namespace HCIKonstanz.Colibri.Networking
             // replaces it rather than completing it.
             Status = ConnectionStatus.Disconnected;
             _connectedGate.TrySetCanceled();
+
+            // A disabled or destroyed component gets no Update to raise them from, so the
+            // OnDisconnected of a connection open until now was never raised - or, after a
+            // re-enable, raised late. Not at the end of Play mode or of the app: teardown has no
+            // order, and a handler would as likely run on an object destroyed a moment ago.
+            if (!SingletonLifetime.IsQuitting)
+                RaiseConnectionEvents();
         }
 
         private void OnDestroy()
@@ -428,15 +440,7 @@ namespace HCIKonstanz.Colibri.Networking
         {
             RefreshConfig();
             TrackDeliveryRate();
-
-            while (_connectionEvents.TryDequeue(out var connected))
-            {
-                if (connected)
-                    Raise(OnConnected, nameof(OnConnected));
-                else
-                    Raise(OnDisconnected, nameof(OnDisconnected));
-            }
-
+            RaiseConnectionEvents();
             DeliverReceivedMessages();
 
             if (_isWatchdogArmed && MillisSinceLastHeartbeat() > HEARTBEAT_TIMEOUT_THRESHOLD_MS)
@@ -460,6 +464,18 @@ namespace HCIKonstanz.Colibri.Networking
 
                 // Faults the receive loop into the reconnect backoff.
                 CloseSocket(_socket);
+            }
+        }
+
+        /// <summary>Raises OnConnected and OnDisconnected for every transition still due, in order.</summary>
+        private void RaiseConnectionEvents()
+        {
+            while (_connectionEvents.TryDequeue(out var connected))
+            {
+                if (connected)
+                    Raise(OnConnected, nameof(OnConnected));
+                else
+                    Raise(OnDisconnected, nameof(OnDisconnected));
             }
         }
 

@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -191,8 +192,112 @@ namespace HCIKonstanz.Colibri.E2E
 
 
         /*
+         *  OnConnected and OnDisconnected when the component goes away
+         *
+         *  Both are raised from Update, which a disabled or destroyed component no longer gets. So
+         *  the OnDisconnected of a connection that was open at that moment was never raised, and
+         *  the last event user code saw said it was still connected.
+         */
+
+        [UnityTest]
+        public IEnumerator DestroyingTheConnectionWhileConnectedRaisesOnDisconnected()
+        {
+            _server = FakeColibriServer.Start(FakeColibriServer.Behaviour.Heartbeat);
+            var connection = ConnectionTo(_server.Port);
+            var events = Record(connection);
+            yield return E2EServer.WaitUntil(() => events.Count == 1, "The client never connected", 10f);
+
+            Object.DestroyImmediate(connection.gameObject);
+
+            Assert.That(events, Is.EqualTo(new[] { "connected", "disconnected" }),
+                "The connection was destroyed while connected, but the last event raised said it was connected");
+        }
+
+        /// <summary>
+        /// Connected, but destroyed before an Update could report it: both are raised, in order, so
+        /// the pair still matches and the last one still tells the truth.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator AConnectionNotYetReportedIsReportedAndEndedWhenTheComponentIsDestroyed()
+        {
+            _server = FakeColibriServer.Start(FakeColibriServer.Behaviour.Heartbeat);
+            var connection = ConnectionTo(_server.Port);
+            var events = Record(connection);
+
+            // No Update runs while this holds the main thread; the connection loop does not need one.
+            var deadline = System.DateTime.UtcNow.AddSeconds(10);
+            while (connection.Status != ConnectionStatus.Connected && System.DateTime.UtcNow < deadline)
+                Thread.Sleep(10);
+            Assert.That(connection.Status, Is.EqualTo(ConnectionStatus.Connected), "The client never connected");
+            Assert.That(events, Is.Empty);
+
+            Object.DestroyImmediate(connection.gameObject);
+
+            Assert.That(events, Is.EqualTo(new[] { "connected", "disconnected" }));
+            yield break;
+        }
+
+        /// <summary>
+        /// Disabling raises OnDisconnected at once - it used to wait for the Update after the
+        /// component was enabled again - and enabling it again connects anew.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator DisablingTheConnectionWhileConnectedRaisesOnDisconnectedAtOnce()
+        {
+            _server = FakeColibriServer.Start(FakeColibriServer.Behaviour.Heartbeat);
+            var connection = ConnectionTo(_server.Port);
+            var events = Record(connection);
+            yield return E2EServer.WaitUntil(() => events.Count == 1, "The client never connected", 10f);
+
+            connection.enabled = false;
+            Assert.That(events, Is.EqualTo(new[] { "connected", "disconnected" }),
+                "The connection was disabled while connected, but the last event raised said it was connected");
+
+            connection.enabled = true;
+            yield return E2EServer.WaitUntil(() => events.Count == 3, "The client never connected again after it was enabled", 10f);
+
+            // A frame more, for anything that was going to be raised late.
+            yield return null;
+            Assert.That(events, Is.EqualTo(new[] { "connected", "disconnected", "connected" }));
+        }
+
+        /// <summary>
+        /// The end of Play mode or of the app raises neither event: teardown has no order, so a
+        /// handler would as likely run on an object destroyed a moment before.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator TheEndOfTheAppRaisesNoConnectionEvents()
+        {
+            _server = FakeColibriServer.Start(FakeColibriServer.Behaviour.Heartbeat);
+            var connection = ConnectionTo(_server.Port);
+            var events = Record(connection);
+            yield return E2EServer.WaitUntil(() => events.Count == 1, "The client never connected", 10f);
+
+            SingletonLifetime.IsQuitting = true;
+            try
+            {
+                Object.DestroyImmediate(connection.gameObject);
+            }
+            finally
+            {
+                SingletonLifetime.IsQuitting = false;
+            }
+
+            Assert.That(events, Is.EqualTo(new[] { "connected" }));
+        }
+
+
+        /*
          *  Driving the connection singleton
          */
+
+        private static List<string> Record(WebServerConnection connection)
+        {
+            var events = new List<string>();
+            connection.OnConnected += () => events.Add("connected");
+            connection.OnDisconnected += () => events.Add("disconnected");
+            return events;
+        }
 
         /// <summary>
         /// Points a fresh connection at the given port and hands it back without waiting a frame,
