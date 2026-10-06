@@ -105,12 +105,15 @@ in the environment wins. [`.env.example`](.env.example) lists every one with its
 | `STACK_TRACE_LIMIT` | `30` | stack frames captured for a logged error |
 | `CONSOLE_LOG_LEVEL` | `info` | least severe level printed to stdout/stderr: `error`, `warn`, `info` or `debug` |
 | `CONSOLE_LOG_BROADCAST_TRAFFIC` | `false` | `true` also prints every `broadcast::` message, whatever the level |
+| `TCP_INBOUND_BACKLOG_LIMIT` | `2000` | messages from Unity clients that may wait for the server's main thread before it holds back `model::update` and drops `broadcast::` messages, so an overloaded server's memory and delay stay bounded; `0`: no limit |
+| `CLIENT_MESSAGE_RATE_LIMIT`, `CLIENT_MESSAGE_RATE_BURST` | `1000`, `2000` | `model::update` and `broadcast::` messages a second that one client, Unity or web, may send, and how many at once after a quieter stretch; beyond that, the same happens to its messages. Catches a runaway send loop. `0` turns the limit off; the burst must be at least 1 |
 
 `DATA_ROOT` and `WEBSERVER_ROOT` may be absolute paths, e.g. `DATA_ROOT=/var/lib/colibri`. A
 relative path is taken from the compiled server's directory, `dist/server`, so the defaults are
 `dist/ui` and the `data` directory next to `dist`. A port that is not an integer from 1 to 65535,
-a sampling rate or stack trace limit that is not a positive integer, or an unknown log level stops
-the server at startup, with a message naming the variable.
+a sampling rate, stack trace limit or burst that is not a positive integer, a limit that is not a
+whole number of 0 or more, or an unknown log level stops the server at startup, with a message
+naming the variable. See [Load limits](#load-limits) for what the limits are for.
 
 ## Features
 
@@ -139,6 +142,27 @@ Everything the server logs, and every line a client sends through colibri-unity'
   appear with `CONSOLE_LOG_BROADCAST_TRAFFIC=true`.
 - **the admin UI's Log page**, which keeps the last 20,000 messages of every level in memory,
   repeats merged into one entry. They are gone when the server restarts.
+
+### Load limits
+
+When clients send more than the server can process, it holds messages back and drops some
+rather than fall further and further behind. If its main thread is `TCP_INBOUND_BACKLOG_LIMIT`
+messages behind what the Unity clients sent, or one client sends more than
+`CLIENT_MESSAGE_RATE_LIMIT` messages a second, `model::update` messages are held back and merged
+per object - the latest value of every field still arrives, only later - and `broadcast::`
+messages are dropped. Nothing else is ever held back or dropped. Synced objects then move less
+smoothly for the other clients.
+
+Each such episode is logged as a warning when it starts, naming `TCP_INBOUND_BACKLOG_LIMIT`, or
+`CLIENT_MESSAGE_RATE_LIMIT` and the client, and again when it ends, with how many updates were
+held back and messages dropped. [Inbound limits](docs/protocol.md#inbound-limits) describes what
+the clients see.
+
+The rate limit leaves ordinary clients alone: one syncing 10 objects 72 times a second sends 720
+updates a second. The backlog warning means the server as a whole is taking in more than it can
+process; fewer synced objects, a lower sync rate or fewer clients per app reduce the load. The
+rate warning names one client that sends far more than the others, usually because something
+sends every frame without a rate cap.
 
 ## Protocol
 

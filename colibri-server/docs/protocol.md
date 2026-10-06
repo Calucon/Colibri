@@ -32,6 +32,9 @@ dropped. To send the other clients a message of your own, give it a command that
 `broadcast::`, e.g. `broadcast::myCommand`, and receive it with colibri-web's `RegisterChannel` or
 colibri-unity's `OnMessageReceived`.
 
+Under overload, or from a client that sends too fast, the server holds back and merges
+`model::update` messages and drops `broadcast::` messages; see [Inbound limits](#inbound-limits).
+
 ## v3 TCP framing (breaking change from v1)
 
 > **This is a breaking protocol change.** A `colibri-unity` client built against the old v1
@@ -257,7 +260,8 @@ Carries an application message: `channel` and `command` identify the message (e.
 server relays the message (see [What the server relays](#what-the-server-relays)), it passes the
 payload on verbatim to other TCP clients without ever decoding it as a string, and only decodes it
 (via `Payload.fromBytes(...).asValue()`) when a hook needs to inspect it or when relaying
-cross-transport to a Socket.IO client.
+cross-transport to a Socket.IO client. The one exception is a `model::update` that was held back
+and merged (see [Inbound limits](#inbound-limits)), which is passed on re-encoded.
 
 ### `broadcast::` commands
 
@@ -338,6 +342,9 @@ number of frames dropped, once it has caught up. For a last-write-wins synchroni
 dropping a stale update for a client that cannot keep up is the correct behavior - buffering
 without bound would only grow process memory for data that is about to be superseded anyway.
 
+This is the outgoing side. For what the server does when clients send more than it can process,
+see [Inbound limits](#inbound-limits).
+
 ## Socket.IO envelope (web clients)
 
 A web client connects with the handshake query `?app=<app>&version=2`; a connection without an
@@ -362,6 +369,59 @@ the others can receive:
 On TCP, channel and command are each at most 65,535 bytes of utf8 (a `u16` length). A message
 from a web client that does not fit into a TCP frame is not relayed to TCP clients; the server
 logs `Dropping unencodable message` instead.
+
+## Inbound limits
+
+Two limits keep a server that is sent more than it can process responsive, and its memory
+bounded:
+
+| limit | counts | setting, default |
+| --- | --- | --- |
+| backlog | messages from all TCP clients that the server's main thread has not processed yet | `TCP_INBOUND_BACKLOG_LIMIT`, `2000` |
+| rate | messages a second from one client, TCP or Socket.IO, with bursts | `CLIENT_MESSAGE_RATE_LIMIT`, `1000`, and `CLIENT_MESSAGE_RATE_BURST`, `2000` |
+
+`0` turns either off. Socket.IO clients are subject to the rate limit only: the server handles
+their messages as it reads them, so there is no queue of them to bound.
+
+Both limits only ever touch `model::update` and `broadcast::` messages, the bulk of a sync loop's
+traffic, and never on the `colibri` or `log` channel. Everything else - handshakes, heartbeats,
+`model::request`, `model::delete`, log lines, anything on the `colibri` channel - always goes
+through at once. Past a limit:
+
+- **`model::update` is held back and merged per object** (per channel and `id`): a field in a
+  later update replaces the one held, and fields not sent again are kept. As soon as there is
+  room - checked with the client's next message and every 100ms - the held updates are passed
+  on, oldest object first, one `model::update` per object. A `model::update` may carry only the
+  fields that changed, and the server and every client merge it field by field, so the other
+  clients and the server's copy skip intermediate states but still get the latest value of every
+  field. A held update is re-encoded as JSON, so it is not byte-identical to anything the client
+  sent.
+- **`broadcast::` messages are dropped.** There is nothing to merge them into.
+- An update the server could not apply anyway - not a JSON object with a string `id` - is
+  dropped, and so is an update for one more object once 1000 are held for that client.
+
+Nothing a client sends overtakes its held updates: they are passed on before its next message
+that is not limited, so a `model::delete` cannot arrive ahead of an update to the same object and
+bring it back, before a second handshake, and when it disconnects, before its app sees
+`client::disconnected`.
+
+Clients are not told. The other clients of the app receive fewer updates, each possibly carrying
+the changes of several, and later; synced objects move less smoothly, and a stream of
+`broadcast::` messages has gaps. The server logs each episode as a warning when it starts and
+again once nothing has been over the limit for a second, with how many updates were held back and
+messages dropped. With the default settings, the warnings read:
+
+| warning | means |
+| --- | --- |
+| `The main thread has fallen 2000 TCP messages behind (TCP_INBOUND_BACKLOG_LIMIT) ...` | the server as a whole is taking in more than it can process; every Unity client is limited |
+| `The main thread has caught up with TCP messages again; ...` | that episode is over |
+| `Unity client '<name>' (...) is sending more than 1000 ...`, `Web client <id> (...) is sending more than 1000 ...` | one client is over its rate limit |
+| `... is back under the message rate limit; ...`, `... disconnected while over the message rate limit; ...` | that client's episode is over |
+
+The rate limit is far above what a client needs - one syncing 10 objects 72 times a second sends
+720 updates a second - so it only catches a runaway loop, typically something that sends every
+frame without a rate cap. The backlog limit is reached when the server as a whole is overloaded:
+fewer synced objects, a lower sync rate or fewer clients per app reduce the load.
 
 ## Server messages
 
@@ -392,7 +452,7 @@ each other when the channel names match.
 
 | command | payload | what the server does |
 | --- | --- | --- |
-| `model::update` | an object with a string `id`, plus the fields that changed (or all of them) | merges it into its copy - each field sent replaces the stored one, fields not sent are kept - and relays the message unchanged to every other client of the app. Without a string `id` it logs an error and drops it. |
+| `model::update` | an object with a string `id`, plus the fields that changed (or all of them) | merges it into its copy - each field sent replaces the stored one, fields not sent are kept - and relays the message unchanged to every other client of the app; past an [inbound limit](#inbound-limits), merged with the sender's later updates first. Without a string `id` it logs an error and drops it. |
 | `model::delete` | `{ "id": "…" }` | removes its copy and relays the message to every other client of the app. Without an `id` it logs a warning and drops it. |
 | `model::request` | `{ "id": "…" }` for one model; anything else (`null`, `{}`) for all of them | answers the requester alone, with one `model::update` per model it has on that channel. Asked for an id it does not have, it answers `{ "id": "…" }`. |
 

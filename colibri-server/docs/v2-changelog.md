@@ -230,6 +230,25 @@ Checked end to end against colibri-unity 2.0.0, with a decoding proxy in front o
 The C# codec stays pinned to this server's encoder by byte-for-byte vectors in colibri-unity's
 EditMode tests, which `npm run test:vectors` checks in CI.
 
+### Inbound limits
+
+- **An overloaded server no longer queues TCP messages without bound.** The TCP thread passed
+  every message to the main thread as fast as clients sent it, so a server taking in more than it
+  could process kept a growing queue of them in memory, logged nothing, and relayed state that was
+  older and older. Once the main thread is `TCP_INBOUND_BACKLOG_LIMIT` messages behind (default
+  2000, `0` turns it off), `model::update` messages are held back per client and merged per
+  object, so intermediate states are skipped but the latest value of every field still arrives,
+  and `broadcast::` messages are dropped. Nothing else is ever held back or dropped, and a
+  client's held updates are passed on before anything else it sends, and before it disconnects.
+- **One client can no longer flood the server for everyone.** Each client, Unity or web, may send
+  `CLIENT_MESSAGE_RATE_LIMIT` `model::update` and `broadcast::` messages a second (default 1000,
+  `0` turns it off), in bursts of up to `CLIENT_MESSAGE_RATE_BURST` (default 2000, at least 1).
+  Beyond that its messages are treated as above. A client syncing 10 objects 72 times a second
+  sends 720, so this only catches a runaway send loop.
+- Each episode over either limit is one warning when it starts, naming the setting (and the
+  client), and one when it is over, with the number of updates held back and messages dropped.
+  See [Inbound limits](./protocol.md#inbound-limits).
+
 ### Correctness & robustness
 
 - **Graceful shutdown**: `SIGTERM`/`SIGINT` now close the HTTP/Socket.IO/UDP servers, terminate the TCP
@@ -336,7 +355,8 @@ The endpoints are documented under [REST store](./protocol.md#rest-store).
   `undefined`/`null`/empty-string/invalid-JSON edge cases), the TCP worker and its proxy, the
   Socket.IO server against real `socket.io-client` sockets, the REST store and web server, the
   voice server, `WebLog`, `ClientLogger`, `BroadcastLogger`, the console log, the `DATA_ROOT`
-  check, the configuration, the ring buffer and the deprecated serialization helpers.
+  check, the configuration, the ring buffer, the deprecated serialization helpers, and the inbound
+  limits: the backlog count, the rate limit and the merging of held updates, on both transports.
 - `npm run test:vectors` checks the cross-implementation protocol vectors in colibri-unity's
   `ProtocolVectorTests.cs` against this server's encoder.
 - `test/tcp-client-test.ts` (`npm run test:tcpclient`) speaks the v3 framing, decodes frames and
@@ -348,9 +368,9 @@ The endpoints are documented under [REST store](./protocol.md#rest-store).
 
 - Added `docs/protocol.md`: which messages the server relays, the v3 framing, version checking and
   detecting an out-of-date server, the payload shape of every `broadcast::` command, size limits,
-  the server's own channels, model synchronization and the REST store.
+  the inbound limits, the server's own channels, model synchronization and the REST store.
 - README updated for the Node 24 requirement, the v3 protocol, a Docker setup that works outside a
-  checkout, the configuration variables, where logs go, and the npm scripts.
+  checkout, the configuration variables, where logs go, the load limits, and the npm scripts.
 
 ### Known limits
 
@@ -359,6 +379,9 @@ The endpoints are documented under [REST store](./protocol.md#rest-store).
   that once received a large frame keeps a buffer of up to 8 MiB until it closes.
 - A client that falls more than 1 MB behind on TCP misses messages without being told; see
   [Backpressure](./protocol.md#backpressure).
+- A client over an inbound limit is not told either that its updates were held back or its
+  broadcasts dropped; only the server's log says so. See
+  [Inbound limits](./protocol.md#inbound-limits).
 - After a reconnect, clients catch up on model updates but not on deletions; see
   [Known limits](./protocol.md#known-limits) in the protocol docs.
 
@@ -373,8 +396,10 @@ Not part of this release:
   `model::request` with every synced member applied, as exactly one instance.
 - **Security hardening**, by design: Colibri is meant for local networks you trust and
   authenticates nobody. There is no handshake token, the app name `colibri` is what makes a client
-  the admin UI, CORS allows any origin, and there are no rate limits, connection caps or TLS. Model
-  objects are plain objects, not null-prototype ones. The voice relay forwards every voice packet
-  to every other voice client, whatever its app. The structural changes that would have come first
-  (Socket.IO rooms, `Map` keying in `DataStore` and the REST store, bounds checks on TCP ingress
-  and egress) landed anyway, on performance and robustness grounds.
+  the admin UI, CORS allows any origin, and there are no connection caps or TLS; the per-client
+  message rate limit is there to catch a runaway send loop, not a hostile client, which can open
+  as many connections as it likes. Model objects are plain objects, not null-prototype ones. The
+  voice relay forwards every voice packet to every other voice client, whatever its app. The
+  structural changes that would have come first (Socket.IO rooms, `Map` keying in `DataStore` and
+  the REST store, bounds checks on TCP ingress and egress) landed anyway, on performance and
+  robustness grounds.
