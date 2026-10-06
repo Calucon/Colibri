@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
@@ -17,7 +18,13 @@ namespace HCIKonstanz.Colibri.Networking
         private IPEndPoint inEndPoint = new IPEndPoint(IPAddress.Any, 0);
         private Thread udpThread;
         private CancellationTokenSource shutdown;
-        private static LockFreeQueue<VoicePacket> queuedVoicePackets = new LockFreeQueue<VoicePacket>();
+
+        // Receive thread in, main thread out - and there can be two receive threads at once:
+        // OnDisable waits only 500 ms for the old one, so after a quick disable and enable it may
+        // still be handing over a packet while the new one starts. A ConcurrentQueue, because the
+        // LockFreeQueue this used to be loses or duplicates items with more than one producer.
+        // Per instance rather than static, so a new connection never delivers an old one's packets.
+        private readonly ConcurrentQueue<VoicePacket> queuedVoicePackets = new ConcurrentQueue<VoicePacket>();
         private readonly Dictionary<int, List<Action<VoicePacket>>> voicePacketListeners = new Dictionary<int, List<Action<VoicePacket>>>();
         private bool isConnected = false;
 
@@ -53,12 +60,18 @@ namespace HCIKonstanz.Colibri.Networking
         private void Update()
         {
             if (isConnected)
-            {
-                while (queuedVoicePackets.Dequeue(out var packet))
-                {
-                    Invoke(packet);
-                }
-            }
+                DeliverReceivedPackets();
+        }
+
+        /// <summary>Hands a received packet to the main thread, where <see cref="Update"/> delivers it.</summary>
+        /// <remarks>Called from the receive thread; internal so the EditMode tests can be several of them.</remarks>
+        internal void EnqueueReceived(VoicePacket packet) => queuedVoicePackets.Enqueue(packet);
+
+        /// <remarks>Internal so the EditMode tests can drive it without a player loop.</remarks>
+        internal void DeliverReceivedPackets()
+        {
+            while (queuedVoicePackets.TryDequeue(out var packet))
+                Invoke(packet);
         }
 
         private void Connect()
@@ -168,7 +181,7 @@ namespace HCIKonstanz.Colibri.Networking
                     VoicePacket voicePacket = GetVoicePacket(bytes);
                     if (voicePacket.Id != 0)
                     {
-                        queuedVoicePackets.Enqueue(voicePacket);
+                        EnqueueReceived(voicePacket);
                     }
                 }
                 catch (ObjectDisposedException)
