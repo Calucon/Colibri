@@ -509,9 +509,11 @@ assumed:
 | `_connectAttempts` | plain field | under `_statusLock` |
 | `Status` **setter** | unsynchronized read-modify-write | serialized on `_statusLock` |
 
-`LockFreeQueue` recycles its nodes through a pool that is only safe with a single producer, so it
-is left to `VoiceServerConnection`, whose one receive thread is exactly that; the connection's
-receive queue and `RemoteLogging`'s log buffer use `ConcurrentQueue`.
+`LockFreeQueue` recycles its nodes through a pool that is only safe with a single producer, so the
+connection's receive queue and `RemoteLogging`'s log buffer use `ConcurrentQueue`.
+`VoiceServerConnection` has since followed: its `OnDisable` waits only 500 ms for the receive
+thread, so after a quick disable and enable the old one may still be handing over a packet while
+the new one starts. With nothing left using it, `LockFreeQueue` is deleted.
 
 The `Status` setter is the one that genuinely needed a lock rather than a keyword: it compares,
 assigns, re-arms the connected gate and queues the connection events, and the connection loop and
@@ -914,6 +916,13 @@ Two things that follow from the design rather than from the harness:
 | `SendCommandAsync` waits on the `Connected` gate | Queued in the outbox; `true` once written, `false` only if it will never be sent |
 | A synced object sends in every frame in which it changed | At most `SyncSettings.MaxSendRate` updates a second, 30 by default; the latest values of a burst still go out |
 
+### Removed
+
+| API | Instead |
+|---|---|
+| `ObservableModel<T>` / `ObservableManager<T>` | `SyncBehaviour<T>` / `SyncBehaviourManager<T>` |
+| `LockFreeQueue<T>`, `LockFreeLinkPool<T>`, `SingleLinkNode<T>`, `SyncMethods` | `System.Collections.Concurrent.ConcurrentQueue<T>` |
+
 ### Unchanged
 
 All 17 `Sync.Receive` / `Sync.Unregister` overloads, every `Sync.Send` overload, `SyncBehaviour`'s
@@ -973,6 +982,10 @@ the v3 wire protocol.
     every value it receives now sees gaps. Send events that must each arrive with `Sync.Send`, or
     set *Max Send Rate* to 0 (or `SyncSettings.MaxSendRate = 0`) to send every frame's change as
     before.
+
+11. **`LockFreeQueue<T>` is gone**, with `LockFreeLinkPool<T>`, `SingleLinkNode<T>` and
+    `SyncMethods`. Use `System.Collections.Concurrent.ConcurrentQueue<T>`: `Enqueue` stays,
+    `Dequeue(out item)` becomes `TryDequeue(out item)`, and any number of threads may enqueue.
 
 ---
 

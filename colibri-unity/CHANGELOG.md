@@ -50,6 +50,11 @@ rationale, migration steps, and what the Editor verification did and did not cov
   `Assets/Samples/`, in `Assembly-CSharp`. Code that referenced a sample type without importing the
   sample no longer compiles. The `Prefabs` folder is unaffected and stays live: `[RemoteLogger]` and
   `[SyncTransformManager]` are still draggable straight out of `Packages/Colibri/Prefabs`.
+- **`LockFreeQueue<T>` is deleted**, with `LockFreeLinkPool<T>`, `SingleLinkNode<T>` and
+  `SyncMethods`, all public in `HCIKonstanz.Colibri.Networking`. It is only safe with one thread
+  enqueueing, and nothing in Colibri uses it any more. Use
+  `System.Collections.Concurrent.ConcurrentQueue<T>`, which is safe with any number of producers
+  and consumers.
 - **Synced objects send at most 30 updates a second** by default, where 1.3.1 sent one in every
   frame in which something changed. The values in between are skipped, so a `[Sync]` setter on
   another client that counts or reacts to every value now sees gaps. A *Max Send Rate* of `0`
@@ -256,7 +261,11 @@ rationale, migration steps, and what the Editor verification did and did not cov
   `localhost` resolved to `::1` first and every send failed. An IP address is no longer
   reverse-resolved (`Dns.GetHostEntry` threw for a LAN address without a DNS name), and an address
   that cannot be resolved, or has no IPv4 address, turns voice off with a clear error instead of
-  throwing from `OnEnable`.
+  throwing from `OnEnable`. Received packets now reach the main thread through a per-instance
+  `ConcurrentQueue`. They went through a static `LockFreeQueue`, which is only safe with one thread
+  enqueueing — and after a quick disable and enable the old receive thread may still be handing over
+  a packet while the new one starts — and which, being static, could hand one connection's packets
+  to the next.
 - **`Store`** serializes with Newtonsoft instead of `JsonUtility`, which cannot handle dictionaries,
   properties, or top-level arrays and so silently disagreed with what `Sync` can carry. What that
   costs a 1.x project is under Breaking changes.
