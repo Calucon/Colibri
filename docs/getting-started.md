@@ -64,8 +64,8 @@ focus. The connection stays up. The status window still says *Connected*. But
 nothing is sent and nothing that arrived is delivered, because none of that happens until `Update`
 runs again.
 
-If you are testing two clients on one machine — and you will be — one of them is always in the
-background. Turn it on now. (On a Quest this setting does nothing; see
+If you are testing two clients on one machine, one of them is always in the background. Turn it
+on now. (On a Quest this setting does nothing; see
 [Building for Meta Quest](#building-for-meta-quest).)
 
 ---
@@ -262,8 +262,8 @@ Two things the window cannot check for you:
 
 ## The samples
 
-*Window → Package Manager → Colibri → Samples → Import*. Each one lands in `Assets/Samples/` and is
-yours to edit and break.
+*Window → Package Manager → Colibri → Samples → Import*. Each one is imported into
+`Assets/Samples/` and can be edited freely.
 
 They are not in your project until you import them — that is deliberate, so you do not ship code you
 never asked for.
@@ -319,8 +319,8 @@ Same app name, same channel names, same rules. Two differences to watch:
 - **Vectors and colours are plain arrays in TypeScript**, not objects: `Sync.sendVector3('pos', [1,
   2, 3])` and `Sync.sendColor('tint', [1, 0, 0, 1])`, where Unity would use a `Vector3` and a
   `Color`. A colour therefore reaches a web listener as `"#RRGGBBAA"` from Unity but as `[r, g, b,
-  a]` from another web client — run it through `toHexColor()` or `toRgbaColor()` and stop caring
-  which. (Unity does the same for you: `ToColor` takes either.)
+  a]` from another web client — run it through `toHexColor()` or `toRgbaColor()` to get one form
+  regardless of the sender. (Unity does the same for you: `ToColor` takes either.)
 - **JavaScript has one number type.** A web client sending `5` reaches Unity as a `float`, so listen
   for it with `Sync.Receive<float>` on the Unity side, not `int`.
 
