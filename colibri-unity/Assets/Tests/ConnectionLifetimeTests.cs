@@ -100,8 +100,8 @@ namespace HCIKonstanz.Colibri.E2E
         /// <summary>
         /// SyncTicker hands the connection what the send-rate limit was holding as the app quits,
         /// and the connection closes its socket in its own OnDisable a moment later. On Mono and
-        /// IL2CPP a socket write completes on a worker thread, so the last update was often still
-        /// on its way and was lost with the socket. Quitting now waits briefly for the outbox.
+        /// IL2CPP a socket write completes on a worker thread, so the last update could still be
+        /// on its way and was then lost with the socket. Quitting now waits briefly for the outbox.
         /// </summary>
         /// <remarks>
         /// Under .NET a small write usually completes inline, so the write still in progress is
