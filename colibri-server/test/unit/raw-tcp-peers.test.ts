@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { spawn } from 'child_process';
 import { once } from 'events';
+import { readdirSync, readFileSync } from 'fs';
 import * as net from 'net';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
@@ -112,4 +113,16 @@ describe('npm run test:tcpclient', () => {
 
         expect(code).toBe(0);
     }, 15000);
+});
+
+// A peer that announces a version of its own is refused as soon as PROTOCOL_VERSION moves on,
+// and then looks like a broken server rather than a stale script.
+describe('raw TCP peers under test/', () => {
+    const scripts = readdirSync(TEST_DIR).filter(name => name.endsWith('.ts'));
+
+    it.each(scripts)('%s announces PROTOCOL_VERSION, not a version literal of its own', name => {
+        const source = readFileSync(path.join(TEST_DIR, name), 'utf8');
+
+        expect(source).not.toMatch(/encodeHandshakeFrame\(\s*['"`]/);
+    });
 });

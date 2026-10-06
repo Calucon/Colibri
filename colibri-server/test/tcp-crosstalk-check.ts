@@ -6,6 +6,7 @@ import { Config } from '../src/server/configuration.js';
 import {
     FrameReader,
     FrameType,
+    PROTOCOL_VERSION,
     encodeHandshakeFrame,
     encodeHeartbeatFrame,
     encodeMessageFrame,
@@ -47,7 +48,7 @@ client.on('close', () => console.log(`done: ${heartbeats} heartbeat(s), ${messag
 
 client.connect(Config.TCP_PORT, '127.0.0.1', () => {
     console.log(`connected, handshaking as app "${app}"`);
-    client.write(encodeHandshakeFrame('2', app, hostname), onError);
+    client.write(encodeHandshakeFrame(PROTOCOL_VERSION, app, hostname), onError);
 
     setTimeout(() => {
         console.log('-> sending broadcast::string on myChannel');
