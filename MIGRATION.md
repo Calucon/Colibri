@@ -197,9 +197,10 @@ using `RemoteLogger` was also a stream of pointless network traffic.
 The server address can be written the way a browser shows it:
 `new Colibri('my-app', 'http://192.168.0.10:9011')` works, as do `https://`, `ws://` and `wss://`,
 a port in the address and a trailing slash. The port is the one in the address, else the third
-argument, else 9011 — for `https://` too. An address that 1.x turned into a URL that could never connect now throws a
-`ColibriError` instead: a path after the host (the admin UI's own `…/log`, say), an unknown scheme,
-a port that is not a whole number, or a port in the address that disagrees with the port argument.
+argument, else 9011 — for `https://` too. An address that 1.x turned into a URL that could never
+connect now throws a `ColibriError` instead: a path after the host (the admin UI's own `…/log`,
+say), an unknown scheme, a port that is not a whole number, or a port in the address that disagrees
+with the port argument.
 
 `Sync.receive*`, `RegisterChannel`, `RegisterModelSync` and `new RemoteLogger()` may come before
 `new Colibri()`; they take effect once it is constructed.
