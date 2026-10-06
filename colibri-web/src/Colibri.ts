@@ -435,8 +435,13 @@ export class Colibri {
 
     /**
      * Queries an object from the REST API identified by `key`.
+     *
+     * Not every failure resolves to null: when the server cannot be reached at all (a wrong
+     * address, the server down, no network), `fetch` rejects, and so does this - typically with a
+     * `TypeError` - as it does when the server's answer is not JSON. Catch it where that matters.
      * @param key REST API storage key
-     * @returns JSON object with data or null if object does not exist or any other error occurs
+     * @returns the stored value; or null if `key` is empty or the server answered with an error
+     *   status, such as 404 for a key that was never stored. A stored `null` looks the same.
      */
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     public async getRestObject(key: string): Promise<any> {
@@ -456,9 +461,15 @@ export class Colibri {
 
     /**
      * Sets or updates an object in the REST API identified by `key`.
+     *
+     * Not every failure resolves to false: when the server cannot be reached at all (a wrong
+     * address, the server down, no network), `fetch` rejects, and so does this - typically with a
+     * `TypeError` - as it does when `data` cannot be turned into JSON (a circular structure, a
+     * BigInt). Catch it where that matters.
      * @param key REST API storage key
      * @param data JSON data to write
-     * @returns true if data was written to REST API
+     * @returns true if the server stored the data; false if `key` is empty or the server answered
+     *   with any other status
      */
     public async setRestObject(key: string, data: unknown): Promise<boolean> {
         const uri = this.getRestUri(key);

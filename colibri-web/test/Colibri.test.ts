@@ -433,6 +433,17 @@ describe('Colibri REST API', () => {
 
         await expect(c.setRestObject('mykey', { a: 1 })).resolves.toBe(false);
     });
+
+    // What the JSDoc promises: a server that cannot be reached is not a null or a false, it is a
+    // rejection, exactly as fetch gives it.
+    it('getRestObject and setRestObject reject when the server cannot be reached', async () => {
+        const c = new Colibri('app', 'localhost', 9011);
+        const networkError = new TypeError('fetch failed');
+        vi.stubGlobal('fetch', vi.fn().mockRejectedValue(networkError));
+
+        await expect(c.getRestObject('mykey')).rejects.toBe(networkError);
+        await expect(c.setRestObject('mykey', { a: 1 })).rejects.toBe(networkError);
+    });
 });
 
 describe('wrapper functions', () => {
