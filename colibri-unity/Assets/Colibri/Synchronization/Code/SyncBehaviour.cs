@@ -485,6 +485,11 @@ namespace HCIKonstanz.Colibri.Synchronization
 
         public void OnModelUpdate(JObject data)
         {
+            // The member table is per type and was only ever built in Awake, so an update reaching
+            // an object of a type no instance of which had woken yet found no members, and every
+            // value in it was dropped with an "Unable to sync attribute" warning.
+            Initialize();
+
             var id = data["id"].Value<string>();
             if (id == Id)
             {
