@@ -3,9 +3,10 @@ services:
     build: .
     restart: unless-stopped
     container_name: colibri
-    tty: true
     # The server logs to stdout/stderr, client log lines included, and Docker's default
-    # json-file log never rotates: cap it rather than let a long study fill the disk.
+    # json-file log never rotates: cap it rather than let a long study fill the disk. And no
+    # `tty: true`: with a TTY, `docker logs` has no stderr, and the warnings and errors are
+    # mixed into stdout.
     logging:
       driver: json-file
       options:
