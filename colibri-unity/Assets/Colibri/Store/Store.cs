@@ -2,6 +2,7 @@ using UnityEngine;
 using UnityEngine.Networking;
 using System.Threading.Tasks;
 using HCIKonstanz.Colibri.Setup;
+using HCIKonstanz.Colibri.Synchronization;
 using Newtonsoft.Json;
 
 namespace HCIKonstanz.Colibri.Store
@@ -17,6 +18,12 @@ namespace HCIKonstanz.Colibri.Store
         /// looking at it.
         /// </summary>
         private const int TimeoutSeconds = 10;
+
+        /// <summary>
+        /// Newtonsoft with Colibri's converters, so a Vector3, Quaternion or Color in a saved
+        /// class converts - see <see cref="ColibriJson"/>.
+        /// </summary>
+        private static readonly JsonSerializerSettings JsonSettings = ColibriJson.CreateSettings();
 
         /// <summary>
         /// Awaits a UnityWebRequest without pulling in a third-party awaiter.
@@ -54,7 +61,7 @@ namespace HCIKonstanz.Colibri.Store
                     // Newtonsoft rather than JsonUtility: JsonUtility cannot round-trip
                     // dictionaries, properties, or top-level arrays, so Get/Put silently
                     // disagreed with everything Sync can carry.
-                    return JsonConvert.DeserializeObject<T>(request.downloadHandler.text);
+                    return JsonConvert.DeserializeObject<T>(request.downloadHandler.text, JsonSettings);
                 }
 
                 LogFailure("load", objectName, request, url);
@@ -64,7 +71,7 @@ namespace HCIKonstanz.Colibri.Store
 
         public static async Task<bool> Put(string objectName, object putObject)
         {
-            string jsonData = JsonConvert.SerializeObject(putObject);
+            string jsonData = JsonConvert.SerializeObject(putObject, JsonSettings);
             var url = ColibriConfig.GetWebUrl($"api/store/{ColibriConfig.Load().AppName}/{objectName}");
             using (UnityWebRequest request = UnityWebRequest.Put(url, jsonData))
             {

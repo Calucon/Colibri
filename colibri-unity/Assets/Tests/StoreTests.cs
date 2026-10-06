@@ -16,6 +16,13 @@ namespace HCIKonstanz.Colibri.E2E
         public int Count { get; set; }
     }
 
+    public class StoredPlacement
+    {
+        public Vector3 Position;
+        public Quaternion Rotation;
+        public Color Tint;
+    }
+
     /// <summary>
     /// The Store is the one part of Colibri that does not use the binary protocol at all - it is
     /// plain REST over the web port, which is why a wrong address failed so differently there.
@@ -41,6 +48,38 @@ namespace HCIKonstanz.Colibri.E2E
             var delete = ColibriStore.Delete(key);
             yield return E2EServer.Await(delete, "Store.Delete never completed", 20f);
             Assert.That(delete.Result, Is.True, "Store.Delete reported failure");
+        }
+
+        /// <summary>
+        /// Newtonsoft on its own cannot write a Vector3, Quaternion or Color - it follows
+        /// Vector3.normalized, a Vector3 again, into a "Self referencing loop" - so a class
+        /// holding one could not be saved at all.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator SavesAndReadsBackAnObjectWithUnityTypes()
+        {
+            var key = $"e2e-{Guid.NewGuid():N}";
+            var saved = new StoredPlacement
+            {
+                Position = new Vector3(1.5f, 2f, -3f),
+                Rotation = new Quaternion(0f, 0.6f, 0f, 0.8f),
+                Tint = new Color(0.25f, 0.5f, 0.75f, 1f)
+            };
+
+            var put = ColibriStore.Put(key, saved);
+            yield return E2EServer.Await(put, "Store.Put never completed", 20f);
+            Assert.That(put.Result, Is.True, "Store.Put reported failure");
+
+            var get = ColibriStore.Get<StoredPlacement>(key);
+            yield return E2EServer.Await(get, "Store.Get never completed", 20f);
+
+            Assert.That(get.Result, Is.Not.Null, "Store.Get returned nothing for a key it had just written");
+            Assert.That(get.Result.Position, Is.EqualTo(saved.Position));
+            Assert.That(get.Result.Rotation, Is.EqualTo(saved.Rotation));
+            Assert.That(get.Result.Tint, Is.EqualTo(saved.Tint));
+
+            var delete = ColibriStore.Delete(key);
+            yield return E2EServer.Await(delete, "Store.Delete never completed", 20f);
         }
 
         /// <summary>

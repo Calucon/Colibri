@@ -185,7 +185,9 @@ namespace HCIKonstanz.Colibri.Synchronization
             if (valueType == typeof(Color[])) return BuildAttribute<Color[]>(name, member);
             if (valueType == typeof(JObject)) return BuildAttribute<JObject>(name, member);
 
-            Debug.LogError($"Colibri: cannot synchronize '{typeof(T).Name}.{member.Name}' - [Sync] does not support {valueType.Name}. Supported types are {SupportedTypes}. For your own classes, sync a JObject built with JToken.FromObject(...).");
+            Debug.LogError($"Colibri: cannot synchronize '{typeof(T).Name}.{member.Name}' - [Sync] does not support {valueType.Name}. Supported types are {SupportedTypes}. "
+                + $"For your own classes, sync a JObject: JObject.FromObject(value, ColibriJson.Serializer), and read it back with ToObject<{valueType.Name}>(ColibriJson.Serializer) - "
+                + "ColibriJson can convert the Vector3, Quaternion and Color members that Newtonsoft on its own cannot.");
             return null;
         }
 
