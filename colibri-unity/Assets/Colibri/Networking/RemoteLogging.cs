@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
@@ -22,9 +23,12 @@ namespace HCIKonstanz.Colibri.Networking
         private const float SendIntervalSeconds = 1f;
 
         /// <summary>
-        /// Lines kept while there is no connection to send them on; past this the oldest go. Held
-        /// here rather than in the connection's own queue so that a long outage's log output cannot
-        /// crowd the messages that synchronize the application out of that queue's bound.
+        /// Lines kept between two sends, connected or not; past this the oldest go. While connected
+        /// that is a second's worth - which is also all a runaway log loop can cost the server - and
+        /// while not, an outage's worth: held here rather than in the connection's own queue so that
+        /// a long outage's log output cannot crowd the messages that synchronize the application out
+        /// of that queue's bound. What is dropped is not lost without a trace: the next send starts
+        /// with one line saying how many are missing.
         /// </summary>
         private const int MaxBufferedLines = 1000;
 
@@ -35,6 +39,9 @@ namespace HCIKonstanz.Colibri.Networking
 
         // Kept alongside the queue rather than asking it: ConcurrentQueue.Count walks its segments.
         private int _bufferedLines;
+
+        // Lines dropped by MaxBufferedLines since the last send.
+        private int _droppedLines;
 
         private WebServerConnection _server;
         private float _nextSendTime;
@@ -123,7 +130,10 @@ namespace HCIKonstanz.Colibri.Networking
             _messages.Enqueue(new LogMsg(logType, msg));
 
             if (Interlocked.Increment(ref _bufferedLines) > MaxBufferedLines && _messages.TryDequeue(out _))
+            {
                 Interlocked.Decrement(ref _bufferedLines);
+                Interlocked.Increment(ref _droppedLines);
+            }
         }
 
         /// <summary>
@@ -132,8 +142,20 @@ namespace HCIKonstanz.Colibri.Networking
         /// send some lines twice: a send that failed after connecting was both queued for retry by
         /// the connection and put back in this queue.
         /// </summary>
-        private void SendLog()
+        private void SendLog() => SendLog((type, line) => _server.SendCommand("log", type, line));
+
+        /// <remarks>Internal, with the send handed in, so the EditMode tests can see what a batch sends.</remarks>
+        internal void SendLog(Action<string, string> send)
         {
+            // Where the lines went missing, and once for all of them. Handed straight to the
+            // connection: through Debug.Log it would come back in here as one more line to buffer.
+            var dropped = Interlocked.Exchange(ref _droppedLines, 0);
+            if (dropped > 0)
+            {
+                send("warning", $"Colibri: {dropped} log {(dropped == 1 ? "line is" : "lines are")} missing here - more than {MaxBufferedLines} "
+                    + "were logged before they could be sent, and the oldest were dropped. The device's own log has them all.");
+            }
+
             var sentThisBatch = new HashSet<string>();
             while (_messages.TryDequeue(out var logMsg))
             {
@@ -141,7 +163,7 @@ namespace HCIKonstanz.Colibri.Networking
 
                 // skip duplicated messages
                 if (sentThisBatch.Add(logMsg.Message))
-                    _server.SendCommand("log", logMsg.Type, logMsg.Message);
+                    send(logMsg.Type, logMsg.Message);
             }
         }
 
@@ -149,6 +171,8 @@ namespace HCIKonstanz.Colibri.Networking
         {
             while (_messages.TryDequeue(out _))
                 Interlocked.Decrement(ref _bufferedLines);
+
+            Interlocked.Exchange(ref _droppedLines, 0);
         }
     }
 }

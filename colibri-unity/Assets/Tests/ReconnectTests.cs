@@ -403,6 +403,45 @@ namespace HCIKonstanz.Colibri.E2E
         }
 
 
+        /// <summary>
+        /// A burst of log lines while connected, more than RemoteLogging keeps between two sends.
+        /// The oldest are dropped, as they always were - that bounds what a runaway log loop costs
+        /// the server - but no longer silently: one line says how many are missing.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator RemoteLoggingSaysHowManyLinesABurstLost()
+        {
+            var prefix = $"burst-log-{System.Guid.NewGuid():N}";
+            var loggingObject = new GameObject("remote-logging");
+            try
+            {
+                loggingObject.AddComponent<RemoteLogging>();
+
+                for (var i = 1; i <= 1200; i++)
+                    Debug.Log($"{prefix} {i}");
+
+                yield return E2EServer.WaitUntil(() => LoggedLines(prefix).Length >= 1000,
+                    $"Only {LoggedLines(prefix).Length} of the 1000 lines kept reached the server");
+
+                // Past RemoteLogging's one-second send interval, so anything else would have shown up.
+                yield return E2EServer.Settle(1.5f);
+
+                Assert.That(LoggedLines(prefix), Is.EqualTo(Enumerable.Range(201, 1000).Select(i => $"{prefix} {i}").ToArray()),
+                    "The newest 1000 lines of the burst should have arrived, in order");
+
+                var summaries = LoggedLines("Colibri: ").Where(line => line.Contains("log lines are missing here")).ToArray();
+                Assert.That(summaries.Length, Is.EqualTo(1), "The lines the burst lost should be summed up in exactly one line");
+                Assert.That(summaries[0], Does.StartWith("Colibri: 200 log lines are missing here"));
+            }
+            finally
+            {
+                // Immediately: left for the end of the frame, its Update could run after the
+                // teardown has destroyed the connection, and would build a new one.
+                Object.DestroyImmediate(loggingObject);
+            }
+        }
+
+
         /*
          *  Connection events
          */

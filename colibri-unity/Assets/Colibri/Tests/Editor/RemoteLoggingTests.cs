@@ -1,8 +1,10 @@
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using HCIKonstanz.Colibri.Networking;
 using NUnit.Framework;
 using UnityEngine;
+using UnityEngine.TestTools;
 
 namespace HCIKonstanz.Colibri.Tests
 {
@@ -83,6 +85,35 @@ namespace HCIKonstanz.Colibri.Tests
             Assert.That(_logging.BufferedLines,
                 Is.EqualTo(Enumerable.Range(501, 1000).Select(i => $"line {i}").ToArray()),
                 "The oldest lines should go first, and the rest stay in order");
+        }
+
+        /// <summary>
+        /// The cap applies between any two sends, connected or not, so a burst of more than 1000
+        /// lines within the one second between sends loses the oldest - and they used to vanish
+        /// without a trace. The next send now starts with one line saying how many are missing,
+        /// handed straight to the connection: through Debug.Log it would feed back into the buffer.
+        /// </summary>
+        [Test]
+        public void DroppedLinesAreSummedUpInOneLineWhereTheyWentMissing()
+        {
+            for (var i = 1; i <= 1500; i++)
+                _logging.OnLogMessage($"line {i}", "", LogType.Log);
+
+            var sent = new List<(string Type, string Line)>();
+            _logging.SendLog((type, line) => sent.Add((type, line)));
+
+            Assert.That(sent.Count, Is.EqualTo(1001), "Expected one summary line and the 1000 lines kept");
+            Assert.That(sent[0].Type, Is.EqualTo("warning"));
+            Assert.That(sent[0].Line, Does.StartWith("Colibri: 500 log lines are missing here - more than 1000 were logged before they could be sent"));
+            Assert.That(sent.Skip(1).Select(s => s.Line), Is.EqualTo(Enumerable.Range(501, 1000).Select(i => $"line {i}")));
+
+            // Said for the lines it is about, and not again for the next batch.
+            sent.Clear();
+            _logging.OnLogMessage("line 1501", "", LogType.Log);
+            _logging.SendLog((type, line) => sent.Add((type, line)));
+
+            Assert.That(sent, Is.EqualTo(new[] { ("info", "line 1501") }));
+            LogAssert.NoUnexpectedReceived();
         }
 
         [Test]
