@@ -539,10 +539,10 @@ namespace HCIKonstanz.Colibri.Synchronization
             bool track = true, string fetchId = null)
         {
             // Ensures the connection is in the scene and that this class is subscribed to it - on
-            // every registration, not only a channel's first. With domain reload disabled, a
-            // channel from the previous Play session keeps its entry below after its listeners'
-            // objects are gone, while the connection it was subscribed to has been destroyed; a
-            // client that only listens then never got a connection again.
+            // every registration, not only a channel's first. A channel's entry below can outlive
+            // the connection it was subscribed to: destroying the connection's GameObject leaves
+            // it in place, and so, before ResetListeners, did the end of a Play session with
+            // domain reload disabled. A client that only listens then never got a connection again.
             Connection();
 
             if (!listeners.TryGetValue(channel, out var channelListeners))
