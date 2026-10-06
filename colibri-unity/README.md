@@ -41,7 +41,8 @@ Alternatively, download the latest [Colibri release](https://github.com/hcigroup
    (`colibri.hci.uni-konstanz.de`) works out of the box.
 3. Import the **SendData** sample: *Window → Package Manager → Colibri → Samples → Import*.
 4. Open the sample scene and press Play. Tick `SendProperties` on the `SendMessages` object and
-   watch the console.
+   watch the console. (The scene needs TextMeshPro's essential resources — see
+   [Samples](#samples).)
 5. Turn on *Project Settings → Player → Resolution and Presentation → **Run In Background***.
    Unity leaves this off by default, and with it off the Editor stops running your game the
    moment its window loses focus. The connection stays up and the status window still says
@@ -92,6 +93,17 @@ Samples live in the `Samples` tab of the Package Manager: select Colibri, then *
 Import*. Importing copies a sample into `Assets/Samples/Colibri/`, which is yours to edit — the
 package's own copy is not compiled into your project until you import it, so nothing you never
 asked for ends up in your build.
+
+The `Remote Store`, `SendData`, `SyncTransform` and `Voice Chat` sample scenes show their
+instructions with **TextMeshPro**, which Colibri does not install for you. Without TextMeshPro's
+essential resources, the instructions text throws a `NullReferenceException` in
+`TMP_Settings`. Before opening one of those scenes:
+
+- **Unity 2022.3:** install *TextMeshPro* (`com.unity.textmeshpro`) from the Package Manager if
+  the project does not have it yet, then run *Window → TextMeshPro → Import TMP Essential
+  Resources*.
+- **Unity 6:** TextMeshPro is part of `com.unity.ugui`, so only the import is needed: *Window →
+  TextMeshPro → Import TMP Essential Resources*.
 
 The `[RemoteLogger]` and `[SyncTransformManager]` prefabs are **not** samples: they are part of
 the package proper. Drag them straight out of `Packages/Colibri/Prefabs/` in the Project window.
