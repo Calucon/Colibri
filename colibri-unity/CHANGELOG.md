@@ -215,7 +215,11 @@ rationale, migration steps, and what the Editor verification did and did not cov
 - **`OnConnected` and `OnDisconnected` come in pairs.** `OnDisconnected` is raised exactly once for
   every `OnConnected`, when that connection ends, a refusal included, and never for an attempt
   that did not connect. A refusal in the very first frame raises neither. Each handler runs on its
-  own, so one that throws is logged and no longer skips the others or the rest of `Update`.
+  own, so one that throws is logged and no longer skips the others or the rest of `Update`. The
+  two are also raised in the order the transitions happened. They used to be two flags, raised
+  connected-first (in 1.3.1 too), so a connection that dropped and came back before the next frame
+  raised `OnConnected` and then `OnDisconnected`, and left code that follows them believing it was
+  offline while it was connected.
 - **Models are requested again after a reconnect.** `model::request` was sent once, when a model
   listener registered, so after a Wi-Fi blip a client kept showing old state until each object
   happened to change again. On every reconnect `Sync` now repeats the requests for every model

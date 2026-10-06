@@ -502,7 +502,7 @@ assumed:
 | `_queuedCommands` | `LockFreeQueue` | `ConcurrentQueue` |
 | `_msgQueue` | `lock (_msgQueueLock)` | replaced by the outbox, under `_outboxLock` |
 | `_sendLock` | `SemaphoreSlim` | unchanged |
-| `_fireOnConnected` / `_fireOnDisconnected` | `volatile` | unchanged |
+| `_fireOnConnected` / `_fireOnDisconnected` | `volatile` | replaced by `_connectionEvents`, a `ConcurrentQueue<bool>` filled under `_statusLock` |
 | `_socket` | plain field | `volatile` |
 | `_status` | plain field | `volatile` |
 | `_connectedGate` | plain field | `volatile` |
@@ -514,11 +514,11 @@ is left to `VoiceServerConnection`, whose one receive thread is exactly that; th
 receive queue and `RemoteLogging`'s log buffer use `ConcurrentQueue`.
 
 The `Status` setter is the one that genuinely needed a lock rather than a keyword: it compares,
-assigns, re-arms the connected gate and raises two flags, and the connection loop and `Update`'s
-heartbeat watchdog can now reach it at the same time. Interleaved, the watchdog's `Disconnected`
-landing between the loop's compare and its assignment would leave the gate open on a socket that is
-already closed. The gate is created with `RunContinuationsAsynchronously`, so `TrySetResult` inside
-the lock schedules whoever awaits it rather than running them there.
+assigns, re-arms the connected gate and queues the connection events, and the connection loop and
+`Update`'s heartbeat watchdog can now reach it at the same time. Interleaved, the watchdog's
+`Disconnected` landing between the loop's compare and its assignment would leave the gate open on a
+socket that is already closed. The gate is created with `RunContinuationsAsynchronously`, so
+`TrySetResult` inside the lock schedules whoever awaits it rather than running them there.
 
 **What did not move: the main-thread handoff user code depends on.** Received messages still go
 receive loop → `_queuedCommands` → drained in `Update()`, so handlers, `SyncBehaviour` fields and
@@ -549,6 +549,12 @@ frame as proof of life, so something that accepts and says nothing is dropped. `
 raised exactly once per `OnConnected`. Both events are raised from `Update`, each handler in its own
 `try`/`catch`, because `Sync`'s re-request of the models after a reconnect is one of those handlers
 and a student's throwing handler must not skip it.
+
+They are raised in the order the transitions happened. The `Status` setter queues each one, under
+its lock, in `_connectionEvents`, and `Update` raises them one by one. They used to be two flags,
+`_fireOnConnected` and `_fireOnDisconnected`, checked connected-first: a connection that dropped and
+came back between two frames — a long frame during a Wi-Fi blip — raised `OnConnected` and then
+`OnDisconnected`, and code that follows the events believed it was offline while it was connected.
 
 **A connect that nothing answers is given up.** The socket has no connect timeout of its own, so an
 address nothing answered on held an attempt in `Connecting` for the operating system's own SYN
@@ -893,6 +899,7 @@ Two things that follow from the design rather than from the harness:
 | `Store.*` may throw `UnityWebRequestException` | A failed request no longer throws; it logs and returns `default`/`false`. A value Newtonsoft cannot convert still throws a `JsonException` |
 | `WebServerConnection.Connected` completes when TCP connects | Completes on the server's first frame; cancelled on a protocol refusal |
 | `OnDisconnected` raised for every failed attempt | Raised exactly once per `OnConnected` |
+| `OnConnected` raised before `OnDisconnected` when both happened since the last frame | Both raised in the order they happened |
 | `SendCommandAsync` waits on the `Connected` gate | Queued in the outbox; `true` once written, `false` only if it will never be sent |
 | A synced object sends in every frame in which it changed | At most `SyncSettings.MaxSendRate` updates a second, 30 by default; the latest values of a burst still go out |
 

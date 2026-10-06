@@ -498,6 +498,9 @@ answers is given up after 5 s. `WebServerConnection.Instance` tells you where it
 - `OnConnected` is raised on the main thread once the server has actually sent something — an
   accepted TCP connection is not enough. `OnDisconnected` is raised exactly once for every
   `OnConnected`, when that connection ends. An attempt that never got connected raises neither.
+  Both are raised in the order things happened, so the last one raised is the current state: a
+  connection that drops and comes back between two frames raises `OnDisconnected`, then
+  `OnConnected`.
 - `LastConnectFailure` says why the last attempt to open the connection failed — for example
   `… did not answer within 5 s`, or a refusal — and is `null` once one has opened.
 - `await connection.Connected` waits until the connection is up. It is cancelled when the server
