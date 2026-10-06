@@ -312,7 +312,7 @@ describe('WebServer over HTTP', () => {
         // Access-Control-Allow-Origin. Without it, setRestObject's fetch rejects with a bare
         // network error instead of resolving to false on the 413.
         it('carries the CORS headers, even for a body the parser refuses', async () => {
-            const origin = 'http://student-laptop.local:5173';
+            const origin = 'http://dev-laptop.local:5173';
 
             const tooLarge = await fetch(storeUrl('WebApp', 'x'), {
                 method: 'PUT',
