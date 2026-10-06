@@ -431,6 +431,79 @@ namespace HCIKonstanz.Colibri.E2E
         }
 
         /// <summary>
+        /// The other side of the test above. A model another client deleted while this one was
+        /// offline is gone from the server too, and the delete the server relayed never reached
+        /// this client. Answered with a bare { id }, the request made again after the reconnect
+        /// had this client send the object's whole state: the server stored it afresh, and every
+        /// other client's manager built the deleted object again. The server answers it with
+        /// model::delete, so this client's copy goes as well, and nothing of it is sent.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator AModelDeletedWhileThisClientWasOfflineStaysDeleted()
+        {
+            const string channel = "e2esyncmodel";
+            var spawned = new List<GameObject>();
+            var witness = new TcpPeer();
+            var checker = new TcpPeer();
+            try
+            {
+                var model = Spawn<E2ESyncModel>(spawned, "deleted-while-offline");
+                var id = model.Id;
+                yield return E2EServer.Settle(1.5f);
+
+                model.Label = "before the outage";
+                yield return _peer.Expect(channel, "model::update",
+                    frame => Assert.That((string)TcpPeer.Json(frame)["id"], Is.EqualTo(id)));
+
+                // The peer stays connected, so the server keeps the app and its models.
+                yield return witness.Connect("delete-witness");
+                _proxy.HoldNewConnections = true;
+                yield return CutTheConnection();
+
+                _peer.Send(channel, "model::delete", new JObject { { "id", id } });
+                yield return witness.Expect(channel, "model::delete");
+                _proxy.HoldNewConnections = false;
+
+                yield return E2EServer.WaitUntil(
+                    () => SecondSession().Any(f => f.Channel == channel && f.Command == "model::request"),
+                    "The model was never requested again after the reconnect", 20f);
+
+                // Long enough for a state sent in reply to the answer to have left.
+                yield return E2EServer.Settle(1.5f);
+
+                var sentAgain = SecondSession()
+                    .Where(f => f.Channel == channel && f.Command == "model::update" && (string)TcpPeer.Json(f)["id"] == id)
+                    .Select(f => TcpPeer.Json(f).ToString(Newtonsoft.Json.Formatting.None))
+                    .ToArray();
+                Assert.That(sentAgain, Is.Empty, "The client sent the state of a model deleted while it was offline");
+
+                yield return checker.Connect("delete-checker");
+                yield return E2EServer.Settle(0.3f);
+                checker.Send(channel, "model::request", new JObject { { "id", id } });
+                yield return checker.Expect(channel, null, frame =>
+                {
+                    var payload = (JObject)TcpPeer.Json(frame);
+                    Assert.That(frame.Command == "model::delete" || payload.Count == 1, Is.True,
+                        $"The model deleted while this client was offline is back on the server: {frame.Command} {payload.ToString(Newtonsoft.Json.Formatting.None)}");
+                });
+
+                Assert.That(Instances(id), Is.Empty, "This client still shows the model that was deleted while it was offline");
+            }
+            finally
+            {
+                witness.Dispose();
+                checker.Dispose();
+
+                // Immediately, while this test's connection is still there: see the tests above.
+                foreach (var gameObject in spawned)
+                {
+                    if (gameObject)
+                        Object.DestroyImmediate(gameObject);
+                }
+            }
+        }
+
+        /// <summary>
         /// RemoteLogging across an outage: every line reaches the server exactly once, in order.
         /// It used to retry a line whose send had failed, while the connection had also queued that
         /// same send for retry, so some lines arrived twice. Lines logged during the outage wait in

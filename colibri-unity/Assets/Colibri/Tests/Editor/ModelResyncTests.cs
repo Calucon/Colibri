@@ -15,6 +15,9 @@ namespace HCIKonstanz.Colibri.Tests
     /// was alone when its connection dropped comes back to a server that holds nothing of its
     /// objects - and answers each request with a bare <c>{ id }</c>. Nothing put the state back,
     /// and every client that joined afterwards was missing those objects.
+    ///
+    /// A model another client deleted meanwhile is answered with <c>model::delete</c> instead, as
+    /// long as the server remembers the delete; ReconnectTests checks that against the server.
     /// </summary>
     public class ModelResyncTests
     {

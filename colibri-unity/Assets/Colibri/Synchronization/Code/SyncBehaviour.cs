@@ -567,11 +567,21 @@ namespace HCIKonstanz.Colibri.Synchronization
                 // nothing of; a SyncBehaviour never sends one as an update. The first such answer
                 // is the usual start of a new object, and what follows it is unchanged: a
                 // manager's TriggerSync sends the full state. A later one answers the request made
-                // again after a reconnect, and means the server has lost this object - it clears
-                // an app's models when its last client leaves, which is what a lone client's Wi-Fi
-                // blip looks like from the server. Nothing used to put the state back, so every
-                // client that joined afterwards was missing the object. The full state carries
-                // members, so a client receiving it applies it and sends nothing in return.
+                // again after a reconnect, and is taken to mean the server has lost this object -
+                // it clears an app's models when its last client leaves, which is what a lone
+                // client's Wi-Fi blip looks like from the server, and all of them when it restarts.
+                // Nothing used to put the state back, so every client that joined afterwards was
+                // missing the object. The full state carries members, so a client receiving it
+                // applies it and sends nothing in return.
+                //
+                // That reading relies on the server telling a lost model from a deleted one. Another
+                // client may have deleted this object while this client was offline, and the delete
+                // it relayed never arrived here. The server remembers such a delete for
+                // MODEL_TOMBSTONE_SECONDS and answers the request with model::delete, which
+                // OnModelDelete handles: this copy goes too, and nothing is sent. Answered with a
+                // bare { id } instead - by a server that does not remember deletes, or after that
+                // time is up - this sends the deleted object's state, and every client builds it
+                // again.
                 if (!isFirstUpdate && data.Count == 1 && !_hasReceivedDestroyCommand)
                     AddFullState();
             }
