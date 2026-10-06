@@ -372,7 +372,9 @@ namespace HCIKonstanz.Colibri.E2E
             }
             finally
             {
-                Object.Destroy(loggingObject);
+                // Immediately: left for the end of the frame, its Update could run after the
+                // teardown has destroyed the connection, and would build a new one.
+                Object.DestroyImmediate(loggingObject);
             }
         }
 

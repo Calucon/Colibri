@@ -334,12 +334,16 @@ namespace HCIKonstanz.Colibri.E2E
             finally
             {
                 witness.Dispose();
+
+                // Immediately, while this test's connection is still there: destroying a synced
+                // object sends model::delete, and one sent after the teardown has destroyed the
+                // connection would build a new one and deliver the delete into a later test.
                 foreach (var instance in Instances(id))
-                    Object.Destroy(instance.gameObject);
+                    Object.DestroyImmediate(instance.gameObject);
                 foreach (var gameObject in spawned)
                 {
                     if (gameObject)
-                        Object.Destroy(gameObject);
+                        Object.DestroyImmediate(gameObject);
                 }
             }
         }
@@ -387,7 +391,9 @@ namespace HCIKonstanz.Colibri.E2E
             }
             finally
             {
-                Object.Destroy(loggingObject);
+                // Immediately: left for the end of the frame, its Update could run after the
+                // teardown has destroyed the connection, and would build a new one.
+                Object.DestroyImmediate(loggingObject);
             }
         }
 
