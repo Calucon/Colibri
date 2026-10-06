@@ -454,7 +454,7 @@ store as well.
 3. **Turn on *Run In Background*** (Project Settings → Player). With it off, an unfocused Editor
    stops running the player loop, so the client silently stops sending and receiving — while the
    socket stays up and everything still reports itself connected. This is not new in 2.0, but it is
-   the single most common way to lose an afternoon.
+   the most common source of lost debugging time.
 4. **Open *Window → Colibri Status*** while connected. It shows the app name, and a typo there
    produces a perfectly healthy connection on which no other client is ever seen. The opposite
    mistake, a name others use too, puts strangers in your app: *Window → Colibri Configuration*
@@ -465,7 +465,7 @@ store as well.
 
 ## What is tested, and what is not
 
-Honest about the edges. The test suites:
+The test suites:
 
 - `npm test` in `colibri-server` and in `colibri-web` — unit tests. Both run in CI, together with a
   check that the server's frame encoding matches the vectors the Unity tests use, and that every
