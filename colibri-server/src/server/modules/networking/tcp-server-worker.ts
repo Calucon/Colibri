@@ -90,6 +90,28 @@ const TICK_STALL_MILLIS = 2000;
 // When the kernel starts probing a socket with nothing in flight; see handleConnection.
 const KEEPALIVE_INITIAL_DELAY_MILLIS = 5000;
 
+// Socket error codes that say only that the peer is gone: it reset the connection (an app that
+// was killed or crashed, a headset put to sleep), a write found it closed, or the network lost it
+// (keepalive gave up, no route to it any more). On Wi-Fi these are part of normal operation, and
+// the disconnect itself is logged anyway, so they are not errors of this server.
+const PEER_GONE_ERRORS: ReadonlySet<string> = new Set([
+    'ECONNRESET',
+    'EPIPE',
+    'ETIMEDOUT',
+    'ECONNABORTED',
+    'EHOSTUNREACH',
+    'ENETUNREACH',
+]);
+
+// What a write still queued for a socket fails with once the socket is destroyed - one callback
+// per queued write, and a client whose connection stalled can have thousands queued.
+const WRITE_CANCELLED_ERRORS: ReadonlySet<string> = new Set(['ECANCELED', 'ERR_STREAM_DESTROYED']);
+
+const errorCode = function (error: Error): string | undefined {
+    const code = (error as NodeJS.ErrnoException).code;
+    return typeof code === 'string' ? code : undefined;
+};
+
 // Settings the proxy sends along with 'm:start'; anything left out keeps its default.
 export interface TcpServerOptions {
     // TCPServerProxy's backlog counter. Without it the backlog is neither counted nor limited.
@@ -394,11 +416,18 @@ export class TCPServerWorker extends WorkerService {
         }
 
         client.socket.write(packet, (err) => {
-            if (err) {
-                this.logWarning(
-                    `Failed to send message to client ${client.id}: ${err.message} `
-                );
-            }
+            if (!err) return;
+
+            // A peer that is gone fails every write still queued for it, each with a callback of
+            // its own: one warning per queued message, thousands for a client whose Wi-Fi dropped
+            // with model updates backed up. The socket's own 'error' event, or this server's
+            // closing it, already reports the connection once (handleSocketError).
+            const code = errorCode(err);
+            if (code && (PEER_GONE_ERRORS.has(code) || WRITE_CANCELLED_ERRORS.has(code))) return;
+
+            this.logWarning(
+                `Failed to send message to client ${client.id}: ${err.message} `
+            );
         });
     }
 
@@ -795,9 +824,15 @@ export class TCPServerWorker extends WorkerService {
     }
 
     private handleSocketError(client: TcpClient, error: Error): void {
-        // ignore ECONNRESET errors, as they are caused by the client disconnecting
-        if (error.message.indexOf('ECONNRESET') === -1) {
-            this.logError(error.message, false);
+        const who = `client ${client.id} (${client.address}${client.name ? `, '${client.name}'` : ''})`;
+        const code = errorCode(error);
+
+        // A peer that closed abruptly - an EPIPE as much as an ECONNRESET - is not this server's
+        // error. Matched by code: it used to be the message, which let EPIPE through at ERROR.
+        if (code && PEER_GONE_ERRORS.has(code)) {
+            this.logDebug(`Lost the connection to ${who}: ${error.message}`);
+        } else {
+            this.logError(`Socket error on ${who}: ${error.message}`, false);
         }
 
         // No need to call handleSocketDisconnect here - a socket's 'close' event always

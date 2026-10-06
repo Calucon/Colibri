@@ -39,10 +39,19 @@ class FakeSocket extends EventEmitter {
         return this;
     }
 
+    // Set to fail every write's callback with this error, the way a real socket fails the writes
+    // queued for a peer that has gone.
+    public failWritesWith: Error | undefined;
+
     // Modelled on what a real net.Socket does with a write after end(): the write fails, the
     // socket emits 'error' and destroys itself - which is how a heartbeat to a refused client
     // used to log twice and could cut off the refusal frame still being flushed.
     public write(data: Buffer, callback?: (err?: Error) => void): boolean {
+        if (this.failWritesWith) {
+            callback?.(this.failWritesWith);
+            return false;
+        }
+
         if (this.ended || this.destroyed) {
             const err = new Error('write after end');
             this.writtenAfterEnd.push(data);
@@ -455,6 +464,73 @@ describe('TCPServerWorker', () => {
             socket.emit('close');
 
             expect(posted.filter(p => p.channel === 'clientDisconnected$')).toHaveLength(1);
+        });
+    });
+
+    // A headset whose app is killed, or that drops off the Wi-Fi, resets its connection or leaves
+    // writes to it failing. That is normal operation, and used to be logged at ERROR (EPIPE), and
+    // as one warning per write still queued for the client.
+    describe('a peer that is gone', () => {
+        const errnoError = (code: string, message = `read ${code}`): Error =>
+            Object.assign(new Error(message), { code });
+
+        const logsAt = (level: LogLevel): string[] =>
+            posted.filter(p => p.channel === 'log' && p.content.level === level).map(p => String(p.content.msg));
+
+        const handshaked = function (): { socket: FakeSocket; id: string } {
+            const client = connect('10.0.0.42');
+            client.socket.emit('data', encodeHandshakeFrame(PROTOCOL_VERSION, 'appA', 'quest-1'));
+            return client;
+        };
+
+        it.each(['ECONNRESET', 'EPIPE', 'ETIMEDOUT', 'EHOSTUNREACH'])('is logged at debug for %s, not as an error', (code) => {
+            const { socket, id } = handshaked();
+
+            socket.emit('error', errnoError(code));
+            socket.emit('close');
+
+            expect(logsAt(LogLevel.Error)).toEqual([]);
+            expect(logsAt(LogLevel.Warn)).toEqual([]);
+            const lost = logsAt(LogLevel.Debug).filter(l => l.includes(code));
+            expect(lost).toHaveLength(1);
+            expect(lost[0]).toContain(id);
+            expect(lost[0]).toContain('10.0.0.42');
+        });
+
+        it('leaves any other socket error an error, naming the client', () => {
+            const { socket, id } = handshaked();
+
+            socket.emit('error', errnoError('EINVAL', 'something unexpected'));
+
+            const errors = logsAt(LogLevel.Error);
+            expect(errors).toHaveLength(1);
+            expect(errors[0]).toContain('something unexpected');
+            expect(errors[0]).toContain(id);
+        });
+
+        it.each(['ECONNRESET', 'EPIPE', 'ECANCELED', 'ERR_STREAM_DESTROYED'])('does not warn once per queued write that fails with %s', (code) => {
+            const { socket } = handshaked();
+            socket.failWritesWith = errnoError(code, `write ${code}`);
+
+            for (let i = 0; i < 5; i++) {
+                internals.handleParentMessage({
+                    channel: 'm:broadcastToApp',
+                    content: { msg: wireMessage('objects', 'model::update', '{"id":"a"}'), app: 'appA' },
+                });
+            }
+            internals.handleHeartbeat();
+
+            expect(logsAt(LogLevel.Warn)).toEqual([]);
+            expect(logsAt(LogLevel.Error)).toEqual([]);
+        });
+
+        it('still warns about a write that fails for another reason', () => {
+            const { socket } = handshaked();
+            socket.failWritesWith = errnoError('EINVAL', 'write EINVAL');
+
+            internals.handleHeartbeat();
+
+            expect(logsAt(LogLevel.Warn).filter(w => w.includes('Failed to send message') && w.includes('EINVAL'))).toHaveLength(1);
         });
     });
 
