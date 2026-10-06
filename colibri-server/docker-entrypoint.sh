@@ -19,9 +19,14 @@ if [ "$(id -u)" = '0' ]; then
     # Only walks the whole tree when something in it is not node's yet, so a data directory full
     # of voice recordings is not re-chowned on every start. -h changes a symlink itself, never
     # what it points to.
+    #
+    # chown fails on a read-only mount, on a file system without Unix owners (CIFS, NFS with
+    # root_squash) and in a container started without CAP_CHOWN - and the directory may still
+    # be writable for node then, in which case the server has nothing to warn about. So this
+    # does not promise a message from the server: it says the server checks, which it does.
     if [ -d "$DATA_DIR" ] && [ -n "$(find "$DATA_DIR" ! -user node -print | head -n 1)" ]; then
         chown -Rh node:node "$DATA_DIR" ||
-            echo "colibri-entrypoint: could not give $DATA_DIR to the node user (uid 1000); see the server's own message below" >&2
+            echo "colibri-entrypoint: could not give everything in $DATA_DIR to the node user (uid 1000), see chown's errors above. Starting the server anyway; it checks whether it can write there and warns if it cannot." >&2
     fi
     exec su-exec node "$@"
 fi

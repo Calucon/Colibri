@@ -169,6 +169,8 @@ interface Deployment {
     // The -v argument; prepares whatever the host would already have.
     mount: (image: string) => Promise<string>;
     user?: string;
+    // Further `docker run` options.
+    dockerArgs?: string[];
     // Seeded by mount(): an app/value that must be readable after startup.
     legacy?: { app: string; key: string; value: unknown };
     // Seeded by mount(): a symlink out of the data directory, whose target must stay root's.
@@ -177,6 +179,8 @@ interface Deployment {
     // When not writable: the error the server must name, and a phrase of the fix it must
     // advise for that error. EACCES and the chown command unless given.
     failure?: { code: string; advice: string };
+    // Whether the entrypoint cannot give the data directory to node, and must say so.
+    chownFails?: boolean;
 }
 
 const runDeployment = async function (image: string, deployment: Deployment): Promise<void> {
@@ -185,7 +189,7 @@ const runDeployment = async function (image: string, deployment: Deployment): Pr
     await docker([ 'rm', '-f', container ]);
 
     const mount = await deployment.mount(image);
-    const args = [ 'run', '-d', '--name', container, ...publish(0, 9011), ...publish(1, 9012), '-v', mount ];
+    const args = [ 'run', '-d', '--name', container, ...publish(0, 9011), ...publish(1, 9012), '-v', mount, ...(deployment.dockerArgs ?? []) ];
     if (deployment.user) args.push('--user', deployment.user);
     args.push(image);
     created.containers.add(container);
@@ -253,6 +257,13 @@ const runDeployment = async function (image: string, deployment: Deployment): Pr
     }
 
     const logs = await logsOf(container);
+    if (deployment.chownFails) {
+        check('the entrypoint says it could not give the data directory to node', logs.includes('colibri-entrypoint: could not give'), logs.slice(0, 1500));
+    }
+    // It used to point at "the server's own message below" - which a directory node can still
+    // write never gets.
+    check('the entrypoint promises no warning from the server that does not come',
+        !logs.includes('message below') || logs.includes('DATA_ROOT is not writable'), logs.slice(0, 1500));
     if (deployment.writable) {
         check('writes store.json', stored.includes(deployment.name), stored || '(no store.json)');
         check('logs no permission error', !/EACCES|EPERM|not writable/.test(logs), logs.slice(-1500));
@@ -306,12 +317,12 @@ const main = async function (): Promise<void> {
     console.log(`  size ${(Number(size) / 1e6).toFixed(1)} MB`);
 
     const tmp = await mkdtemp(path.join(TMP_ROOT, `${PREFIX}-`));
-    const rootOwnedDir = async function (name: string, files: Record<string, string>, img: string, symlinkOut?: string): Promise<string> {
+    const rootOwnedDir = async function (name: string, files: Record<string, string>, img: string, symlinkOut?: string, mode = 0o755): Promise<string> {
         const dir = path.join(tmp, name);
         // Docker creates the missing source as root, and the root container fills it in, so
         // the directory and everything in it is owned by root - exactly what a 1.x install left.
         const link = symlinkOut ? `fs.symlinkSync(${JSON.stringify(symlinkOut)}, '/x/link-out-of-data');` : '';
-        await asRoot(img, dir, `const fs = require('fs'); for (const [f, c] of Object.entries(${JSON.stringify(files)})) fs.writeFileSync('/x/' + f, c); ${link} fs.chmodSync('/x', 0o755);`);
+        await asRoot(img, dir, `const fs = require('fs'); for (const [f, c] of Object.entries(${JSON.stringify(files)})) fs.writeFileSync('/x/' + f, c); ${link} fs.chmodSync('/x', ${mode});`);
         return `${dir}:${DATA_DIR}`;
     };
     const volume = async function (name: string): Promise<string> {
@@ -363,6 +374,18 @@ const main = async function (): Promise<void> {
             legacy,
             writable: false,
             failure: { code: 'EROFS', advice: 'drop ":ro"' },
+            chownFails: true,
+        },
+        {
+            // Without CAP_CHOWN - as on a file system without Unix owners - the entrypoint
+            // cannot hand the 1.x data over. This directory is writable for everyone, though,
+            // so the server can use it anyway and has nothing to warn about.
+            name: 'bind-world-writable-no-chown',
+            mount: img => rootOwnedDir('bind-world-writable-no-chown', legacyStore, img, undefined, 0o777),
+            dockerArgs: [ '--cap-drop', 'CHOWN' ],
+            legacy,
+            writable: true,
+            chownFails: true,
         },
     ];
 
