@@ -329,13 +329,21 @@ Limitations:
 
 Colibri also offers a voice chat for remote scenarios. The voice chat consists of two scripts `VoiceBroadcast` and `VoiceReceiver`.
 
-`VoiceBroadcast` records the microphone audio and streams it over the network. Simply attach the script to an empty `GameObject`. To start broadcasting, call the `StartBroadcasting` method with any (`short`) voice id:
+`VoiceBroadcast` records the microphone audio and streams it over the network. Simply attach the script to an empty `GameObject`. To start broadcasting, call `StartBroadcast` on that component with any (`short`) voice id except `0`; `StopBroadcast` stops it again:
 
 ```c#
-// Create random voice id
-VoiceId = (short)UnityEngine.Random.Range(1, 32000);
-VoiceBroadcast.StartBroadcast(VoiceId);
+// The VoiceBroadcast component, assigned in the Inspector
+public VoiceBroadcast Broadcast;
+
+void Start()
+{
+    // Create random voice id
+    short voiceId = (short)UnityEngine.Random.Range(1, 32000);
+    Broadcast.StartBroadcast(voiceId);
+}
 ```
+
+On Android (Meta Quest), `VoiceBroadcast` asks for the microphone permission when it starts. If the permission is refused, it logs an error and does not broadcast.
 
 `VoiceReceiver` receives and playbacks the voice data of a specific voice id. Attach the script to a `GameObject` of your choice. This is usually a user representation, such as an avatar. When attaching the script, an `AudioSource` is automatically added. To support mulitple `VoiceReceiver` create a prefab of the object. To start receiving voice data, call the `StartPlayback` method with the specific voice id of the client. For the distribution of active voice ids of other clients, `Sync.Send` can be used:
 
@@ -357,6 +365,8 @@ See `Samples/VoiceChat` for a fully working voice chat example with a `VoiceMana
 By default, the voice chat transmits audio as raw PCM data. However, to reduce throughput, the Colibri voice chat also supports Opus codec compression on Windows, Linux, and Android. In order to use the Opus codec, enable the `Use Opus Codec` toggle on both the `VoiceBroadcast` and `VoiceReceiver`.
 
 Colibri voice chat also supports spatial audio. The `VoiceReceiver` position in the scene defines the playback location of the voice. Make sure that `Spatialize` is enabled on the `AudioSource` and that `Spatial Blend` is set to `1` (3D). This also works with a spatializer plugin set in the audio settings. 
+
+The voice server only listens on IPv4. Colibri sends voice to an IPv4 address of the configured server, so `localhost` works on Windows, where it resolves to the IPv6 address `::1` first. If the server address has no IPv4 address, or cannot be resolved, Colibri logs an error and turns voice chat off.
 
 Limitations:
 
