@@ -126,7 +126,8 @@ namespace HCIKonstanz.Colibri.Setup
             GUILayout.Space(15f);
             EditorGUILayout.LabelField("", GUI.skin.horizontalSlider);
 
-            EditorGUILayout.HelpBox("Please choose a unique application name. Each client *must* have the same app name!", MessageType.Info);
+            EditorGUILayout.HelpBox("Choose an App Name unique to this project. Every client that should share objects and messages "
+                + "must use the same App Name.", MessageType.Info);
             Config.AppName = EditorGUILayout.TextField("App Name: ", Config.AppName);
 
             var sharedAppName = ColibriConfig.SharedAppNameWarning(Config.AppName);
@@ -140,7 +141,8 @@ namespace HCIKonstanz.Colibri.Setup
             {
                 var x = EditorGUILayout.BeginVertical();
                 x.position = new Vector2(5, 5);
-                EditorGUILayout.HelpBox("Only modify if you know what you are doing!", MessageType.Warning);
+                EditorGUILayout.HelpBox("The ports, SSL/TLS and the voice sampling rate must match the server. Change them only "
+                    + "if the server does not use the defaults.", MessageType.Warning);
                 Config.IsSSL = EditorGUILayout.Toggle("Server supports SSL/TLS?", Config.IsSSL);
                 Config.WebServerPort = EditorGUILayout.IntField("Web server Port: ", Config.WebServerPort);
                 Config.TcpServerPort = EditorGUILayout.IntField("TCP server Port: ", Config.TcpServerPort);
