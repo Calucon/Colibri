@@ -127,7 +127,7 @@ export interface HeldUpdate {
     model: ModelUpdate;
 }
 
-// How many objects one client may have updates held back for at once. Far beyond any lab scene;
+// How many objects one client may have updates held back for at once. Far beyond any typical scene;
 // it only bounds the memory a client creating new objects in a runaway loop can take up.
 export const MAX_HELD_OBJECTS = 1000;
 

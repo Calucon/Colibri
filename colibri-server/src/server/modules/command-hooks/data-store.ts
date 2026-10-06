@@ -8,7 +8,7 @@ export interface SyncModel {
 // How long a deleted model's id is remembered; see DataStore.removeModel.
 export const DEFAULT_TOMBSTONE_MILLIS = 600_000;
 
-// How many deleted ids one app remembers at most. Far more than a lab scene deletes in the
+// How many deleted ids one app remembers at most. Far more than a typical scene deletes in the
 // tombstones' lifetime - only a scene that spawns and destroys synced objects in a loop comes near -
 // and a bound on what such a scene, or a client deleting ids in a runaway loop, can make the server
 // keep. Past it the oldest is forgotten first.

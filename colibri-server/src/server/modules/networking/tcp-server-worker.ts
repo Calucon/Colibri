@@ -67,7 +67,7 @@ const MAX_V1_WARNING_ADDRESSES = 1024;
 
 // How many TCP messages may be waiting for the main thread before the worker starts holding back
 // model updates and dropping broadcasts (see isLimitable). At the main thread's saturation point on
-// a 4-core lab server (about 15k model::update/s) 2000 is roughly 130 ms of work: well clear of a
+// a 4-core test machine (about 15k model::update/s) 2000 is roughly 130 ms of work: well clear of a
 // normal burst, and short enough that what does get through is not seconds old.
 export const DEFAULT_INBOUND_BACKLOG_LIMIT = 2000;
 
