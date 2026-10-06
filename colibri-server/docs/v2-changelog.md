@@ -82,7 +82,8 @@ this is the server's full detail.
 
 - `npm run test:tcpclient` takes an optional version argument (`-- 1`) so the refusal can be
   driven by hand against a live server. It prints the server's reason and exits with code 2 on a
-  refusal, instead of blaming missing heartbeats.
+  refusal, instead of blaming missing heartbeats, and with code 1 when the server sends a frame it
+  cannot decode, even after a heartbeat.
 
 - `npm run test:vectors`, which CI runs, fails when colibri-web, the Unity package or the admin UI
   announce a protocol version different from the server's.
@@ -116,7 +117,8 @@ this is the server's full detail.
 - `docker-compose.yml` caps the container log at 5 × 10 MB, since client log lines now reach
   `docker logs` and Docker's default log never rotates.
 - New `npm run test:docker` runs the image against a fresh bind mount, a root-owned 1.x data
-  directory, a named volume, and as `--user 1000:1000`.
+  directory, a named volume, as `--user 1000:1000`, with the 1.x data mounted read-only, without
+  `CAP_CHOWN`, and with a changed `WEBSERVER_PORT` or `WEBSERVER_HOST`.
 
 ### Logging
 
@@ -408,9 +410,11 @@ The endpoints are documented under [REST store](./protocol.md#rest-store).
 - `npm run test:vectors` checks the cross-implementation protocol vectors in colibri-unity's
   `ProtocolVectorTests.cs` against this server's encoder.
 - `test/tcp-client-test.ts` (`npm run test:tcpclient`) speaks the v3 framing, decodes frames and
-  echoes heartbeats. Manual probes for end-to-end runs: `test/tcp-wire-tap.ts` (a proxy that
-  decodes every frame in both directions), `test/tcp-crosstalk-check.ts`, `test/model-inject.ts`,
-  `test/broadcast-inject.ts` and `test/stress-echo-peer.ts` (`npm run test:stressecho`).
+  echoes heartbeats; a unit test runs it against a stand-in server for each of its exit codes, and
+  checks that no script under `test/` hard-codes the protocol version it handshakes with. Manual
+  probes for end-to-end runs: `test/tcp-wire-tap.ts` (a proxy that decodes every frame in both
+  directions), `test/tcp-crosstalk-check.ts`, `test/model-inject.ts`, `test/broadcast-inject.ts`
+  and `test/stress-echo-peer.ts` (`npm run test:stressecho`).
 
 ### Documentation
 

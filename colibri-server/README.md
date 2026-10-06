@@ -224,16 +224,20 @@ its address and the package to upgrade, at most once a minute per address. See
 * `npm run test:tcpclient`: Manual smoke test against a server running on this machine (on
   `TCP_PORT`) - connects with the v3 TCP framing, handshakes and echoes heartbeats.
   `npm run test:tcpclient -- 1` announces protocol version 1 instead, to see a refusal. It exits
-  2 when the server refused its protocol version, after printing the server's reason, and 1 when
-  no heartbeat arrived; 0 means it connected and was heartbeated. A frame it cannot decode is
-  printed as `Malformed frame from server` and ends the run.
+  0 when it connected and was heartbeated, 2 when the server refused its protocol version, after
+  printing the server's reason, and 1 when something is wrong with the server: no heartbeat
+  arrived, or the server sent a frame it cannot decode, which is printed as
+  `Malformed frame from server` and ends the run.
 * `npm run test:stressecho`: A raw TCP client that answers the probes of colibri-unity's Network
   Stress sample, so a single Unity editor can measure round trips
   (`npm run test:stressecho -- [app] [seconds]`).
 * `npm run test:docker`: Needs Docker. Builds the image (or uses `COLIBRI_DOCKER_IMAGE`) and runs
-  it with a fresh bind mount, a root-owned 1.x data directory, a named volume, and as
-  `--user 1000:1000` on a named volume and on a root-owned directory. It checks that each one
-  saves data (or, in the last case, says loudly that it cannot), keeps it across a restart and
-  stops cleanly, then removes everything it created. Pass deployment names to run only those;
-  `COLIBRI_DOCKER_PREFIX`, `COLIBRI_DOCKER_PORT` and `COLIBRI_DOCKER_TMPDIR` are described at the
-  top of `test/docker-image-check.ts`.
+  it with a fresh bind mount, a root-owned 1.x data directory, a named volume, as
+  `--user 1000:1000` on a named volume and on a root-owned directory, with the 1.x data mounted
+  read-only, without `CAP_CHOWN`, with `WEBSERVER_PORT` set in the environment and in a mounted
+  `.env`, and with `WEBSERVER_HOST=localhost`. It checks that each one becomes healthy and stops
+  cleanly, and all but the last that it saves data and keeps it across a restart - or, where it
+  cannot save, says so loudly, with advice that fits. It removes each container once its
+  deployment is done, and everything else it created at the end. Pass deployment names to run
+  only those; `COLIBRI_DOCKER_PREFIX`, `COLIBRI_DOCKER_PORT` and `COLIBRI_DOCKER_TMPDIR` are
+  described at the top of `test/docker-image-check.ts`.
