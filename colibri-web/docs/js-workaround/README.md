@@ -73,11 +73,11 @@ export class SampleClass extends SyncModel {
 }
 
 // registration is identical, just without the type parameter
-const [SampleClasses$, registerExampleClass] = RegisterModelSync({ type: SampleClass });
+const [SampleClasses$, registerExampleClass] = RegisterModelSync({ name: 'sampleclass', type: SampleClass });
 ```
 
-`RegisterModelSync`, the returned BehaviorSubject, `update()`, `toJson()` and `delete()` need no
-workaround — they are ordinary methods and behave as documented.
+`RegisterModelSync`, the Observable it returns, `update()`, `toJson()` and `delete()` need no
+workaround — they are ordinary runtime code and behave as documented.
 
 ## Runnable example
 
