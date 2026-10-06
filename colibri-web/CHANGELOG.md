@@ -20,10 +20,9 @@ Colibri component from 1.x.
   synchronization in frameworks like React, which never worked correctly under the legacy
   decorator.
 - **Breaking:** Colibri now targets TypeScript (5.0 or newer). `@Synced()` is a TypeScript
-  decorator, and the documentation, samples and tests all assume a TypeScript project; the
-  plain-JavaScript sample ports were removed again. Projects that are tied to plain
-  JavaScript can fall back on the [workaround](docs/js-workaround/README.md) documented in
-  the repository.
+  decorator, and the documentation, samples and tests all assume a TypeScript project.
+  Projects that are tied to plain JavaScript can fall back on the
+  [workaround](docs/js-workaround/README.md) documented in the repository.
 - **Breaking:** the socket handshake announces protocol version `'2'` instead of `'1'`, and
   colibri-server 2.0.0 checks it and refuses any other version. colibri-web 1.x and
   colibri-server 2.0.0 therefore cannot be used together; upgrade both. See
@@ -43,7 +42,7 @@ Colibri component from 1.x.
 
 ### Added
 
-- **`Colibri.protocolMismatch` and `ProtocolMismatchError` (both exported).** colibri-server
+- **`Colibri.protocolMismatch`, and `ProtocolMismatchError` (exported).** colibri-server
   2.0.0 checks the handshake `version`, and when it refuses a client it sends a `colibri` /
   `protocol::rejected` message before disconnecting. `Colibri` handles that itself: it turns
   off Socket.IO reconnection (a mismatch cannot resolve itself, and retrying only buries the
@@ -106,10 +105,10 @@ Colibri component from 1.x.
 - With `RemoteLogger` installed, logging a value JSON cannot encode (a `BigInt`, a throwing
   `toJSON`) threw out of `console.log`. Forwarding never throws now, and a `BigInt` is sent as
   its decimal string.
-- **Server addresses in the form a browser shows them.** `'http://host'` and `'https://host'`
-  became `ws://http://host:9011`, and a port in the address, as in the admin UI's
-  `'http://host:9011'`, became `ws://host:9011:9011`; both retried forever without an error.
-  `http://` and `ws://` now mean `ws` for the socket and `http` for the REST API, `https://`
+- **Server addresses in the form a browser shows them.** `'http://host'` became
+  `ws://http://host:9011` (and `'https://host'` likewise), and a port in the address, as in
+  `'host:9011'`, ended up twice: `ws://host:9011:9011`. Neither could connect, and nothing
+  reported an error. `http://` and `ws://` now mean `ws` for the socket and `http` for the REST API, `https://`
   and `wss://` mean `wss` and `https`, a port in the address is used, and a trailing slash is
   ignored. `Colibri.port` is the port actually used: the one in the address, else the one
   passed, else 9011. A `ColibriError` is now thrown for anything that cannot connect: a port
