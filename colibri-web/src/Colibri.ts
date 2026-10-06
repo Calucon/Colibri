@@ -215,7 +215,9 @@ export class Colibri {
         const address = parseServerAddress(server);
         this.port = resolvePort(server, address.port, coercePort(port));
         this.uri = `${address.socket}://${address.host}:${this.port}`;
-        this.uriRestApi = `${address.rest}://${address.host}:${this.port}/api/store/${app}/`;
+        // Encoded, like the key in getRestUri: the server decodes each path segment back to the
+        // very name the socket's handshake carries, so the two still name the same app.
+        this.uriRestApi = `${address.rest}://${address.host}:${this.port}/api/store/${encodeURIComponent(app)}/`;
 
         // there is already an instance running
         if (Colibri.instance) throw new ColibriError('A Colibri instance already exists!');
@@ -423,14 +425,25 @@ export class Colibri {
 
     // #region Rest API
     /**
-     * Returns the REST API Endpoint for a given `key` or null of the key is empty.
+     * Returns the REST API Endpoint for a given `key`, or null if the key is empty - or is `.` or
+     * `..`, which a URL cannot carry as a name. Any other key is stored under exactly that name,
+     * `#`, `?`, `/`, `%` and spaces included, after surrounding whitespace and leading slashes are
+     * stripped.
      * @param key REST API storage key
      * @returns
      */
     public getRestUri(key: string): string | null {
         key = key.trim();
         while (key.startsWith('/')) key = key.substring(1);
-        return key.length === 0 ? null : this.uriRestApi + key;
+
+        // A URL parser resolves a path segment of '.' or '..' - percent-encoded or not - as a
+        // directory step, so '..' would address the app's parent instead of a key.
+        if (key.length === 0 || key === '.' || key === '..') return null;
+
+        // Encoded, since the key is a single path segment: written in as it was, a '#' or '?' cut
+        // the key short (the rest became a fragment or a query), a '/' split it into a path the
+        // server has no route for, and a '%' made a URL the server could not decode.
+        return this.uriRestApi + encodeURIComponent(key);
     }
 
     /**
