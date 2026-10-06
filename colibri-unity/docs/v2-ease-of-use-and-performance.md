@@ -547,10 +547,12 @@ Model channels (`model::update` / `model::delete`) are registered with `track: f
 Colibri's own `SyncBehaviour` plumbing, never go through `Invoke<T>`, and listing them would bury
 the channels the student actually wrote.
 
-The registry has **no `UnityEngine` dependency**, which is the reason it is a separate file: `Sync`
-itself cannot be unit-tested, because registering a listener reaches
-`WebServerConnection.Instance`, which spawns a GameObject. Splitting the registry out made the
-interesting part testable — see `Tests/Editor/ChannelListenerRegistryTests.cs`.
+The registry has **no `UnityEngine` dependency**, which is the reason it is a separate file:
+registering a listener with `Sync` reaches `WebServerConnection.Instance`, which spawns a
+GameObject. Splitting the registry out made the interesting part testable without one — see
+`Tests/Editor/ChannelListenerRegistryTests.cs`. (`Sync`'s own dispatch is tested too now, in
+`MessageDispatchTests`, which accepts the inert connection object that registering creates in edit
+mode.)
 
 ### The cast on every `Receive`
 
@@ -617,6 +619,12 @@ What is deliberately *not* automatic: a `static` listener, and one belonging to 
 Neither has a Unity lifetime to follow, so `Unregister` remains the only thing that could be meant.
 It also stays the way to stop listening while the object is alive — the `OnEnable`/`OnDisable` pair
 in the samples is unaffected by any of this, since a disabled component has not been destroyed.
+
+A listener that throws for any other reason no longer takes the frame down either. `Sync` calls
+each listener in its own `try`/`catch`, and `WebServerConnection` does the same for each
+`OnMessageReceived` handler, so a throw is logged once with its channel and command while the other
+listeners, and every message queued behind it, are still delivered. A payload that cannot be read
+as the type its command names is reported and dropped in the same way instead of throwing.
 
 ### Missing configuration
 
@@ -1047,12 +1055,13 @@ two-client recipe:
 The ten items are silent about `SyncBehaviour` itself — they cover `SyncTransform`, which is one
 particular subclass — so the sample was run as well, and it is the thing that exercises §2's typed
 change tracking on members a student actually declares. On connect, each of the three scene models
-broadcast its full `[Sync]` state on `samplesyncedbehaviour` (the channel is
-`typeof(T).Name.ToLower()`), e.g.
+broadcast its full `[Sync]` state on `samplesyncedbehaviour` (the channel is the type name passed
+through `ToLowerInvariant()`), e.g.
 `{"id":"nonrandom_id","position":[...],"scale":[...],"rotation":[...],"color":"#00000000","randomvalue":0,"editorteststring":"1234"}`.
 All three member kinds propagate: `randomvalue` is a `[Sync, SerializeField]` *private field*,
 `editorteststring` a public field, and `position` / `scale` / `rotation` / `color` are properties —
-so the `Expression.Compile()` accessors reach non-public state as intended. Injecting a
+so the `Expression.Compile()` accessors reach non-public state as intended. (That is the Mono path
+the Editor runs; IL2CPP builds use the reflection-bound accessors described in §9.) Injecting a
 `model::update` for `remote-model-1` produced a `SampleSyncedBehaviourTemplate(Clone)` whose
 component read back `RandomValue: 99`, `EditorTestString: "from the injector"`, `Scale: (2,2,2)`,
 `Color: RGBA(1,0,0,1)` (parsed from `#FF0000FF`) and `Id: remote-model-1` — every synced member
@@ -1093,18 +1102,47 @@ console that cries wolf is a console nobody reads.
 every generic instantiation visible to the AOT compiler (IL2CPP), and it doubles as the place that
 can tell a student their `[Sync]` member has a type Colibri cannot put on the wire.
 
+**No expression trees on IL2CPP.** On Mono the accessors are compiled from expression trees, typed
+for properties and fields alike, so nothing boxes. IL2CPP has no JIT: `Expression.Compile()` does
+not fail there but falls back to an interpreter that is slow on every call and, for value types,
+depends on generic code IL2CPP may not have generated. So under `ENABLE_IL2CPP` a property gets
+open-instance delegates bound straight to its get and set methods — the same typed call, still
+allocation-free — and a field goes through `FieldInfo.GetValue`/`SetValue`, which boxes a value-type
+field on every poll. There is no allocation-free way to read a field through reflection without a
+JIT, so on a Quest a hot value-type member is cheaper as a property; every `SyncTransform` member
+already is one. The IL2CPP path is compiled on every backend, so the EditMode tests run it in the
+Editor.
+
+**`[Sync]` derives from `PreserveAttribute`.** A `[Sync]` member is only ever reached through
+reflection, so nothing references it, which is exactly what managed code stripping removes above
+the *Minimal* level. The Unity linker honours subclasses of `PreserveAttribute`, and on a property
+it keeps the getter and setter too.
+
 **Registration in `Awake`/`OnDestroy`, not `OnEnable`/`OnDisable`.** The base class already declares
 `Awake` and `OnDestroy` as `protected virtual`, so subclasses that shadow them get a compiler
 warning. Introducing `OnEnable`/`OnDisable` as *new* virtuals would create a fresh trap: a subclass
 writing `private void OnEnable()` would silently take over the Unity message and the object would
-never register. Polling is instead gated on `isActiveAndEnabled` inside the tick.
+never register. Polling is instead gated inside the tick, on the component's own `enabled` — not on
+`isActiveAndEnabled`. An inactive GameObject is still polled, because being inactive is itself
+synced state: `SyncTransform`'s `Active` reads `activeSelf`, and gated on `isActiveAndEnabled` the
+poll stopped the moment the object was switched off, so `false` was never sent and other clients'
+copies never disappeared. Disabling only the component stops it syncing without hiding the copies.
+Teardown sends nothing through the poll: destroying an object and unloading its scene leave
+`activeSelf` alone and remove the object from the ticker in `OnDestroy`, before another poll, so
+they send only `model::delete`. Leaving Play mode or quitting sends nothing at all, whether the
+object is active or not: `OnDestroy` skips the delete when `OnApplicationQuit` ran, which Unity sends
+only to active objects, and when `Application.quitting` was raised (`SingletonLifetime.IsQuitting`),
+which covers the inactive ones.
 
 **Only the traffic log is reset at `SubsystemRegistration`, not `Sync`'s listener dictionaries.**
 Those are statics too, and they survive Play mode with domain reload disabled just as readily. A
-listener belonging to a Unity object is already dropped when that object is destroyed, and ending a
-Play session destroys every one of them — so in practice the dictionaries empty themselves. What
-does leak into the next session is a `static` listener, or one owned by a plain C# object, since
-neither has a Unity lifetime to follow. Clearing them wholesale at startup would be the obvious fix
+listener belonging to a Unity object is dropped once that object is destroyed — lazily, the next
+time its channel delivers a message or gets a new registration — and ending a Play session destroys
+every one of them, so they never reach the next session's code. A channel's entry can outlive its
+listeners that way, which is why every registration asks for the connection again: a client that
+only listens would otherwise never rebuild it in the next session. What does leak into the next
+session is a `static` listener, or one owned by a plain C# object, since neither has a Unity
+lifetime to follow. Clearing them wholesale at startup would be the obvious fix
 and is the wrong one: a listener registered from a `[RuntimeInitializeOnLoadMethod]` hook of a
 student's own would be silently unregistered by it, depending on which ran first. Left as a known
 edge rather than traded for a subtler one.
