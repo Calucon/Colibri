@@ -313,7 +313,7 @@ Limitations:
 
 ### Remote Store
 
-Colibri offers persistent data storage on the server, so that data can be saved easily between sessions. `[Serializable]` objects can be uploaded via a RESTful interface of the `Store` object:
+Colibri offers persistent data storage on the server, so that data can be saved easily between sessions. Anything Newtonsoft JSON can serialize — an object of your own class, a list, or a plain number or string — can be uploaded via a RESTful interface of the `Store` object, up to 5 MiB of JSON per name. Data is kept per *app name*:
 
 ```c#
 // Create example object
@@ -340,10 +340,12 @@ else
 }
 ```
 
+`await Store.Delete("exampleObject")` removes it again.
+
 Limitations:
 
 - Data fetching happens manually (data won’t be automatically updated!)
-- If you want to synchronize custom classes, use the built-in `[Serializable]` attribute on your class
+- Values are converted with Newtonsoft JSON, which saves the public fields and properties of your class; `[Serializable]` is not needed
 
 ### SyncBehaviour
 
