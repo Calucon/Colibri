@@ -207,7 +207,8 @@ export class InboundBacklog {
         if (this.counter) Atomics.add(this.counter, 0, 1);
     }
 
+    // Without a counter, pending is always 0 and so never reaches a limit.
     public get full(): boolean {
-        return this.limit > 0 && this.counter !== undefined && Atomics.load(this.counter, 0) >= this.limit;
+        return this.limit > 0 && this.pending >= this.limit;
     }
 }

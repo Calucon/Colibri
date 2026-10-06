@@ -713,7 +713,7 @@ describe('TCPServerWorker', () => {
                 }
 
                 expect(warnings()).toHaveLength(1);
-                expect(warnings()[0]).toContain('TCP messages behind');
+                expect(warnings()[0]).toContain('fallen 1 TCP messages behind');
                 expect(warnings()[0]).toContain('TCP_INBOUND_BACKLOG_LIMIT');
 
                 // The last drop was 10 ms ago; the episode ends a second after it.

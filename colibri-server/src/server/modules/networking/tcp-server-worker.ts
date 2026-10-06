@@ -664,9 +664,11 @@ export class TCPServerWorker extends WorkerService {
         if (!this.inboundBacklog.full) return false;
 
         if (this.backlogEpisode.recordDrop(performance.now())) {
+            // The limit rather than a fresh read of the counter, which the main thread may have
+            // counted down a little since `full` read it - "1998 behind, limit 2000" just confuses.
             this.logWarning(
-                `The main thread is ${this.inboundBacklog.pending} TCP messages behind ` +
-                    `(TCP_INBOUND_BACKLOG_LIMIT is ${this.inboundBacklog.limit}): the server is taking in more than it can process. ` +
+                `The main thread has fallen ${this.inboundBacklog.limit} TCP messages behind (TCP_INBOUND_BACKLOG_LIMIT): ` +
+                    'the server is taking in more than it can process. ' +
                     'Dropping model::update and broadcast::* messages from Unity clients until it catches up, so synced objects ' +
                     'will lag or jump. Fewer synced objects, a lower sync rate or fewer clients per app reduce the load.'
             );
