@@ -231,6 +231,98 @@ namespace HCIKonstanz.Colibri.E2E
 
 
         /*
+         *  Objects another client created, built here by a SyncTransformManager from a template
+         *  that is switched off - the usual way to keep a template in the scene without it being
+         *  a synced object itself. The clone starts out switched off as well, and used to stay
+         *  that way: it never ran Awake, never registered for its own updates, and an object that
+         *  arrived hidden could never be shown again.
+         */
+
+        [UnityTest]
+        public IEnumerator AnObjectHiddenElsewhereIsBuiltFromAnInactiveTemplateAndShownWhenItReappears()
+        {
+            yield return SpawnManagerWithInactiveTemplate();
+
+            var id = Guid.NewGuid().ToString();
+            Peer.Send(Channel, "model::update", new JObject
+            {
+                { "id", id },
+                { "active", false },
+                { "position", new JArray(1f, 2f, 3f) }
+            });
+
+            yield return E2EServer.WaitUntil(() => Instances(id).Any(),
+                $"The manager never instantiated the object '{id}' it was told about");
+
+            var clone = Instances(id).Single();
+            try
+            {
+                Assert.That(clone.gameObject.activeSelf, Is.False, "The object is hidden on the client it came from");
+                Assert.That(clone.transform.position, Is.EqualTo(new Vector3(1f, 2f, 3f)));
+
+                Peer.Send(Channel, "model::update", new JObject { { "id", id }, { "active", true } });
+                yield return E2EServer.WaitUntil(() => clone.gameObject.activeSelf,
+                    "The peer showed the object again, but it is still hidden here");
+
+                // Applying either state must not send it back.
+                yield return Peer.ExpectNothing(Channel);
+            }
+            finally
+            {
+                Object.Destroy(clone.gameObject);
+            }
+        }
+
+        [UnityTest]
+        public IEnumerator AVisibleObjectIsBuiltFromAnInactiveTemplateAsVisibleAndFollowsItsMoves()
+        {
+            yield return SpawnManagerWithInactiveTemplate();
+
+            var id = Guid.NewGuid().ToString();
+            Peer.Send(Channel, "model::update", new JObject { { "id", id }, { "position", new JArray(1f, 2f, 3f) } });
+
+            yield return E2EServer.WaitUntil(() => Instances(id).Any(),
+                $"The manager never instantiated the object '{id}' it was told about");
+
+            var clone = Instances(id).Single();
+            try
+            {
+                Assert.That(clone.gameObject.activeSelf, Is.True, "The clone of an inactive template stayed inactive");
+                Assert.That(clone.transform.position, Is.EqualTo(new Vector3(1f, 2f, 3f)));
+
+                Peer.Send(Channel, "model::update", new JObject { { "id", id }, { "position", new JArray(4f, 5f, 6f) } });
+                yield return E2EServer.WaitUntil(() => clone.transform.position == new Vector3(4f, 5f, 6f),
+                    $"The clone never moved; it is at {clone.transform.position}");
+
+                yield return Peer.ExpectNothing(Channel);
+            }
+            finally
+            {
+                Object.Destroy(clone.gameObject);
+            }
+        }
+
+        private IEnumerator SpawnManagerWithInactiveTemplate()
+        {
+            var templateObject = Spawn("inactive-transform-template");
+            templateObject.SetActive(false);
+            var template = templateObject.AddComponent<SyncTransform>();
+
+            var manager = Spawn<SyncTransformManager>("transform-manager");
+            manager.Template = template;
+
+            // Start is where the manager subscribes; nothing before it runs would be seen.
+            yield return null;
+            yield return LetInitialStateArrive();
+        }
+
+        private static SyncTransform[] Instances(string id)
+            => Object.FindObjectsByType<SyncTransform>(FindObjectsInactive.Include, FindObjectsSortMode.None)
+                .Where(s => s.Id == id)
+                .ToArray();
+
+
+        /*
          *  Quitting. Leaving Play mode or the app tears every object down, and that must delete
          *  nothing on the server: the object is meant to outlive this client. An active object
          *  hears about it through OnApplicationQuit, but Unity never sends that to an inactive

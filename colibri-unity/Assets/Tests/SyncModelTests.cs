@@ -204,6 +204,58 @@ namespace HCIKonstanz.Colibri.E2E
                 UnityEngine.Object.Destroy(instance.gameObject);
         }
 
+        /// <summary>
+        /// Templates are often kept switched off in the scene, so that they are not objects of their
+        /// own. A clone starts out as its template is, and a clone that is off never ran Awake: it
+        /// never registered for its own updates or with the ticker, and stayed exactly as the first
+        /// update had left it - invisible, deaf and mute.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator AModelBuiltFromAnInactiveTemplateIsVisibleAndKeepsSyncing()
+        {
+            var templateObject = Spawn("inactive-template");
+            templateObject.SetActive(false);
+            var template = templateObject.AddComponent<E2ESyncModel>();
+            var manager = Spawn<E2ESyncModelManager>("manager");
+            manager.Template = template;
+
+            yield return null;
+            yield return LetInitialStateArrive();
+
+            var id = Guid.NewGuid().ToString();
+            Peer.Send(Channel, "model::update", new JObject { { "id", id }, { "label", "from the peer" } });
+
+            yield return E2EServer.WaitUntil(() => Instances(id).Any(),
+                $"The manager never instantiated the model '{id}' it was told about");
+
+            var clone = Instances(id).Single();
+            try
+            {
+                Assert.That(clone.gameObject.activeSelf, Is.True, "The clone of an inactive template stayed inactive");
+                Assert.That(clone.Label, Is.EqualTo("from the peer"));
+                Assert.That(templateObject.activeSelf, Is.False, "The template itself was switched on");
+
+                // Later updates reach it...
+                Peer.Send(Channel, "model::update", new JObject { { "id", id }, { "label", "changed" } });
+                yield return E2EServer.WaitUntil(() => clone.Label == "changed", "The clone never received a later update");
+
+                // ...without being echoed, and its own changes go out.
+                yield return Peer.ExpectNothing(Channel);
+
+                clone.Label = "local";
+                yield return Peer.Expect(Channel, "model::update", frame =>
+                {
+                    var payload = TcpPeer.Json(frame);
+                    Assert.That(payload["id"].Value<string>(), Is.EqualTo(id));
+                    Assert.That(payload["label"].Value<string>(), Is.EqualTo("local"));
+                });
+            }
+            finally
+            {
+                UnityEngine.Object.Destroy(clone.gameObject);
+            }
+        }
+
 
         /*
          *  The send-rate limit (SyncSettings.MaxSendRate). Set low here, so that what it holds

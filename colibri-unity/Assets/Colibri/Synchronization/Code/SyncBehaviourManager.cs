@@ -86,6 +86,17 @@ namespace HCIKonstanz.Colibri.Synchronization
                 Template.enabled = false;
                 Template.Id = id;
                 var go = Instantiate(Template);
+
+                // Templates are often kept switched off in the scene, and a clone starts out as
+                // its template is. A clone that is off never runs Awake: it never registers for
+                // its own updates or with the ticker, so it stayed exactly as this first update
+                // left it - and an object hidden elsewhere (active: false) could never be shown
+                // again. Switched on first, Awake runs and latches the template's values; the
+                // state applied next is then latched too, so none of it is echoed back, and it
+                // decides whether the object ends up visible.
+                if (!go.gameObject.activeSelf)
+                    go.gameObject.SetActive(true);
+
                 go.OnModelUpdate(data);
                 _existingObjects.Add(go);
                 go.enabled = true;
