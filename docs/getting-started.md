@@ -336,6 +336,8 @@ what type each expects, and the most recent messages in and out.
 | A message never arrives, no errors | The listener expects a different type than the sender sent. Check the console; Colibri names both. |
 | One client goes quiet when you click away | *Run In Background* is off on that client. |
 | Nothing connects at all | Console says `Colibri is not configured yet` — open *Window → Colibri Configuration* and set an app name. |
+| Status window says *did not answer within 5 s* | The server address is wrong, or this device is on a different network than the server. |
+| Status window says *ended before a single frame could be read* | The server runs Colibri 1.x, and this client needs 2.0 or newer. Or the TCP port is not Colibri's. |
 | A `[Sync]` field never syncs | Its type is not one Colibri can send. It is reported in the console when the game starts. |
 | `Store.Get` or `Put` fails | The log names the object, the URL, and the HTTP status. Usually the server address. |
 
