@@ -33,6 +33,12 @@ class FakeSocket extends EventEmitter {
         return this;
     }
 
+    public keepAlive: [boolean, number] | undefined;
+    public setKeepAlive(enable: boolean, initialDelay: number): this {
+        this.keepAlive = [enable, initialDelay];
+        return this;
+    }
+
     // Modelled on what a real net.Socket does with a write after end(): the write fails, the
     // socket emits 'error' and destroys itself - which is how a heartbeat to a refused client
     // used to log twice and could cut off the refusal frame still being flushed.
@@ -877,6 +883,121 @@ describe('TCPServerWorker', () => {
             vi.advanceTimersByTime(500);
             client.socket.emit('data', burstOf(600));
             expect(relayedFrom(client.id)).toBe(2500);
+        });
+    });
+
+    // A Quest that drops off the Wi-Fi sends no FIN. Its connection used to stay open - a
+    // connected client, keeping its app's models alive - until the kernel gave up on it.
+    describe('idle timeout', () => {
+        beforeEach(() => {
+            vi.useFakeTimers();
+        });
+
+        afterEach(() => {
+            vi.useRealTimers();
+        });
+
+        const handshaked = function (name = 'quest-1'): { socket: FakeSocket; id: string } {
+            const client = connect();
+            client.socket.emit('data', encodeHandshakeFrame(PROTOCOL_VERSION, 'appA', name));
+            return client;
+        };
+
+        // The worker's 100 ms tick, for `millis`, with `each` run before every tick.
+        const run = function (millis: number, each: () => void = () => undefined): void {
+            for (let t = 0; t < millis; t += 100) {
+                vi.advanceTimersByTime(100);
+                each();
+                internals.tick();
+            }
+        };
+
+        const disconnected = (): string[] => posted.filter(p => p.channel === 'clientDisconnected$').map(p => String(p.content.id));
+        const warnings = (): string[] =>
+            posted.filter(p => p.channel === 'log' && p.content.level === LogLevel.Warn).map(p => String(p.content.msg));
+
+        it('ends a handshaked client that has sent nothing for 10 s, as if it had disconnected', () => {
+            const gone = handshaked('quest-gone');
+
+            run(9_900);
+            expect(disconnected()).toEqual([]);
+            run(100);
+
+            expect(disconnected()).toEqual([gone.id]);
+            expect(gone.socket.destroyed).toBe(true);
+            expect(internals.clients.has(gone.id)).toBe(false);
+            expect(internals.clientsByApp.has('appA')).toBe(false);
+            expect(warnings().filter(w => w.includes('has sent nothing for 10 s'))).toHaveLength(1);
+            expect(warnings()[0]).toContain('quest-gone');
+
+            // Its socket's own 'close' follows; that must not report it a second time.
+            gone.socket.emit('close');
+            expect(disconnected()).toEqual([gone.id]);
+        });
+
+        it('keeps a client that echoes its heartbeats', () => {
+            const alive = handshaked('quest-alive');
+            const gone = handshaked('quest-gone');
+
+            run(30_000, () => alive.socket.emit('data', encodeHeartbeatFrame(1n)));
+
+            expect(disconnected()).toEqual([gone.id]);
+            expect(alive.socket.destroyed).toBe(false);
+            expect(internals.clients.has(alive.id)).toBe(true);
+        });
+
+        it('counts any traffic, not only heartbeat replies', () => {
+            const sender = handshaked();
+
+            run(30_000, () => sender.socket.emit('data', encodeMessageFrame(wireMessage('objects', 'model::update', '{"id":"a"}'))));
+
+            expect(disconnected()).toEqual([]);
+        });
+
+        it('ends a connection that never handshakes', () => {
+            const silent = connect();
+
+            run(10_000);
+
+            expect(silent.socket.destroyed).toBe(true);
+            expect(internals.waitingClients.has(silent.id)).toBe(false);
+            expect(warnings()).toEqual([]);
+        });
+
+        it('takes another timeout from the start options, and 0 as never', () => {
+            worker.configure({ idleTimeoutMillis: 3000 });
+            const quick = handshaked();
+            run(3000);
+            expect(disconnected()).toEqual([quick.id]);
+
+            worker.configure({ idleTimeoutMillis: 0 });
+            const patient = handshaked();
+            run(60_000);
+            expect(patient.socket.destroyed).toBe(false);
+        });
+
+        // A worker thread that could not run for longer than the timeout has not read anything
+        // either; its clients have to be given the chance to be heard before being judged.
+        it('does not end clients on the tick right after the worker itself stalled', () => {
+            const alive = handshaked('quest-alive');
+            const gone = handshaked('quest-gone');
+            run(1000);
+
+            vi.advanceTimersByTime(15_000);
+            internals.tick();
+            expect(disconnected()).toEqual([]);
+
+            // What the clients sent during the stall is read before the next tick.
+            alive.socket.emit('data', encodeHeartbeatFrame(1n));
+            run(100);
+
+            expect(disconnected()).toEqual([gone.id]);
+        });
+
+        it('turns on TCP keepalive for every connection', () => {
+            const { socket } = connect();
+
+            expect(socket.keepAlive?.[0]).toBe(true);
         });
     });
 

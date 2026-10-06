@@ -65,6 +65,22 @@ const MAX_V1_WARNING_ADDRESSES = 1024;
 // short enough that what does get through is not seconds old.
 export const DEFAULT_INBOUND_BACKLOG_LIMIT = 2000;
 
+// How long a client may send nothing at all before it is taken for gone. A Quest that drops off
+// the Wi-Fi sends no FIN, so without this its connection stayed open - a connected client, keeping
+// its app's synchronized models alive - until the kernel gave up retransmitting to it, which takes
+// many minutes. A live client is never anywhere near this quiet: colibri-unity echoes the 100 ms
+// heartbeat from its receive thread, so even a main thread busy loading a scene keeps it talking.
+export const DEFAULT_IDLE_TIMEOUT_MILLIS = 10_000;
+
+// If the worker's own 100 ms tick comes this late, the thread itself was stalled (a long GC, a
+// starved CPU) and could not have read anything in the meantime. Every client would look idle for
+// that long, so the idle check is skipped for that one tick: by the next, whatever the clients sent
+// during the stall has been read.
+const TICK_STALL_MILLIS = 2000;
+
+// When the kernel starts probing a socket with nothing in flight; see handleConnection.
+const KEEPALIVE_INITIAL_DELAY_MILLIS = 5000;
+
 // Settings the proxy sends along with 'm:start'; anything left out keeps its default.
 export interface TcpServerOptions {
     // TCPServerProxy's backlog counter. Without it the backlog is neither counted nor limited.
@@ -73,6 +89,8 @@ export interface TcpServerOptions {
     inboundBacklogLimit?: number;
     // Per client; see InboundRateLimiter.
     rateLimit?: RateLimit;
+    // See DEFAULT_IDLE_TIMEOUT_MILLIS. 0 never times a client out.
+    idleTimeoutMillis?: number;
 }
 
 // The worker thread only ever deals in raw payload bytes (straight off the wire, or
@@ -122,6 +140,8 @@ interface TcpClient {
     // byte count is interpolated into the message.
     dropping: boolean;
     droppedSinceWarning: number;
+    // performance.now() of the last bytes received, or of the connection if none have been yet.
+    lastInboundAt: number;
 }
 
 export class TCPServerWorker extends WorkerService {
@@ -146,6 +166,9 @@ export class TCPServerWorker extends WorkerService {
     // The backstop for one runaway client, which on its own can push the main thread into the
     // backlog limit above and so cost every other client its updates too.
     private rateLimiter = this.createRateLimiter(DEFAULT_RATE_LIMIT);
+
+    private idleTimeoutMillis = DEFAULT_IDLE_TIMEOUT_MILLIS;
+    private lastTickAt: number | undefined;
 
     // Remote address -> when a Colibri 1.x client there was last warned about. Kept in
     // warning order (an address is re-inserted each time), so the oldest entry is always first.
@@ -212,6 +235,7 @@ export class TCPServerWorker extends WorkerService {
             options.inboundBacklogLimit ?? DEFAULT_INBOUND_BACKLOG_LIMIT
         );
         this.rateLimiter = this.createRateLimiter(options.rateLimit ?? DEFAULT_RATE_LIMIT);
+        this.idleTimeoutMillis = options.idleTimeoutMillis ?? DEFAULT_IDLE_TIMEOUT_MILLIS;
     }
 
     private createRateLimiter(limit: RateLimit): InboundRateLimiter<TcpClient> {
@@ -243,6 +267,41 @@ export class TCPServerWorker extends WorkerService {
             this.logWarning(
                 `The main thread has caught up with TCP messages again; ${describeEpisode(backlogSummary)} while it was behind.`
             );
+        }
+
+        const stalled = this.lastTickAt !== undefined && now - this.lastTickAt > TICK_STALL_MILLIS;
+        this.lastTickAt = now;
+        if (!stalled) this.endIdleClients(now);
+    }
+
+    // Ends every client that has sent nothing for idleTimeoutMillis, exactly as if it had
+    // disconnected: out of every index, clientDisconnected$ posted, and so its app's models
+    // dropped once it was the app's last client. Destroyed rather than ended - a peer that is
+    // gone will neither read what is still queued for it nor answer a FIN.
+    //
+    // A client still waiting for its handshake is held to the same limit, counted from when it
+    // connected: a real client handshakes at once, and since nothing is sent to a waiting client
+    // any more, nothing else would ever notice one that never does.
+    private endIdleClients(now: number): void {
+        if (this.idleTimeoutMillis <= 0) return;
+
+        const idleSince = now - this.idleTimeoutMillis;
+        for (const client of [...this.clients.values(), ...this.waitingClients.values()]) {
+            if (client.lastInboundAt > idleSince) continue;
+
+            const seconds = Math.round((now - client.lastInboundAt) / 1000);
+            if (this.clients.has(client.id)) {
+                this.logWarning(
+                    `Unity client '${client.name}' (${client.id}, app '${client.app}', ${client.address}) has sent nothing for ` +
+                        `${seconds} s (TCP_IDLE_TIMEOUT_SECONDS); disconnecting it as gone. A headset that left the Wi-Fi or ` +
+                        'went to sleep without closing its connection looks like this.'
+                );
+            } else {
+                this.logDebug(`Disconnecting client ${client.id} from ${client.address}: no handshake within ${seconds} s`);
+            }
+
+            this.handleSocketDisconnect(client);
+            client.socket.destroy();
         }
     }
 
@@ -335,6 +394,10 @@ export class TCPServerWorker extends WorkerService {
             `New client (${id}) connected from ${socket.remoteAddress}, waiting for app name`
         );
         socket.setNoDelay(true);
+        // The kernel's own dead-peer detection, for a socket with nothing in flight - one waiting
+        // for its handshake, say. A handshaked client is written to every 100 ms, which keeps
+        // keepalive from ever probing it; the idle timeout in endIdleClients covers that case.
+        socket.setKeepAlive(true, KEEPALIVE_INITIAL_DELAY_MILLIS);
 
         const tcpClient: TcpClient = {
             id,
@@ -348,6 +411,7 @@ export class TCPServerWorker extends WorkerService {
             closeTimer: undefined,
             dropping: false,
             droppedSinceWarning: 0,
+            lastInboundAt: performance.now(),
         };
         this.waitingClients.set(tcpClient.id, tcpClient);
 
@@ -373,6 +437,9 @@ export class TCPServerWorker extends WorkerService {
         // A client this server has already refused or cut off: the peer can keep sending
         // until it notices our FIN, and none of it is meant to be acted on.
         if (client.disconnected) return;
+
+        const now = performance.now();
+        client.lastInboundAt = now;
 
         let frames;
         try {
@@ -427,7 +494,7 @@ export class TCPServerWorker extends WorkerService {
                     // The client's own limit first: a message over it is the client's doing, and
                     // counts towards its episode rather than the server's.
                     if (isDroppable(frame.channel, frame.command)
-                        && (!this.rateLimiter.admit(client, performance.now()) || this.dropForBacklog())) {
+                        && (!this.rateLimiter.admit(client, now) || this.dropForBacklog())) {
                         break;
                     }
 

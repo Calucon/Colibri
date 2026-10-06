@@ -73,6 +73,7 @@ const startup = async () => {
     tcpServer.start(Config.TCP_PORT, Config.TCP_HOST, {
         inboundBacklogLimit: Config.TCP_INBOUND_BACKLOG_LIMIT,
         rateLimit,
+        idleTimeoutMillis: Config.TCP_IDLE_TIMEOUT_SECONDS * 1000,
     });
     voiceServer.start(Config.VOICE_PORT, Config.VOICE_HOST);
 };

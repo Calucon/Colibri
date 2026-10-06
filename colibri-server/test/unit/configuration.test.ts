@@ -81,6 +81,11 @@ describe('Config', () => {
             expect(config.CLIENT_MESSAGE_RATE_BURST).toBe(500);
         });
 
+        it('default to disconnecting a TCP client after 10 s of silence, and take 0 to never', async () => {
+            expect((await loadConfig({ TCP_IDLE_TIMEOUT_SECONDS: undefined })).TCP_IDLE_TIMEOUT_SECONDS).toBe(10);
+            expect((await loadConfig({ TCP_IDLE_TIMEOUT_SECONDS: '0' })).TCP_IDLE_TIMEOUT_SECONDS).toBe(0);
+        });
+
         it('default to warning about an app of more than 8 clients, and take 0 to never warn', async () => {
             expect((await loadConfig({ APP_CLIENT_WARNING_THRESHOLD: undefined })).APP_CLIENT_WARNING_THRESHOLD).toBe(8);
             expect((await loadConfig({ APP_CLIENT_WARNING_THRESHOLD: '0' })).APP_CLIENT_WARNING_THRESHOLD).toBe(0);

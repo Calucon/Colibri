@@ -76,6 +76,10 @@ export const Config = {
     // model::update and broadcast::* messages (see DEFAULT_INBOUND_BACKLOG_LIMIT). 0: never drop.
     TCP_INBOUND_BACKLOG_LIMIT: parseNonNegativeInt('TCP_INBOUND_BACKLOG_LIMIT', process.env.TCP_INBOUND_BACKLOG_LIMIT, 2000),
 
+    // Seconds a TCP client may send nothing at all before it is disconnected as gone (see
+    // DEFAULT_IDLE_TIMEOUT_MILLIS); 0: never.
+    TCP_IDLE_TIMEOUT_SECONDS: parseNonNegativeInt('TCP_IDLE_TIMEOUT_SECONDS', process.env.TCP_IDLE_TIMEOUT_SECONDS, 10),
+
     // How many model::update and broadcast::* messages a second one client may send, on either
     // transport, before the rest are dropped (see DEFAULT_RATE_LIMIT); 0: no limit. The burst is
     // how many it may send at once after a quieter stretch.
