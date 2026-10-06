@@ -68,9 +68,9 @@ else. `version`, `app`, and `name` are `::`-joined into the body as plain utf8 t
 three may contain `::`, or start or end with `:`, since a body like `"2::app:::name"` cannot be
 split back into the fields that were meant. A body that does not split into exactly three fields
 closes the connection. colibri-unity replaces a `::` and a colon at either end of its app and
-device name with `_`, and warns about a changed app name. The server assigns the
-connection to `app` and begins including it in that app's broadcasts; any `message` frame
-received before the handshake is ignored and logged.
+device name with `_`, and warns about a changed app name. The server assigns the connection to
+`app` and begins including it in that app's broadcasts; any `message` frame received before the
+handshake is ignored and logged.
 
 A client may send another handshake on the same connection. The server then moves it to the new
 app: the old app sees `client::disconnected` and loses its models if that was its last client, and
@@ -231,11 +231,12 @@ about naming the cause rather than deciding whether to continue.
 
 The server sends a `heartbeat` frame every 100ms to each TCP client whose handshake it accepted,
 until the connection closes, carrying `process.hrtime.bigint()` as the ping timestamp. A client is
-expected to echo the frame back verbatim. The server relays an echoed heartbeat into the normal message pipeline as a synthetic
-`colibri`/`latency` message so `MeasureLatency`'s round-trip accounting handles it the same way it
-handles a web client's latency ping - this is the only place a `heartbeat` frame travels
-client→server. Merging the heartbeat and the latency ping into one frame halves the idle
-per-client packet rate compared to running them as two independent 100ms timers.
+expected to echo the frame back verbatim. The server relays an echoed heartbeat into the normal
+message pipeline as a synthetic `colibri`/`latency` message so `MeasureLatency`'s round-trip
+accounting handles it the same way it handles a web client's latency ping - this is the only place
+a `heartbeat` frame travels client→server. Merging the heartbeat and the latency ping into one
+frame halves the idle per-client packet rate compared to running them as two independent 100ms
+timers.
 
 Because the server is never silent for long, a client can treat silence as a dead connection:
 colibri-unity drops a session after 2s without any frame - including while it waits for the
