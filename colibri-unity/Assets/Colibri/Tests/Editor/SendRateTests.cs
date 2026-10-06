@@ -16,10 +16,10 @@ namespace HCIKonstanz.Colibri.Tests
     /// The per-object send-rate limit, on a clock the tests drive themselves.
     ///
     /// A headset renders 72 to 120 frames per second, and every moving synced object used to send
-    /// an update in every one of them - which dozens of headsets on one server and one Wi-Fi
-    /// network do not survive. The limit must not cost anything else, though: a one-off change
-    /// still goes out at once, and the last values of a burst always arrive, even when nothing
-    /// changes after them.
+    /// an update in every one of them - traffic that one server and one Wi-Fi network cannot keep
+    /// up with from dozens of headsets. The limit must not cost anything else, though: a one-off
+    /// change still goes out at once, and the last values of a burst always arrive, even when
+    /// nothing changes after them.
     /// </summary>
     public class SendRateTests
     {

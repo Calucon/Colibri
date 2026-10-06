@@ -30,8 +30,8 @@ namespace HCIKonstanz.Colibri.Synchronization
         /// </para>
         /// <para>
         /// Why there is a limit: a headset renders 72 to 120 frames per second, and without one every
-        /// moving object sends that many messages. Dozens of headsets moving a few objects each are
-        /// more than one server and one Wi-Fi network can keep up with.
+        /// moving object sends that many messages. Dozens of headsets, each moving a few objects,
+        /// produce more traffic than one server and one Wi-Fi network can keep up with.
         /// </para>
         /// <para>
         /// Starts out as <see cref="ColibriConfig.MaxSendRate"/> (Window -> Colibri Configuration).
