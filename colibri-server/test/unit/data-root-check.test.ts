@@ -71,7 +71,12 @@ describe('DataRootCheck', () => {
         expect(banner).toContain('EACCES');
         expect(banner).toContain(`runs as uid ${uid}`);
         expect(banner).toContain(`chown -R ${uid}:${gid} ${dir}`);
-        expect(banner).toContain('named volume');
+        // Offered only to the uid a new named volume belongs to; see the tests below.
+        if (uid === 1000) {
+            expect(banner).toContain('-v colibri-data:');
+        } else {
+            expect(banner).toContain('A named volume would not help');
+        }
 
         // Once more for the admin UI, marked so the console sink does not print it twice.
         expect(logged).toHaveLength(1);
@@ -118,11 +123,11 @@ describe('DataRootCheck', () => {
     describe('advises a fix for what actually went wrong', () => {
         const DIR = '/srv/colibri/data';
 
-        // A uid of 1000 as in the image, unless there is none (Windows).
-        const describeCode = (code: string | undefined, withUid = true) => {
+        // A uid of 1000 as in the image, unless given another, or null for none (Windows).
+        const describeCode = (code: string | undefined, uid: number | null = 1000) => {
             const error: NodeJS.ErrnoException = new Error(`${code ?? 'Unknown'}: something, open '${DIR}/.colibri-write-check-1'`);
             if (code !== undefined) error.code = code;
-            return withUid ? DataRootCheck.describe(DIR, error, 1000, 1000) : DataRootCheck.describe(DIR, error, undefined, undefined);
+            return DataRootCheck.describe(DIR, error, uid ?? undefined, uid ?? undefined);
         };
 
         it.each([ 'EACCES', 'EPERM' ])('%s: give the directory to the server\'s uid, or use a named volume', code => {
@@ -130,11 +135,24 @@ describe('DataRootCheck', () => {
 
             expect(text).toContain('runs as uid 1000 (gid 1000)');
             expect(text).toContain(`chown -R 1000:1000 ${DIR}`);
-            expect(text).toContain('named volume');
+            expect(text).toContain('or mount a\nnamed volume there instead of a host directory (-v colibri-data:<that path>)');
+        });
+
+        // A new named volume belongs to uid 1000, as /srv/colibri/data does in the image. It used
+        // to be offered to any uid, and with docker run --user 1001 it fails just the same.
+        it.each([ 'EACCES', 'EPERM' ])('%s as a uid other than 1000: give it the directory, and no named volume', code => {
+            const text = describeCode(code, 1001);
+
+            expect(text).toContain('runs as uid 1001 (gid 1001)');
+            expect(text).toContain(`chown -R 1001:1001 ${DIR}`);
+            expect(text).not.toContain('-v colibri-data');
+            expect(text).not.toContain('mount a\nnamed volume');
+            expect(text).toContain('A named volume would not help: a new one belongs to uid 1000');
+            expect(text).toContain('not to uid 1001.');
         });
 
         it.each([ 'EACCES', 'EPERM' ])('%s without a uid: make it writable for whoever runs the server', code => {
-            const text = describeCode(code, false);
+            const text = describeCode(code, null);
 
             expect(text).toContain('make that directory writable for the user running the server');
             expect(text).not.toContain('chown');

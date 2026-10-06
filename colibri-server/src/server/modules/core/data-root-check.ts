@@ -5,6 +5,9 @@ import { Service } from './service.js';
 
 const RULE = '='.repeat(80);
 
+// The uid of the Docker image's node user, which owns /srv/colibri/data in the image.
+const IMAGE_UID = 1000;
+
 /**
  * Checks once, at startup, that the server can write to DATA_ROOT, and says so loudly on stderr
  * when it cannot.
@@ -98,8 +101,17 @@ export class DataRootCheck extends Service {
                 return [
                     `Fix: give the directory to uid ${uid}, then restart the server:`,
                     `    chown -R ${uid}:${gid ?? uid} ${dir}`,
-                    `With Docker, run that on the host directory mounted at ${dir}, or mount a`,
-                    'named volume there instead of a host directory (-v colibri-data:<that path>).',
+                    // A new named volume takes the owner of what the image has at the mount
+                    // point, the node user. It used to be offered to every uid, but for any other
+                    // (docker run --user 1001, say) it is just as unwritable as the directory.
+                    ...(uid === IMAGE_UID ? [
+                        `With Docker, run that on the host directory mounted at ${dir}, or mount a`,
+                        'named volume there instead of a host directory (-v colibri-data:<that path>).',
+                    ] : [
+                        `With Docker, run that on the host directory mounted at ${dir}.`,
+                        `A named volume would not help: a new one belongs to uid ${IMAGE_UID} (the image's`,
+                        `node user), not to uid ${uid}.`,
+                    ]),
                 ];
             case 'EROFS':
                 return [
