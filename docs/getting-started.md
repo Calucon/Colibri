@@ -134,11 +134,16 @@ Drop the **`SyncTransform`** component onto any GameObject. Its position, rotati
 active state now follow the same object on every other client.
 
 The server remembers where things are, so a client that joins later gets the current positions
-rather than starting from the scene's defaults.
+rather than starting from the scene's defaults — for as long as at least one client of your app is
+connected. Once the last one disconnects, the server forgets them; anything that has to outlast that
+belongs in the [Store](#keep-data-between-sessions).
 
-Each of the four is a separate tick box on the component. Turning off the ones you do not need is
-worth doing — a `SyncTransform` that only sends position is a quarter of the traffic, and it stops
-a stray rotation from fighting with someone else's.
+Each of the four is a separate tick box on the component. Only values that change are sent, so
+turning off the ones you do not need saves little traffic — but it stops a stray rotation from
+fighting with someone else's, because an unticked value is neither sent nor applied when it arrives.
+
+Destroying a synced object, or unloading its scene, removes it on every client. Leaving Play mode
+or quitting the app does not: the object stays on the server for everyone else.
 
 For objects you create at runtime, drag the **`[SyncTransformManager]`** prefab out of
 `Packages/Colibri/Prefabs/` into your scene and give it a prefab in its `Template` field. When any
@@ -171,9 +176,10 @@ public class PlayerManager : SyncBehaviourManager<Player> { }
 Put `PlayerManager` in the scene with a `Player` prefab in its `Template` field. Now `Score = 10` on
 one client is `Score == 10` on all of them, and a `Player` created anywhere appears everywhere.
 
-`[Sync]` works on public fields, private fields marked `[SerializeField]`, and properties. Only the
-members that actually changed are sent, once per frame — assigning a field in `Update` every frame
-does not flood anything unless the value really is changing.
+`[Sync]` works on fields and properties, public or private, of the types listed under
+[What you can send](#what-you-can-send) (for your own classes, a `JObject`). Only the members that
+actually changed are sent, once per frame — assigning a field in `Update` every frame does not
+flood anything unless the value really is changing.
 
 ---
 
@@ -188,6 +194,8 @@ await Store.Put("highscores", myScores);
 
 var scores = await Store.Get<ScoreTable>("highscores");
 ```
+
+Anything Json.NET can serialize works, a plain number or string included, up to 5 MiB.
 
 If the server cannot be reached, the call fails after ten seconds and the console says what went
 wrong, at which URL. It will not hang forever waiting.
@@ -299,7 +307,7 @@ The web client needs TypeScript 5 or newer. Full details in
 
 **Open *Window → Colibri Status* while the game is running.** It answers most of it at a glance:
 whether you are connected, to which server, **as which app name**, which channels have listeners and
-what type each expects, and the last twenty messages in and out.
+what type each expects, and the most recent messages in and out.
 
 | What you see | What it usually is |
 | --- | --- |
