@@ -262,6 +262,37 @@ namespace HCIKonstanz.Colibri.E2E
         }
 
         /// <summary>
+        /// A handler of OnConnected that disables the connection: the OnDisconnected that its
+        /// OnDisable is due waits until OnConnected has reached every handler. Raised right away,
+        /// in the middle of OnConnected, it would reach the handlers after this one first, and the
+        /// last event they saw would say connected while the connection is off.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator AHandlerThatDisablesTheConnectionOnConnectedLeavesTheOtherHandlersTheEventsInOrder()
+        {
+            _server = FakeColibriServer.Start(FakeColibriServer.Behaviour.Heartbeat);
+            var connection = ConnectionTo(_server.Port);
+
+            var disabling = new List<string>();
+            connection.OnConnected += () =>
+            {
+                disabling.Add("connected");
+                connection.enabled = false;
+            };
+            connection.OnDisconnected += () => disabling.Add("disconnected");
+            var later = Record(connection);
+
+            yield return E2EServer.WaitUntil(() => disabling.Count > 0, "The client never connected", 10f);
+
+            // A frame more, for anything that was going to be raised late.
+            yield return null;
+            Assert.That(connection.enabled, Is.False);
+            Assert.That(disabling, Is.EqualTo(new[] { "connected", "disconnected" }));
+            Assert.That(later, Is.EqualTo(new[] { "connected", "disconnected" }),
+                "A handler after the one that disabled the connection was told it connected after it was told it disconnected");
+        }
+
+        /// <summary>
         /// The end of Play mode or of the app raises neither event: teardown has no order, so a
         /// handler would as likely run on an object destroyed a moment before.
         /// </summary>

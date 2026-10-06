@@ -131,7 +131,8 @@ namespace HCIKonstanz.Colibri.Networking
         /// <see cref="OnDisconnected"/> and then <see cref="OnConnected"/> in the next frame.
         /// Disabling or destroying this component raises what is still due there and then, from
         /// <c>OnDisable</c>, so a connection open at that moment ends with its
-        /// <see cref="OnDisconnected"/> too. The one exception is the end of Play mode or of the
+        /// <see cref="OnDisconnected"/> too - or, when a handler of one of these events is what
+        /// disabled it, right after that event has reached every handler. The one exception is the end of Play mode or of the
         /// app, which raises neither: the objects the handlers belong to may already be gone.
         /// </remarks>
         public event Action OnConnected;
@@ -252,6 +253,10 @@ namespace HCIKonstanz.Colibri.Networking
         // and came back before the next Update raised OnConnected and then OnDisconnected, and
         // left user code believing it was disconnected while it was connected.
         private readonly ConcurrentQueue<bool> _connectionEvents = new ConcurrentQueue<bool>();
+
+        // Set while RaiseConnectionEvents is running, on the main thread only. A handler that
+        // disables or destroys this component runs OnDisable inside that loop; see there.
+        private bool _isRaisingConnectionEvents;
 
         /// <summary>
         /// Smoothed rate at which <see cref="Update"/> runs, which is the rate at which received
@@ -421,7 +426,9 @@ namespace HCIKonstanz.Colibri.Networking
             // A disabled or destroyed component gets no Update to raise them from, so the
             // OnDisconnected of a connection open until now was never raised - or, after a
             // re-enable, raised late. Not at the end of Play mode or of the app: teardown has no
-            // order, and a handler would as likely run on an object destroyed a moment ago.
+            // order, and a handler would as likely run on an object destroyed a moment ago. When
+            // one of these handlers is what disabled it, this returns at once, and the loop that
+            // called the handler raises OnDisconnected after it.
             if (!SingletonLifetime.IsQuitting)
                 RaiseConnectionEvents();
         }
@@ -471,12 +478,27 @@ namespace HCIKonstanz.Colibri.Networking
         /// <summary>Raises OnConnected and OnDisconnected for every transition still due, in order.</summary>
         private void RaiseConnectionEvents()
         {
-            while (_connectionEvents.TryDequeue(out var connected))
+            // A handler that disables or destroys this component calls back in here from
+            // OnDisable. Raising OnDisconnected there and then would reach the handlers after it
+            // before the OnConnected being raised does, and they would be left believing they are
+            // connected. The loop below raises it instead, once every handler has had OnConnected.
+            if (_isRaisingConnectionEvents)
+                return;
+
+            _isRaisingConnectionEvents = true;
+            try
             {
-                if (connected)
-                    Raise(OnConnected, nameof(OnConnected));
-                else
-                    Raise(OnDisconnected, nameof(OnDisconnected));
+                while (_connectionEvents.TryDequeue(out var connected))
+                {
+                    if (connected)
+                        Raise(OnConnected, nameof(OnConnected));
+                    else
+                        Raise(OnDisconnected, nameof(OnDisconnected));
+                }
+            }
+            finally
+            {
+                _isRaisingConnectionEvents = false;
             }
         }
 
