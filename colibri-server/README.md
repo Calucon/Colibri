@@ -1,86 +1,180 @@
 # Colibri - Server
 
+The server relays messages between the Unity clients (TCP) and web clients (Socket.IO) of each
+app, keeps the app's synchronized models, stores values through a small REST API, relays voice
+over UDP, and serves an admin UI showing what every client logs.
+
+Colibri has no authentication: anyone who can reach these ports can join any app, read and change
+its data, and read the log. Run it on a network you trust.
+
 ## Setup
 
 ### [Docker](https://hub.docker.com/r/hcikn/colibri) _(recommended)_
 
-Use the following `docker-compose.yml` and run `docker-compose up -d`:
+Save the following as `docker-compose.yml` and run `docker compose up -d`:
 
 ```yaml
 services:
   colibri:
-    build: .
+    image: hcikn/colibri:2.0.0
     restart: unless-stopped
     container_name: colibri
     tty: true
+    # The server logs to stdout/stderr, client log lines included, and Docker's default
+    # json-file log never rotates: cap it rather than let a long study fill the disk.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     volumes:
-        - ./data/:/srv/colibri/data
+      - colibri-data:/srv/colibri/data
     ports:
-      - 9011:9011 # web interface / web sockets
+      - 9011:9011 # web interface / web sockets / REST store
       - 9012:9012 # tcp (unity)
       - "9013:9013/udp" # voice
+
+volumes:
+  colibri-data:
 ```
+
+The admin UI is then at `http://<your-server-ip>:9011`.
+
+`/srv/colibri/data` holds the REST store's `store.json` and any voice recordings. A named volume,
+like `colibri-data` above, needs no setup. To keep the data in a directory on the host instead,
+mount that directory:
+
+```yaml
+    volumes:
+      - ./data:/srv/colibri/data
+```
+
+This works with a `./data` that Docker creates on first start, and with a root-owned `data`
+directory left behind by colibri-server 1.x, whose `store.json` keeps its format. The container
+starts as root, gives `/srv/colibri/data` to the `node` user (uid 1000) if anything in it belongs
+to someone else, and then runs the server as `node`; on the host, the directory ends up owned by
+uid 1000. Started with `--user` (or `user:` in the compose file), the container cannot change
+owners: give the directory to that user yourself, e.g. `sudo chown -R 1000:1000 ./data`, or use
+a named volume.
+
+If the server cannot write to its data directory, it says so at startup, on stderr - with the
+path, its uid and the `chown` that fixes it - and in the admin UI's log. It keeps running, but
+saves nothing: `store.json` and voice recordings stay in memory until it stops.
+
+Settings from [Configuration](#configuration) go into an `environment:` section, e.g.
+`CONSOLE_LOG_LEVEL: debug`. To use other ports, change the host side of `ports:`
+(`"8011:9011"`) rather than `WEBSERVER_PORT`, since the image's health check requests
+`http://127.0.0.1:9011/` inside the container every 30 s.
+
+The image sets `NODE_ENV=production` and runs the server as PID 1, so `docker stop` shuts it down
+cleanly and writes any pending store changes first. From a checkout, `docker compose up -d` in
+this directory uses its own `docker-compose.yml`, which builds the image from source and keeps
+the data in `./data`.
 
 ### Node
 
 Requirements: NodeJS 24+
 
-Clone this repository, build with `npm run build`, then start with `npm start`.
+Clone this repository, then in `colibri-server` install with `npm ci`, build with
+`npm run build`, and start with `npm start`.
 
-#### Configuration
+### Configuration
 
-The web interface, socketIO server, and voice server are customizable.
-The main aspect here lies in changing default ports or hostnames to facilitate running the application behind a proxy.
-Additionally, voice server settings such as the sampling rate and recording options can be adjusted.
+The server reads its settings from environment variables, and from a `.env` file in the
+directory it is started from (`colibri-server` for `npm start`); a variable that is already set
+in the environment wins. [`.env.example`](.env.example) lists them with their defaults:
 
-For reference, see the `.env.example` file:
+| variable | default | |
+| --- | --- | --- |
+| `WEBSERVER_HOST`, `WEBSERVER_PORT` | `0.0.0.0`, `9011` | admin UI, web clients (Socket.IO) and the REST store |
+| `TCP_HOST`, `TCP_PORT` | `0.0.0.0`, `9012` | Unity clients |
+| `VOICE_HOST`, `VOICE_PORT` | `0.0.0.0`, `9013` | voice relay (UDP, IPv4) |
+| `VOICE_SAMPLING_RATE` | `48000` | sampling rate written into voice recordings, in Hz |
+| `VOICE_RECORDING` | `false` | `true` saves each voice client's audio as a `.wav` file in the data directory (PCM voice only) |
+| `DATA_ROOT` | `../../data` | data directory: `store.json` and voice recordings |
+| `WEBSERVER_ROOT` | `../ui/` | the admin UI's build output |
+| `BASE_URL` | empty | path the admin UI is served under, e.g. `/colibri` behind a reverse proxy; `/api/store` and Socket.IO stay at the root |
+| `STACK_TRACE_LIMIT` | `30` | stack frames captured for a logged error |
+| `CONSOLE_LOG_LEVEL` | `info` | least severe level printed to stdout/stderr: `error`, `warn`, `info` or `debug` |
+| `CONSOLE_LOG_BROADCAST_TRAFFIC` | `false` | `true` also prints every `broadcast::` message, whatever the level |
 
-```basic
-TCP_HOST='0.0.0.0'
-TCP_PORT=9012
-
-VOICE_HOST='0.0.0.0'
-VOICE_PORT=9013
-VOICE_SAMPLING_RATE=48000
-VOICE_RECORDING=false
-
-WEBSERVER_HOST='0.0.0.0'
-WEBSERVER_PORT=9011
-WEBSERVER_ROOT='../ui/'
-BASE_URL=''
-
-DATA_ROOT='../../data'
-
-# Frames walked when capturing a stack trace for a logged error.
-STACK_TRACE_LIMIT=30
-```
+`DATA_ROOT` and `WEBSERVER_ROOT` may be absolute paths, e.g. `DATA_ROOT=/var/lib/colibri`. A
+relative path is taken from the compiled server's directory, `dist/server`, so the defaults are
+`dist/ui` and the `data` directory next to `dist`. A port that is not an integer from 1 to 65535,
+a sampling rate or stack trace limit that is not a positive integer, or an unknown log level stops
+the server at startup, with a message naming the variable.
 
 ## Features
 
-A web interface is available on `http://<your-server-ip>:9011` to view the log output of connected clients.
+- **Admin UI** at `http://<your-server-ip>:9011`. The *Log* page shows what the server and every
+  connected client log, filtered by app and level, with a separate *Sync traffic* switch for the
+  continuous `broadcast::` messages. The *Statistics* page shows the connected clients and their
+  latency.
+- **Model synchronization** and **broadcasts** between the Unity and web clients of an app, see
+  [docs/protocol.md](docs/protocol.md).
+- **REST store** at `/api/store` on the web port, saved to `store.json` in the data directory, see
+  [REST store](docs/protocol.md#rest-store).
+- **Voice relay** on UDP port 9013. It does not separate apps: every voice packet goes to every
+  other client currently sending voice to this server, and receivers pick voices by user id, so
+  apps that share a server need distinct voice user ids.
+
+### Logs
+
+Everything the server logs, and every line a client sends through colibri-unity's
+`RemoteLogging` or colibri-web's `RemoteLogger`, goes to two places:
+
+- **stdout and stderr**, one line per message, `<time> <LEVEL> [<group>/<service>] <message>`;
+  errors and warnings go to stderr. With Docker, `docker logs colibri` shows them: refused
+  clients, failed `store.json` writes and client errors included. `CONSOLE_LOG_LEVEL` sets how
+  much is printed (by default everything but debug messages), and `broadcast::` messages only
+  appear with `CONSOLE_LOG_BROADCAST_TRAFFIC=true`.
+- **the admin UI's Log page**, which keeps the last 20,000 messages of every level in memory,
+  repeats merged into one entry. They are gone when the server restarts.
 
 ## Protocol
 
-Web clients talk to the server over Socket.IO. Unity clients talk to the server over TCP using a
-custom binary protocol - see [docs/protocol.md](docs/protocol.md) for the wire format. **v2.0.0
-introduces a v3 framing format that is a breaking change** for any TCP client older than this
-version (older clients must be updated to the new framing, see `docs/protocol.md`); the Socket.IO
-envelope is unaffected.
+Web clients talk to the server over Socket.IO, and Unity clients over TCP using a custom binary
+protocol - see [docs/protocol.md](docs/protocol.md) for both. **v2.0.0 introduces a v3 framing
+format that is a breaking change** for Unity clients: colibri-unity 1.x cannot connect, update it
+to 2.x. The Socket.IO envelope is unchanged, but colibri-web 1.x is refused too (see below), so
+update web clients to 2.x as well.
 
 Both transports announce a protocol version in their handshake, and the server refuses any client
 that does not match its own - there is one supported version at a time and no negotiation. A
-refused client is told why on the `colibri` channel and then disconnected, and never appears in
-the admin UI. See [Version checking](docs/protocol.md#version-checking).
+refused client is told why on the `colibri` channel and then disconnected, never appears in the
+admin UI, and the server logs the refusal with both versions. A colibri-unity 1.x client cannot
+read that refusal; the server recognises it by its 1.x framing instead and logs a warning naming
+its address and the package to upgrade, at most once a minute per address. See
+[Version checking](docs/protocol.md#version-checking).
 
 ## Development
 
+* `npm ci`: Install the dependencies.
 * `npm run watch`: Run development server with auto-compile and reload on file changes
 * `npm run build`: Compilation
 * `npm start`: Start server -- make sure to compile first.
 * `npm run lint`: Lint the server and admin UI sources.
 * `npm test`: Run the vitest unit suite.
+* `npm run gui:test`: Run the admin UI's unit tests.
 * `npm run bench`: Run the vitest benchmark harness. Results are machine- and runtime-specific,
   so they are reported in the pull request that claims them rather than committed here; always
   measure a before/after pair on the same machine and the same Node version.
-* `npm run test:tcpclient`: Manual smoke test - connects with the v3 TCP framing and sends a
-  handshake.
+* `npm run test:vectors`: Check that colibri-unity's protocol test vectors still match this
+  server's encoder, and that colibri-web, colibri-unity and the admin UI announce this server's
+  protocol version. CI runs it; `npm run test:vectors -- --emit` prints the C# vector table.
+* `npm run test:tcpclient`: Manual smoke test against a server running on this machine (on
+  `TCP_PORT`) - connects with the v3 TCP framing, handshakes and echoes heartbeats.
+  `npm run test:tcpclient -- 1` announces protocol version 1 instead, to see a refusal. Exits 0
+  when it connected and was heartbeated, 1 when something is wrong with the server (no
+  heartbeat, or a frame it cannot decode), and 2 when the server refused its protocol version,
+  after printing the server's reason.
+* `npm run test:stressecho`: A raw TCP client that answers the probes of colibri-unity's Network
+  Stress sample, so a single Unity editor can measure round trips
+  (`npm run test:stressecho -- [app] [seconds]`).
+* `npm run test:docker`: Needs Docker. Builds the image (or uses `COLIBRI_DOCKER_IMAGE`) and runs
+  it with a fresh bind mount, a root-owned 1.x data directory, a named volume, and as
+  `--user 1000:1000` on a named volume and on a root-owned directory. It checks that each one
+  saves data (or, in the last case, says loudly that it cannot), keeps it across a restart and
+  stops cleanly, then removes everything it created. Pass deployment names to run only those;
+  `COLIBRI_DOCKER_PREFIX`, `COLIBRI_DOCKER_PORT` and `COLIBRI_DOCKER_TMPDIR` are described at the
+  top of `test/docker-image-check.ts`.
