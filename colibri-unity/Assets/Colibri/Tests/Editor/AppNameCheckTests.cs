@@ -7,7 +7,8 @@ namespace HCIKonstanz.Colibri.Tests
     /// The setup window's warning about app names that strangers use too. The server puts every
     /// client with the same app name into one app, so unrelated projects that settle on an example
     /// name - colibri-web's samples use "myAppName" - see each other's objects, and the server's
-    /// work grows with the square of the clients, with nothing at runtime to say why.
+    /// work grows with the square of the number of clients in the app, with nothing at runtime to
+    /// say why.
     /// </summary>
     public class AppNameCheckTests
     {
