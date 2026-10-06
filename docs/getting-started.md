@@ -194,8 +194,8 @@ one client is `Score == 10` on all of them, and a `Player` created anywhere appe
 
 `[Sync]` works on fields and properties, public or private, of the types listed under
 [What you can send](#what-you-can-send) (for your own classes, a `JObject`). Only the members that
-actually changed are sent, once per frame — assigning a field in `Update` every frame does not
-flood anything unless the value really is changing.
+actually changed are sent, so assigning a field in `Update` every frame costs nothing while its
+value stays the same.
 
 ---
 
