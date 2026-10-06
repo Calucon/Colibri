@@ -560,7 +560,7 @@ an hour they do not spend on their prototype, so:
   hiding, showing and deleting, including an object hidden when this client quits; `SyncModelTests`
   a value from another client followed by a local change; `LifecycleTests` a listener registered
   after the connection was rebuilt.
-- The send-rate limit and the other late changes have tests of their own. In EditMode,
+- The send-rate limit, the connect timeout and the outbox cap have tests of their own. In EditMode,
   `SendRateTests` drive the limit on a clock of their own: the leading edge, a burst, the held
   update going out when its interval is up, 30 a second at 72, 90 and 120 fps, a limit of `0`,
   showing and hiding, a server value replacing a held change, a delete from another client
@@ -582,7 +582,7 @@ an hour they do not spend on their prototype, so:
   `ConnectTimeoutTests.AnAttemptNothingAnswersIsGivenUpAfterTheTimeout` and
   `.CancellingGivesUpTheAttemptAtOnce`, and
   `ProtocolMismatchDetectionTests.AnAttemptNothingAnswersIsGivenUpAfterFiveSecondsAndRetried`.
-  There the timeout is checked by hand: with an unreachable server address, the client leaves
+  There, check the timeout by hand: with an unreachable server address, the client should leave
   *Connecting* after 5 s.
 - `node colibri-unity/run-tests.mjs` runs both suites, starting and stopping a server with
   `docker compose` — unless one is already listening, which it uses as it stands. See
