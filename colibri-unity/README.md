@@ -662,7 +662,8 @@ address and the queue that hands received packets to the main thread are unit-te
 
 ### Documents
 
-- [../MIGRATION.md](../MIGRATION.md) — upgrading a Colibri 1.x project, for all three components
+- [../MIGRATION.md](../MIGRATION.md) — upgrading a Colibri 1.x project, for all three components;
+  read it together with the change log's [Breaking changes](CHANGELOG.md#breaking-changes)
 - [CHANGELOG.md](CHANGELOG.md) — everything that changed in `1.3.1` → `2.0.0`
 - [docs/v2-ease-of-use-and-performance.md](docs/v2-ease-of-use-and-performance.md) — how the sync
   loop and the diagnostics work, why they were built that way, and how to migrate an existing project

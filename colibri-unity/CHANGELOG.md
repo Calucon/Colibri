@@ -6,7 +6,9 @@ Summary of everything that changed in the `1.3.1` → `2.0.0` modernization, clo
 release across all three packages. `colibri-server` 2.0.0 replaced the v1 TCP framing with a fixed
 binary v3 protocol (see its [change log](../colibri-server/docs/v2-changelog.md)); this release is
 the Unity client's side of that change. To upgrade a 1.x project, start with
-[MIGRATION.md](../MIGRATION.md), which covers all three components and what you have to change.
+[MIGRATION.md](../MIGRATION.md), which covers all three components, then read the [Breaking
+changes](#breaking-changes) below as well — among them the per-object send-rate limit, which
+changes what other clients receive without failing to compile.
 
 The ease-of-use and sync-loop pass that closes the release is written up in more depth — mechanism,
 rationale, migration steps, and what the Editor verification did and did not cover — in
