@@ -50,6 +50,41 @@ namespace HCIKonstanz.Colibri.Setup
         /// </summary>
         public bool IsConfigured => !string.IsNullOrWhiteSpace(AppName);
 
+        /// <summary>
+        /// App names that many people end up with: "myAppName" is what every sample, the docs and
+        /// the web client's examples use, and the others are what anyone types first. Lowercase;
+        /// compared without regard to case.
+        /// </summary>
+        private static readonly string[] CommonAppNames =
+        {
+            "myappname", "myapp", "appname", "app", "test", "testapp", "demo", "example", "colibri", "default"
+        };
+
+        /// <summary>
+        /// Why <paramref name="appName"/> is likely to be shared with strangers, or null if it is
+        /// not. An empty name is not this method's concern - see <see cref="IsConfigured"/>.
+        /// </summary>
+        /// <remarks>
+        /// The server puts every client with the same app name into one app, whoever they are. So
+        /// everyone in a class who keeps the sample's name sees everyone else's objects and
+        /// messages, and since each update goes to every other client in the app, the server's
+        /// work grows with the square of their number. Nothing says so at runtime: it just works,
+        /// for everyone at once.
+        /// </remarks>
+        internal static string SharedAppNameWarning(string appName)
+        {
+            if (string.IsNullOrWhiteSpace(appName))
+                return null;
+
+            var name = appName.Trim();
+            if (System.Array.IndexOf(CommonAppNames, name.ToLowerInvariant()) < 0)
+                return null;
+
+            return $"'{name}' is an App Name other people use too - the samples and the documentation use 'myAppName'. "
+                + "Everyone on this server with the same App Name is in one app: they all see each other's objects and messages, "
+                + "and the server's work grows with the square of their number. Choose a name of your own, such as your group and project.";
+        }
+
         public string AppName = "";
         public string ServerAddress = "colibri.hci.uni-konstanz.de";
         public int WebServerPort = 9011;

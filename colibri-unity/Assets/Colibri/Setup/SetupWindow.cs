@@ -125,6 +125,11 @@ namespace HCIKonstanz.Colibri.Setup
 
             EditorGUILayout.HelpBox("Please choose a unique application name. Each client *must* have the same app name!", MessageType.Info);
             Config.AppName = EditorGUILayout.TextField("App Name: ", Config.AppName);
+
+            var sharedAppName = ColibriConfig.SharedAppNameWarning(Config.AppName);
+            if (sharedAppName != null)
+                EditorGUILayout.HelpBox(sharedAppName, MessageType.Warning);
+
             Config.ServerAddress = EditorGUILayout.TextField("Server Address: ", Config.ServerAddress);
             GUILayout.Space(16);
             _portSettings = EditorGUILayout.Foldout(_portSettings, "Optional Config");
@@ -148,7 +153,9 @@ namespace HCIKonstanz.Colibri.Setup
 
             var errors = new List<string>();
 
-            if (string.IsNullOrEmpty(Config.AppName))
+            // The status window's test. A name of spaces only used to pass here, and the status
+            // window then reported the project as not configured.
+            if (!Config.IsConfigured)
                 errors.Add("App Name must not be empty!");
             if (Config.ServerAddress.Contains("://"))
                 errors.Add("Server address should not contain a protocol (only IP or domain name)");
