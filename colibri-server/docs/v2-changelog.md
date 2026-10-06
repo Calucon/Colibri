@@ -275,7 +275,7 @@ EditMode tests, which `npm run test:vectors` checks in CI.
 - Each episode over either limit is one warning when it starts, naming the setting (and the
   client), and one when it is over, with the number of updates held back and messages dropped.
   See [Inbound limits](./protocol.md#inbound-limits).
-- **A warning when one app has more clients than a typical session uses.** Every message is
+- **A warning when one app has more clients than a typical app has.** Every message is
   relayed to every other client of the same app, so the server's work grows with the square of an
   app's size, and separate projects that all kept the same app name become one big app with
   nothing saying so.

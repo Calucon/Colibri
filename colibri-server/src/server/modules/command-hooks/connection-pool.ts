@@ -38,8 +38,8 @@ export abstract class NetworkServer {
 export type MessageHandler = (message: NetworkMessage) => void;
 
 // Past this many clients in one app, the pool warns that the app may be shared by accident. A
-// typical session is a handful of devices plus a browser or two; separate projects that all kept
-// the same App Name (a sample's default, say) end up as one app of dozens of clients instead.
+// typical app has a handful of devices plus a browser or two; separate projects that all kept the
+// same App Name (a sample's default, say) end up as one app of dozens of clients instead.
 export const DEFAULT_APP_CLIENT_WARNING_THRESHOLD = 8;
 
 // The app the admin UI joins. However many are open, they are not an application's clients.
