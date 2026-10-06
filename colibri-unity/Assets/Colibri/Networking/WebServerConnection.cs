@@ -34,10 +34,11 @@ namespace HCIKonstanz.Colibri.Networking
     public class WebServerConnection : SingletonBehaviour<WebServerConnection>
     {
         /// <summary>
-        /// Protocol version announced in the handshake. Matches colibri-web's
-        /// <c>query: { app, version: '2' }</c> and <c>PROTOCOL_VERSION</c> in the server's
-        /// <c>src/server/modules/networking/protocol.ts</c>. A server speaking anything else
-        /// refuses the connection with a <see cref="PROTOCOL_REJECTED_COMMAND"/> message.
+        /// Protocol version announced in the handshake. Has to equal <c>PROTOCOL_VERSION</c> in
+        /// the server's <c>src/server/modules/networking/protocol.ts</c> and in colibri-web's
+        /// <c>src/Colibri.ts</c>; colibri-server's <c>npm run test:vectors</c> checks that all of
+        /// them agree. A server speaking anything else refuses the connection with a
+        /// <see cref="PROTOCOL_REJECTED_COMMAND"/> message.
         /// </summary>
         private const string CLIENT_VERSION = "2";
 
