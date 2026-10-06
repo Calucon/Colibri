@@ -99,11 +99,11 @@ replaced by a fixed binary format:
 Anything you wrote that speaks TCP to Colibri has to be rewritten against
 [`docs/protocol.md`](colibri-server/docs/protocol.md). Socket.IO clients are unaffected.
 
-Two of the server's rules matter to such a client. It sends nothing until it has accepted the
-handshake, so the first frame a client gets is either the refusal or a heartbeat. And it
-disconnects a TCP client that has sent nothing for 10 seconds (`TCP_IDLE_TIMEOUT_SECONDS`), one
-that never handshakes included; echoing every heartbeat, as colibri-unity does, keeps a client
-well inside that.
+Two of the server's rules matter to such a client. It sends nothing, not even a heartbeat, until it
+has accepted the handshake, so the client has to send its handshake first; a refused client gets
+the refusal and nothing else. And it disconnects a TCP client that has sent nothing for 10 seconds
+(`TCP_IDLE_TIMEOUT_SECONDS`), one that never handshakes included; echoing every heartbeat, as
+colibri-unity does, keeps a client well inside that.
 
 **The `flatbuffers` dependency is gone**, along with `body-parser`, `uuid` and
 `source-map-support`.
