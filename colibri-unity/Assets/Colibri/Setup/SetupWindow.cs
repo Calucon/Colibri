@@ -138,6 +138,11 @@ namespace HCIKonstanz.Colibri.Setup
                 Config.TcpServerPort = EditorGUILayout.IntField("TCP server Port: ", Config.TcpServerPort);
                 Config.VoiceServerPort = EditorGUILayout.IntField("Voice server Port: ", Config.VoiceServerPort);
                 Config.VoiceServerSamplingRate = EditorGUILayout.IntField("Voice Sampling Rate: ", Config.VoiceServerSamplingRate);
+                Config.MaxSendRate = EditorGUILayout.IntField(new GUIContent("Max Send Rate (Hz): ",
+                    "The most updates per second one synced object (SyncTransform, SyncBehaviour) sends. "
+                    + "Nothing is lost: a single change goes out at once, and the latest values of quicker "
+                    + "changes go out when the interval is up. 0 = no limit, one update per frame. "
+                    + "Code can change it at runtime through SyncSettings.MaxSendRate."), Config.MaxSendRate);
                 EditorGUILayout.EndVertical();
             }
 
@@ -157,6 +162,8 @@ namespace HCIKonstanz.Colibri.Setup
                 errors.Add("Two ports may not have the same value!");
             if (Config.VoiceServerSamplingRate < 16000 || Config.VoiceServerSamplingRate > 48000)
                 errors.Add("Voice server sampling rate invalid (must be a number between 16000 - 48000, default 48000)");
+            if (Config.MaxSendRate < 0)
+                errors.Add($"Max send rate invalid (updates per second per synced object; 0 = no limit, default {ColibriConfig.DEFAULT_MAX_SEND_RATE})");
 
             GUILayout.Space(15f);
 
@@ -171,6 +178,15 @@ namespace HCIKonstanz.Colibri.Setup
 
             foreach (var error in errors)
                 EditorGUILayout.HelpBox(error, MessageType.Error);
+
+            // Outside the foldout: it is closed whenever the window opens, and this is not a
+            // setting to forget about.
+            if (Config.MaxSendRate == 0)
+            {
+                EditorGUILayout.HelpBox("Max Send Rate is 0, so there is no limit: every moving synced object sends an update "
+                    + "in every frame, 72 to 120 a second on a headset. A class of clients on one server and one Wi-Fi network "
+                    + $"will not keep up. The default is {ColibriConfig.DEFAULT_MAX_SEND_RATE}.", MessageType.Warning);
+            }
 
             DrawAndroidIssues();
 
