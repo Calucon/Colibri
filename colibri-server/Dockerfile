@@ -42,8 +42,19 @@ EXPOSE 9012
 # Voice
 EXPOSE 9013/udp
 
+# Probes the web server where it actually listens: WEBSERVER_HOST and WEBSERVER_PORT (default
+# 9011), from the environment or a .env in the working directory, as the server reads them -
+# a wildcard host on loopback. A probe hard-coded to 127.0.0.1:9011 left a container with any
+# other WEBSERVER_PORT, or a host such as localhost (which Node binds to ::1), unhealthy for
+# good, and an orchestrator restarting it over and over. /api/store rather than /, which is
+# only the admin UI while BASE_URL is empty.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD node -e "fetch('http://127.0.0.1:9011/').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+    CMD node -e " \
+        try { process.loadEnvFile(); } catch {} \
+        const { WEBSERVER_HOST: h = '', WEBSERVER_PORT: port = '' } = process.env; \
+        const host = h === '' || h === '0.0.0.0' || h === '::' ? '127.0.0.1' : h.includes(':') ? '[' + h + ']' : h; \
+        fetch('http://' + host + ':' + (port || '9011') + '/api/store') \
+            .then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"
 
 # Starts as root only long enough to give /srv/colibri/data to the node user, then runs the
 # server as node. node itself, not npm, so the server is PID 1 and receives docker stop's SIGTERM.

@@ -18,7 +18,7 @@
  * system temp directory.
  */
 import { execFile } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import * as net from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -171,6 +171,12 @@ interface Deployment {
     user?: string;
     // Further `docker run` options.
     dockerArgs?: string[];
+    // The server's environment, and the container port that gives it to serve HTTP on.
+    env?: Record<string, string>;
+    webPort?: number;
+    // Whether only the container itself can reach the web server, so that being healthy, and
+    // stopping cleanly, is all there is to check.
+    healthOnly?: boolean;
     // Seeded by mount(): an app/value that must be readable after startup.
     legacy?: { app: string; key: string; value: unknown };
     // Seeded by mount(): a symlink out of the data directory, whose target must stay root's.
@@ -189,7 +195,9 @@ const runDeployment = async function (image: string, deployment: Deployment): Pr
     await docker([ 'rm', '-f', container ]);
 
     const mount = await deployment.mount(image);
-    const args = [ 'run', '-d', '--name', container, ...publish(0, 9011), ...publish(1, 9012), '-v', mount, ...(deployment.dockerArgs ?? []) ];
+    const webPort = deployment.webPort ?? 9011;
+    const args = [ 'run', '-d', '--name', container, ...publish(0, webPort), ...publish(1, 9012), '-v', mount, ...(deployment.dockerArgs ?? []) ];
+    for (const [ name, value ] of Object.entries(deployment.env ?? {})) args.push('-e', `${name}=${value}`);
     if (deployment.user) args.push('--user', deployment.user);
     args.push(image);
     created.containers.add(container);
@@ -199,10 +207,15 @@ const runDeployment = async function (image: string, deployment: Deployment): Pr
     check('becomes healthy', health === 'running healthy', `${health}\n${(await logsOf(container)).slice(-1500)}`);
     if (health !== 'running healthy') return;
 
-    const web = `http://127.0.0.1:${await hostPort(container, 9011)}`;
-
     const proc = await serverUid(container);
     check('server is PID 1 and runs as uid 1000', proc.startsWith('1000 node '), proc);
+
+    if (deployment.healthOnly) {
+        await stopCleanly(container, 1);
+        return;
+    }
+
+    const web = `http://127.0.0.1:${await hostPort(container, webPort)}`;
 
     if (deployment.symlinkOut) {
         const owner = (await dockerOk([ 'exec', container, 'stat', '-c', '%U', deployment.symlinkOut ])).trim();
@@ -291,7 +304,7 @@ const runDeployment = async function (image: string, deployment: Deployment): Pr
     const again = await waitHealthy(container);
     check('comes back healthy on the same data', again === 'running healthy', again);
     if (again !== 'running healthy') return;
-    const restartedWeb = `http://127.0.0.1:${await hostPort(container, 9011)}`;
+    const restartedWeb = `http://127.0.0.1:${await hostPort(container, webPort)}`;
     const res = await fetch(`${restartedWeb}/api/store/image-check/value`);
     const body = res.status === 200 ? await res.json() : undefined;
     check('still has the value after a restart', JSON.stringify(body) === JSON.stringify(value), `HTTP ${res.status}`);
@@ -334,6 +347,8 @@ const main = async function (): Promise<void> {
 
     const legacy = { app: 'legacy-app', key: 'greeting', value: 'stored by colibri 1.x' };
     const legacyStore = { 'store.json': JSON.stringify({ [legacy.app]: { [legacy.key]: legacy.value } }) };
+    const envFile = path.join(tmp, 'web-port.env');
+    await writeFile(envFile, 'WEBSERVER_PORT=9112\n', { mode: 0o644 });
     const deployments: Deployment[] = [
         {
             name: 'bind-missing-dir',
@@ -386,6 +401,31 @@ const main = async function (): Promise<void> {
             legacy,
             writable: true,
             chownFails: true,
+        },
+        {
+            // The health check has to ask the port the server listens on: one hard-coded to
+            // 9011 left this container unhealthy for good, and an orchestrator restarting it.
+            name: 'web-port-9111',
+            mount: () => volume('web-port-9111'),
+            env: { WEBSERVER_PORT: '9111' },
+            webPort: 9111,
+            writable: true,
+        },
+        {
+            // ...and the host: Node binds localhost to ::1 here, which 127.0.0.1 never reaches.
+            name: 'web-host-localhost',
+            mount: () => volume('web-host-localhost'),
+            env: { WEBSERVER_HOST: 'localhost' },
+            writable: true,
+            healthOnly: true,
+        },
+        {
+            // ...wherever the port is set: the server also reads a .env in its working directory.
+            name: 'web-port-from-env-file',
+            mount: () => volume('web-port-from-env-file'),
+            dockerArgs: [ '-v', `${envFile}:/srv/colibri/.env:ro` ],
+            webPort: 9112,
+            writable: true,
         },
     ];
 
