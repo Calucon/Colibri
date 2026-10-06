@@ -50,15 +50,27 @@ namespace HCIKonstanz.Colibri.E2E
         [UnityTearDown]
         public IEnumerator DisconnectPeer()
         {
+            var destroyed = false;
             foreach (var spawned in _spawned)
             {
                 if (spawned)
+                {
                     Object.Destroy(spawned);
+                    destroyed = true;
+                }
             }
             _spawned.Clear();
 
             // Destruction is what sends model::delete, and that has to leave before the peer does.
             yield return null;
+
+            // ...and reach the server before the next test's peer joins. The next test usually
+            // listens on the same model channel, and every frame it has received counts for its
+            // Expect and ExpectNothing - so a delete from here that the server handled after the
+            // join failed whichever test came next. One frame was not enough on a busy machine:
+            // two full runs in nine failed that way, each time in a different test.
+            if (destroyed)
+                yield return E2EServer.Settle(0.25f);
 
             Peer?.Dispose();
             Peer = null;
