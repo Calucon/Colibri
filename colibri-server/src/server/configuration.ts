@@ -75,4 +75,10 @@ export const Config = {
     // How many TCP messages may wait for the main thread before the TCP worker drops incoming
     // model::update and broadcast::* messages (see DEFAULT_INBOUND_BACKLOG_LIMIT). 0: never drop.
     TCP_INBOUND_BACKLOG_LIMIT: parseNonNegativeInt('TCP_INBOUND_BACKLOG_LIMIT', process.env.TCP_INBOUND_BACKLOG_LIMIT, 2000),
+
+    // How many model::update and broadcast::* messages a second one client may send, on either
+    // transport, before the rest are dropped (see DEFAULT_RATE_LIMIT); 0: no limit. The burst is
+    // how many it may send at once after a quieter stretch.
+    CLIENT_MESSAGE_RATE_LIMIT: parseNonNegativeInt('CLIENT_MESSAGE_RATE_LIMIT', process.env.CLIENT_MESSAGE_RATE_LIMIT, 1000),
+    CLIENT_MESSAGE_RATE_BURST: parsePositiveInt('CLIENT_MESSAGE_RATE_BURST', process.env.CLIENT_MESSAGE_RATE_BURST || undefined, 2000),
 };

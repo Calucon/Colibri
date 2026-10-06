@@ -66,6 +66,25 @@ describe('Config', () => {
         it.each(['-1', '1.5', 'lots'])('refuse to start with a limit of "%s"', async (raw) => {
             await expect(loadConfig({ TCP_INBOUND_BACKLOG_LIMIT: raw })).rejects.toThrow('TCP_INBOUND_BACKLOG_LIMIT');
         });
+
+        it('default to 1000 messages a second per client, in bursts of up to 2000', async () => {
+            const config = await loadConfig({ CLIENT_MESSAGE_RATE_LIMIT: undefined, CLIENT_MESSAGE_RATE_BURST: undefined });
+
+            expect(config.CLIENT_MESSAGE_RATE_LIMIT).toBe(1000);
+            expect(config.CLIENT_MESSAGE_RATE_BURST).toBe(2000);
+        });
+
+        it('take a rate limit of 0 to turn it off', async () => {
+            const config = await loadConfig({ CLIENT_MESSAGE_RATE_LIMIT: '0', CLIENT_MESSAGE_RATE_BURST: '500' });
+
+            expect(config.CLIENT_MESSAGE_RATE_LIMIT).toBe(0);
+            expect(config.CLIENT_MESSAGE_RATE_BURST).toBe(500);
+        });
+
+        // A bucket that can never hold a token would drop every update.
+        it('refuse a burst of 0', async () => {
+            await expect(loadConfig({ CLIENT_MESSAGE_RATE_BURST: '0' })).rejects.toThrow('CLIENT_MESSAGE_RATE_BURST');
+        });
     });
 
     it('loads .env without printing dotenv\'s banner and tip', async () => {

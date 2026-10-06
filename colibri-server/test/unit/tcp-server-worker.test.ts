@@ -757,6 +757,129 @@ describe('TCPServerWorker', () => {
         });
     });
 
+    // A backstop for one client's runaway send loop, which on its own could push the main thread
+    // past the backlog limit and cost every other client its updates too.
+    describe('per-client rate limit', () => {
+        const handshaked = function (name: string): { socket: FakeSocket; id: string } {
+            const client = connect();
+            client.socket.emit('data', encodeHandshakeFrame(PROTOCOL_VERSION, 'appA', name));
+            return client;
+        };
+
+        const burstOf = function (count: number, command = 'model::update', channel = 'objects'): Buffer {
+            return Buffer.concat(Array.from({ length: count }, (_, i) => encodeMessageFrame(wireMessage(channel, command, `{"id":"${i}"}`))));
+        };
+
+        const relayedFrom = (id: string): number =>
+            posted.filter(p => p.channel === 'clientMessage$' && (p.content.origin as { id: string }).id === id).length;
+        const warnings = (): string[] =>
+            posted.filter(p => p.channel === 'log' && p.content.level === LogLevel.Warn).map(p => String(p.content.msg));
+
+        beforeEach(() => {
+            vi.useFakeTimers();
+            worker.configure({ rateLimit: { messagesPerSecond: 100, burst: 200 } });
+        });
+
+        afterEach(() => {
+            vi.useRealTimers();
+        });
+
+        it('drops a client\'s model::update and broadcast::* past its burst, and warns once naming it', () => {
+            const runaway = handshaked('runaway-quest');
+
+            runaway.socket.emit('data', burstOf(150));
+            runaway.socket.emit('data', burstOf(150, 'broadcast::json', 'myChannel'));
+
+            expect(relayedFrom(runaway.id)).toBe(200);
+            expect(warnings()).toHaveLength(1);
+            expect(warnings()[0]).toContain('Unity client \'runaway-quest\'');
+            expect(warnings()[0]).toContain(runaway.id);
+            expect(warnings()[0]).toContain('more than 100');
+        });
+
+        it('lets the client through again at its sustained rate', () => {
+            const runaway = handshaked('runaway-quest');
+            runaway.socket.emit('data', burstOf(250));
+            expect(relayedFrom(runaway.id)).toBe(200);
+
+            vi.advanceTimersByTime(100);
+            runaway.socket.emit('data', burstOf(20));
+
+            expect(relayedFrom(runaway.id)).toBe(210);
+        });
+
+        it('never limits a request, a delete, a log line or a heartbeat reply', () => {
+            const runaway = handshaked('runaway-quest');
+            runaway.socket.emit('data', burstOf(300));
+            const before = relayedFrom(runaway.id);
+
+            runaway.socket.emit('data', Buffer.concat([
+                burstOf(50, 'model::request'),
+                burstOf(50, 'model::delete'),
+                burstOf(50, 'info', 'log'),
+                encodeHeartbeatFrame(1n),
+            ]));
+
+            expect(relayedFrom(runaway.id) - before).toBe(151);
+        });
+
+        it('does not hold one client\'s loop against another', () => {
+            const runaway = handshaked('runaway-quest');
+            const neighbour = handshaked('neighbour');
+
+            runaway.socket.emit('data', burstOf(500));
+            neighbour.socket.emit('data', burstOf(100));
+
+            expect(relayedFrom(neighbour.id)).toBe(100);
+        });
+
+        it('sums up the episode once the client has slowed down', () => {
+            const runaway = handshaked('runaway-quest');
+            runaway.socket.emit('data', burstOf(250));
+
+            vi.advanceTimersByTime(999);
+            internals.tick();
+            expect(warnings()).toHaveLength(1);
+
+            vi.advanceTimersByTime(1);
+            internals.tick();
+            expect(warnings()).toHaveLength(2);
+            expect(warnings()[1]).toContain('Unity client \'runaway-quest\'');
+            expect(warnings()[1]).toContain('back under the message rate limit; dropped 50 message(s)');
+        });
+
+        it('sums up the episode of a client that disconnects while over the limit', () => {
+            const runaway = handshaked('runaway-quest');
+            runaway.socket.emit('data', burstOf(250));
+
+            runaway.socket.emit('close');
+
+            expect(warnings()[1]).toContain('disconnected while over the message rate limit; dropped 50 message(s)');
+        });
+
+        it('limits nothing when turned off', () => {
+            worker.configure({ rateLimit: { messagesPerSecond: 0, burst: 1 } });
+            const client = handshaked('fast-but-allowed');
+
+            client.socket.emit('data', burstOf(5000));
+
+            expect(relayedFrom(client.id)).toBe(5000);
+            expect(warnings()).toEqual([]);
+        });
+
+        it('defaults to 1000 a second with bursts of 2000', () => {
+            worker.configure({});
+            const client = handshaked('quest');
+
+            client.socket.emit('data', burstOf(2500));
+            expect(relayedFrom(client.id)).toBe(2000);
+
+            vi.advanceTimersByTime(500);
+            client.socket.emit('data', burstOf(600));
+            expect(relayedFrom(client.id)).toBe(2500);
+        });
+    });
+
     describe('heartbeat replies', () => {
         it('relays an echoed ping timestamp as a colibri/latency message', () => {
             const { socket } = connect();

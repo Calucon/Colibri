@@ -198,3 +198,121 @@ describe('SocketIOServer', () => {
         });
     });
 });
+
+// The same per-client backstop as the TCP worker's, on the Socket.IO path: a web client's runaway
+// send loop could otherwise saturate the main thread for everyone.
+describe('SocketIOServer rate limit', () => {
+    let http: HttpServer;
+    let server: SocketIOServer;
+    let port: number;
+    let clients: ClientSocket[];
+    let logs: LogMessage[];
+    let logSubscription: Subscription;
+    let received: NetworkMessage[];
+
+    const start = async function (rateLimit: { messagesPerSecond: number; burst: number }): Promise<void> {
+        http = createServer();
+        await new Promise<void>(resolve => http.listen(0, '127.0.0.1', resolve));
+        port = (http.address() as AddressInfo).port;
+
+        server = new SocketIOServer();
+        server.start(http, { rateLimit });
+        server.messages$.subscribe(m => received.push(m));
+    };
+
+    beforeEach(() => {
+        clients = [];
+        logs = [];
+        received = [];
+        logSubscription = Service.output$.subscribe(msg => logs.push(msg));
+    });
+
+    afterEach(async () => {
+        logSubscription.unsubscribe();
+        for (const client of clients) client.disconnect();
+        server.stop();
+        await new Promise(resolve => http.once('close', resolve));
+    });
+
+    const connect = async function (app = 'appA'): Promise<ClientSocket> {
+        const socket = connectClient(`http://127.0.0.1:${port}`, {
+            query: { app, version: PROTOCOL_VERSION },
+            transports: ['websocket'],
+            reconnection: false,
+            forceNew: true,
+        });
+        clients.push(socket);
+        await new Promise(resolve => socket.once('colibri', resolve));
+        return socket;
+    };
+
+    // Socket.IO delivers a socket's events in order, so once this marker arrives everything sent
+    // before it has been through the middleware.
+    const flush = async function (socket: ClientSocket): Promise<void> {
+        const marker = firstValueFrom(server.messages$.pipe(filter(m => m.channel === 'marker' && m.origin?.id === socket.id)));
+        socket.emit('marker', { command: 'flush', payload: {} });
+        await marker;
+    };
+
+    const from = (socket: ClientSocket, command: string): number =>
+        received.filter(m => m.origin?.id === socket.id && m.command === command).length;
+    const warnings = (): string[] => logs.filter(l => l.level === LogLevel.Warn).map(l => l.message);
+
+    it('drops a client\'s model::update and broadcast::* past its burst, and warns once naming it', async () => {
+        await start({ messagesPerSecond: 1, burst: 5 });
+        const socket = await connect();
+
+        for (let i = 0; i < 20; i++) socket.emit('objects', { command: 'model::update', payload: { id: `o${i}` } });
+        for (let i = 0; i < 20; i++) socket.emit('myChannel', { command: 'broadcast::json', payload: { i } });
+        await flush(socket);
+
+        expect(from(socket, 'model::update') + from(socket, 'broadcast::json')).toBe(5);
+        const limited = warnings().filter(w => w.includes('more than 1 model::update'));
+        expect(limited).toHaveLength(1);
+        expect(limited[0]).toContain(`Web client ${socket.id}`);
+        expect(limited[0]).toContain('app \'appA\'');
+    });
+
+    it('never limits a request or a delete, and not another client', async () => {
+        await start({ messagesPerSecond: 1, burst: 2 });
+        const runaway = await connect();
+        const neighbour = await connect();
+
+        for (let i = 0; i < 10; i++) runaway.emit('objects', { command: 'model::update', payload: { id: `o${i}` } });
+        for (let i = 0; i < 10; i++) runaway.emit('objects', { command: 'model::request', payload: { id: `o${i}` } });
+        for (let i = 0; i < 10; i++) runaway.emit('objects', { command: 'model::delete', payload: { id: `o${i}` } });
+        neighbour.emit('objects', { command: 'model::update', payload: { id: 'n1' } });
+        neighbour.emit('objects', { command: 'model::update', payload: { id: 'n2' } });
+        await flush(runaway);
+        await flush(neighbour);
+
+        expect(from(runaway, 'model::update')).toBe(2);
+        expect(from(runaway, 'model::request')).toBe(10);
+        expect(from(runaway, 'model::delete')).toBe(10);
+        expect(from(neighbour, 'model::update')).toBe(2);
+    });
+
+    it('limits nothing when turned off', async () => {
+        await start({ messagesPerSecond: 0, burst: 1 });
+        const socket = await connect();
+
+        for (let i = 0; i < 50; i++) socket.emit('objects', { command: 'model::update', payload: { id: `o${i}` } });
+        await flush(socket);
+
+        expect(from(socket, 'model::update')).toBe(50);
+        expect(warnings().filter(w => w.includes('rate limit'))).toEqual([]);
+    });
+
+    it('sums up the episode of a client that disconnects while over the limit', async () => {
+        await start({ messagesPerSecond: 1, burst: 1 });
+        const socket = await connect();
+        for (let i = 0; i < 4; i++) socket.emit('objects', { command: 'model::update', payload: { id: `o${i}` } });
+        await flush(socket);
+
+        const gone = firstValueFrom(server.clientDisconnected$);
+        socket.disconnect();
+        await gone;
+
+        expect(warnings().some(w => w.includes('disconnected while over the message rate limit; dropped 3 message(s)'))).toBe(true);
+    });
+});

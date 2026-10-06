@@ -74,6 +74,114 @@ export const describeEpisode = function (summary: EpisodeSummary): string {
     return `dropped ${summary.dropped} message(s) over ${summary.seconds.toFixed(1)} s`;
 };
 
+export interface RateLimit {
+    // Droppable messages a second a single client may send, sustained. 0 turns the limit off.
+    messagesPerSecond: number;
+    // How many it may send at once, after a quieter stretch.
+    burst: number;
+}
+
+// Well above what any legitimate client sends - a Quest syncing 10 objects at 72 Hz sends 720
+// updates a second - so this only ever bites on a runaway loop: a sync without a rate cap, or a
+// send in Update() with nothing changing, which on its own can saturate the server for everyone.
+export const DEFAULT_RATE_LIMIT: RateLimit = { messagesPerSecond: 1000, burst: 2000 };
+
+// The classic token bucket: holds up to `burst` tokens, refills at `messagesPerSecond`, and a
+// message passes only if it can take one.
+export class TokenBucket {
+    private tokens: number;
+    private refilledAt: number;
+
+    public constructor(private readonly limit: RateLimit, now: number) {
+        this.tokens = limit.burst;
+        this.refilledAt = now;
+    }
+
+    public take(now: number): boolean {
+        if (now > this.refilledAt) {
+            this.tokens = Math.min(this.limit.burst, this.tokens + ((now - this.refilledAt) * this.limit.messagesPerSecond) / 1000);
+            this.refilledAt = now;
+        }
+
+        if (this.tokens < 1) return false;
+        this.tokens -= 1;
+        return true;
+    }
+}
+
+export interface RateLimitReporter<K> {
+    // A client's first message over the limit since it was last under it.
+    started(client: K): void;
+    // The client has been under the limit for EPISODE_QUIET_MILLIS, or (`left`) disconnected.
+    ended(client: K, summary: EpisodeSummary, left: boolean): void;
+}
+
+// A token bucket per client, for droppable messages only (see isDroppable), plus one drop episode
+// per client so each stretch of dropping is reported once rather than per message. Shared by both
+// transports; K is whatever object the transport keeps per client.
+export class InboundRateLimiter<K> {
+    private readonly clients = new Map<K, { bucket: TokenBucket; episode: DropEpisode }>();
+    // Only these can have an episode to end, so sweep() never walks every connected client.
+    private readonly dropping = new Set<K>();
+
+    public constructor(
+        public readonly limit: RateLimit,
+        private readonly reporter: RateLimitReporter<K>
+    ) {}
+
+    // Whether a droppable message from this client may pass.
+    public admit(client: K, now: number): boolean {
+        if (this.limit.messagesPerSecond <= 0) return true;
+
+        let state = this.clients.get(client);
+        if (!state) {
+            state = { bucket: new TokenBucket(this.limit, now), episode: new DropEpisode() };
+            this.clients.set(client, state);
+        }
+
+        if (state.bucket.take(now)) return true;
+
+        if (state.episode.recordDrop(now)) {
+            this.dropping.add(client);
+            this.reporter.started(client);
+        }
+        return false;
+    }
+
+    // Reports the end of every episode that has gone quiet. Call it periodically.
+    public sweep(now: number): void {
+        for (const client of this.dropping) {
+            const summary = this.clients.get(client)?.episode.endIfQuiet(now);
+            if (!summary) continue;
+
+            this.dropping.delete(client);
+            this.reporter.ended(client, summary, false);
+        }
+    }
+
+    // For a client that has gone: reports its episode if it was in one, and lets go of it.
+    public forget(client: K): void {
+        const summary = this.clients.get(client)?.episode.end();
+        this.clients.delete(client);
+        this.dropping.delete(client);
+        if (summary) this.reporter.ended(client, summary, true);
+    }
+}
+
+export const rateLimitStartWarning = function (who: string, limit: RateLimit): string {
+    return (
+        `${who} is sending more than ${limit.messagesPerSecond} model::update and broadcast::* messages a second ` +
+        `(CLIENT_MESSAGE_RATE_LIMIT, bursts up to CLIENT_MESSAGE_RATE_BURST=${limit.burst}); dropping what is over the limit ` +
+        'until it slows down. The usual cause is something sending every frame without a rate cap.'
+    );
+};
+
+export const rateLimitEndWarning = function (who: string, summary: EpisodeSummary, left: boolean): string {
+    return left
+        ? `${who} disconnected while over the message rate limit; ${describeEpisode(summary)}.`
+        : `${who} is back under the message rate limit; ${describeEpisode(summary)}.`;
+};
+
 // The worker side of the count of TCP messages posted to the main thread and not yet dispatched
 // there - the depth of the worker->main MessagePort queue, which nothing else can observe.
 //

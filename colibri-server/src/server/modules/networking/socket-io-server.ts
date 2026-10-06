@@ -14,6 +14,20 @@ import {
     protocolAcceptance,
     protocolRejection,
 } from './protocol.js';
+import {
+    DEFAULT_RATE_LIMIT,
+    EPISODE_QUIET_MILLIS,
+    InboundRateLimiter,
+    RateLimit,
+    isDroppable,
+    rateLimitEndWarning,
+    rateLimitStartWarning,
+} from './inbound-limits.js';
+
+export interface SocketIoServerOptions {
+    // Per client; see InboundRateLimiter.
+    rateLimit?: RateLimit;
+}
 
 // The largest packet a web client may send. engine.io's default is 1e6 bytes, past which the
 // client is disconnected outright - while a TCP client may send frames of up to MAX_FRAME_LENGTH
@@ -45,7 +59,17 @@ export class SocketIOServer extends Service implements NetworkServer {
     private readonly clientDisconnectedStream = new Subject<SocketIoClient>();
     private readonly messageStream = new Subject<NetworkMessage>();
 
-    public start(server: HttpServer): void {
+    // The same per-client backstop as the TCP worker's, against a web client's runaway send loop.
+    private rateLimiter = this.createRateLimiter(DEFAULT_RATE_LIMIT);
+    private rateLimitSweep: NodeJS.Timeout | undefined;
+
+    public start(server: HttpServer, options: SocketIoServerOptions = {}): void {
+        this.rateLimiter = this.createRateLimiter(options.rateLimit ?? DEFAULT_RATE_LIMIT);
+        // Ends the episodes of clients that have slowed down again. Never the reason the process
+        // stays alive.
+        this.rateLimitSweep = setInterval(() => this.rateLimiter.sweep(performance.now()), EPISODE_QUIET_MILLIS / 2);
+        this.rateLimitSweep.unref();
+
         this.ioServer = new SocketIoServer(server, {
             cors: {
                 origin: '*'
@@ -64,10 +88,19 @@ export class SocketIOServer extends Service implements NetworkServer {
     // Tolerates never having been started - a signal (or a crash) arriving while startup()
     // is still running must not throw here and skip the shutdown steps behind it.
     public stop(): void {
+        clearInterval(this.rateLimitSweep);
         if (!this.ioServer) return;
 
         this.ioServer.close();
         this.logInfo('Stopped SocketIO server');
+    }
+
+    private createRateLimiter(limit: RateLimit): InboundRateLimiter<SocketIoClient> {
+        const describe = (client: SocketIoClient) => `Web client ${client.id} (app '${client.app}', ${client.name})`;
+        return new InboundRateLimiter<SocketIoClient>(limit, {
+            started: (client) => this.logWarning(rateLimitStartWarning(describe(client), limit)),
+            ended: (client, summary, left) => this.logWarning(rateLimitEndWarning(describe(client), summary, left)),
+        });
     }
 
     public get clients$(): Observable<SocketIoClient[]> {
@@ -214,6 +247,11 @@ export class SocketIOServer extends Service implements NetworkServer {
                 return;
             }
 
+            if (isDroppable(channel, body.command) && !this.rateLimiter.admit(client, performance.now())) {
+                next();
+                return;
+            }
+
             const msg: NetworkMessage = {
                 origin: client,
                 channel: channel,
@@ -244,6 +282,7 @@ export class SocketIOServer extends Service implements NetworkServer {
 
         for (const rc of removedClients) {
             this.removeFromAppIndex(rc);
+            this.rateLimiter.forget(rc);
             if (rc.app !== 'colibri') { // ignore colibri web interface clients
                 this.logDebug(`Colibri client '${rc.name}' (${rc.id}) disconnected`, {
                     clientApp: rc.app,

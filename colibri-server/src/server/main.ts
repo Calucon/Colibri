@@ -66,10 +66,12 @@ const startup = async () => {
     // server is still useful without persistence, it just has to say so.
     await dataRootCheck.check();
 
+    const rateLimit = { messagesPerSecond: Config.CLIENT_MESSAGE_RATE_LIMIT, burst: Config.CLIENT_MESSAGE_RATE_BURST };
     const httpServer = webServer.start();
-    socketioServer.start(httpServer);
+    socketioServer.start(httpServer, { rateLimit });
     tcpServer.start(Config.TCP_PORT, Config.TCP_HOST, {
         inboundBacklogLimit: Config.TCP_INBOUND_BACKLOG_LIMIT,
+        rateLimit,
     });
     voiceServer.start(Config.VOICE_PORT, Config.VOICE_HOST);
 };

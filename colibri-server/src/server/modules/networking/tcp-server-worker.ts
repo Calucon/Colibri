@@ -17,7 +17,17 @@ import {
     ownBytes,
     protocolRejection,
 } from './protocol.js';
-import { DropEpisode, InboundBacklog, describeEpisode, isDroppable } from './inbound-limits.js';
+import {
+    DEFAULT_RATE_LIMIT,
+    DropEpisode,
+    InboundBacklog,
+    InboundRateLimiter,
+    RateLimit,
+    describeEpisode,
+    isDroppable,
+    rateLimitEndWarning,
+    rateLimitStartWarning,
+} from './inbound-limits.js';
 
 export const TCP_SERVER_WORKER = fileURLToPath(import.meta.url);
 
@@ -61,6 +71,8 @@ export interface TcpServerOptions {
     inboundBacklog?: Int32Array;
     // 0 turns the limit off.
     inboundBacklogLimit?: number;
+    // Per client; see InboundRateLimiter.
+    rateLimit?: RateLimit;
 }
 
 // The worker thread only ever deals in raw payload bytes (straight off the wire, or
@@ -131,6 +143,10 @@ export class TCPServerWorker extends WorkerService {
     // posts a second to the thread that is already behind.
     private readonly backlogEpisode = new DropEpisode();
 
+    // The backstop for one runaway client, which on its own can push the main thread into the
+    // backlog limit above and so cost every other client its updates too.
+    private rateLimiter = this.createRateLimiter(DEFAULT_RATE_LIMIT);
+
     // Remote address -> when a Colibri 1.x client there was last warned about. Kept in
     // warning order (an address is re-inserted each time), so the oldest entry is always first.
     private readonly v1WarnedAt = new Map<string, number>();
@@ -195,6 +211,15 @@ export class TCPServerWorker extends WorkerService {
             options.inboundBacklog,
             options.inboundBacklogLimit ?? DEFAULT_INBOUND_BACKLOG_LIMIT
         );
+        this.rateLimiter = this.createRateLimiter(options.rateLimit ?? DEFAULT_RATE_LIMIT);
+    }
+
+    private createRateLimiter(limit: RateLimit): InboundRateLimiter<TcpClient> {
+        const describe = (client: TcpClient) => `Unity client '${client.name}' (${client.id}, app '${client.app}', ${client.address})`;
+        return new InboundRateLimiter<TcpClient>(limit, {
+            started: (client) => this.logWarning(rateLimitStartWarning(describe(client), limit)),
+            ended: (client, summary, left) => this.logWarning(rateLimitEndWarning(describe(client), summary, left)),
+        });
     }
 
     public start(port: number, host: string): void {
@@ -210,7 +235,10 @@ export class TCPServerWorker extends WorkerService {
     private tick(): void {
         this.handleHeartbeat();
 
-        const backlogSummary = this.backlogEpisode.endIfQuiet(performance.now());
+        const now = performance.now();
+        this.rateLimiter.sweep(now);
+
+        const backlogSummary = this.backlogEpisode.endIfQuiet(now);
         if (backlogSummary) {
             this.logWarning(
                 `The main thread has caught up with TCP messages again; ${describeEpisode(backlogSummary)} while it was behind.`
@@ -396,7 +424,12 @@ export class TCPServerWorker extends WorkerService {
                         break;
                     }
 
-                    if (isDroppable(frame.channel, frame.command) && this.dropForBacklog()) break;
+                    // The client's own limit first: a message over it is the client's doing, and
+                    // counts towards its episode rather than the server's.
+                    if (isDroppable(frame.channel, frame.command)
+                        && (!this.rateLimiter.admit(client, performance.now()) || this.dropForBacklog())) {
+                        break;
+                    }
 
                     this.postClientMessage(client, frame.channel, frame.command, frame.payload);
                     break;
@@ -596,6 +629,7 @@ export class TCPServerWorker extends WorkerService {
         this.clients.delete(client.id);
         this.waitingClients.delete(client.id);
         this.removeFromAppIndex(client);
+        this.rateLimiter.forget(client);
         this.postMessage('clientDisconnected$', { id: client.id });
     }
 
