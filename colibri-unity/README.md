@@ -431,7 +431,10 @@ other clients changed in the meantime arrives. It does not catch up on everythin
 
 A refused protocol version is final: `Status` becomes `ProtocolMismatch`, the client stops
 reconnecting, and whatever was queued or is sent afterwards is dropped, with a one-time warning.
-Disabling and re-enabling the `WebServerConnection` component tries again.
+`ServerVersion` and `ProtocolMismatchReason` say what the server answered. Disabling and
+re-enabling the `WebServerConnection` component tries again. A mismatch the server could not
+report — see [Requirements](#requirements) — shows up in `SuspectedProtocolMismatch` instead, while
+the client keeps retrying.
 
 ### Voice Chat
 
