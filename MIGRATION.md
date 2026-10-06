@@ -128,6 +128,30 @@ and the 1.x-client warning above included, and so are the log lines clients send
 with `CONSOLE_LOG_BROADCAST_TRAFFIC=true`. The bundled `docker-compose.yml` caps the container log
 at five files of 10 MB.
 
+**New limits keep one client, or one class, from overloading the server.** Each is an environment
+variable, described in [`.env.example`](colibri-server/.env.example):
+
+- `CLIENT_MESSAGE_RATE_LIMIT` (default 1000, `0` for none) and `CLIENT_MESSAGE_RATE_BURST`
+  (default 2000): how many broadcasts and model updates a second one client, Unity or web, may
+  send. Beyond that its broadcasts are dropped, and its model updates are held back and merged per
+  object, so the latest value of every field still arrives.
+- `TCP_INBOUND_BACKLOG_LIMIT` (default 2000, `0` for none): how many messages from Unity clients
+  may be waiting for the server's main thread before it treats their broadcasts and model updates
+  the same way.
+- `TCP_IDLE_TIMEOUT_SECONDS` (default 10, `0` for never): a Unity client that sends nothing for
+  this long is disconnected. A headset that drops off the Wi-Fi or goes to sleep does not close
+  its connection, and used to count as connected, keeping its app's synced objects alive, until
+  the operating system gave up on it many minutes later.
+- `APP_CLIENT_WARNING_THRESHOLD` (default 8, `0` for never): a warning when one app has more
+  clients than this. Every message goes to each of an app's other clients, so the server's work
+  grows with the square of an app's size; a class whose groups all kept the same app name is the
+  usual way to get there.
+
+Each stretch of dropping or holding back is logged as one warning when it starts, naming the client
+for the rate limit, and one summary with the counts once it is over. The rate limit's default is
+far above what a lab group sends: even ten objects each sending in every frame at 72 Hz make 720
+updates a second.
+
 ---
 
 ## colibri-web
