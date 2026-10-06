@@ -277,6 +277,41 @@ namespace HCIKonstanz.Colibri.E2E
         }
 
         /// <summary>
+        /// Quitting must not cost the last changes: the server keeps the object for the clients
+        /// that stay, and it would keep it where it was a moment before. Unity sends
+        /// OnApplicationQuit to every active object before tearing any down; here it is sent to
+        /// the ticker alone, since quitting for real would end the test run.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator WhatTheLimitHoldsIsSentWhenTheAppQuits()
+        {
+            var model = SpawnConfigured<E2ESyncModel>("held-at-quit", _ => { });
+            yield return LetInitialStateArrive();
+
+            SyncSettings.MaxSendRate = 1;
+            try
+            {
+                model.Label = "sent";
+                yield return Peer.Expect(Channel, "model::update");
+
+                model.Label = "held";
+                yield return null;
+                yield return null;
+
+                var ticker = Resources.FindObjectsOfTypeAll<SyncTicker>().Single();
+                ticker.SendMessage("OnApplicationQuit", SendMessageOptions.DontRequireReceiver);
+
+                yield return Peer.Expect(Channel, "model::update",
+                    frame => Assert.That(TcpPeer.Json(frame)["label"].Value<string>(), Is.EqualTo("held")),
+                    timeoutSeconds: 0.5f);
+            }
+            finally
+            {
+                SyncSettings.ResetMaxSendRate();
+            }
+        }
+
+        /// <summary>
         /// The delete goes out at once, and what the limit was holding goes nowhere: sent after the
         /// delete, it would bring the object back on the server and on every other client.
         /// </summary>

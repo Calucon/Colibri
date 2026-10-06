@@ -159,6 +159,23 @@ namespace HCIKonstanz.Colibri.Synchronization
                 Compact();
         }
 
+        /// <summary>
+        /// Leaving Play mode or the app: send what the send-rate limit is still holding back, or
+        /// the last moves before quitting never reach the server, which keeps the objects for the
+        /// clients that stay. Unity sends OnApplicationQuit to every active object before it
+        /// tears any of them down, so the connection is still there - and this object is always
+        /// active, which the synced objects themselves need not be.
+        /// </summary>
+        private void OnApplicationQuit() => FlushHeldUpdates();
+
+        /// <summary>Sends every object's waiting update now, whatever the send-rate limit says.</summary>
+        internal static void FlushHeldUpdates()
+        {
+            var now = Time.unscaledTimeAsDouble;
+            for (var i = 0; i < _tickables.Count; i++)
+                _tickables[i]?.FlushUpdate(now, 0);
+        }
+
         private static void Compact()
         {
             _hasEmptySlots = false;
