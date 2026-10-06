@@ -56,13 +56,14 @@ enum Codec {
 // |userId(2)|sequence(2)|frameSize(2)|codec(1)|, see the message handler.
 const HEADER_LENGTH = 7;
 
-// A source sending malformed packets does so at packet rate (up to ~50/s for a broken voice
-// client), so it is reported at most once per this interval rather than once per packet...
-const MALFORMED_REPORT_INTERVAL_MILLIS = 10000;
-// ...and only this many distinct sources are remembered at a time, so a burst from many
-// addresses can't grow the map without bound. Once full, new sources go unreported until
+// A source sending malformed packets, or a peer that can't be relayed to, fails at packet rate
+// (up to ~50/s per voice client), so each is reported at most once per this interval rather
+// than once per packet...
+const REPORT_INTERVAL_MILLIS = 10000;
+// ...and only this many distinct sources and peers are remembered at a time, so a burst from
+// many addresses can't grow the map without bound. Once full, new ones go unreported until
 // the next prune frees a slot.
-const MALFORMED_REPORT_MAX_SOURCES = 100;
+const REPORT_MAX_KEYS = 100;
 
 export class VoiceServer extends Service {
 
@@ -82,9 +83,9 @@ export class VoiceServer extends Service {
     // tick; see the comment there.
     private savingRecordings = false;
 
-    // Source address:port -> when a malformed packet from it was last reported. See
-    // MALFORMED_REPORT_INTERVAL_MILLIS; pruned every disconnect-check tick.
-    private readonly malformedReportedAt = new Map<string, number>();
+    // Report key (see reportMalformedPacket and reportRelayFailure) -> when it was last
+    // reported. See REPORT_INTERVAL_MILLIS; pruned every disconnect-check tick.
+    private readonly reportedAt = new Map<string, number>();
 
     public constructor(private samplingRate: number, private voiceRecordingPath: string, private recordingVoiceData: boolean = false) {
         super();
@@ -164,11 +165,18 @@ export class VoiceServer extends Service {
             for (const peer of this.getClientsCache()) {
                 if (peer === voiceClient) continue;
 
-                this.udpSocket.send(message, 0, message.length, peer.port, peer.ip, (err) => {
-                    if (err) {
-                        this.logError(`Failed to relay voice packet to ${peer.ip}:${peer.port}: ${err.message}`, false);
-                    }
-                });
+                // send() checks its arguments synchronously and throws, and anything thrown
+                // out of this listener is an uncaught exception that shuts the server down.
+                // Nothing that registers should fail those checks (see the port 0 check
+                // above), so this is a backstop. It also keeps one peer that can't be sent
+                // to from stopping the relay to every peer after it.
+                try {
+                    this.udpSocket.send(message, 0, message.length, peer.port, peer.ip, (err) => {
+                        if (err) this.reportRelayFailure(peer, err, Date.now());
+                    });
+                } catch (err) {
+                    this.reportRelayFailure(peer, err, nowMillis);
+                }
             }
 
             if (codec === Codec.PCM && this.recordingVoiceData) {
@@ -185,7 +193,7 @@ export class VoiceServer extends Service {
 
         // Check if clients disconnected every second
         this.disconnectCheckInterval = setInterval(() => {
-            this.pruneMalformedReports(Date.now());
+            this.pruneReports(Date.now());
             void this.checkClientsDisconnected();
         }, 1000);
     }
@@ -197,19 +205,36 @@ export class VoiceServer extends Service {
     }
 
     private reportMalformedPacket(source: string, reason: string, nowMillis: number): void {
-        const reportedAt = this.malformedReportedAt.get(source);
-        if (reportedAt !== undefined && nowMillis - reportedAt < MALFORMED_REPORT_INTERVAL_MILLIS) return;
-        if (reportedAt === undefined && this.malformedReportedAt.size >= MALFORMED_REPORT_MAX_SOURCES) return;
+        if (!this.claimReport(source, nowMillis)) return;
 
-        this.malformedReportedAt.set(source, nowMillis);
         this.logError(`Ignoring malformed voice packet from ${source}: ${reason}`
-            + ` (further ones from this source are not reported for ${MALFORMED_REPORT_INTERVAL_MILLIS / 1000}s)`, false);
+            + ` (further ones from this source are not reported for ${REPORT_INTERVAL_MILLIS / 1000}s)`, false);
     }
 
-    private pruneMalformedReports(nowMillis: number): void {
-        for (const [source, reportedAt] of this.malformedReportedAt) {
-            if (nowMillis - reportedAt >= MALFORMED_REPORT_INTERVAL_MILLIS) {
-                this.malformedReportedAt.delete(source);
+    private reportRelayFailure(peer: VoiceClient, err: unknown, nowMillis: number): void {
+        const target = `${peer.ip}:${peer.port}`;
+        // Keyed apart from the peer's own malformed packets, so neither report hides the other.
+        if (!this.claimReport(`relay to ${target}`, nowMillis)) return;
+
+        this.logError(`Failed to relay voice packet to ${target}: ${err instanceof Error ? err.message : String(err)}`
+            + ` (further failures for this peer are not reported for ${REPORT_INTERVAL_MILLIS / 1000}s)`, false);
+    }
+
+    // True, and remembers the time, if `key` may be reported now: at most once per
+    // REPORT_INTERVAL_MILLIS, and only while fewer than REPORT_MAX_KEYS keys are remembered.
+    private claimReport(key: string, nowMillis: number): boolean {
+        const reportedAt = this.reportedAt.get(key);
+        if (reportedAt !== undefined && nowMillis - reportedAt < REPORT_INTERVAL_MILLIS) return false;
+        if (reportedAt === undefined && this.reportedAt.size >= REPORT_MAX_KEYS) return false;
+
+        this.reportedAt.set(key, nowMillis);
+        return true;
+    }
+
+    private pruneReports(nowMillis: number): void {
+        for (const [key, reportedAt] of this.reportedAt) {
+            if (nowMillis - reportedAt >= REPORT_INTERVAL_MILLIS) {
+                this.reportedAt.delete(key);
             }
         }
     }

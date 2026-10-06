@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as dgram from 'dgram';
 import { once } from 'events';
 import { AddressInfo } from 'net';
@@ -19,8 +19,8 @@ const voicePacket = function (userId: number, sequence: number, data: number[] =
 interface VoiceServerInternals {
     udpSocket: dgram.Socket;
     clients: Map<string, unknown>;
-    malformedReportedAt: Map<string, number>;
-    pruneMalformedReports(nowMillis: number): void;
+    reportedAt: Map<string, number>;
+    pruneReports(nowMillis: number): void;
 }
 
 describe('VoiceServer', () => {
@@ -52,6 +52,7 @@ describe('VoiceServer', () => {
         });
 
     const malformedReports = () => logs.filter(l => l.origin === 'VoiceServer' && l.level === LogLevel.Error && /malformed/i.test(l.message));
+    const relayFailures = () => logs.filter(l => l.origin === 'VoiceServer' && l.level === LogLevel.Error && /failed to relay/i.test(l.message));
 
     // Relays a valid packet from `from` to `to` and waits for it: a datagram sent earlier from
     // the same loopback socket has been handled by the time this one comes out the other side.
@@ -132,8 +133,8 @@ describe('VoiceServer', () => {
         expect(malformedReports()).toHaveLength(2);
 
         // Once the interval has passed, the same source is reported again.
-        internals.pruneMalformedReports(Date.now() + 10000);
-        expect(internals.malformedReportedAt.size).toBe(0);
+        internals.pruneReports(Date.now() + 10000);
+        expect(internals.reportedAt.size).toBe(0);
         await send(a, [ 1, 2 ]);
         await roundTrip(a, b, 1);
         expect(malformedReports()).toHaveLength(3);
@@ -160,6 +161,61 @@ describe('VoiceServer', () => {
         expect(malformedReports()[0]!.message).toContain('127.0.0.1:0');
     });
 
+    it('keeps relaying to the other peers when send() throws for one of them', async () => {
+        // Nothing that registers through the listener fails send()'s argument checks any more
+        // (port 0 is dropped above), so a peer it rejects is planted directly. It goes in first,
+        // so every relay reaches it before a and b.
+        internals.clients.set('127.0.0.1:0', {
+            ip: '127.0.0.1', port: 0, userId: 9, lastSequence: 0, lastHeartbeat: Date.now(),
+            frameSize: 960, frameSizeMillis: 20, codec: 0, recordingStartDate: new Date(), recordingData: { length: 0 },
+        });
+        const a = await openClient();
+        const b = await openClient();
+
+        // The ERR_SOCKET_BAD_PORT thrown for the planted peer used to escape the listener
+        // (an uncaught exception) and skip every peer after it.
+        await send(a, voicePacket(1, 1));
+        for (let i = 0; i < 5; i++) {
+            expect(await roundTrip(b, a, 2)).toEqual(voicePacket(2, 1));
+            expect(await roundTrip(a, b, 1)).toEqual(voicePacket(1, 1));
+        }
+
+        // Ten failed relays to it, reported once.
+        expect(relayFailures()).toHaveLength(1);
+        expect(relayFailures()[0]!.message).toContain('127.0.0.1:0');
+        expect(relayFailures()[0]!.message).toContain('Port should be > 0');
+    });
+
+    it('reports a peer that keeps failing asynchronously once per interval', async () => {
+        const a = await openClient();
+        const b = await openClient();
+        const bPort = (b.address() as AddressInfo).port;
+
+        // An asynchronous send error, as for a peer that has dropped off the network
+        // (EHOSTUNREACH), arrives in the callback for every packet relayed to it.
+        const realSend = internals.udpSocket.send.bind(internals.udpSocket) as (...args: unknown[]) => void;
+        vi.spyOn(internals.udpSocket, 'send').mockImplementation(((...args: unknown[]) => {
+            if (args[3] !== bPort) return realSend(...args);
+            const callback = args[args.length - 1] as (err: Error | null) => void;
+            setImmediate(() => callback(Object.assign(new Error('send EHOSTUNREACH'), { code: 'EHOSTUNREACH' })));
+        }) as never);
+
+        await send(b, voicePacket(2, 1));
+        for (let i = 0; i < 5; i++) {
+            await send(a, voicePacket(1, 1));
+            expect(await roundTrip(b, a, 2)).toEqual(voicePacket(2, 1));
+        }
+        await new Promise(resolve => setImmediate(resolve));
+
+        expect(relayFailures()).toHaveLength(1);
+        expect(relayFailures()[0]!.message).toContain(`127.0.0.1:${bPort}: send EHOSTUNREACH`);
+
+        // A peer's own malformed packets are reported separately from relay failures to it.
+        await send(b, [ 1, 2 ]);
+        await roundTrip(b, a, 2);
+        expect(malformedReports()).toHaveLength(1);
+    });
+
     it('bounds what it remembers about malformed senders', () => {
         // Synthetic deliveries from many distinct sources, as from a flood of spoofed
         // addresses - no real socket can send from that many ports quickly.
@@ -167,7 +223,7 @@ describe('VoiceServer', () => {
             internals.udpSocket.emit('message', Buffer.from([ 1, 2 ]), { address: '10.0.0.1', port: 1024 + i, family: 'IPv4', size: 2 });
         }
 
-        expect(internals.malformedReportedAt.size).toBeLessThanOrEqual(100);
+        expect(internals.reportedAt.size).toBeLessThanOrEqual(100);
         expect(malformedReports().length).toBeLessThanOrEqual(100);
         expect(internals.clients.size).toBe(0);
     });
