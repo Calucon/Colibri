@@ -228,6 +228,59 @@ rationale, migration steps, and what the Editor verification did and did not cov
 - **`Store`** serializes with Newtonsoft instead of `JsonUtility`, which cannot handle dictionaries,
   properties, or top-level arrays and so silently disagreed with what `Sync` can carry.
 
+## SyncBehaviour and SyncTransform
+
+- **Showing and hiding.** Deactivating a `SyncTransform`'s GameObject hides its copies on the other
+  clients, and reactivating it shows them again, as in 1.3.1: its `Active` member reads
+  `activeSelf`, and the poll keeps running while the object is inactive, since being inactive is
+  the state to sync. Received values are applied through `SetActive` and not echoed back.
+  Disabling only the component (`enabled = false`) pauses its syncing, and deactivating a parent
+  changes nothing elsewhere.
+- **Leaving Play mode or quitting deletes nothing.** `OnDestroy` sends `model::delete` unless the
+  application is quitting, and it learned that only from `OnApplicationQuit` — which Unity does not
+  send to inactive GameObjects. So an object that was hidden, by this client or by another one,
+  when Play mode ended or the app quit was deleted on the server, and with it every other client's
+  copy (in 1.3.1 too). `OnDestroy` now also checks `Application.quitting`, which Unity raises
+  whatever the object's state. Destroying an object and unloading its scene still delete it for
+  everyone.
+- **A value from another client no longer swallows the next local change.** Echo suppression was a
+  per-member "skip the next change" flag (in 1.3.1 too). It went stale whenever the poll saw no
+  change afterwards — two updates between polls that ended where they started, or any update while
+  the component was disabled — and then silently dropped the next genuine local change. Received
+  values are now latched as the known state instead, and `TriggerSync` sends the full state in one
+  message.
+- **Wire names are lowercased the same way on every machine.** Model channels and `[Sync]` member
+  names used `ToLower()`, which on Turkish and Azerbaijani systems turns `I` into a dotless `ı` —
+  `PhysicsId` went out under a name no other client uses, and stopped syncing. They now use
+  `ToLowerInvariant()`, matching colibri-web.
+- A dead prefab check in `SyncBehaviour.Awake` that compared a struct with `null` (compiler warning
+  CS0472) is gone; behaviour is unchanged.
+
+## Meta Quest and Android
+
+- **The package compiles for Android on Unity 2022.3.** `VoiceBroadcast` subscribed to
+  `PermissionCallbacks.PermissionRequestDismissed`, which only exists from Unity 2023.1 on, so every
+  2022.3 project with the Android target active failed to compile (1.3.1 included). The
+  subscription is now limited to 2023.1 and newer; a refused microphone permission is still logged
+  on 2022.3.
+- **Android build check.** With the Android target active, Colibri warns in the console after every
+  domain reload, and *Window → Colibri Configuration* gets an *Android / Meta Quest* section with a
+  one-click fix per problem: *Internet Access* left at *Auto*, which may leave the INTERNET
+  permission out of the build, and *Allow downloads over HTTP* blocking plain HTTP to a server that
+  is not `localhost` while SSL is off, which fails every `Store` call on the headset. The Setup
+  window's body now scrolls.
+- **No expression trees on IL2CPP.** The `[Sync]` accessors were built with `Expression.Compile()`
+  (in 1.3.1 too), which IL2CPP does not compile but interprets — slowly, and for value types through
+  generic code IL2CPP may not have generated. Under `ENABLE_IL2CPP` a property now gets
+  open-instance delegates bound to its get and set methods, which allocate nothing, and a field goes
+  through `FieldInfo.GetValue`/`SetValue`, which boxes a value type on every poll. Mono — the Editor
+  and Mono players — keeps the compiled expressions. An accessor that cannot be built is reported
+  per member instead of escaping from `Awake`.
+- **`[Sync]` members survive managed code stripping.** Nothing references them except through
+  reflection, which is exactly what stripping removes above the *Minimal* level. `SyncAttribute`
+  now derives from `UnityEngine.Scripting.PreserveAttribute`, which the linker honours, and on a
+  property it keeps the getter and setter too.
+
 ## Getting started
 
 Colibri is used to teach, by people who know some C# and almost no Unity. Every silent failure is
@@ -304,7 +357,10 @@ an hour they do not spend on their prototype, so:
   iterating an index loop over its registrations. `SyncedAttribute` became a typed hierarchy whose
   per-instance tracker compares with `EqualityComparer<TValue>.Default` — the `IEquatable<>` path
   for `Vector3`/`Quaternion` — so an unchanged attribute costs a comparison and nothing else. A
-  value is boxed only on the frame it actually changes, to hand it to `AddUpdate`.
+  value is boxed only on the frame it actually changes, to hand it to `AddUpdate`. The one
+  exception is a value-type `[Sync]` *field* on IL2CPP, which is read through reflection and boxes
+  on every poll (see *Meta Quest and Android*); properties, and every `SyncTransform` member, are
+  unaffected.
 - Poll (`Update`) and flush (`LateUpdate`) are separate phases, which keeps the existing
   one-message-per-frame coalescing while removing the `async void` + `UniTask.Yield(PostLateUpdate)`
   state machine that used to allocate once per change.
