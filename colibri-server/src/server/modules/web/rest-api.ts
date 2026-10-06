@@ -25,6 +25,9 @@ export class RestAPI extends Service {
 
     private saveTimeout: NodeJS.Timeout | undefined;
     private savePromise: Promise<void> = Promise.resolve();
+    // Whether `data` holds a change store.json does not have yet - set by every change,
+    // cleared when a write takes its snapshot, and set again if that write fails.
+    private dirty = false;
 
     public constructor(dataPath: string, webserver: WebServer) {
         super();
@@ -165,12 +168,15 @@ export class RestAPI extends Service {
 
     // Cancels any pending debounce and writes the current data immediately - used at
     // shutdown so the last update before the process exits isn't lost to an unflushed timer.
+    // Writes only what is unsaved: it used to rewrite store.json at every shutdown, which on
+    // a DATA_ROOT the server cannot write logged an EACCES even when nothing had changed.
     public async flush(): Promise<void> {
         if (this.saveTimeout) {
             clearTimeout(this.saveTimeout);
             this.saveTimeout = undefined;
         }
         await this.savePromise;
+        if (!this.dirty) return;
         this.savePromise = this.writeStoreFile();
         await this.savePromise;
     }
@@ -178,6 +184,7 @@ export class RestAPI extends Service {
     // A burst of PUT/DELETE calls (e.g. many models saved in a loop) coalesces into a
     // single write instead of one fs write per request.
     private scheduleSave(): void {
+        this.dirty = true;
         if (this.saveTimeout) return;
         this.saveTimeout = setTimeout(() => {
             this.saveTimeout = undefined;
@@ -193,10 +200,16 @@ export class RestAPI extends Service {
     // truncate store.json, since the rename only ever swaps in a fully-written file.
     private async writeStoreFile(): Promise<void> {
         try {
+            // Snapshot and flag together: a change made while this write is in flight sets
+            // `dirty` again, and the save that change schedules writes it.
+            const json = this.serializeStore();
+            this.dirty = false;
             await mkdir(path.dirname(this.storeFilePath), { recursive: true });
-            await writeFile(this.storeTempFilePath, this.serializeStore(), 'utf8');
+            await writeFile(this.storeTempFilePath, json, 'utf8');
             await rename(this.storeTempFilePath, this.storeFilePath);
         } catch (err) {
+            // Still unsaved, so the next save - at the latest flush() at shutdown - tries again.
+            this.dirty = true;
             this.logError(err instanceof Error ? err.message : String(err), false);
         }
     }

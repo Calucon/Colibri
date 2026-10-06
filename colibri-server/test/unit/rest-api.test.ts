@@ -1,9 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { copyFile, mkdtemp, readFile, rm, writeFile } from 'fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import type { Router, Request, RequestHandler, Response } from 'express';
+import { Subscription } from 'rxjs';
+import { LogLevel, LogMessage, Service } from '../../src/server/modules/core/index.js';
 import { RestAPI } from '../../src/server/modules/web/rest-api.js';
 import type { WebServer } from '../../src/server/modules/web/web-server.js';
 
@@ -132,6 +134,9 @@ describe('RestAPI', () => {
             });
             await expect(get('/web-demo/sampleKey')).resolves.toMatchObject({ status: 200, body: { tags: [ 'a', 'b' ], nothing: null } });
 
+            // A change that cancels out, so that flush() has something to write.
+            await put('/scratch/key', 1);
+            await del('/scratch');
             await api.flush();
             await expect(readFile(storePath, 'utf8')).resolves.toBe(JSON.stringify(JSON.parse(fixture)));
         });
@@ -339,6 +344,97 @@ describe('RestAPI', () => {
                 status: 200,
                 body: { nested: [1, 2] },
             });
+        });
+    });
+
+    // flush() runs at every shutdown, and used to write store.json whether or not anything had
+    // changed: a needless write at best, and on a DATA_ROOT the server cannot write, an EACCES
+    // at every shutdown even when there was nothing to save.
+    describe('flush() at shutdown', () => {
+        let errors: LogMessage[];
+        let subscription: Subscription;
+
+        beforeEach(async () => {
+            await api.init();
+            errors = [];
+            subscription = Service.output$.subscribe(msg => {
+                if (msg.origin === 'RestAPI' && msg.level === LogLevel.Error) errors.push(msg);
+            });
+        });
+
+        afterEach(() => {
+            subscription.unsubscribe();
+        });
+
+        // A directory where the temp file goes makes every write fail, as root too.
+        const blockWrites = () => mkdir(`${storePath}.tmp`);
+        const unblockWrites = () => rm(`${storePath}.tmp`, { recursive: true });
+
+        it('writes nothing when nothing has changed', async () => {
+            await api.flush();
+
+            await expect(readFile(storePath, 'utf8')).rejects.toThrow(/ENOENT/);
+        });
+
+        it('leaves an existing store.json alone when nothing has changed', async () => {
+            const pretty = JSON.stringify({ appA: { key: 'value' } }, null, 4);
+            await writeFile(storePath, pretty, 'utf8');
+            const reloaded = new RestAPI(dataPath, new FakeWebServer().asWebServer());
+            await reloaded.init();
+
+            await reloaded.flush();
+
+            await expect(readFile(storePath, 'utf8')).resolves.toBe(pretty);
+        });
+
+        it('reports no error for a directory it cannot write when nothing has changed', async () => {
+            await blockWrites();
+
+            await api.flush();
+
+            expect(errors).toEqual([]);
+        });
+
+        it('does not write again what the debounced save has already written', async () => {
+            await put('/appA/key', 'value');
+            await new Promise(resolve => setTimeout(resolve, SAVE_DEBOUNCE_MILLIS + 100));
+            await expect(readStore()).resolves.toEqual({ appA: { key: 'value' } });
+
+            const write = vi.spyOn(api as unknown as { writeStoreFile(): Promise<void> }, 'writeStoreFile');
+            await api.flush();
+
+            expect(write).not.toHaveBeenCalled();
+        });
+
+        // A save that failed leaves the change unsaved: the flush at shutdown is its last
+        // chance, e.g. after the directory has been made writable in the meantime.
+        it('tries again a save that failed', async () => {
+            await blockWrites();
+            await put('/appA/key', 'value');
+            await new Promise(resolve => setTimeout(resolve, SAVE_DEBOUNCE_MILLIS + 100));
+            expect(errors).toHaveLength(1);
+
+            await unblockWrites();
+            await api.flush();
+
+            await expect(readStore()).resolves.toEqual({ appA: { key: 'value' } });
+        });
+
+        it('writes a change made while a save is in flight', async () => {
+            await put('/appA/one', 1);
+            const write = api as unknown as { writeStoreFile(): Promise<void> };
+            const original = write.writeStoreFile.bind(api);
+            // The debounced save starts, and a second PUT lands before it has finished.
+            vi.spyOn(write, 'writeStoreFile').mockImplementationOnce(async () => {
+                const saving = original();
+                await put('/appA/two', 2);
+                await saving;
+            });
+            await new Promise(resolve => setTimeout(resolve, SAVE_DEBOUNCE_MILLIS + 100));
+
+            await api.flush();
+
+            await expect(readStore()).resolves.toEqual({ appA: { one: 1, two: 2 } });
         });
     });
 });
