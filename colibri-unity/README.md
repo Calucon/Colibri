@@ -464,8 +464,8 @@ Limitations:
 
 A synced object — a `SyncTransform` or any other `SyncBehaviour` — sends at most **30 updates a
 second** by default, however fast the app runs. A headset renders 72 to 120 frames a second, and
-without a limit every moving object sends that many messages: dozens of headsets moving a few
-objects each produce more traffic than one server and one Wi-Fi network can keep up with.
+without a limit every moving object sends that many messages: dozens of headsets, each moving a
+few objects, produce more traffic than one server and one Wi-Fi network can keep up with.
 
 What the limit holds back, and what it does not:
 

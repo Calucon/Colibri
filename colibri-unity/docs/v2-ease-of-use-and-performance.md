@@ -368,9 +368,9 @@ would want an explicit dirty flag instead of a poll, and that is a different des
 ### The send-rate limit
 
 Polling is per frame, and so was sending: an object that moved sent a `model::update` in every
-frame. A headset renders 72 to 120 frames a second, so dozens of headsets moving a few objects
-each produced more traffic than one server and one Wi-Fi network can keep up with. Each object now
-sends at most `SyncSettings.MaxSendRate` updates a second: 30 unless `ColibriConfig.MaxSendRate`
+frame. A headset renders 72 to 120 frames a second, so dozens of headsets, each moving a few
+objects, produced more traffic than one server and one Wi-Fi network can keep up with. Each object
+now sends at most `SyncSettings.MaxSendRate` updates a second: 30 unless `ColibriConfig.MaxSendRate`
 says otherwise, and 0 for no limit. The ticker reads the clock (`Time.unscaledTimeAsDouble`, so
 `timeScale = 0` does not stop sending) and the interval once per `LateUpdate`, and each object
 decides in `TakeDueUpdate`:

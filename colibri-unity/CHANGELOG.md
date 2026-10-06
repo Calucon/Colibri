@@ -279,20 +279,20 @@ rationale, migration steps, and what the Editor verification did and did not cov
 ## SyncBehaviour and SyncTransform
 
 - **A send-rate limit, per object.** A headset renders 72 to 120 frames a second, and every moving
-  synced object sent an update in each of them: dozens of headsets moving a few objects each sent
-  more than one server and one Wi-Fi network can keep up with. Each object now sends at most
-  `SyncSettings.MaxSendRate` updates a second, 30 unless configured otherwise, without losing what
-  a last-write-wins client needs. A change after a quiet spell goes out in the same frame. Changes
-  within the next interval are merged, and their latest values go out as soon as it is up, even if
-  nothing changes afterwards, because `SyncTicker` flushes every object in every frame. The next
-  slot is counted from the previous one rather than from the frame that sent, so 72 fps still gives
-  30 updates a second, not 24. Switching an object off or on skips the limit and sends what is
-  waiting at once, and destroying it still sends `model::delete` at once, dropping what was held.
-  The setting is `ColibriConfig.MaxSendRate`, shown as *Max Send Rate (Hz)* under *Optional
-  Config* in *Window → Colibri Configuration*, which warns when it is `0` (no limit) and refuses a
-  negative value; a configuration saved before the field existed gets 30 without being saved again.
-  `SyncSettings.MaxSendRate` changes it while the app runs, for that run only, and throws on a
-  negative value.
+  synced object sent an update in each of them: dozens of headsets, each moving a few objects,
+  produced more traffic than one server and one Wi-Fi network can keep up with. Each object now
+  sends at most `SyncSettings.MaxSendRate` updates a second, 30 unless configured otherwise, without
+  losing what a last-write-wins client needs. A change after a quiet spell goes out in the same
+  frame. Changes within the next interval are merged, and their latest values go out as soon as it
+  is up, even if nothing changes afterwards, because `SyncTicker` flushes every object in every
+  frame. The next slot is counted from the previous one rather than from the frame that sent, so
+  72 fps still gives 30 updates a second, not 24. Switching an object off or on skips the limit and
+  sends what is waiting at once, and destroying it still sends `model::delete` at once, dropping
+  what was held. The setting is `ColibriConfig.MaxSendRate`, shown as *Max Send Rate (Hz)* under
+  *Optional Config* in *Window → Colibri Configuration*, which warns when it is `0` (no limit) and
+  refuses a negative value; a configuration saved before the field existed gets 30 without being
+  saved again. `SyncSettings.MaxSendRate` changes it while the app runs, for that run only, and
+  throws on a negative value.
 - **What the limit holds is sent when the app stops.** `SyncTicker` sends everything waiting, past
   the limit, when the app pauses or loses focus — on Android and so on Quest the usual way out,
   where Unity may never call `OnApplicationQuit` — and from `OnApplicationQuit`. It polls every
