@@ -14,7 +14,7 @@ namespace HCIKonstanz.Colibri.Store
         /// address left Get/Put/Delete outstanding forever - no result, no error, nothing in
         /// the console. An unconfigured project reaches the public default server, where this
         /// was observed to still be waiting after a minute. Ten seconds is long enough for a
-        /// slow link and short enough that the failure is reported while the student is still
+        /// slow link and short enough that the failure is reported while the developer is still
         /// looking at it.
         /// </summary>
         private const int TimeoutSeconds = 10;

@@ -163,8 +163,8 @@ namespace HCIKonstanz.Colibri.Synchronization
         // Explicit per-type dispatch rather than MakeGenericMethod: every BuildAttribute<TValue>,
         // and with it SyncedAttribute<TValue>, ChangeTracker<TValue> and the Func/Action delegate
         // types, is a closed instantiation IL2CPP can see and compile ahead of time. It is also the
-        // one place that can tell a student up front that their [Sync] member has a type Colibri
-        // cannot put on the wire.
+        // one place that can report up front that a [Sync] member has a type Colibri cannot put on
+        // the wire.
         private static SyncedAttribute BuildAttribute(string name, Type valueType, MemberInfo member)
         {
             if (valueType == typeof(bool)) return BuildAttribute<bool>(name, member);

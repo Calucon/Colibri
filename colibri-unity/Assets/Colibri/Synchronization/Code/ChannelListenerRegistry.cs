@@ -121,7 +121,7 @@ namespace HCIKonstanz.Colibri.Synchronization
         // Separated by \0, which no channel name can contain, so the two halves cannot run together.
         private static string MismatchKey(string channel, Type type) => channel + "\0" + type.FullName;
 
-        /// <summary>C# keyword spellings, because "Single" is not what a student wrote in their code.</summary>
+        /// <summary>C# keyword spellings, because code declares a "float", not a "Single".</summary>
         public static string FriendlyName(Type type)
         {
             if (type.IsArray)

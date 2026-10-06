@@ -84,8 +84,8 @@ namespace HCIKonstanz.Colibri.Synchronization
                 var prevId = Template.Id;
                 T go = null;
 
-                // Restored in finally: applying the state can throw - a [Sync] setter of the
-                // student's, a value that cannot be read - and the exception leaves through
+                // Restored in finally: applying the state can throw - a [Sync] setter in
+                // application code, a value that cannot be read - and the exception leaves through
                 // Sync's dispatch, which reports it. Left behind, _isCreatingObject stayed true,
                 // so no object created on this client afterwards ever sent its state, and the
                 // template kept the remote model's id.

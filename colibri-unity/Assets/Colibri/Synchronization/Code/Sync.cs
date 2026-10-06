@@ -534,7 +534,7 @@ namespace HCIKonstanz.Colibri.Synchronization
 
         // `track` is off for the model channels: they are Colibri's own SyncBehaviour plumbing,
         // they never go through Invoke<T>, and listing them would only bury the channels the
-        // student actually wrote.
+        // application code actually registered.
         private static void AddListener<T>(string channel, Dictionary<string, List<Listener<T>>> listeners, Action<T> listener,
             bool track = true, string fetchId = null)
         {
