@@ -34,6 +34,9 @@ Colibri focuses on three key areas:
 - **Multi-Platform:** Colibri (currently) supports synchronization between Unity and Web
 - **Lab Conditions:** XR Research prototypes often benefit from ideal lab conditions, allowing Colibri to focus on low latency and high throughput (at the cost of potential bandwidth savings and some performance).
 
+Colibri has no authentication, by design: anyone who can reach a server can join any app on it, and read and change
+its data. Run it on a network you trust.
+
 Please see the folders for more specific information: [Unity](colibri-unity/) - [Web (TS)](colibri-web/) - [Server](colibri-server/)
 
 
