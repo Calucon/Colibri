@@ -398,6 +398,67 @@ namespace HCIKonstanz.Colibri.E2E
             }
         }
 
+        /// <summary>
+        /// Deleted by another client while the limit holds an update for it, the object is gone
+        /// here a moment later - but until then it used to be driven by the ticker. An update sent
+        /// in that moment, held or new, reaches the server after the delete and creates the model
+        /// afresh there, and every other client's manager builds a ghost of it that nobody will
+        /// ever delete again.
+        /// </summary>
+        /// <remarks>
+        /// Both only happen in that moment by chance, so a second delete listener stages them as
+        /// the delete is delivered: it lifts the limit - as the interval running out in that frame
+        /// does - and changes the object, as a script moving it in that frame does.
+        /// </remarks>
+        [UnityTest]
+        public IEnumerator ADeleteFromAnotherClientIsNotUndoneByWhatTheLimitHolds()
+        {
+            var model = SpawnConfigured<E2ESyncModel>("deleted-elsewhere-while-held", _ => { });
+            yield return LetInitialStateArrive();
+
+            var id = model.Id;
+            Action<JObject> inTheSameFrame = deleted =>
+            {
+                if (deleted["id"]?.Value<string>() != id)
+                    return;
+
+                SyncSettings.MaxSendRate = 0;
+                model.Count = 42;
+            };
+
+            Sync.AddModelDeleteListener(Channel, inTheSameFrame);
+            SyncSettings.MaxSendRate = 1;
+            try
+            {
+                model.Label = "sent";
+                yield return Peer.Expect(Channel, "model::update", timeoutSeconds: 0.5f);
+
+                model.Label = "held";
+                yield return null;
+                yield return null;
+
+                Peer.Send(Channel, "model::delete", new JObject { { "id", id } });
+                yield return E2EServer.WaitUntil(() => model == null, "The model deleted by the peer was never destroyed");
+                yield return E2EServer.Settle(0.5f);
+
+                // What the server holds for that id now: nothing but the id, which is its answer
+                // for a model it does not know - unless the held update has brought it back.
+                Peer.Send(Channel, "model::request", new JObject { { "id", id } });
+                yield return Peer.Expect(Channel, "model::update", frame =>
+                {
+                    var payload = (JObject)TcpPeer.Json(frame);
+                    Assert.That(payload["id"].Value<string>(), Is.EqualTo(id));
+                    Assert.That(payload.Properties().Select(p => p.Name).ToArray(), Is.EqualTo(new[] { "id" }),
+                        $"The model the peer deleted is back on the server: {payload.ToString(Newtonsoft.Json.Formatting.None)}");
+                });
+            }
+            finally
+            {
+                Sync.RemoveModelDeleteListener(Channel, inTheSameFrame);
+                SyncSettings.ResetMaxSendRate();
+            }
+        }
+
         private static E2ESyncModel[] Instances(string id)
             => UnityEngine.Object.FindObjectsByType<E2ESyncModel>(FindObjectsInactive.Include, FindObjectsSortMode.None)
                 .Where(m => m.Id == id)

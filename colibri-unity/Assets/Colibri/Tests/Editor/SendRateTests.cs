@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.Text.RegularExpressions;
 using HCIKonstanz.Colibri.Networking;
 using HCIKonstanz.Colibri.Setup;
 using HCIKonstanz.Colibri.Synchronization;
 using Newtonsoft.Json.Linq;
 using NUnit.Framework;
 using UnityEngine;
+using UnityEngine.TestTools;
 using Object = UnityEngine.Object;
 
 namespace HCIKonstanz.Colibri.Tests
@@ -371,6 +373,35 @@ namespace HCIKonstanz.Colibri.Tests
 
             Assert.That(model.TakeDueUpdate(Start, interval: 0), Is.Null);
             Assert.That(model.Label, Is.EqualTo("theirs"));
+        }
+
+
+        /*
+         *  Another client deletes the object
+         */
+
+        /// <summary>
+        /// The object is destroyed a moment after the delete arrives, not at once. Sent in that
+        /// moment, what the limit holds would reach the server after the delete and create the
+        /// model there afresh - a ghost on every other client that nobody deletes again.
+        /// </summary>
+        [Test]
+        public void ADeleteFromAnotherClientDropsWhatTheLimitHolds()
+        {
+            var model = SpawnModel();
+
+            model.Label = "sent";
+            Assert.That(Frame(model, Start), Is.Not.Null);
+
+            model.Label = "held";
+            Assert.That(Frame(model, Start + 0.010), Is.Null, "Precondition: the change is held");
+
+            // Edit mode refuses Destroy, and says so - which leaves the object here to look at.
+            LogAssert.Expect(LogType.Error, new Regex("Destroy may not be called from edit mode"));
+            Sync.OnServerMessage(model.Channel, "model::delete", new JObject { { "id", model.Id } });
+
+            Assert.That(model.TakeDueUpdate(Start + Interval, Interval), Is.Null,
+                "The held update was still sent after the model had been deleted");
         }
 
 

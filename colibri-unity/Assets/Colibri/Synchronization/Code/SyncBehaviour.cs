@@ -532,6 +532,16 @@ namespace HCIKonstanz.Colibri.Synchronization
             if (id == Id)
             {
                 _hasReceivedDestroyCommand = true;
+
+                // Destroyed a moment from now rather than at once, and until OnDestroy the ticker
+                // went on driving the object: an update it sent in that moment - one the send-rate
+                // limit was holding, or a change polled meanwhile - reached the server after the
+                // delete and created the model there afresh. Every other client's manager then
+                // built a ghost of it, and nobody was left to delete it again. Nothing about this
+                // object goes out any more.
+                _nextUpdate = null;
+                SyncTicker.Deregister(this);
+
                 Destroy(gameObject, 0.001f);
             }
         }
