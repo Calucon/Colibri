@@ -351,6 +351,18 @@ consumers.
 
 These are the ones to watch: your project builds, and then behaves differently.
 
+**Synced objects send at most 30 updates a second.** In 1.x a `SyncTransform`, like any other
+`SyncBehaviour<T>`, sent an update in every frame in which one of its values changed: 72 to 120 a
+second for each moving object on a headset, more than a class of headsets on one server and one
+Wi-Fi network keeps up with. Each synced object now sends at most *Max Send Rate* updates a second,
+30 by default, projects configured with 1.x included. The first change after a quiet spell goes
+out at once, later changes within the interval are merged, and their latest values go out when it
+is up, so only the values in between are skipped. Switching an object off or on, and destroying
+it, go out at once. Other clients therefore see a moving object take 30 steps a second rather than
+one per frame. *Window → Colibri Configuration → Optional Config → Max Send Rate* sets the limit,
+`SyncSettings.MaxSendRate` changes it from code for the running app, and `0` brings back the 1.x
+behaviour. `Sync.Send` is not limited.
+
 **Strings finally round-trip.** 1.x wrote string payloads *unquoted*, which is not valid JSON, so
 the server fell back to a different reader. A Unity `Sync.Send(channel, "hello")` and a web client's
 version of the same message did not arrive identically. Both now go out as JSON. If you had a
