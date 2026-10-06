@@ -279,8 +279,8 @@ rationale, migration steps, and what the Editor verification did and did not cov
 ## SyncBehaviour and SyncTransform
 
 - **A send-rate limit, per object.** A headset renders 72 to 120 frames a second, and every moving
-  synced object sent an update in each of them: a class of headsets moving a few objects each was
-  more than one server and one Wi-Fi network keep up with. Each object now sends at most
+  synced object sent an update in each of them: dozens of headsets moving a few objects each sent
+  more than one server and one Wi-Fi network can keep up with. Each object now sends at most
   `SyncSettings.MaxSendRate` updates a second, 30 unless configured otherwise, without losing what
   a last-write-wins client needs. A change after a quiet spell goes out in the same frame. Changes
   within the next interval are merged, and their latest values go out as soon as it is up, even if
@@ -370,8 +370,8 @@ rationale, migration steps, and what the Editor verification did and did not cov
 
 ## Getting started
 
-Colibri is used to teach, by people who know some C# and almost no Unity. Every silent failure is
-an hour they do not spend on their prototype, so:
+Many Colibri users know some C# and little Unity. Every silent failure costs them time they would
+otherwise spend on their prototype, so:
 
 - **Installing is one git URL.** No UniRx, no R3, no UniTask, no NuGetForUnity — the only
   dependency is `com.unity.nuget.newtonsoft-json`, resolved automatically from `package.json`.
@@ -403,8 +403,8 @@ an hour they do not spend on their prototype, so:
   typo there produces a healthy connection on which no other client is ever seen.
 - **The setup window warns about an App Name others use too**: `myAppName`, which the web client's
   samples use, and names such as `test`, `demo`, `app` or `colibri`, ignoring case and surrounding
-  spaces. Everyone on a server with the same App Name is in one app, so a class that keeps such a
-  name sees each other's objects and messages, and since every update goes to every other client
+  spaces. Everyone on a server with the same App Name is in one app, so projects that keep such a
+  name see each other's objects and messages, and since every update goes to every other client
   in the app, the server's work grows with the square of their number. The Unity client does not
   say so at runtime; colibri-server's log does, naming the app, once it has more than 8 clients
   (by default; `APP_CLIENT_WARNING_THRESHOLD`), except for `colibri`, the admin UI's own app. The
@@ -676,7 +676,7 @@ The fixes it produced:
   `Store.Get` neither threw nor logged, and was still outstanding after a minute. The detailed
   failure log added in this release only runs when the request finishes, so `Get`/`Put`/`Delete` now
   set a ten-second timeout: long enough for a slow link, short enough that the failure is reported
-  while the student is still looking at the console.
+  while the developer is still looking at the console.
 - **`SyncTicker` leaked one GameObject per Play session, and they all ticked.** With *Enter Play Mode
   Options → Disable Domain Reload* on, three enter/exit cycles left one extra `[Colibri SyncTicker]`
   behind each time; measured outside Play mode the Editor had collected seven, all still enabled:
