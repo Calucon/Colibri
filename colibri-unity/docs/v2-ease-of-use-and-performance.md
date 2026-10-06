@@ -6,9 +6,9 @@ Editor verification showed — including the two numbers that were only ever arg
 
 Two goals, and they turned out not to conflict:
 
-1. **A student with some C# and almost no Unity should get a prototype running in their first
-   hour.** Colibri is used in university courses; every silent failure and every manual install
-   step is an hour not spent on the prototype.
+1. **A developer with some C# and little Unity experience should get a prototype running in the
+   first hour.** Every silent failure and every manual install step is an hour not spent on the
+   prototype.
 2. **Synchronization stays real-time.** Under good network conditions the client must not be the
    thing that adds latency or frame-time cost.
 
@@ -22,7 +22,7 @@ path, and removing them made the sync loop allocation-free while idle.
 
 - [Why](#why)
 - [1. Installation: three packages to one URL](#1-installation-three-packages-to-one-url)
-- [What a student actually writes](#what-a-student-actually-writes)
+- [What you actually write](#what-you-actually-write)
 - [2. The sync loop](#2-the-sync-loop)
 - [3. Removing UniTask](#3-removing-unitask)
 - [4. Four silent failures, made loud](#4-four-silent-failures-made-loud)
@@ -52,7 +52,7 @@ their first hour:
 | No `Resources/ColibriConfig.asset` | The connect loop polled forever without a word, and `ColibriConfig.GetWebUrl` threw a `NullReferenceException` |
 | "Am I even connected?" | Only answerable by reading Console logs |
 
-A student cannot debug what does not say anything. The whole point of this pass is that the common
+Nobody can debug a failure that says nothing. The whole point of this pass is that the common
 mistakes now name themselves.
 
 ---
@@ -90,7 +90,7 @@ Total call sites removed: eight. That is what the two dependencies were buying.
 
 ---
 
-## What a student actually writes
+## What you actually write
 
 Everything below this section is internals. This is the surface — and the surface is the point, so
 it is worth seeing before the machinery.
@@ -132,7 +132,7 @@ Sync.Unregister("ping", (Action<Vector3>)OnPing);
 ```
 
 Without the cast, `Sync.Receive("ping", OnPing)` failed to compile against 17 overloads with an
-error message that pointed at overload resolution rather than at anything the student had done. It
+error message that pointed at overload resolution rather than at anything in the calling code. It
 is the single most common wall people hit in the first ten minutes.
 
 ### Level 2 — a shared object
@@ -185,7 +185,7 @@ and press Save Config. (Every client that should see each other has to use the s
 Get connected but see nobody, and the connect log already names the reason:
 
 ```
-Colibri: connected to 192.168.0.10:9012 as app 'my-seminar-project'.
+Colibri: connected to 192.168.0.10:9012 as app 'my-ar-prototype'.
 Only clients using the same App Name can see each other.
 ```
 
@@ -245,7 +245,7 @@ moving:
 
 That is the cost of an *idle* scene, before anything moves. It is not catastrophic — Unity's GC
 absorbs it — but it is a recurring collection pressure with nothing to show for it, and it scales
-linearly with the number of synced objects, which is precisely the axis a course project grows on.
+linearly with the number of synced objects, which is precisely the axis a project grows along.
 
 ### What it looks like now
 
@@ -368,8 +368,8 @@ would want an explicit dirty flag instead of a poll, and that is a different des
 ### The send-rate limit
 
 Polling is per frame, and so was sending: an object that moved sent a `model::update` in every
-frame. A headset renders 72 to 120 frames a second, so a class of headsets moving a few objects
-each produced more traffic than one server and one Wi-Fi network keep up with. Each object now
+frame. A headset renders 72 to 120 frames a second, so dozens of headsets moving a few objects
+each produced more traffic than one server and one Wi-Fi network can keep up with. Each object now
 sends at most `SyncSettings.MaxSendRate` updates a second: 30 unless `ColibriConfig.MaxSendRate`
 says otherwise, and 0 for no limit. The ticker reads the clock (`Time.unscaledTimeAsDouble`, so
 `timeScale = 0` does not stop sending) and the interval once per `LateUpdate`, and each object
@@ -550,7 +550,7 @@ raised and the queue flushed, and before then the 2 s watchdog in `Update` count
 frame as proof of life, so something that accepts and says nothing is dropped. `OnDisconnected` is
 raised exactly once per `OnConnected`. Both events are raised from `Update`, each handler in its own
 `try`/`catch`, because `Sync`'s re-request of the models after a reconnect is one of those handlers
-and a student's throwing handler must not skip it.
+and a handler in application code that throws must not skip it.
 
 They are raised in the order the transitions happened. The `Status` setter queues each one, under
 its lock, in `_connectionEvents`, and `Update` raises them one by one. They used to be two flags,
@@ -676,7 +676,7 @@ Three deliberate restrictions on when it speaks:
 
 Model channels (`model::update` / `model::delete`) are registered with `track: false`. They are
 Colibri's own `SyncBehaviour` plumbing, never go through `Invoke<T>`, and listing them would bury
-the channels the student actually wrote.
+the channels the application actually uses.
 
 The registry has **no `UnityEngine` dependency**, which is the reason it is a separate file:
 registering a listener with `Sync` reaches `WebServerConnection.Instance`, which spawns a
@@ -781,17 +781,17 @@ produces a perfectly healthy connection on which no other client is ever seen �
 from a working setup. It now reads:
 
 ```
-Colibri: connected to 192.168.0.10:9012 as app 'my-seminar-project'.
+Colibri: connected to 192.168.0.10:9012 as app 'my-ar-prototype'.
 Only clients using the same App Name can see each other.
 ```
 
 ### An App Name everyone uses
 
 A typo in the app name isolates a client; the opposite mistake joins it to strangers. The server
-puts every client with the same app name into one app, whoever they are, so a class that keeps a
-name everybody picks — `myAppName` from the web client's samples, `test`, `demo` — ends up in one
-shared app. Each group sees every other group's objects and messages, and since every update goes
-to every other client in the app, the server's work grows with the square of the number of
+puts every client with the same app name into one app, whoever they are, so projects that keep a
+name everybody picks — `myAppName` from the web client's samples, `test`, `demo` — end up in one
+shared app. Each project sees every other project's objects and messages, and since every update
+goes to every other client in the app, the server's work grows with the square of the number of
 clients. Nothing fails at runtime: it just works, for everyone at once.
 
 So *Window → Colibri Configuration* warns, right under the App Name field, when the name is one of
@@ -1038,7 +1038,7 @@ not cover is the visual half; see the subsection after the ten.
 
 Ten of the problems the run turned up were fixed; they are listed in
 [`CHANGELOG.md`](../CHANGELOG.md) under *End-to-end verification, and what it fixed*. Two more were
-diagnoses rather than defects, and both are worth knowing before teaching with this:
+diagnoses rather than defects, and both are worth knowing before building on Colibri:
 
 - Unity 6's *Insecure HTTP Option* defaults to *Not allowed*, and the `Store` round trip over
   `http://localhost:9011` worked anyway, because Unity exempts loopback. It only bites when the
@@ -1060,7 +1060,7 @@ diagnoses rather than defects, and both are worth knowing before teaching with t
    from the package's own `dependencies`, and the lock file's 3.2.2 satisfied the requested 3.2.1
    with no conflict. What was *not* tested is the wording of the item: the project is Unity
    6000.5.7f1 rather than 2022.3, and Colibri was added as a local `file:` reference rather than
-   through the git URL the README hands out, so the URL itself was not exercised: the `v2.0.0` tag
+   through the git URL the README documents, so the URL itself was not exercised: the `v2.0.0` tag
    it pins did not exist at the time (see §1).
 2. **Covered, though not by this pass.** The pass itself happened inside `ColibriTest`, and after
    the samples moved to `Samples~` (see the change log) the `colibri-unity` project can no longer
@@ -1228,7 +1228,7 @@ two-client recipe:
 
 - **TextMeshPro is missing from a fresh project.** The sample scenes' `Instructions` object raised
   `NullReferenceException at TMPro.TMP_Settings.get_defaultFontAsset` in the player, because a new
-  project has no TMP Essentials imported. Not a Colibri fault, but it is the first thing a student
+  project has no TMP Essentials imported. Not a Colibri fault, but it is the first thing anyone
   building this recipe will hit.
 - **One orphaned socket, unexplained.** A single Editor connection created at 21:14 was still
   `Established` nearly an hour later with **zero** `WebServerConnection` components alive — a socket
@@ -1242,7 +1242,7 @@ two-client recipe:
 
 The ten items are silent about `SyncBehaviour` itself — they cover `SyncTransform`, which is one
 particular subclass — so the sample was run as well, and it is the thing that exercises §2's typed
-change tracking on members a student actually declares. On connect, each of the three scene models
+change tracking on members a project actually declares. On connect, each of the three scene models
 broadcast its full `[Sync]` state on `samplesyncedbehaviour` (the channel is the type name passed
 through `ToLowerInvariant()`), e.g.
 `{"id":"nonrandom_id","position":[...],"scale":[...],"rotation":[...],"color":"#00000000","randomvalue":0,"editorteststring":"1234"}`.
@@ -1289,7 +1289,7 @@ console that cries wolf is a console nobody reads.
 **Explicit per-type dispatch instead of `MakeGenericMethod`.** `SyncBehaviour.BuildAttribute` is a
 17-line `if` chain over the supported types rather than reflection over an open generic. It keeps
 every generic instantiation visible to the AOT compiler (IL2CPP), and it doubles as the place that
-can tell a student their `[Sync]` member has a type Colibri cannot put on the wire.
+can report that a `[Sync]` member has a type Colibri cannot put on the wire.
 
 **No expression trees on IL2CPP.** On Mono the accessors are compiled from expression trees, typed
 for properties and fields alike, so nothing boxes. IL2CPP has no JIT: `Expression.Compile()` does
@@ -1342,8 +1342,8 @@ listeners that way, which is why every registration asks for the connection agai
 only listens would otherwise never rebuild it in the next session. What does leak into the next
 session is a `static` listener, or one owned by a plain C# object, since neither has a Unity
 lifetime to follow. Clearing them wholesale at startup would be the obvious fix
-and is the wrong one: a listener registered from a `[RuntimeInitializeOnLoadMethod]` hook of a
-student's own would be silently unregistered by it, depending on which ran first. Left as a known
+and is the wrong one: a listener registered from a project's own `[RuntimeInitializeOnLoadMethod]`
+hook would be silently unregistered by it, depending on which ran first. Left as a known
 edge rather than traded for a subtler one.
 
 **Known limitation, unchanged from before:** a `[Sync]` array mutated **in place** is not detected.
