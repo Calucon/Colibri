@@ -18,37 +18,46 @@ colibri-unity 2.0.0 speaks a [new binary TCP protocol](colibri-server/docs/proto
 upgraded together. A 1.x Unity client cannot talk to a 2.0.0 server, and a 2.0.0 Unity client
 cannot talk to a 1.x server.
 
-The failure is at least diagnosable now. The server checks the handshake's version field and
-refuses anything it does not speak, naming both versions in its log and telling the client why on
-the `colibri` channel; the Unity client logs that, shows it in `Window → Colibri Status`, and stops
-reconnecting. Where the framing itself differs the refusal cannot be decoded, so the client falls
-back to reporting a likely protocol mismatch after three sessions that fail before a single frame
-is read. See [Version checking](colibri-server/docs/protocol.md#version-checking).
+The failure is at least diagnosable now. The server's log — the admin UI's log page, and since 2.0
+also the server's console output, so `docker logs` for a container — says what is wrong:
+
+- **A 1.x Unity client** cannot even send the server a handshake it can read, so the server cannot
+  check its version or tell it anything. It recognizes the 1.x wire format instead and logs a
+  warning that names the client's address and says to upgrade the Colibri Unity package
+  (`de.uni.kn.colibri`) to 2.x. A 1.x client retries about once a second, so the warning is repeated
+  at most once a minute per address. The client is never told why; it just keeps reconnecting.
+- **A client whose handshake the server can read, but whose protocol version it does not speak**,
+  is refused: the server logs the client and both versions, and tells the client why on the
+  `colibri` channel. A 2.0.0 Unity client logs that, shows it in `Window → Colibri Status`, and
+  stops reconnecting.
+
+See [Version checking](colibri-server/docs/protocol.md#version-checking).
 
 **Web clients are covered by the same check**, even though Socket.IO itself did not change.
 `colibri-web` 1.x announces `version: '1'` in its handshake query, so a 2.0.0 server refuses it —
-this is the one place the version check is a breaking change for web, which was previously told
-its version field was only ever displayed.
+this is the one place the version check is a breaking change for web.
 
-The symptom on a stale web client is quiet, because `colibri-web` only learned to recognize
-`protocol::rejected` after 2.0.0 was published. An older client receives the rejection as an
-ordinary message on `Colibri.messages`, which nothing is listening for, and is then disconnected;
-Socket.IO does not reconnect after a server-side disconnect, so **it connects once and then stops,
-with no error on the client at all**. The server's log line — which names the client, its address
-and both versions — is the diagnostic. A client built against a `colibri-web` that has the check
-logs the mismatch itself and exposes it on `Colibri.protocolMismatch`.
+The symptom on a stale web client is quiet, because no 1.x release of `colibri-web` (the last is
+1.3.2) knows `protocol::rejected`. It receives the rejection as an ordinary message on
+`Colibri.messages`, which nothing is listening for, and is then disconnected; Socket.IO does not
+reconnect after a server-side disconnect, so **it connects once and then stops, with no error on the
+client at all**. The server's log line — which names the client, its address and both versions — is
+the diagnostic. `colibri-web` 2.0.0 logs a refusal itself and exposes it on
+`Colibri.protocolMismatch`.
 
 Upgrading in the other order — clients first, server later — is now noticed too, though only ever
 as a suspicion. Neither client can be *told* it is talking to a 1.x server, because the version
-check lives on the server and a 1.x server has none. A 2.0.0+ server therefore announces itself on
-connect, and its silence is the signal: a current web client warns after five seconds and **stays
-connected** (it works — the Socket.IO envelope did not change, verified against real 1.1.1 and
-1.3.1 servers with traffic flowing both ways), and a current Unity client warns after three
-connections that were accepted and then died before a frame could be read. Details in
+check lives on the server and a 1.x server has none. A 2.0.0+ server therefore announces itself to
+web clients on connect, and its silence is the signal: a current web client warns after five
+seconds and **stays connected** (it works — the Socket.IO envelope did not change, verified against
+real 1.1.1 and 1.3.1 servers with traffic flowing both ways). A current Unity client cannot connect
+to a 1.x server at all; it reports a likely protocol mismatch after three connections that were
+accepted and then ended before a frame could be read, and keeps retrying. Details in
 [Detecting an out-of-date server](colibri-server/docs/protocol.md#detecting-an-out-of-date-server).
 
-So the safe order is: **upgrade the server first**, then Unity, then the web clients — but do
-upgrade the web clients, rather than leaving 1.x ones running against a 2.0.0 server.
+So the safe order is: **upgrade the server first** — from then on its log names every client that is
+still on 1.x — then Unity, then the web clients. A 2.0.0 server refuses 1.x web clients, so they
+have to be upgraded too; they cannot be left running.
 
 ---
 
@@ -63,6 +72,7 @@ upgrade the web clients, rather than leaving 1.x ones running against a 2.0.0 se
       longer compiled into your project
 - [ ] Web: `@Synced() private x = 0` → `@Synced() accessor x = 0`, and drop `experimentalDecorators`
 - [ ] Web: add `rxjs` to your own dependencies
+- [ ] Web: `receiveColor` / `receiveColorArray` callbacks get a `ColorValue`, not a `string`
 - [ ] Everywhere: read [Behaviour changes that will not fail to
       compile](#behaviour-changes-that-will-not-fail-to-compile) — that is where the surprises are
 
@@ -94,9 +104,29 @@ Anything you wrote that speaks TCP to Colibri has to be rewritten against
 
 ### Worth knowing
 
-The Docker image is multi-stage now: it runs as the non-root `node` user, ships only `dist/` and
-production dependencies, and has a `HEALTHCHECK` on the web port. If you mount volumes or run
-commands inside the container, check they still work as a non-root user.
+**If you run the published image without a version tag** (`hcikn/colibri`, which means `latest`),
+the first pull after 2.0.0 is published upgrades your server — and cuts off every 1.x client with
+it. Pin the version you run, and change it when you upgrade the clients.
+
+**The Docker image is multi-stage now.** It ships only `dist/` and production dependencies, sets
+`NODE_ENV=production`, starts `node` directly instead of `npm start` (so the server is PID 1 and
+shuts down cleanly on `docker stop`), and has a `HEALTHCHECK` on the web port.
+
+**The server no longer runs as root.** The container starts as root only long enough to hand
+`/srv/colibri/data` to the image's `node` user (uid 1000), then runs the server as `node`. A
+`./data` that Docker creates, or the root-owned one 1.x left behind, therefore works without any
+manual step — but on the host it now belongs to uid 1000. Started with `docker run --user …` (or
+`user:` in compose), the container cannot change ownership: give the directory to that user
+yourself, or use a named volume. If the server cannot write its data directory, it says so on
+stderr at startup, with the fix, and keeps running without saving anything.
+
+**The server's log reaches `docker logs`.** In 1.x its log messages only appeared on the admin
+UI's log page. They are now also printed to stdout, errors and warnings to stderr — the refusals
+and the 1.x-client warning above included, and so are the log lines clients send through Unity's
+`[RemoteLogger]` prefab or colibri-web's `RemoteLogger`. `CONSOLE_LOG_LEVEL` (`error`, `warn`,
+`info` or `debug`; default `info`) sets how much is printed, and broadcast traffic is only printed
+with `CONSOLE_LOG_BROADCAST_TRAFFIC=true`. The bundled `docker-compose.yml` caps the container log
+at five files of 10 MB.
 
 ---
 
@@ -110,12 +140,12 @@ every synced member into an `accessor`:
 
 ```ts
 // 1.x
-class Player extends SyncModel {
+class Player extends SyncModel<Player> {
     @Synced() private age = 0;
 }
 
 // 2.0
-class Player extends SyncModel {
+class Player extends SyncModel<Player> {
     @Synced() accessor age = 0;
 }
 ```
@@ -135,12 +165,49 @@ API (`SyncModel`, `RegisterModelSync`, `Colibri.messages`). Add it to your own `
 npm install rxjs
 ```
 
+### Breaking: colour callbacks get a `ColorValue`
+
+A colour reaches a web client as the string `"#RRGGBBAA"` from Unity, but as an `[r, g, b, a]`
+array from another web client. 1.x typed the `receiveColor` callback as `string` either way, so a
+web-to-web colour was an array passed off as a string. The callbacks of `receiveColor` and
+`receiveColorArray` now get a `ColorValue` (either form), and the new `toHexColor()` and
+`toRgbaColor()` turn one into the shape you want:
+
+```ts
+// 1.x
+Sync.receiveColor('tint', (hex: string) => setTint(hex));
+
+// 2.0
+import { toHexColor } from '@hcikn/colibri';
+Sync.receiveColor('tint', colour => setTint(toHexColor(colour)));
+```
+
+Under `strict`, a callback typed `string` no longer compiles; without it, it compiles and goes on
+receiving arrays from web peers. A value that is not a colour makes both functions warn and return
+opaque black instead of throwing. `sendColor` accepts either form too; what goes on the wire is
+unchanged.
+
 ### Fixed
 
 `import { ColibriError } from '@hcikn/colibri'` works — it was a default export, which `export *`
 does not re-export, so it silently imported `undefined`. `require()` consumers now get their own
 `.d.cts` declarations. A stray `console.log` on every model registration is gone, which for anyone
 using `RemoteLogger` was also a stream of pointless network traffic.
+
+The server address can be written the way a browser shows it:
+`new Colibri('my-app', 'http://192.168.0.10:9011')` works, as do `https://`, `ws://` and `wss://`,
+a port in the address and a trailing slash. The port is the one in the address, else the third
+argument, else 9011 — for `https://` too. An address that 1.x turned into a URL that could never connect now throws a
+`ColibriError` instead: a path after the host (the admin UI's own `…/log`, say), an unknown scheme,
+a port that is not a whole number, or a port in the address that disagrees with the port argument.
+
+`Sync.receive*`, `RegisterChannel`, `RegisterModelSync` and `new RemoteLogger()` may come before
+`new Colibri()`; they take effect once it is constructed.
+
+`RegisterModelSync` names its channel after the class unless you pass `name`, and a minifier
+renames classes — so a minified build can end up on a different channel from Unity and from other
+builds, without any error. It now warns when the class name looks minified. Pass `name` for
+anything you bundle: `RegisterModelSync({ name: 'player', type: Player })`.
 
 ---
 
@@ -189,6 +256,14 @@ WebServerConnection.Instance.Connected.Subscribe(isConnected => ...);
 ```
 
 For the subscription form, use the `OnConnected` / `OnDisconnected` events instead.
+`OnDisconnected` is raised exactly once for every `OnConnected`, and never for an attempt that did
+not connect.
+
+"Connected" now means the server has spoken: the task completes, and `OnConnected` fires, once the
+first frame from the server arrives, not as soon as the TCP connection is accepted. While
+disconnected, `Connected` is a fresh task that waits for the next connection. It is cancelled when
+the component is disabled and when the server refuses this client's protocol version, so an `await`
+on it can throw `TaskCanceledException`.
 
 ### Breaking: `ObservableModel<T>` and `ObservableManager<T>` are deleted
 
@@ -246,9 +321,10 @@ The `log` channel is the deliberate exception and still carries raw text, becaus
 it as a string.
 
 **Colours cross between Unity and the web in both directions.** Unity writes `#RRGGBBAA`;
-colibri-web's `sendColor` writes `[r, g, b, a]`. Unity used to throw an `InvalidCastException` on
-the array form — out of the frame's single dispatch loop, taking every message queued behind it that
-frame with it. It now accepts both.
+colibri-web's `sendColor` writes `[r, g, b, a]` when given an array. Unity used to throw an
+`InvalidCastException` on the array form — out of the frame's single dispatch loop, taking every
+message queued behind it that frame with it. It now accepts both, and so does colibri-web (see
+[colour callbacks](#breaking-colour-callbacks-get-a-colorvalue)).
 
 **Integers from Unity reach web clients.** Unity distinguishes `int` from `float` and tags the
 message accordingly, so `Sync.Send(channel, 5)` arrives as `broadcast::int`. `receiveNumber` only
@@ -257,6 +333,19 @@ listened for `broadcast::float` and dropped every one of them in silence. It now
 **`Store` gives up after 10 seconds.** `UnityWebRequest` defaults to no timeout at all, so a wrong
 server address left `Get`/`Put`/`Delete` outstanding forever: no result, no error, nothing in the
 console. Calls that used to hang now fail, and say what failed, at which URL, with the HTTP status.
+
+**The store takes any JSON value.** 1.x answered `400` to anything but an object or an array, and
+`413` above 100 kB. A plain number, string, boolean or `null` is now stored too — Unity's
+`Store.Put("score", 42)`, colibri-web's `setRestObject('note', 'text')` — up to 5 MiB.
+
+**Clients catch up after a reconnect.** Both clients used to ask for the synced models' state only
+when a listener registered, so whatever other clients changed during an outage was missed until the
+next change. Unity and web clients now ask again every time they reconnect, and update the objects
+they have rather than creating duplicates. A model deleted during the outage is not removed, and the
+server still forgets an app's models once its last client disconnects. While a Unity client is
+disconnected, what it sends waits in one queue and goes out in order when the connection is back;
+past 256 broadcasts and log lines the oldest are dropped, with one warning per outage, while model
+updates are never dropped.
 
 **Voice chat binds to an ephemeral port.** The receive socket used to bind port 9014, which capped a
 machine at one Unity client. The server replies to the datagram's source port, so the fixed port
@@ -311,17 +400,33 @@ store as well.
 
 ---
 
-## What is still not covered
+## What is tested, and what is not
 
-Honest about the edges:
+Honest about the edges. The test suites:
 
-- **Voice chat has no automated tests.** It needs a microphone. The port-0 bind and the
-  cancellation-token shutdown were reviewed and compiled, not exercised.
-- **Two Unity clients following each other** was confirmed as far as both connecting concurrently;
-  object-follows-object between two *players* is still a manual check.
-- Batched `model::request` replies and the server's security hardening phase were deliberately
-  deferred — see *Deferred work* in the server changelog.
+- `npm test` in `colibri-server` and in `colibri-web` — unit tests. Both run in CI, together with a
+  check that the server's frame encoding matches the vectors the Unity tests use, and that every
+  client announces the protocol version the server speaks.
+- `npm run test:e2e` in `colibri-web` — against a running server. Not run in CI.
+- `node colibri-unity/run-tests.mjs` — the Unity client's EditMode tests, and its PlayMode tests
+  against a real server (started with Docker, unless one is already running). It needs a local
+  Unity installation and does not run in CI. See
+  [colibri-unity/README.md](colibri-unity/README.md#for-maintainers).
+- `npm run test:docker` in `colibri-server` — runs the image against a fresh, a root-owned and a
+  named-volume data directory. Needs Docker; not run in CI.
 
-Everything else is covered by the test suites: `npm test` in `colibri-server` and `colibri-web`, and
-`node colibri-unity/run-tests.mjs` for the Unity client, which runs the whole thing against a real
-server. See [colibri-unity/README.md](colibri-unity/README.md#for-maintainers).
+What none of them covers:
+
+- **Voice chat**, beyond the server's relay and the Unity client's choice of server address. The
+  rest needs a microphone; the client's socket and its shutdown were reviewed and compiled, not
+  exercised.
+- **Android and Meta Quest.** No suite builds for Android or runs on a headset. The code that only
+  runs there — the IL2CPP `[Sync]` accessors — and the Android settings check are tested in the
+  Editor.
+- **Two Unity clients following each other.** The PlayMode tests talk to a scripted peer, not to a
+  second Unity client; an object following its copy between two Unity players is a manual check.
+- **The samples** are not compiled or run by any suite.
+
+Batched `model::request` replies were deliberately left for later; see the server changelog. And
+Colibri has no access control, by design: anyone who can reach the server's ports can join any app
+and read or change its store. Run it on a network you trust.
