@@ -213,10 +213,15 @@ namespace HCIKonstanz.Colibri.E2E
                 Assert.That((string)movingUpdates[0]["label"], Is.EqualTo("first"), "The member changed first was lost when the updates were combined");
                 Assert.That((int)movingUpdates[0]["count"], Is.EqualTo(100), "The combined update does not carry the newest value");
 
-                Assert.That(sent.Any(f => f.Command == "model::request" && (string)TcpPeer.Json(f)["id"] == requested), Is.True,
-                    "The request a new object made during the outage was dropped");
-                Assert.That(sent.Any(f => f.Command == "model::delete" && (string)TcpPeer.Json(f)["id"] == deleted), Is.True,
-                    "The delete made during the outage was dropped");
+                // Every reconnect asks for the models again, this one included, so a model::request
+                // for it arrives whether or not the queued one was kept. But that re-request is only
+                // sent once the reconnect is reported, behind everything queued during the outage -
+                // behind the delete queued last. A request ahead of the delete is the queued one.
+                var delete = sent.FindIndex(f => f.Command == "model::delete" && (string)TcpPeer.Json(f)["id"] == deleted);
+                var queuedRequest = sent.FindIndex(f => f.Command == "model::request" && (string)TcpPeer.Json(f)["id"] == requested);
+                Assert.That(delete, Is.GreaterThanOrEqualTo(0), "The delete made during the outage was dropped");
+                Assert.That(queuedRequest, Is.GreaterThanOrEqualTo(0).And.LessThan(delete),
+                    "The request a new object made during the outage was dropped: the only one sent was the re-request after reconnecting");
 
                 // The broadcasts are what the bound is for: the newest of them, in order.
                 var noise = SecondSession().Where(f => f.Channel == noiseChannel).Select(f => int.Parse(TcpPeer.Text(f))).ToArray();
