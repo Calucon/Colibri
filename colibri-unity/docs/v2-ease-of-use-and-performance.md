@@ -1060,8 +1060,7 @@ diagnoses rather than defects, and both are worth knowing before building on Col
    from the package's own `dependencies`, and the lock file's 3.2.2 satisfied the requested 3.2.1
    with no conflict. What was *not* tested is the wording of the item: the project is Unity
    6000.5.7f1 rather than 2022.3, and Colibri was added as a local `file:` reference rather than
-   through the git URL the README documents, so the URL itself was not exercised: the `v2.0.0` tag
-   it pins did not exist at the time (see §1).
+   through the git URL the README documents, so the URL itself was not exercised.
 2. **Covered, though not by this pass.** The pass itself happened inside `ColibriTest`, and after
    the samples moved to `Samples~` (see the change log) the `colibri-unity` project can no longer
    open the sample scenes in place — `ColibriTest` is where they are opened now. But
