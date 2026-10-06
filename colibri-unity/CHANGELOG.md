@@ -735,3 +735,7 @@ The fixes it produced:
   `model::update` is offered to every instance of that type. With every object changing, the cost
   of applying a frame's updates therefore grows with the square of the number of objects. The
   `Network Stress` sample is there to measure where that starts to matter.
+- What the send-rate limit still holds when the app quits, or Play mode ends, is handed to the
+  connection during the same teardown that closes its socket, so it may not arrive. Pausing and
+  losing focus, which is how an Android or Quest app is usually left, send it while the connection
+  is still open.
