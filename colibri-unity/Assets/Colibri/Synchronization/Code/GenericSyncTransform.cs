@@ -92,6 +92,23 @@ namespace HCIKonstanz.Colibri.Synchronization
 
         public bool UseLocalTransform = false;
 
+        /// <summary>
+        /// The Sync* boxes. A member whose box is unticked reads a placeholder above (the origin,
+        /// no rotation, scale one, active), which must never go on the wire: a client with that
+        /// box ticked would apply it.
+        /// </summary>
+        private protected override bool IsSynced(string memberName)
+        {
+            switch (memberName)
+            {
+                case nameof(Active): return SyncActive;
+                case nameof(Position): return SyncPosition;
+                case nameof(Rotation): return SyncRotation;
+                case nameof(Scale): return SyncScale;
+                default: return true;
+            }
+        }
+
 
         private string clientPhysicsId = System.Guid.NewGuid().ToString();
 

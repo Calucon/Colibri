@@ -41,6 +41,10 @@ namespace HCIKonstanz.Colibri.Synchronization
         private abstract class SyncedAttribute
         {
             public string Name;
+
+            /// <summary>The C# name, which <see cref="IsSynced"/> is asked about.</summary>
+            public string MemberName;
+
             public int Index;
             public Type PropertyType;
 
@@ -222,6 +226,7 @@ namespace HCIKonstanz.Colibri.Synchronization
             return new SyncedAttribute<TValue>
             {
                 Name = name,
+                MemberName = member.Name,
                 PropertyType = typeof(TValue),
                 Getter = getter,
                 Setter = setter
@@ -328,6 +333,20 @@ namespace HCIKonstanz.Colibri.Synchronization
         int SyncTicker.ITickable.TickIndex { get => _tickIndex; set => _tickIndex = value; }
 
 
+        /// <summary>
+        /// Whether the [Sync] member named <paramref name="memberName"/> (its C# name) is switched
+        /// on. One that is off is never sent: not as a change, not in the full state that
+        /// <see cref="TriggerSync"/> sends.
+        /// </summary>
+        /// <remarks>
+        /// A switched-off member still has a getter, and the value it reads is no value of the
+        /// object's - SyncTransform's Position reads Vector3.zero while SyncPosition is off. Sent,
+        /// that placeholder is applied by every client that has the member switched on: the
+        /// object jumps to the origin there.
+        /// </remarks>
+        private protected virtual bool IsSynced(string memberName) => true;
+
+
         protected virtual void Awake()
         {
             Initialize();
@@ -425,7 +444,10 @@ namespace HCIKonstanz.Colibri.Synchronization
                 if (!_trackers[i].CaptureChange(self))
                     continue;
 
-                if (_hasReceivedFirstUpdate)
+                // Switching a member off is itself a change of what its getter reads - to a
+                // placeholder - and that is not a value to send. Switched on again, the getter
+                // reads the real value, which differs from the latched placeholder and goes out.
+                if (_hasReceivedFirstUpdate && IsSynced(_attributeList[i].MemberName))
                     AddUpdate(_attributeList[i], _attributeList[i].GetBoxed(self));
             }
 
@@ -520,9 +542,18 @@ namespace HCIKonstanz.Colibri.Synchronization
             if (!this)
                 return;
 
+            AddFullState();
+        }
+
+        /// <summary>Every member that is switched on, as one update.</summary>
+        private void AddFullState()
+        {
             var self = this as T;
             foreach (var attribute in _attributeList)
-                AddUpdate(attribute, attribute.GetBoxed(self));
+            {
+                if (IsSynced(attribute.MemberName))
+                    AddUpdate(attribute, attribute.GetBoxed(self));
+            }
         }
 
 

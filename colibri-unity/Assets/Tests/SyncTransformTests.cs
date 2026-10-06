@@ -68,6 +68,35 @@ namespace HCIKonstanz.Colibri.E2E
             });
         }
 
+        /// <summary>
+        /// The full state a manager sends for a new object, once the server has answered the
+        /// object's first request, goes by the same switches. It used to carry every member, and a
+        /// switched-off one as the placeholder its getter reads - Vector3.zero for the position -
+        /// which a client with that box ticked applied: the object jumped to the origin there.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator TheFullStateLeavesOutTheFieldsThatAreSwitchedOff()
+        {
+            yield return SpawnManagerWithInactiveTemplate();
+
+            var sync = SpawnConfigured<SyncTransform>("full-state-position-off", s =>
+            {
+                s.SyncPosition = false;
+                s.SyncActive = false;
+            });
+
+            yield return Peer.Expect(Channel, "model::update", frame =>
+            {
+                var payload = (JObject)TcpPeer.Json(frame);
+                var members = payload.Properties().Select(p => p.Name).ToArray();
+
+                Assert.That(payload["id"].Value<string>(), Is.EqualTo(sync.Id));
+                Assert.That(members, Does.Contain("rotation").And.Contain("scale"), $"Expected the full state, got {payload}");
+                Assert.That(members, Does.Not.Contain("position").And.Not.Contain("active"),
+                    $"A switched-off member went out as its placeholder: {payload}");
+            });
+        }
+
         [UnityTest]
         public IEnumerator AnUnchangedTransformSendsNothingAtAll()
         {

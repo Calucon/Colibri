@@ -311,6 +311,35 @@ namespace HCIKonstanz.Colibri.Tests
 
 
         /*
+         *  A SyncTransform box unticked while the app runs
+         */
+
+        /// <summary>
+        /// Unticking SyncPosition switches what Position reads to Vector3.zero. The poll saw that
+        /// as a move and sent it, and every client with the box still ticked moved the object to
+        /// the origin.
+        /// </summary>
+        [Test]
+        public void UntickingABoxSendsNoPlaceholderAndTickingItAgainSendsTheValue()
+        {
+            var sync = SpawnTransform();
+
+            sync.transform.position = new Vector3(1f, 2f, 3f);
+            Assert.That(Frame(sync, Start)?["position"], Is.Not.Null, "Precondition: the move goes out");
+
+            sync.SyncPosition = false;
+            var sent = new List<JObject>();
+            RunFrames(sync, Start + 1.0, Start + 2.0, 90, sent);
+            Assert.That(sent, Is.Empty, $"Unticking the box sent: {string.Join(" | ", sent)}");
+
+            sync.SyncPosition = true;
+            var resumed = Frame(sync, Start + 3.0);
+            Assert.That(resumed?["position"]?.ToObject<float[]>(), Is.EqualTo(new[] { 1f, 2f, 3f }),
+                "Ticking the box again should send the position the object has");
+        }
+
+
+        /*
          *  A value from the server meets a local change that has not gone out yet
          */
 
