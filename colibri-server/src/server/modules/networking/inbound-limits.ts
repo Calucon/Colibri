@@ -33,6 +33,13 @@ export type Limited = 'held' | 'dropped';
 // pair of log lines rather than a pair every few hundred milliseconds.
 export const EPISODE_QUIET_MILLIS = 1000;
 
+// How long an episode has to go on before it is worth a warning. The main thread stalling for a
+// few hundred milliseconds - a long garbage collection, say - can fill the backlog at a load the
+// server otherwise keeps up with, and empty it again just as quickly; the warning that used to
+// follow each of those said the server was overloaded when it was not. An overload that matters
+// lasts, and is warned about a second in.
+export const EPISODE_WARNING_MILLIS = 1000;
+
 export interface EpisodeSummary {
     // model::update messages held back (and merged per object) rather than passed on at once.
     held: number;
@@ -40,32 +47,42 @@ export interface EpisodeSummary {
     dropped: number;
     // From the first message over the limit to the last.
     seconds: number;
+    // Whether the episode lasted long enough to be warned about (see EPISODE_WARNING_MILLIS). The
+    // caller sums up such an episode as a warning too, and a shorter one at debug level.
+    warned: boolean;
 }
 
 // One stretch of being over a limit, from the first message held back or dropped until
-// EPISODE_QUIET_MILLIS pass without another. The caller logs a warning when record() says an
-// episode started, and a summary when endIfQuiet() or end() hands one back - two lines per
-// episode however much happens in between, the same way the egress 'dropping' state in
-// TCPServerWorker.writeToClient logs only transitions.
+// EPISODE_QUIET_MILLIS pass without another. The caller logs a warning when record() says the
+// episode has gone on for EPISODE_WARNING_MILLIS, and a summary when endIfQuiet() or end() hands
+// one back - at most two warnings per episode however much happens in between, the same way the
+// egress 'dropping' state in TCPServerWorker.writeToClient logs only transitions.
 export class LimitEpisode {
     private held = 0;
     private dropped = 0;
     private startedAt = 0;
     private lastAt = 0;
+    private warned = false;
 
     public get active(): boolean {
         return this.held + this.dropped > 0;
     }
 
-    // Returns true for the message that started the episode.
+    // Returns true for the one message that makes the episode worth a warning: the first that is
+    // still over the limit EPISODE_WARNING_MILLIS after the episode began.
     public record(now: number, limited: Limited): boolean {
-        const started = !this.active;
-        if (started) this.startedAt = now;
+        if (!this.active) {
+            this.startedAt = now;
+            this.warned = false;
+        }
         this.lastAt = now;
 
         if (limited === 'held') this.held += 1;
         else this.dropped += 1;
-        return started;
+
+        if (this.warned || now - this.startedAt < EPISODE_WARNING_MILLIS) return false;
+        this.warned = true;
+        return true;
     }
 
     public endIfQuiet(now: number): EpisodeSummary | undefined {
@@ -76,9 +93,15 @@ export class LimitEpisode {
     public end(): EpisodeSummary | undefined {
         if (!this.active) return undefined;
 
-        const summary = { held: this.held, dropped: this.dropped, seconds: (this.lastAt - this.startedAt) / 1000 };
+        const summary = {
+            held: this.held,
+            dropped: this.dropped,
+            seconds: (this.lastAt - this.startedAt) / 1000,
+            warned: this.warned,
+        };
         this.held = 0;
         this.dropped = 0;
+        this.warned = false;
         return summary;
     }
 }
@@ -195,9 +218,10 @@ export class TokenBucket {
 }
 
 export interface RateLimitReporter<K> {
-    // A client's first message over the limit since it was last under it.
+    // A client has been over the limit for EPISODE_WARNING_MILLIS since it was last under it.
     started(client: K): void;
     // The client has been under the limit for EPISODE_QUIET_MILLIS, or (`left`) disconnected.
+    // Called for every episode; `summary.warned` says whether started() was called for this one.
     ended(client: K, summary: EpisodeSummary, left: boolean): void;
 }
 
@@ -224,8 +248,10 @@ export class InboundRateLimiter<K> {
 
     // What became of a message from this client that take() refused.
     public record(client: K, now: number, limited: Limited): void {
+        // Every episode has to be ended by sweep(), not only those long enough to be warned about:
+        // one left open would take the next episode's messages, however much later, as its own.
+        this.limited.add(client);
         if (this.stateOf(client, now).episode.record(now, limited)) {
-            this.limited.add(client);
             this.reporter.started(client);
         }
     }
@@ -266,16 +292,20 @@ export const LIMITED_TRAFFIC =
 
 export const rateLimitStartWarning = function (who: string, limit: RateLimit): string {
     return (
-        `${who} is sending more than ${limit.messagesPerSecond} model::update and broadcast::* messages a second ` +
-        `(CLIENT_MESSAGE_RATE_LIMIT, bursts up to CLIENT_MESSAGE_RATE_BURST=${limit.burst}). Until it slows down, ${LIMITED_TRAFFIC}. ` +
-        'The usual cause is something sending every frame without a rate cap.'
+        `${who} has been sending more than ${limit.messagesPerSecond} model::update and broadcast::* messages a second ` +
+        `(CLIENT_MESSAGE_RATE_LIMIT, bursts up to CLIENT_MESSAGE_RATE_BURST=${limit.burst}) for a second now. Until it slows down, ` +
+        `${LIMITED_TRAFFIC}. The usual cause is something sending every frame without a rate cap.`
     );
 };
 
+// The summary of an episode: a warning for one that was warned about, a debug line for a short one.
 export const rateLimitEndWarning = function (who: string, summary: EpisodeSummary, left: boolean): string {
+    const over = summary.warned ? 'over the message rate limit' : 'briefly over the message rate limit';
     return left
-        ? `${who} disconnected while over the message rate limit; ${describeEpisode(summary)}.`
-        : `${who} is back under the message rate limit; ${describeEpisode(summary)}.`;
+        ? `${who} disconnected while ${over}; ${describeEpisode(summary)}.`
+        : summary.warned
+            ? `${who} is back under the message rate limit; ${describeEpisode(summary)}.`
+            : `${who} was ${over}; ${describeEpisode(summary)}.`;
 };
 
 // The worker side of the count of TCP messages posted to the main thread and not yet dispatched

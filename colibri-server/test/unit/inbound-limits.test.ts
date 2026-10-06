@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
     EPISODE_QUIET_MILLIS,
+    EPISODE_WARNING_MILLIS,
     EpisodeSummary,
     HeldUpdates,
     InboundBacklog,
@@ -46,13 +47,29 @@ describe('inbound limits', () => {
     });
 
     describe('LimitEpisode', () => {
-        it('reports only the message that starts an episode', () => {
+        // A main thread that stalls for a few hundred milliseconds at normal load fills the backlog
+        // and empties it again; that used to be warned about as an overload every time.
+        it('asks for a warning only once an episode has lasted EPISODE_WARNING_MILLIS, and only once', () => {
             const episode = new LimitEpisode();
 
-            expect(episode.record(0, 'held')).toBe(true);
+            expect(episode.record(0, 'held')).toBe(false);
             expect(episode.record(10, 'dropped')).toBe(false);
-            expect(episode.record(20, 'held')).toBe(false);
+            expect(episode.record(EPISODE_WARNING_MILLIS - 1, 'held')).toBe(false);
+            expect(episode.record(EPISODE_WARNING_MILLIS, 'held')).toBe(true);
+            expect(episode.record(EPISODE_WARNING_MILLIS + 10, 'held')).toBe(false);
+            expect(episode.record(5000, 'held')).toBe(false);
             expect(episode.active).toBe(true);
+            expect(episode.end()?.warned).toBe(true);
+        });
+
+        it('never asks for a warning for an episode shorter than that, and says so in its summary', () => {
+            const episode = new LimitEpisode();
+            const warnedAt: number[] = [];
+            // A 350 ms stall: over the limit throughout, then not at all.
+            for (let t = 0; t <= 350; t += 10) if (episode.record(t, 'held')) warnedAt.push(t);
+
+            expect(warnedAt).toEqual([]);
+            expect(episode.endIfQuiet(350 + EPISODE_QUIET_MILLIS)).toEqual({ held: 36, dropped: 0, seconds: 0.35, warned: false });
         });
 
         it('ends once nothing has been over the limit for a while, with what became of what and for how long', () => {
@@ -64,34 +81,36 @@ describe('inbound limits', () => {
             expect(episode.endIfQuiet(3500 + EPISODE_QUIET_MILLIS - 1)).toBeUndefined();
             const summary = episode.endIfQuiet(3500 + EPISODE_QUIET_MILLIS);
 
-            expect(summary).toEqual({ held: 2, dropped: 1, seconds: 2.5 });
+            expect(summary).toEqual({ held: 2, dropped: 1, seconds: 2.5, warned: true });
             expect(describeEpisode(summary!)).toBe('held back 2 model::update(s), merged per object and dropped 1 message(s) over 2.5 s');
             expect(episode.active).toBe(false);
         });
 
         it('only mentions what happened', () => {
-            expect(describeEpisode({ held: 4, dropped: 0, seconds: 1 })).toBe('held back 4 model::update(s), merged per object over 1.0 s');
-            expect(describeEpisode({ held: 0, dropped: 3, seconds: 0 })).toBe('dropped 3 message(s) over 0.0 s');
+            expect(describeEpisode({ held: 4, dropped: 0, seconds: 1, warned: true })).toBe('held back 4 model::update(s), merged per object over 1.0 s');
+            expect(describeEpisode({ held: 0, dropped: 3, seconds: 0, warned: false })).toBe('dropped 3 message(s) over 0.0 s');
         });
 
         it('keeps one episode going while the limit bites in bursts closer together than the quiet period', () => {
             const episode = new LimitEpisode();
-            const starts: number[] = [];
+            const warnings: number[] = [];
             for (let t = 0; t < 10_000; t += 400) {
-                if (episode.record(t, 'held')) starts.push(t);
+                if (episode.record(t, 'held')) warnings.push(t);
                 expect(episode.endIfQuiet(t + 300)).toBeUndefined();
             }
 
-            expect(starts).toEqual([0]);
+            expect(warnings).toEqual([1200]);
         });
 
-        it('starts a new episode after one ended', () => {
+        it('starts a new episode after one ended, timed from its own start', () => {
             const episode = new LimitEpisode();
             episode.record(0, 'dropped');
-            episode.endIfQuiet(EPISODE_QUIET_MILLIS);
+            episode.record(1500, 'dropped');
+            expect(episode.endIfQuiet(1500 + EPISODE_QUIET_MILLIS)?.warned).toBe(true);
 
-            expect(episode.record(5000, 'held')).toBe(true);
-            expect(episode.end()).toEqual({ held: 1, dropped: 0, seconds: 0 });
+            expect(episode.record(5000, 'held')).toBe(false);
+            expect(episode.record(5000 + EPISODE_WARNING_MILLIS - 1, 'held')).toBe(false);
+            expect(episode.end()).toEqual({ held: 2, dropped: 0, seconds: 0.999, warned: false });
         });
 
         it('has nothing to end when nothing was over the limit', () => {
@@ -269,12 +288,44 @@ describe('inbound limits', () => {
             expect([rateLimiter.take('b', 0), rateLimiter.take('b', 0)]).toEqual([true, true]);
         });
 
-        it('reports one start per episode, however much is over the limit', () => {
+        it('reports one start per episode, a second in, however much is over the limit', () => {
             const { rateLimiter, events } = limiter(10, 1);
+            const startedAt: number[] = [];
 
-            for (let t = 0; t < 500; t += 1) send(rateLimiter, 'a', t);
+            for (let t = 0; t < 3000; t += 1) {
+                send(rateLimiter, 'a', t);
+                if (events.length > startedAt.length) startedAt.push(t);
+            }
 
             expect(events).toEqual([['started', 'a']]);
+            expect(startedAt[0]).toBeGreaterThanOrEqual(EPISODE_WARNING_MILLIS);
+            expect(startedAt[0]).toBeLessThan(EPISODE_WARNING_MILLIS + 10);
+        });
+
+        it('reports no start for an episode shorter than a second, but still ends it', () => {
+            const { rateLimiter, events } = limiter(10, 1);
+            for (let t = 0; t < 500; t += 1) send(rateLimiter, 'a', t);
+
+            rateLimiter.sweep(499 + EPISODE_QUIET_MILLIS);
+
+            // From the first refused message (t = 1; the burst took t = 0) to the last (t = 499).
+            expect(events).toEqual([['ended', 'a', { held: 0, dropped: 495, seconds: 0.498, warned: false }, false]]);
+        });
+
+        // Left open, a short episode would take the next one's messages as its own - and with its
+        // start long past, warn about that one at its first message.
+        it('times an episode after a short one from its own start', () => {
+            const { rateLimiter, events } = limiter(10, 1);
+            send(rateLimiter, 'a', 0);
+            send(rateLimiter, 'a', 0);
+            rateLimiter.sweep(EPISODE_QUIET_MILLIS);
+
+            send(rateLimiter, 'a', 60_000);
+            send(rateLimiter, 'a', 60_000);
+            send(rateLimiter, 'a', 60_500);
+            send(rateLimiter, 'a', 60_500);
+
+            expect(events.filter(e => e[0] === 'started')).toEqual([]);
         });
 
         // A held-back update that is retried and refused again is still one message.
@@ -286,7 +337,7 @@ describe('inbound limits', () => {
 
             rateLimiter.sweep(EPISODE_QUIET_MILLIS);
 
-            expect(events[1]).toEqual(['ended', 'a', { held: 1, dropped: 0, seconds: 0 }, false]);
+            expect(events).toEqual([['ended', 'a', { held: 1, dropped: 0, seconds: 0, warned: false }, false]]);
         });
 
         it('reports the end once the client has stayed under the limit for the quiet period', () => {
@@ -294,13 +345,15 @@ describe('inbound limits', () => {
             send(rateLimiter, 'a', 0);
             send(rateLimiter, 'a', 0);
             send(rateLimiter, 'a', 50);
+            send(rateLimiter, 'a', 1050);
+            send(rateLimiter, 'a', 1050);
 
-            rateLimiter.sweep(50 + EPISODE_QUIET_MILLIS - 1);
-            expect(events).toHaveLength(1);
-            rateLimiter.sweep(50 + EPISODE_QUIET_MILLIS);
-            rateLimiter.sweep(50 + 2 * EPISODE_QUIET_MILLIS);
+            rateLimiter.sweep(1050 + EPISODE_QUIET_MILLIS - 1);
+            expect(events).toEqual([['started', 'a']]);
+            rateLimiter.sweep(1050 + EPISODE_QUIET_MILLIS);
+            rateLimiter.sweep(1050 + 2 * EPISODE_QUIET_MILLIS);
 
-            expect(events).toEqual([['started', 'a'], ['ended', 'a', { held: 0, dropped: 2, seconds: 0.05 }, false]]);
+            expect(events).toEqual([['started', 'a'], ['ended', 'a', { held: 0, dropped: 3, seconds: 1.05, warned: true }, false]]);
         });
 
         it('reports a client that leaves mid-episode as having left, and forgets it', () => {
@@ -311,7 +364,7 @@ describe('inbound limits', () => {
             rateLimiter.forget('a');
             rateLimiter.sweep(10_000);
 
-            expect(events).toEqual([['started', 'a'], ['ended', 'a', { held: 0, dropped: 1, seconds: 0 }, true]]);
+            expect(events).toEqual([['ended', 'a', { held: 0, dropped: 1, seconds: 0, warned: false }, true]]);
             // A client of the same identity that comes back starts with a full bucket.
             expect(rateLimiter.take('a', 0)).toBe(true);
         });
@@ -334,14 +387,26 @@ describe('inbound limits', () => {
 
         it('words its warnings with the client, the limit, the settings to change and what happens meanwhile', () => {
             const start = rateLimitStartWarning('Unity client \'quest-3\'', { messagesPerSecond: 1000, burst: 2000 });
-            expect(start).toContain('Unity client \'quest-3\' is sending more than 1000');
+            expect(start).toContain('Unity client \'quest-3\' has been sending more than 1000');
+            expect(start).toContain('for a second now');
             expect(start).toContain('CLIENT_MESSAGE_RATE_LIMIT');
             expect(start).toContain('the latest value of every field still arrives');
 
-            expect(rateLimitEndWarning('c', { held: 0, dropped: 3, seconds: 1.25 }, false)).toBe(
+            expect(rateLimitEndWarning('c', { held: 0, dropped: 3, seconds: 1.25, warned: true }, false)).toBe(
                 'c is back under the message rate limit; dropped 3 message(s) over 1.3 s.'
             );
-            expect(rateLimitEndWarning('c', { held: 0, dropped: 3, seconds: 1.25 }, true)).toContain('c disconnected while over');
+            expect(rateLimitEndWarning('c', { held: 0, dropped: 3, seconds: 1.25, warned: true }, true)).toBe(
+                'c disconnected while over the message rate limit; dropped 3 message(s) over 1.3 s.'
+            );
+        });
+
+        it('words the summary of a short episode as one', () => {
+            expect(rateLimitEndWarning('c', { held: 2, dropped: 0, seconds: 0.25, warned: false }, false)).toBe(
+                'c was briefly over the message rate limit; held back 2 model::update(s), merged per object over 0.3 s.'
+            );
+            expect(rateLimitEndWarning('c', { held: 2, dropped: 0, seconds: 0.25, warned: false }, true)).toBe(
+                'c disconnected while briefly over the message rate limit; held back 2 model::update(s), merged per object over 0.3 s.'
+            );
         });
     });
 

@@ -107,7 +107,11 @@ export class SocketIOServer extends Service implements NetworkServer {
         const describe = (client: SocketIoClient) => `Web client ${client.id} (app '${client.app}', ${client.name})`;
         return new InboundRateLimiter<SocketIoClient>(limit, {
             started: (client) => this.logWarning(rateLimitStartWarning(describe(client), limit)),
-            ended: (client, summary, left) => this.logWarning(rateLimitEndWarning(describe(client), summary, left)),
+            ended: (client, summary, left) => {
+                const text = rateLimitEndWarning(describe(client), summary, left);
+                if (summary.warned) this.logWarning(text);
+                else this.logDebug(text);
+            },
         });
     }
 

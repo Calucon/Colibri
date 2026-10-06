@@ -721,6 +721,8 @@ describe('TCPServerWorker', () => {
                 .map(p => JSON.parse((p.content.payload as Buffer).toString('utf8')) as unknown);
         const warnings = (): string[] =>
             posted.filter(p => p.channel === 'log' && p.content.level === LogLevel.Warn).map(p => String(p.content.msg));
+        const debugLines = (): string[] =>
+            posted.filter(p => p.channel === 'log' && p.content.level === LogLevel.Debug).map(p => String(p.content.msg));
 
         it('counts every message posted to the main thread, heartbeat replies included', () => {
             configure({ inboundBacklogLimit: 100 });
@@ -800,7 +802,7 @@ describe('TCPServerWorker', () => {
                 internals.tick();
 
                 expect(relayed()).toEqual(['objects model::update']);
-                expect(warnings()[1]).toContain('dropped 2 message(s)');
+                expect(debugLines().filter(l => l.includes('briefly 1 TCP messages behind'))[0]).toContain('dropped 2 message(s)');
             } finally {
                 vi.useRealTimers();
             }
@@ -900,21 +902,30 @@ describe('TCPServerWorker', () => {
             expect(relayedUpdates()).toEqual([{ id: 'f2' }, { id: 's0' }]);
         });
 
-        it('warns once when it starts holding back and sums up once it has stopped', () => {
+        // Over the limit for a second, sending every 10 ms as a sync loop does.
+        const stayBehind = function (socket: FakeSocket, millis: number): void {
+            for (let t = 0; t < millis; t += 10) {
+                send(socket, 'objects', 'model::update', `{"id":"a","x":${t}}`);
+                vi.advanceTimersByTime(10);
+                internals.tick();
+            }
+        };
+
+        it('warns once the main thread has been behind for a second, and sums up once it has caught up', () => {
             vi.useFakeTimers();
             try {
                 configure({ inboundBacklogLimit: 1 });
                 const socket = handshaked();
                 send(socket, 'objects', 'model::update');
                 send(socket, 'myChannel', 'broadcast::json', '{}');
-                for (let i = 0; i < 50; i++) {
-                    send(socket, 'objects', 'model::update', `{"id":"a","x":${i}}`);
-                    vi.advanceTimersByTime(10);
-                    internals.tick();
-                }
+
+                stayBehind(socket, 1000);
+                expect(warnings()).toEqual([]);
+                stayBehind(socket, 500);
 
                 expect(warnings()).toHaveLength(1);
-                expect(warnings()[0]).toContain('fallen 1 TCP messages behind');
+                expect(warnings()[0]).toContain('kept falling 1 TCP messages behind');
+                expect(warnings()[0]).toContain('for a second now');
                 expect(warnings()[0]).toContain('TCP_INBOUND_BACKLOG_LIMIT');
                 expect(warnings()[0]).toContain('held back and merged per object');
 
@@ -924,16 +935,43 @@ describe('TCPServerWorker', () => {
                 internals.tick();
                 expect(warnings()).toHaveLength(1);
                 // ...but what was held back went on as soon as there was room.
-                expect(relayedUpdates()).toEqual([{ id: 'a' }, { id: 'a', x: 49 }]);
+                expect(relayedUpdates()).toEqual([{ id: 'a' }, { id: 'a', x: 490 }]);
 
                 vi.advanceTimersByTime(1);
                 internals.tick();
                 expect(warnings()).toHaveLength(2);
                 expect(warnings()[1]).toContain('caught up');
-                expect(warnings()[1]).toContain('held back 50 model::update(s), merged per object and dropped 1 message(s) over 0.5 s');
+                expect(warnings()[1]).toContain('held back 150 model::update(s), merged per object and dropped 1 message(s) over 1.5 s');
 
                 internals.tick();
                 expect(warnings()).toHaveLength(2);
+            } finally {
+                vi.useRealTimers();
+            }
+        });
+
+        // A main thread that stalls for a few hundred milliseconds at normal load - a long GC, a
+        // busy host - fills the backlog and empties it again. That is not an overload to warn about.
+        it('only sums up, at debug level, a stall shorter than a second', () => {
+            vi.useFakeTimers();
+            try {
+                configure({ inboundBacklogLimit: 1 });
+                const socket = handshaked();
+                send(socket, 'objects', 'model::update');
+                send(socket, 'myChannel', 'broadcast::json', '{}');
+                stayBehind(socket, 350);
+
+                caughtUp();
+                vi.advanceTimersByTime(1000);
+                internals.tick();
+                internals.tick();
+
+                expect(warnings()).toEqual([]);
+                expect(relayedUpdates()).toEqual([{ id: 'a' }, { id: 'a', x: 340 }]);
+                const summaries = debugLines().filter(l => l.includes('TCP messages behind'));
+                expect(summaries).toHaveLength(1);
+                expect(summaries[0]).toContain('briefly 1 TCP messages behind');
+                expect(summaries[0]).toContain('held back 35 model::update(s), merged per object and dropped 1 message(s) over 0.3 s');
             } finally {
                 vi.useRealTimers();
             }
@@ -957,7 +995,7 @@ describe('TCPServerWorker', () => {
                 }
 
                 expect(relayed()).toHaveLength(5);
-                expect(warnings().filter(w => w.includes('is sending more than'))).toEqual([]);
+                expect(warnings().filter(w => w.includes('has been sending more than'))).toEqual([]);
             } finally {
                 vi.useRealTimers();
             }
@@ -1011,6 +1049,17 @@ describe('TCPServerWorker', () => {
                 && (command === undefined || p.content.command === command)).length;
         const warnings = (): string[] =>
             posted.filter(p => p.channel === 'log' && p.content.level === LogLevel.Warn).map(p => String(p.content.msg));
+        const debugLines = (): string[] =>
+            posted.filter(p => p.channel === 'log' && p.content.level === LogLevel.Debug).map(p => String(p.content.msg));
+
+        // A runaway loop: 300 updates a second, three times the limit, for `millis`.
+        const runAway = function (socket: FakeSocket, millis: number): void {
+            for (let t = 0; t < millis; t += 10) {
+                socket.emit('data', burstOf(3, 'model::update', 'objects', t));
+                vi.advanceTimersByTime(10);
+                internals.tick();
+            }
+        };
 
         beforeEach(() => {
             vi.useFakeTimers();
@@ -1021,7 +1070,7 @@ describe('TCPServerWorker', () => {
             vi.useRealTimers();
         });
 
-        it('holds back a client\'s updates and drops its broadcasts past its burst, and warns once naming it', () => {
+        it('holds back a client\'s updates and drops its broadcasts past its burst', () => {
             const runaway = handshaked('runaway-quest');
 
             runaway.socket.emit('data', burstOf(150));
@@ -1030,10 +1079,37 @@ describe('TCPServerWorker', () => {
 
             expect(relayedFrom(runaway.id, 'model::update')).toBe(150);
             expect(relayedFrom(runaway.id, 'broadcast::json')).toBe(50);
+        });
+
+        it('warns once a client has been over its limit for a second, naming it', () => {
+            const runaway = handshaked('runaway-quest');
+            runaway.socket.emit('data', burstOf(200, 'model::update', 'objects', 10_000));
+
+            runAway(runaway.socket, 990);
+            expect(warnings()).toEqual([]);
+            runAway(runaway.socket, 2000);
+
             expect(warnings()).toHaveLength(1);
             expect(warnings()[0]).toContain('Unity client \'runaway-quest\'');
             expect(warnings()[0]).toContain(runaway.id);
             expect(warnings()[0]).toContain('more than 100');
+        });
+
+        it('only sums up, at debug level, a burst that is over its limit for less than a second', () => {
+            const runaway = handshaked('runaway-quest');
+            runaway.socket.emit('data', burstOf(250));
+
+            vi.advanceTimersByTime(1000);
+            internals.tick();
+            vi.advanceTimersByTime(1000);
+            internals.tick();
+
+            expect(relayedFrom(runaway.id)).toBe(250);
+            expect(warnings()).toEqual([]);
+            const summaries = debugLines().filter(l => l.includes('rate limit'));
+            expect(summaries).toHaveLength(1);
+            expect(summaries[0]).toContain('Unity client \'runaway-quest\'');
+            expect(summaries[0]).toContain('was briefly over the message rate limit; held back 50 model::update(s)');
         });
 
         it('passes what it held back on at the client\'s sustained rate', () => {
@@ -1078,9 +1154,12 @@ describe('TCPServerWorker', () => {
 
         it('sums up the episode once the client has slowed down', () => {
             const runaway = handshaked('runaway-quest');
-            runaway.socket.emit('data', burstOf(250));
+            runaway.socket.emit('data', burstOf(200, 'model::update', 'objects', 10_000));
+            runAway(runaway.socket, 1500);
+            expect(warnings()).toHaveLength(1);
 
-            vi.advanceTimersByTime(999);
+            // The last update over the limit came 10 ms before the loop ended.
+            vi.advanceTimersByTime(989);
             internals.tick();
             expect(warnings()).toHaveLength(1);
 
@@ -1088,17 +1167,30 @@ describe('TCPServerWorker', () => {
             internals.tick();
             expect(warnings()).toHaveLength(2);
             expect(warnings()[1]).toContain('Unity client \'runaway-quest\'');
-            expect(warnings()[1]).toContain('back under the message rate limit; held back 50 model::update(s)');
+            expect(warnings()[1]).toContain('back under the message rate limit; held back 450 model::update(s)');
         });
 
         it('passes on what it held back, and sums up the episode, when the client disconnects over the limit', () => {
+            const runaway = handshaked('runaway-quest');
+            runaway.socket.emit('data', burstOf(200, 'model::update', 'objects', 10_000));
+            runAway(runaway.socket, 1500);
+
+            runaway.socket.emit('close');
+
+            expect(relayedFrom(runaway.id)).toBe(200 + 450);
+            expect(warnings()[1]).toContain('disconnected while over the message rate limit; held back 450 model::update(s)');
+        });
+
+        it('sums up a short episode at debug level when the client disconnects in it', () => {
             const runaway = handshaked('runaway-quest');
             runaway.socket.emit('data', burstOf(250));
 
             runaway.socket.emit('close');
 
             expect(relayedFrom(runaway.id)).toBe(250);
-            expect(warnings()[1]).toContain('disconnected while over the message rate limit; held back 50 model::update(s)');
+            expect(warnings()).toEqual([]);
+            expect(debugLines().filter(l => l.includes('disconnected while briefly over the message rate limit; held back 50 model::update(s)')))
+                .toHaveLength(1);
         });
 
         it('limits nothing when turned off', () => {

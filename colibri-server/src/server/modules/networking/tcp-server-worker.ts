@@ -191,9 +191,10 @@ export class TCPServerWorker extends WorkerService {
     private heartbeatInterval: NodeJS.Timeout | undefined;
 
     private inboundBacklog = new InboundBacklog(undefined, DEFAULT_INBOUND_BACKLOG_LIMIT);
-    // Logged once when the backlog first overflows and once when it has drained, however much is
-    // held back or dropped in between - not per message, which under overload would itself be
-    // thousands of posts a second to the thread that is already behind.
+    // Logged once when the backlog has been overflowing for EPISODE_WARNING_MILLIS and once when it
+    // has drained, however much is held back or dropped in between - not per message, which under
+    // overload would itself be thousands of posts a second to the thread that is already behind. A
+    // shorter episode is summed up in a single debug line.
     private readonly backlogEpisode = new LimitEpisode();
     // Clients with updates held back, for the tick to pass on as room frees up.
     private readonly clientsHolding = new Set<TcpClient>();
@@ -277,7 +278,11 @@ export class TCPServerWorker extends WorkerService {
         const describe = (client: TcpClient) => `Unity client '${client.name}' (${client.id}, app '${client.app}', ${client.address})`;
         return new InboundRateLimiter<TcpClient>(limit, {
             started: (client) => this.logWarning(rateLimitStartWarning(describe(client), limit)),
-            ended: (client, summary, left) => this.logWarning(rateLimitEndWarning(describe(client), summary, left)),
+            ended: (client, summary, left) => {
+                const text = rateLimitEndWarning(describe(client), summary, left);
+                if (summary.warned) this.logWarning(text);
+                else this.logDebug(text);
+            },
         });
     }
 
@@ -299,9 +304,14 @@ export class TCPServerWorker extends WorkerService {
         this.rateLimiter.sweep(now);
 
         const backlogSummary = this.backlogEpisode.endIfQuiet(now);
-        if (backlogSummary) {
+        if (backlogSummary?.warned) {
             this.logWarning(
                 `The main thread has caught up with TCP messages again; ${describeEpisode(backlogSummary)} while it was behind.`
+            );
+        } else if (backlogSummary) {
+            this.logDebug(
+                `The main thread was briefly ${this.inboundBacklog.limit} TCP messages behind (TCP_INBOUND_BACKLOG_LIMIT) and has ` +
+                    `caught up; ${describeEpisode(backlogSummary)} while it was behind.`
             );
         }
 
@@ -816,8 +826,9 @@ export class TCPServerWorker extends WorkerService {
             // The limit rather than a fresh read of the counter, which the main thread may have
             // counted down a little since `full` read it - "1998 behind, limit 2000" just confuses.
             this.logWarning(
-                `The main thread has fallen ${this.inboundBacklog.limit} TCP messages behind (TCP_INBOUND_BACKLOG_LIMIT): ` +
-                    `the server is taking in more than it can process. Until it catches up, for every Unity client ${LIMITED_TRAFFIC}, ` +
+                `The main thread has kept falling ${this.inboundBacklog.limit} TCP messages behind (TCP_INBOUND_BACKLOG_LIMIT) for a ` +
+                    'second now: the server is taking in more than it can process. Until it catches up, for every Unity client ' +
+                    `${LIMITED_TRAFFIC}, ` +
                     'so synced objects move less smoothly. Fewer synced objects, a lower sync rate or fewer clients per app reduce the load.'
             );
         }

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createServer, Server as HttpServer } from 'http';
 import { AddressInfo } from 'net';
 import { Subscription, filter, firstValueFrom, tap } from 'rxjs';
@@ -228,6 +228,7 @@ describe('SocketIOServer rate limit', () => {
     });
 
     afterEach(async () => {
+        vi.restoreAllMocks();
         logSubscription.unsubscribe();
         for (const client of clients) client.disconnect();
         server.stop();
@@ -268,7 +269,7 @@ describe('SocketIOServer rate limit', () => {
 
     // flush() sends a message that is never limited, so it also passes on whatever is held back
     // first: what arrives before it is everything not dropped.
-    it('holds back a client\'s model updates past its burst, merged per object, drops its broadcasts, and warns once', async () => {
+    it('holds back a client\'s model updates past its burst, merged per object, and drops its broadcasts', async () => {
         await start({ messagesPerSecond: 1, burst: 5 });
         const socket = await connect();
 
@@ -282,6 +283,29 @@ describe('SocketIOServer rate limit', () => {
         const updates = received.filter(m => m.command === 'model::update').map(m => m.payload?.asValue());
         expect(updates).toEqual([{ id: 'o0' }, { id: 'o1' }, { id: 'o2' }, { id: 'o3' }, { id: 'o4' }, { id: 'cube', x: 2, isOn: true }]);
         expect(from(socket, 'broadcast::json')).toBe(0);
+        // A burst over in an instant is not worth a warning.
+        expect(warnings().filter(w => w.includes('rate limit'))).toEqual([]);
+    });
+
+    // The clock the limiter reads is set by hand here: a real second of traffic would make the
+    // test slow, and Socket.IO itself does not read performance.now().
+    it('warns once a client has been over its limit for a second, naming it', async () => {
+        let clock = 0;
+        vi.spyOn(performance, 'now').mockImplementation(() => clock);
+        await start({ messagesPerSecond: 1, burst: 1 });
+        const socket = await connect();
+
+        for (let i = 0; i < 3; i++) socket.emit('myChannel', { command: 'broadcast::json', payload: { i } });
+        await flush(socket);
+        clock = 999;
+        for (let i = 0; i < 2; i++) socket.emit('myChannel', { command: 'broadcast::json', payload: { i } });
+        await flush(socket);
+        expect(warnings().filter(w => w.includes('more than 1 model::update'))).toEqual([]);
+
+        clock = 1000;
+        for (let i = 0; i < 2; i++) socket.emit('myChannel', { command: 'broadcast::json', payload: { i } });
+        await flush(socket);
+
         const limited = warnings().filter(w => w.includes('more than 1 model::update'));
         expect(limited).toHaveLength(1);
         expect(limited[0]).toContain(`Web client ${socket.id}`);
@@ -342,6 +366,9 @@ describe('SocketIOServer rate limit', () => {
 
         expect(events).toEqual(['model::update o0', 'model::update o1', 'model::update o2', 'model::update o3', 'disconnected']);
         expect(received.every(m => m.origin?.id === id)).toBe(true);
-        expect(warnings().some(w => w.includes('disconnected while over the message rate limit; held back 3 model::update(s)'))).toBe(true);
+        // Over in an instant, so summed up at debug level.
+        expect(warnings().filter(w => w.includes('rate limit'))).toEqual([]);
+        expect(logs.filter(l => l.level === LogLevel.Debug).some(l =>
+            l.message.includes('disconnected while briefly over the message rate limit; held back 3 model::update(s)'))).toBe(true);
     });
 });
