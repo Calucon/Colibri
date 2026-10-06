@@ -293,6 +293,13 @@ For synchronizing the location of an object, Colibri provides a `SyncTransform` 
 
 Information about the object's state is stored on the server. When a new client connects, the location is automatically updated to its current state.
 
+Showing, hiding and deleting:
+
+- Deactivating the GameObject (`SetActive(false)`) hides its copies on the other clients, and reactivating it shows them again. Only the object's own active flag (`activeSelf`) is synced: deactivating a parent changes nothing elsewhere. Turn `SyncActive` off to keep the active state local.
+- Disabling only the `SyncTransform` component pauses its syncing without hiding anything. Changes made meanwhile are sent once it is enabled again.
+- Destroying the object, or unloading its scene (including loading another scene in its place), deletes it on the server and on every client.
+- Leaving Play mode, quitting the app, or the app being killed deletes nothing, whether the object is shown or hidden. It stays on the server for the other clients — until the app's last client disconnects (see [Connection and outages](#connection-and-outages)).
+
 `SyncTransform` also supports physics. `PhysicsAuthority` defines which client is currently controlling the physics. Only one client can control the physics of an object at a time. If the `PhysicsAuthority` is set to `true` on one client it is automatically set to `false` on all other clients. If the `PhysicsAuthority` is checked by default, the first client receives the physics authority. The `isKinematic` field of the attached `Rigidbody` will be overwritten by the `isKinematic` field of the `SyncTransform`. Therefore, if you want to change this field, always (additionally) set the `isKinematic` field of the `SyncTransform`.
 
 For dynamically created objects, add a `[SyncTransformManager]` prefab to the scene. Create a prefab of the object you'll dynamically instantiate and add it to the `Template` attribute. Set the `ModelId` (in the `SyncTransform`) of the prefab to a custom value that identifies the prefab. When a client instantiates an object with `SyncTransform` and the same `ModelId`, the Manager will automatically create an object using this prefab and synchronize it. Make sure to leave the `Id` field of the prefab blank!
@@ -371,7 +378,17 @@ public class MyClassManager : SyncBehaviourManager<MyClass>
 
 The manager should be added to your scene (e.g., on an empty GameObject), and the manager requires a Prefab with the model script for synchronizing different objects. 
 
-By the way: `SyncTransform` is also a `SyncBehaviour`.
+By the way: `SyncTransform` is also a `SyncBehaviour`. What it says above about disabling, destroying and quitting applies to every `SyncBehaviour`; only the active state is specific to `SyncTransform`.
+
+`Awake` and `OnDestroy` are where a `SyncBehaviour` registers and unregisters itself. If you need them in your model script, override them and call the base method:
+
+```c#
+protected override void Awake()
+{
+    base.Awake();
+    // your code
+}
+```
 
 Limitations:
 
