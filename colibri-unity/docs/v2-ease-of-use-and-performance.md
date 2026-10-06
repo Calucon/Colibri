@@ -820,6 +820,13 @@ the v3 wire protocol.
 6. **`try { await Store.Get… } catch (UnityWebRequestException)`** can be deleted; check the return
    value instead (`null` / `false`).
 
+7. **`await connection.Connected` can throw.** It is cancelled when the server refuses this
+   client's protocol version and when the component is disabled, so an `await` of it then throws
+   `TaskCanceledException` instead of waiting forever.
+
+8. **`OnDisconnected` is no longer raised for failed attempts**, only once for every
+   `OnConnected`. Code that counted failed attempts with it should watch `Status` instead.
+
 ---
 
 ## 8. Verification status
