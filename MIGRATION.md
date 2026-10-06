@@ -134,8 +134,8 @@ and the 1.x-client warning above included, and so are the log lines clients send
 with `CONSOLE_LOG_BROADCAST_TRAFFIC=true`. The bundled `docker-compose.yml` caps the container log
 at five files of 10 MB.
 
-**New limits keep one client, or one class, from overloading the server.** Each is an environment
-variable, described in [`.env.example`](colibri-server/.env.example):
+**New limits keep one client, or many clients together, from overloading the server.** Each is an
+environment variable, described in [`.env.example`](colibri-server/.env.example):
 
 - `CLIENT_MESSAGE_RATE_LIMIT` (default 1000, `0` for none) and `CLIENT_MESSAGE_RATE_BURST`
   (default 2000): how many broadcasts and model updates a second one client, Unity or web, may
@@ -150,13 +150,13 @@ variable, described in [`.env.example`](colibri-server/.env.example):
   the operating system gave up on it many minutes later.
 - `APP_CLIENT_WARNING_THRESHOLD` (default 8, `0` for never): a warning when one app has more
   clients than this. Every message goes to each of an app's other clients, so the server's work
-  grows with the square of an app's size; a class whose groups all kept the same app name is the
-  usual way to get there.
+  grows with the square of an app's size; the usual way to get there is several projects on one
+  server that all kept the same app name, such as `test` or the one from an example.
 
 Each stretch of dropping or holding back is logged as one warning when it starts, naming the client
 for the rate limit, and one summary with the counts once it is over. The rate limit's default is
-far above what a lab group sends: even ten objects each sending in every frame at 72 Hz make 720
-updates a second.
+far above what one client of a typical prototype sends: even ten objects each sending in every frame
+at 72 Hz make 720 updates a second.
 
 ---
 
@@ -353,8 +353,8 @@ These are the ones to watch: your project builds, and then behaves differently.
 
 **Synced objects send at most 30 updates a second.** In 1.x a `SyncTransform`, like any other
 `SyncBehaviour<T>`, sent an update in every frame in which one of its values changed: 72 to 120 a
-second for each moving object on a headset, more than a class of headsets on one server and one
-Wi-Fi network keeps up with. Each synced object now sends at most *Max Send Rate* updates a second,
+second for each moving object on a headset, more than one server and one Wi-Fi network can sustain
+for dozens of headsets. Each synced object now sends at most *Max Send Rate* updates a second,
 30 by default, projects configured with 1.x included. The first change after a quiet spell goes
 out at once, later changes within the interval are merged, and their latest values go out when it
 is up, so only the values in between are skipped. Switching an object off or on, and destroying
