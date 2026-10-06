@@ -50,8 +50,8 @@ which slows it down for everyone using it. Pick something nobody else will:
 
 *Project Settings → Player → Resolution and Presentation → **Run In Background***.
 
-Unity leaves this **off** by default, and with it off the Editor stops running your game the moment
-its window loses focus. The connection stays up. The status window still says *Connected*. But
+Check that it is on. With it **off**, the Editor stops running your game the moment its window loses
+focus. The connection stays up. The status window still says *Connected*. But
 nothing is sent and nothing that arrived is delivered, because none of that happens until `Update`
 runs again.
 
