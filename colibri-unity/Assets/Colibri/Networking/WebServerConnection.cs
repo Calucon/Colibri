@@ -80,10 +80,22 @@ namespace HCIKonstanz.Colibri.Networking
         /// How many broadcasts and other messages that are not model state may wait for the
         /// connection while it is down. This is a last-write-wins sync client: growing the queue
         /// without limit during a long outage would only buffer updates that are already
-        /// superseded, so past this the oldest are dropped. Model messages are never dropped; see
+        /// superseded, so past this the oldest are dropped. Model messages are not dropped here; see
         /// "The outbox" below for why, and for what bounds them instead.
         /// </summary>
         private const int MAX_QUEUED_MESSAGES = 256;
+
+        /// <summary>
+        /// How many messages the outbox may hold in all, model state included - the backstop behind
+        /// <see cref="MAX_QUEUED_MESSAGES"/>, which only counts what may be dropped. A model::request,
+        /// a model::delete and a model::update that cannot be folded (one someone awaits, or one with
+        /// something else about its object queued in between) are not counted there, so an outage in
+        /// which objects keep being created and destroyed used to queue them without limit; so did a
+        /// connection whose writes fall behind what is sent. Past this many the oldest messages that
+        /// may be dropped go first, and only then the oldest model messages: a loss nothing repairs,
+        /// but a bounded one.
+        /// </summary>
+        private const int MAX_OUTBOX_MESSAGES = 10000;
 
         /// <summary>
         /// ClientLogger (<c>client-logger.ts</c>) reads this channel's payload with
@@ -154,6 +166,7 @@ namespace HCIKonstanz.Colibri.Networking
 
         // Reset on every connection, so a drop is reported once per outage.
         private bool _hasWarnedAboutDrops;
+        private bool _hasWarnedAboutOutboxLimit;
 
         // Set when the server refuses this client's protocol version. Nothing will ever be sent
         // again, so a send completes at once, as dropped, instead of waiting in the outbox.
@@ -1091,7 +1104,7 @@ namespace HCIKonstanz.Colibri.Networking
          *
          *  The queue is bounded during an outage, but not by dropping just anything. Broadcasts -
          *  and anything else that is not model state - are capped at MAX_QUEUED_MESSAGES, oldest
-         *  dropped first. The model commands are not dropped at all, because nothing would repair
+         *  dropped first. The model commands are not dropped by it, because nothing would repair
          *  the loss: a dropped model::request leaves its SyncBehaviour waiting for its first state
          *  and never sending a change, a dropped model::delete leaves the object alive on every
          *  other client, and a dropped model::update - an object that changed once early in the
@@ -1100,6 +1113,11 @@ namespace HCIKonstanz.Colibri.Networking
          *  for the same object during an outage is folded into one, newer fields winning, which
          *  is exactly what a last-write-wins server would have ended up with. That keeps model
          *  state bounded by the number of objects rather than by how long the outage lasts.
+         *
+         *  Requests, deletes and awaited updates are not folded, though; each is queued as it is.
+         *  So behind both of these sits a hard cap on the whole outbox, MAX_OUTBOX_MESSAGES, which
+         *  applies while connected too: the last resort, which does drop model state rather than
+         *  grow without end.
          *
          *  The folded update moves to the back of the queue, so a fold must never carry an update
          *  past something else about the same object: a newer update, a delete, or a request the
@@ -1118,7 +1136,8 @@ namespace HCIKonstanz.Colibri.Networking
             // Null for SendCommand, which nobody awaits.
             public TaskCompletionSource<bool> Sent;
 
-            // Whether the outage bound may drop it: not for the model commands.
+            // Whether the outage bound counts it, and the cap on the whole outbox drops it before any
+            // model command: false for the model commands.
             public bool CanDrop;
 
             // Set for a model::update queued during an outage, which later updates for the same
@@ -1145,6 +1164,7 @@ namespace HCIKonstanz.Colibri.Networking
                 _outboxSocket = socket;
                 _outboxToken = token;
                 _hasWarnedAboutDrops = false;
+                _hasWarnedAboutOutboxLimit = false;
 
                 // Updates are only folded within one outage. From here on, those folded during the
                 // outage that just ended are ordinary queued messages: what is sent while connected
@@ -1225,6 +1245,7 @@ namespace HCIKonstanz.Colibri.Networking
         {
             List<Outgoing> dropped = null;
             var warnAboutDrops = false;
+            var warnAboutOutboxLimit = false;
             var startDraining = false;
             var refused = false;
             var warnAboutRefusal = false;
@@ -1269,6 +1290,14 @@ namespace HCIKonstanz.Colibri.Networking
                         startDraining = true;
                     }
                 }
+
+                if (!refused && _outbox.Count > MAX_OUTBOX_MESSAGES)
+                {
+                    EnforceOutboxLimit(ref dropped);
+
+                    warnAboutOutboxLimit = !_hasWarnedAboutOutboxLimit;
+                    _hasWarnedAboutOutboxLimit = true;
+                }
             }
 
             // Logged, and the dropped tasks completed, outside the lock: both can run other code.
@@ -1291,6 +1320,13 @@ namespace HCIKonstanz.Colibri.Networking
                     + "Said once per outage.");
             }
 
+            if (warnAboutOutboxLimit)
+            {
+                Debug.LogWarning($"Colibri: more than {MAX_OUTBOX_MESSAGES} messages are waiting to be sent, so the oldest are being dropped - "
+                    + "broadcasts and other messages first, and once there are none of those left, synchronized model state (requests, "
+                    + "updates and deletes), which other clients then never see. Said once per connection.");
+            }
+
             if (dropped != null)
             {
                 foreach (var message in dropped)
@@ -1301,6 +1337,30 @@ namespace HCIKonstanz.Colibri.Networking
             // complete at once.
             if (startDraining)
                 _ = DrainOutbox();
+        }
+
+        // Under _outboxLock. The oldest message that may be dropped goes first, and only when none
+        // is left the oldest of the rest. Never the message the drainer is writing at this moment:
+        // dropping that one would report as dropped a message that may well arrive.
+        private void EnforceOutboxLimit(ref List<Outgoing> dropped)
+        {
+            while (_outbox.Count > MAX_OUTBOX_MESSAGES)
+            {
+                var oldest = _isDraining ? _outbox.First.Next : _outbox.First;
+
+                var victim = oldest;
+                if (_droppableCount > 0)
+                {
+                    var droppable = oldest;
+                    while (droppable != null && !droppable.Value.CanDrop)
+                        droppable = droppable.Next;
+
+                    victim = droppable ?? oldest;
+                }
+
+                (dropped ??= new List<Outgoing>()).Add(victim.Value);
+                RemoveFromOutbox(victim);
+            }
         }
 
         // Under _outboxLock, while not connected.
@@ -1485,7 +1545,7 @@ namespace HCIKonstanz.Colibri.Networking
         /// </summary>
         /// <returns>
         /// Completes with true once the message has been written to the socket, or with false if
-        /// it never will be: it could not be encoded, the outage bound dropped it, the server
+        /// it never will be: it could not be encoded, a bound on the outbox dropped it, the server
         /// refused this client's protocol version, or this component was destroyed first. Never
         /// false for a message that is still going to be sent, so there is nothing to retry. While
         /// the connection is down it stays pending.

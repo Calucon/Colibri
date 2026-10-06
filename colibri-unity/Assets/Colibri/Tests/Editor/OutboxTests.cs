@@ -4,6 +4,7 @@ using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using HCIKonstanz.Colibri.Networking;
@@ -11,6 +12,7 @@ using HCIKonstanz.Colibri.Networking.Protocol;
 using Newtonsoft.Json.Linq;
 using NUnit.Framework;
 using UnityEngine;
+using UnityEngine.TestTools;
 using Object = UnityEngine.Object;
 
 namespace HCIKonstanz.Colibri.Tests
@@ -171,6 +173,76 @@ namespace HCIKonstanz.Colibri.Tests
 
 
         /*
+         *  The cap on the whole outbox
+         */
+
+        /// <summary>
+        /// Only broadcasts and the like count towards the outage bound. Model requests, deletes and
+        /// updates that cannot be folded used to queue without any limit at all - an outage in which
+        /// objects keep coming and going is enough. Past 10 000 messages in all the oldest go now:
+        /// first what may be dropped, then the oldest model messages, and an awaited one that goes
+        /// is reported as not sent.
+        /// </summary>
+        [Test]
+        public void PastTheCapTheOldestMessagesGoBroadcastsFirst()
+        {
+            var awaited = _connection.SendCommandAsync(Channel, "model::request", new JObject { { "id", "awaited" } });
+
+            for (var i = 1; i <= 100; i++)
+                _connection.SendCommand(Channel, "broadcast::int", i);
+
+            // 10 051 in all: the 51 oldest broadcasts go.
+            LogAssert.Expect(LogType.Warning, new Regex("^Colibri: more than 10000 messages are waiting to be sent, so the oldest are being dropped"));
+            for (var i = 1; i <= 9950; i++)
+                _connection.SendCommand(Channel, "model::request", new JObject { { "id", $"r{i}" } });
+
+            // 59 more: the 49 broadcasts left, then the awaited request and the nine oldest of the rest.
+            for (var i = 9951; i <= 10009; i++)
+                _connection.SendCommand(Channel, "model::request", new JObject { { "id", $"r{i}" } });
+
+            var sent = Receive(OpenSession(), 10000);
+
+            Assert.That(sent.Select(Describe), Is.EqualTo(Enumerable.Range(10, 10000).Select(i => $"model::request {{\"id\":\"r{i}\"}}")),
+                "The outbox should hold the newest 10 000 messages, having dropped the broadcasts before any model message");
+            Assert.That(awaited.IsCompleted && !awaited.Result, Is.True, "A dropped message someone awaits was not reported as not sent");
+
+            // Said once, not once per message dropped.
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        /// <summary>
+        /// The cap holds while connected too, for a connection whose writes fall behind what is sent.
+        /// The message being written at that moment is never the one dropped: it may well arrive.
+        /// </summary>
+        [Test]
+        public void TheCapHoldsWhileConnectedWithoutDroppingTheMessageBeingWritten()
+        {
+            var session = OpenSession();
+
+            // A write that does not complete: the first message is on its way, the rest pile up.
+            _connection.SendLock.Wait();
+            try
+            {
+                _connection.SendCommand(Channel, "broadcast::int", 0);
+
+                LogAssert.Expect(LogType.Warning, new Regex("^Colibri: more than 10000 messages are waiting to be sent"));
+                for (var i = 1; i <= 10050; i++)
+                    _connection.SendCommand(Channel, "broadcast::int", i);
+            }
+            finally
+            {
+                _connection.SendLock.Release();
+            }
+
+            var sent = Receive(session, 10000).Select(frame => int.Parse(Encoding.UTF8.GetString(frame.Payload))).ToArray();
+
+            Assert.That(sent, Is.EqualTo(new[] { 0 }.Concat(Enumerable.Range(52, 9999))),
+                "The newest 10 000 should be kept, and the one being written when the cap was reached with them");
+            LogAssert.NoUnexpectedReceived();
+        }
+
+
+        /*
          *  Helpers
          */
 
@@ -182,28 +254,7 @@ namespace HCIKonstanz.Colibri.Tests
         {
             _connection.SendCommand(EndChannel, "end", null);
 
-            var listener = new TcpListener(IPAddress.Loopback, 0);
-            listener.Start();
-            Socket client;
-            Socket server;
-            try
-            {
-                client = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-                _disposables.Add(client);
-                client.Connect((IPEndPoint)listener.LocalEndpoint);
-
-                server = listener.AcceptSocket();
-                _disposables.Add(server);
-                server.ReceiveTimeout = 5000;
-            }
-            finally
-            {
-                listener.Stop();
-            }
-
-            var session = new CancellationTokenSource();
-            _disposables.Add(session);
-            _connection.OpenOutbox(client, session.Token);
+            var server = OpenSession();
 
             var reader = new FrameReader();
             var frames = new List<DecodedFrame>();
@@ -226,6 +277,69 @@ namespace HCIKonstanz.Colibri.Tests
             }
 
             return frames.Where(frame => frame.Channel != EndChannel).ToList();
+        }
+
+        /// <summary>
+        /// Connects a fresh session over loopback, as a reconnect does, and hands back the server's
+        /// end of it: the outbox starts draining into it straight away.
+        /// </summary>
+        private Socket OpenSession()
+        {
+            var listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            Socket client;
+            Socket server;
+            try
+            {
+                client = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+                _disposables.Add(client);
+                client.Connect((IPEndPoint)listener.LocalEndpoint);
+
+                server = listener.AcceptSocket();
+                _disposables.Add(server);
+                server.ReceiveTimeout = 5000;
+            }
+            finally
+            {
+                listener.Stop();
+            }
+
+            var session = new CancellationTokenSource();
+            _disposables.Add(session);
+            _connection.OpenOutbox(client, session.Token);
+            return server;
+        }
+
+        /// <summary>
+        /// Reads exactly <paramref name="count"/> frames from a session, in the order they were
+        /// sent, and fails if any more follow. For a test that cannot queue an end marker without
+        /// changing what it is testing.
+        /// </summary>
+        private static List<DecodedFrame> Receive(Socket server, int count)
+        {
+            var reader = new FrameReader();
+            var frames = new List<DecodedFrame>();
+            var buffer = new byte[64 * 1024];
+            while (frames.Count < count)
+            {
+                int received;
+                try
+                {
+                    received = server.Receive(buffer);
+                }
+                catch (SocketException e)
+                {
+                    Assert.Fail($"Only {frames.Count} of {count} messages arrived ({e.SocketErrorCode})");
+                    throw;
+                }
+
+                Assert.That(received, Is.GreaterThan(0), $"The session was closed after {frames.Count} of {count} messages");
+                frames.AddRange(reader.Append(new ReadOnlySpan<byte>(buffer, 0, received)));
+            }
+
+            Assert.That(frames.Count == count && !server.Poll(300 * 1000, SelectMode.SelectRead), Is.True,
+                $"More than the {count} messages expected were sent");
+            return frames;
         }
 
         /// <summary>The object as a server that merges each update into what it has would end up with it.</summary>
