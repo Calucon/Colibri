@@ -178,6 +178,8 @@ Colibri provides a *web logger* with web interface to send diagnostic data (curr
 
 To setup, add the `[RemoteLogger]` prefab to your scene. The Unity log output should be redirect to your server's webinterface, which can be accessed via `http://<your-server-ip>:9011`.
 
+Log lines are sent once a second. While the connection is down, the newest 1000 lines are kept and sent once it is back; if the server refuses the client's protocol version, they are discarded.
+
 ### Sending Data between Clients
 
 Colibri supports simple data transmission via pub/sub communication. Data can be published from anywhere in
@@ -375,6 +377,41 @@ Limitations:
 
 - Only one client can update each attribute of the object simultaneously
 - Scene will be reset once all clients disconnect
+
+### Connection and outages
+
+Colibri opens the connection by itself the first time anything calls `Sync.Send` or
+`Sync.Receive`, or a `SyncBehaviour` wakes up. When the connection drops, it reconnects on its
+own, waiting 0.5 s, then 1 s, 2 s and so on, up to 10 s, between attempts.
+`WebServerConnection.Instance` tells you where it stands:
+
+- `Status` is `Connecting`, `Connected`, `Reconnecting`, `Disconnected` or `ProtocolMismatch`.
+- `OnConnected` is raised on the main thread once the server has actually spoken — its first
+  message, not merely an accepted TCP connection. `OnDisconnected` is raised exactly once for every
+  `OnConnected`, when that connection ends. An attempt that never got connected raises neither.
+- `await connection.Connected` waits until the connection is up. It is cancelled when the server
+  refuses this client's protocol version or the component is disabled, so the `await` then throws
+  a `TaskCanceledException`.
+
+While the connection is down, whatever you send waits, and goes out in the order it was sent as
+soon as the connection is back — ahead of anything sent afterwards:
+
+- Broadcasts (`Sync.Send`) and log lines: at most 256 are kept. Past that the oldest are dropped,
+  with one warning per outage.
+- Changes to synced objects (`SyncBehaviour`, `SyncTransform`) are never dropped. Several changes
+  to the same object during one outage are merged into one update, newer values winning.
+
+After reconnecting, Colibri asks the server again for every synced object it listens to, so what
+other clients changed in the meantime arrives. It does not catch up on everything:
+
+- An object that another client deleted during the outage stays on this client.
+- The server forgets an app's synced objects when the app's last client disconnects, and when it
+  restarts. A single client whose connection drops is that last client. Afterwards the server learns
+  each object again only when it changes, and then only the members that changed.
+
+A refused protocol version is final: `Status` becomes `ProtocolMismatch`, the client stops
+reconnecting, and whatever was queued or is sent afterwards is dropped, with a one-time warning.
+Disabling and re-enabling the `WebServerConnection` component tries again.
 
 ### Voice Chat
 
