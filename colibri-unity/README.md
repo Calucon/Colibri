@@ -197,7 +197,7 @@ Colibri provides a *web logger* with web interface to send diagnostic data (curr
 
 To setup, add the `[RemoteLogger]` prefab to your scene. The Unity log output should be redirect to your server's webinterface, which can be accessed via `http://<your-server-ip>:9011`.
 
-Log lines are sent once a second. While the connection is down, the newest 1000 lines are kept and sent once it is back; if the server refuses the client's protocol version, they are discarded.
+Log lines are sent once a second, and identical lines in one batch are sent once. At most the newest 1000 lines are kept between two sends — while the connection is down, that is the whole outage — and sent once it is back. Where older lines had to be dropped, the server's log shows one line in their place, `Colibri: N log lines are missing here …`; the device's own log keeps everything. If the server refuses the client's protocol version, the kept lines are discarded.
 
 ### Sending Data between Clients
 

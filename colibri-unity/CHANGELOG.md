@@ -455,8 +455,11 @@ an hour they do not spend on their prototype, so:
   `ConcurrentQueue` filled from Unity's threaded log callback — several threads may log at once —
   and drained by a one-second timer in `Update`. Each line is handed to the connection exactly
   once, and the connection's outbox keeps it across an outage, so nothing is retried here and no
-  line is sent twice. While not connected it keeps the newest 1000 lines, and after a protocol
-  refusal it discards them.
+  line is sent twice. It keeps at most the newest 1000 lines between two sends — a second's worth
+  while connected, which also bounds what a runaway log loop costs the server, and the whole outage
+  while not — and the next send starts with one line saying how many were dropped (`Colibri: N log
+  lines are missing here …`), so a gap in the server's log no longer goes unnoticed. After a
+  protocol refusal it discards them.
 - **UniTask removed.** `UniTaskCompletionSource` → `TaskCompletionSource` (which also tolerates
   several pending awaiters); `await request.SendWebRequest()` → a three-line `TaskCompletionSource`
   wrapper over `UnityWebRequestAsyncOperation.completed`, completing inline so the caller stays on

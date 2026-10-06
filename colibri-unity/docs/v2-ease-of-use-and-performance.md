@@ -633,10 +633,13 @@ Newtonsoft calls around them are not caught, so a value that cannot be converted
 filled from Unity's threaded log callback (which fires on arbitrary threads) and drained by a
 one-second timer in `Update`. It has since been simplified further. The queue is a
 `ConcurrentQueue`, since several threads may log at once, with an `Interlocked` count beside it.
-While the connection is not `Connected` it keeps the newest 1000 lines; after a protocol refusal it
-discards them. While connected it hands each line to `SendCommand` exactly once and never retries:
-the connection's outbox keeps a line across an outage, and the old in-flight gate and retry
-re-arm were what had sent some lines twice. `UniTask.Yield`'s allocation-free await does not apply
+It keeps at most the newest 1000 lines between two sends, connected or not: a second's worth while
+connected, which is also all a runaway log loop can cost the server, and the whole outage while
+not. It counts the lines it drops, and the next send starts with one line saying how many are
+missing, handed straight to the connection — through `Debug.Log` it would come back into the
+buffer. After a protocol refusal it discards the lines and the count. While connected it hands
+each line to `SendCommand` exactly once and never retries: the connection's outbox keeps a line
+across an outage, and the old in-flight gate and retry re-arm were what had sent some lines twice. `UniTask.Yield`'s allocation-free await does not apply
 anywhere here, because §2 removed the await rather than swapping it for `Task.Yield`.
 
 ---
