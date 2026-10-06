@@ -194,7 +194,7 @@ namespace HCIKonstanz.Colibri.Setup
             if (Config.MaxSendRate == 0)
             {
                 EditorGUILayout.HelpBox("Max Send Rate is 0, so there is no limit: every moving synced object sends an update "
-                    + "in every frame, 72 to 120 a second on a headset. A class of clients on one server and one Wi-Fi network "
+                    + "in every frame, 72 to 120 a second on a headset. Dozens of clients on one server and one Wi-Fi network "
                     + $"will not keep up. The default is {ColibriConfig.DEFAULT_MAX_SEND_RATE}.", MessageType.Warning);
             }
 
