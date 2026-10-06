@@ -72,10 +72,9 @@ https://github.com/hcigroupkonstanz/Colibri.git?path=colibri-unity/Assets/Colibr
 `com.unity.nuget.newtonsoft-json` is the only remaining dependency, and it is declared in
 `Assets/Colibri/package.json`, so the Package Manager resolves it automatically.
 
-The `#v2.0.0` is not optional. Without it the URL resolves to the repository's default branch,
-which still holds 1.3.1: that asmdef references UniRx and UniTask, so it does not compile without
-them, and it speaks the v1 protocol. The `v2.0.0` tag does not exist until 2.0.0 is released, and
-neither does a 2.0 `.unitypackage` on the Releases page.
+The `#v2.0.0` is not optional. Without it the URL resolves to whatever the repository's default
+branch holds at the time. If that is 1.3.1, it does not compile without UniRx and UniTask, which its
+asmdef references, and it speaks the v1 protocol.
 
 What was removed along the way:
 
@@ -894,8 +893,8 @@ diagnoses rather than defects, and both are worth knowing before teaching with t
    from the package's own `dependencies`, and the lock file's 3.2.2 satisfied the requested 3.2.1
    with no conflict. What was *not* tested is the wording of the item: the project is Unity
    6000.5.7f1 rather than 2022.3, and Colibri was added as a local `file:` reference rather than
-   through the git URL the README hands out, so the URL itself is still unexercised. It cannot be
-   until the `v2.0.0` tag it pins exists (see §1).
+   through the git URL the README hands out, so the URL itself was not exercised: the `v2.0.0` tag
+   it pins did not exist at the time (see §1).
 2. **Covered, though not by this pass.** The pass itself happened inside `ColibriTest`, and after
    the samples moved to `Samples~` (see the change log) the `colibri-unity` project can no longer
    open the sample scenes in place — `ColibriTest` is where they are opened now. But

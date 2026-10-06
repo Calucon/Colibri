@@ -27,18 +27,17 @@ One URL. In Unity, open *Window → Package Manager → + → Install package fr
 https://github.com/hcigroupkonstanz/Colibri.git?path=colibri-unity/Assets/Colibri#v2.0.0
 ```
 
-Keep the `#v2.0.0` at the end: it selects the 2.0.0 release. **2.0.0 is not released yet**, and
-until the `v2.0.0` tag exists, installing from this URL fails with an error. Without the `#…`, the
-URL installs the repository's default branch, which still holds Colibri 1.3.1: it does not compile
-without UniRx and UniTask, and it cannot talk to a 2.0 server. Until 2.0.0 is tagged, use the
-install URL your course or study gives you.
+Keep the `#v2.0.0` at the end: it selects the 2.0.0 release. Without the `#…`, the URL installs
+whatever the repository's default branch holds at the time, which need not be the version this
+README describes. Errors about UniRx or UniTask mean it is a Colibri 1.x, which could not talk to a
+2.x server anyway. If your course or study gives you an install URL, use that one.
 
 Colibri's only dependency is `com.unity.nuget.newtonsoft-json`, which the Package Manager
 installs by itself.
 
 ### UnityPackage
 
-Alternatively, import the `.unitypackage` attached to the 2.0.0 release on the [Releases page](https://github.com/hcigroupkonstanz/Colibri/releases). Check the version number: until 2.0.0 is out, every release there is Colibri 1.x, which cannot talk to a 2.0 server. Installed this way, Newtonsoft JSON has to be added by hand from the Package Manager (`com.unity.nuget.newtonsoft-json`) — a `.unitypackage` cannot declare dependencies.
+Alternatively, import the `.unitypackage` attached to the 2.0.0 release on the [Releases page](https://github.com/hcigroupkonstanz/Colibri/releases). Check the version number: a Colibri 1.x release cannot talk to a 2.x server. Installed this way, Newtonsoft JSON has to be added by hand from the Package Manager (`com.unity.nuget.newtonsoft-json`) — a `.unitypackage` cannot declare dependencies.
 
 ## Quickstart
 
@@ -47,8 +46,9 @@ Alternatively, import the `.unitypackage` attached to the 2.0.0 release on the [
    use the *same* one — and the **Server Address** of your colibri-server, then press *Save
    Config*. Use the server your course or study gives you, or run your own colibri-server 2.x
    ([Docker setup](../colibri-server/README.md#docker-recommended)). The address is preset to the
-   public test server `colibri.hci.uni-konstanz.de`, but at the time of writing that server still
-   runs Colibri 1.x, which this package cannot connect to (see [Requirements](#requirements)).
+   public test server `colibri.hci.uni-konstanz.de`, which this package can only use while it runs
+   colibri-server 2.x: against a 1.x server, *Window → Colibri Status* reports a suspected protocol
+   mismatch (see [Requirements](#requirements)).
 3. Import the **SendData** sample: *Window → Package Manager → Colibri → Samples → Import*.
 4. Open the sample scene and press Play. Tick `SendProperties` on the `SendMessages` object and
    watch the console. (The scene needs TextMeshPro's essential resources — see
@@ -72,7 +72,7 @@ Upon installation, a configuration window should show up:
 
 <img src="img/config.png" alt="Config Screen" width=400/>
 
-- Enter the address of your (shared) [server](../colibri-server): a host name or an IP address, without `http://`. The preset is the public test server `colibri.hci.uni-konstanz.de`. At the time of writing it still runs Colibri 1.x, so this package cannot use it: run your own colibri-server 2.x, or use the one your course gives you.
+- Enter the address of your (shared) [server](../colibri-server): a host name or an IP address, without `http://`. The preset is the public test server `colibri.hci.uni-konstanz.de`, which this package can only use while it runs colibri-server 2.x (see [Requirements](#requirements)). Otherwise run your own colibri-server 2.x, or use the one your course gives you.
 - On a headset or phone, `localhost` is the device itself. Enter the IPv4 address of the machine running the server on your local network instead.
 - Choose a unique *app name*. Though a server supports multiple clients, data is only synchronized between clients with identical *app names*!
 - To adjust the Colibri Configuration you can reopen the window in Unity under "Window" -> "Colibri Configuration" 
@@ -174,7 +174,7 @@ Colibri also reports the common mistakes in the console rather than failing quie
 | A `[Sync]` field never syncs | Its type is reported at startup if Colibri cannot put it on the wire |
 | Connected, but one client is silent | That client's Editor window is in the background and *Run In Background* is off — see step 5 of the Quickstart |
 | `Store.Get`/`Put` reports a failure | The log names the operation, the object, the URL, the transport error and the HTTP status; requests give up after 10 s rather than hanging |
-| Never connects, although something answers on the port | `invalid frame from server` errors if the server sends anything, then `3 connections in a row were accepted but ended before a single frame could be read. This usually means a protocol mismatch…` — the server is probably 1.x, as the public test server still is, or the address is not a colibri-server |
+| Never connects, although something answers on the port | `invalid frame from server` errors if the server sends anything, then `3 connections in a row were accepted but ended before a single frame could be read. This usually means a protocol mismatch…` — the server is probably 1.x, or the address is not a colibri-server |
 | Works in the Editor, not on the Quest | With the Android target active: `Colibri (Android build): …` in the console, and the *Android / Meta Quest* section of *Window → Colibri Configuration* |
 
 ## Documentation
