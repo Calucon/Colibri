@@ -275,8 +275,11 @@ in `Packages/Colibri/Prefabs/`.
 A web page can join the same app as your Unity clients and exchange the same messages:
 
 ```sh
-npm install @hcikn/colibri
+npm install @hcikn/colibri@^2
 ```
+
+The `@^2` makes sure you get version 2. A 2.0 server refuses a 1.x web client, and the client shows
+no error when that happens: it connects once and then goes quiet.
 
 ```ts
 import { Colibri, Sync } from '@hcikn/colibri';
