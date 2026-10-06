@@ -14,7 +14,6 @@ namespace HCIKonstanz.Colibri.Networking
     {
         private UdpClient udpClient;
         private IPEndPoint sendIPEndPoint;
-        private IPEndPoint inEndPoint = new IPEndPoint(IPAddress.Any, 0);
         private Thread udpThread;
         private CancellationTokenSource shutdown;
 
@@ -167,7 +166,13 @@ namespace HCIKonstanz.Colibri.Networking
                 udpClient.Client.Bind(new IPEndPoint(IPAddress.Any, 0));
 
                 shutdown = new CancellationTokenSource();
-                udpThread = new Thread(Receive)
+
+                // Handed over here rather than read by the thread when it starts. A thread that
+                // has not run by the time OnDisable's 500 ms Join gives up on it finds both fields
+                // already cleared, and used to die of a NullReferenceException reading them.
+                var client = udpClient;
+                var token = shutdown.Token;
+                udpThread = new Thread(() => Receive(client, token))
                 {
                     Name = "Voice UDP Thread",
                     IsBackground = true
@@ -245,17 +250,16 @@ namespace HCIKonstanz.Colibri.Networking
             return null;
         }
 
-        private void Receive()
+        private void Receive(UdpClient client, CancellationToken token)
         {
-            // Captured locally: OnDisable clears the fields while this thread is still winding down.
-            var client = udpClient;
-            var token = shutdown.Token;
+            // Per thread: an old receive thread may still be winding down while a new one starts.
+            var from = new IPEndPoint(IPAddress.Any, 0);
 
             while (!token.IsCancellationRequested)
             {
                 try
                 {
-                    byte[] bytes = client.Receive(ref inEndPoint);
+                    byte[] bytes = client.Receive(ref from);
                     VoicePacket voicePacket = GetVoicePacket(bytes);
                     if (voicePacket.Id != 0)
                     {
