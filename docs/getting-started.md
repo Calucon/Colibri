@@ -6,8 +6,9 @@ it moves on everyone else's screen. That is the whole idea; everything below is 
 This guide is written for Unity, because that is where most prototypes start. There is a short
 section at the end on [talking to a browser](#talking-to-a-browser), which works the same way.
 
-**You need two things before you start:** the address of a Colibri server, and an app name. Your
-supervisor will give you the server; the app name you choose yourself.
+**You need two things before you start:** the address of a running colibri-server 2.x — your own
+(see [colibri-server](../colibri-server/README.md#setup)) or a shared one — and an app name, which
+you choose yourself.
 
 ---
 
@@ -23,7 +24,9 @@ That is the whole installation. Unity pulls in the one library Colibri needs by 
 
 Package Manager should now list **Colibri 2.0.0** or newer. If it shows a 1.x version, you have the
 old Colibri: it does not compile without extra packages (UniRx and UniTask), and it cannot talk to
-a 2.0 server either. Remove it, and ask your supervisor which URL to use instead.
+a 2.0 server either. Remove it, and install it again with a 2.x release tag appended to the URL
+above, e.g. `#v2.0.0`; the [Releases page](https://github.com/hcigroupkonstanz/Colibri/releases)
+lists the tags.
 
 You need **Unity 2022.3 or newer**, and the server has to be **version 2.0 or newer** — a 2.0
 client and a 1.x server cannot talk to each other at all.
@@ -44,12 +47,13 @@ This is the single most common reason two clients ignore each other. Both say *C
 look perfectly healthy, and nothing crosses between them, because the server keeps each app name
 completely separate.
 
-It works the other way round too: **every group needs its own app name.** Two groups that pick the
-same one — both use `test`, or both keep the name from an example — end up in the same app. Each
-sees the other's objects and messages, and the server sends every message to both groups' clients,
-which slows it down for everyone using it. Pick something nobody else will:
-`ana-thesis-prototype`, not `test`. The configuration window warns about the names people try
-first, such as `test`, `demo` or `myAppName`, but it cannot know which names other groups chose.
+It works the other way round too: **every project needs its own app name.** Two projects on one
+server that pick the same one — both use `test`, or both keep the name from an example — end up in
+the same app. Each sees the other's objects and messages, and the server sends every message to the
+clients of both, which slows it down for everyone using it. Choose a name nobody else on the server
+uses: `museum-ar-prototype`, not `test`. The configuration window warns about the names people try
+first, such as `test`, `demo` or `myAppName`, but it cannot know which names other projects on the
+server already use.
 
 ### 2. Turn on Run In Background
 
@@ -334,7 +338,7 @@ what type each expects, and the most recent messages in and out.
 | What you see | What it usually is |
 | --- | --- |
 | Two clients ignore each other, both connected | Different app names. The Status window shows the one in use — compare them. |
-| Objects or messages you did not create show up | Another group uses the same app name. Pick one nobody else uses. |
+| Objects or messages you did not create show up | Another project on the server uses the same app name. Pick one nobody else uses. |
 | Works in the Editor, nothing happens on the Quest | See [Building for Meta Quest](#building-for-meta-quest): Internet Access, plain HTTP, and the server address. |
 | A message never arrives, no errors | The listener expects a different type than the sender sent. Check the console; Colibri names both. |
 | One client goes quiet when you click away | *Run In Background* is off on that client. |
