@@ -22,7 +22,10 @@ namespace HCIKonstanz.Colibri.Synchronization
         /// made, as it always did. Changes within one interval (1 / MaxSendRate seconds) after that
         /// are collected, and their latest values go out together as soon as the interval is up -
         /// whether or not anything changes after them. Only the values in between never travel.
-        /// Switching an object off or on is never held back.
+        /// Switching an object off or on is never held back, and neither is what is waiting when
+        /// the app pauses or loses focus - the way out on Android and Quest. When the app quits,
+        /// what is waiting is sent too, but the connection closes in the same teardown, so that
+        /// last send is best effort.
         /// </para>
         /// <para>
         /// Why there is a limit: a headset renders 72 to 120 frames per second, and without one every
