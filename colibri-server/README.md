@@ -60,13 +60,18 @@ This works with a `./data` that Docker creates on first start, and with a root-o
 directory left behind by colibri-server 1.x, whose `store.json` keeps its format. The container
 starts as root, gives `/srv/colibri/data` to the `node` user (uid 1000) if anything in it belongs
 to someone else, and then runs the server as `node`; on the host, the directory ends up owned by
-uid 1000. Started with `--user` (or `user:` in the compose file), the container cannot change
-owners: give the directory to that user yourself, e.g. `sudo chown -R 1000:1000 ./data`, or use
-a named volume.
+uid 1000.
+
+Started with `--user` (or `user:` in the compose file), the container cannot change owners, so
+the data directory has to belong to that user already. Give a host directory to it yourself,
+e.g. `sudo chown -R 1001:1001 ./data` for `--user 1001:1001`. A new named volume belongs to uid
+1000, as `/srv/colibri/data` does in the image, so it only works as it is with
+`--user 1000:1000`. For any other uid, use a host directory you gave to that uid, or drop
+`--user` and let the container hand the directory to `node` itself.
 
 If the server cannot write to its data directory, it says so at startup, on stderr - with the
-path, its uid and the `chown` that fixes it - and in the admin UI's log. It keeps running, but
-saves nothing: `store.json` and voice recordings stay in memory until it stops.
+path, the error and the uid it runs as - and in the admin UI's log. It keeps running, but saves
+nothing: `store.json` and voice recordings stay in memory until it stops.
 
 Settings from [Configuration](#configuration) go into an `environment:` section, e.g.
 `CONSOLE_LOG_LEVEL: debug`. To use other ports, change the host side of `ports:`
