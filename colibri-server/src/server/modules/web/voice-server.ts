@@ -92,8 +92,10 @@ export class VoiceServer extends Service {
     }
 
     public start(voicePort: number, hostname: string) {
+        let listening = false;
         this.udpSocket = dgram.createSocket('udp4');
         this.udpSocket.on('listening', () => {
+            listening = true;
             const address = this.udpSocket.address() as AddressInfo;
             this.logInfo(`Voice server listening on ${address.address}:${address.port}`);
             this.logInfo(`Voice server Sampling Rate: ${this.samplingRate} Hz`);
@@ -185,8 +187,23 @@ export class VoiceServer extends Service {
                 }
             }
         });
-        this.udpSocket.on('error', (exception) => {
-            console.error(exception.message);
+        // A failed bind (the voice port taken, a VOICE_HOST that does not resolve or is not
+        // this machine's) is only ever reported here, and the rest of the server runs on
+        // without voice. This used to be a bare console.error of the message - on stderr
+        // only, never in the admin UI's log, and as nothing more than
+        // 'bind EADDRINUSE 0.0.0.0:9013', without saying what had failed or what it meant.
+        this.udpSocket.on('error', (err: NodeJS.ErrnoException) => {
+            if (!listening) {
+                const inUse = err.code === 'EADDRINUSE' ? ', which another process is already using' : '';
+                this.logError(`Voice server could not listen on UDP ${hostname}:${voicePort}${inUse}: ${err.message}. `
+                    + 'Voice is disabled until the server is restarted with a VOICE_HOST and VOICE_PORT it can listen on; '
+                    + 'everything else keeps running.', false);
+                return;
+            }
+            // Once it listens, this is a failed receive, which a peer could cause at packet rate.
+            if (!this.claimReport('socket error', Date.now())) return;
+            this.logError(`Voice server socket error on UDP ${hostname}:${voicePort}: ${err.message}`
+                + ` (further ones are not reported for ${REPORT_INTERVAL_MILLIS / 1000}s)`, false);
         });
         this.udpSocket.bind(voicePort, hostname);
 

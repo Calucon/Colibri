@@ -259,4 +259,75 @@ describe('VoiceServer startup', () => {
             server.stop();
         }
     });
+
+    // The socket's 'error' handler was a bare console.error(err.message): a voice port that
+    // was already taken printed only 'bind EADDRINUSE 127.0.0.1:<port>' on stderr, never
+    // reached the admin UI's log, and said nothing of voice being off while the rest ran on.
+    describe('socket errors', () => {
+        let logs: LogMessage[];
+        let stderr: string[];
+        let consoleError: ReturnType<typeof vi.spyOn>;
+        let subscriptions: Subscription[];
+        let sockets: dgram.Socket[];
+        let server: VoiceServer;
+
+        beforeEach(() => {
+            logs = [];
+            stderr = [];
+            sockets = [];
+            consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+            // What the admin UI's WebLog sees, and what the sink main.ts attaches prints on stderr.
+            const sink = new ConsoleLog({ minLevel: LogLevel.Info, broadcastTraffic: false }, {
+                out: () => undefined,
+                err: line => stderr.push(line),
+            });
+            subscriptions = [ Service.output$.subscribe(log => logs.push(log)), sink.attach(Service.output$) ];
+            server = new VoiceServer(48000, '/nonexistent-voice-recordings');
+        });
+
+        afterEach(() => {
+            for (const subscription of subscriptions) subscription.unsubscribe();
+            server.stop();
+            for (const socket of sockets) socket.close();
+        });
+
+        const errors = () => logs.filter(l => l.origin === 'VoiceServer' && l.level === LogLevel.Error);
+
+        it('says where voice could not listen, and that voice is disabled, when the port is taken', async () => {
+            const taken = dgram.createSocket('udp4');
+            sockets.push(taken);
+            taken.bind(0, '127.0.0.1');
+            await once(taken, 'listening');
+            const port = (taken.address() as AddressInfo).port;
+
+            server.start(port, '127.0.0.1');
+            await once((server as unknown as VoiceServerInternals).udpSocket, 'error');
+
+            expect(errors()).toHaveLength(1);
+            const message = errors()[0]!.message;
+            expect(message).toContain(`Voice server could not listen on UDP 127.0.0.1:${port}`);
+            expect(message).toContain('another process is already using');
+            expect(message).toContain(`bind EADDRINUSE 127.0.0.1:${port}`);
+            expect(message).toContain('Voice is disabled');
+            expect(stderr).toHaveLength(1);
+            expect(stderr[0]).toMatch(/ ERROR \[web\/VoiceServer\] Voice server could not listen on UDP /);
+            expect(consoleError).not.toHaveBeenCalled();
+            // afterEach then stops it, which must not throw for a socket that never listened.
+        });
+
+        it('reports an error once it is listening with its context, once per interval', async () => {
+            server.start(0, '127.0.0.1');
+            const udpSocket = (server as unknown as VoiceServerInternals).udpSocket;
+            await once(udpSocket, 'listening');
+
+            for (let i = 0; i < 3; i++) {
+                udpSocket.emit('error', Object.assign(new Error('recvmsg ECONNRESET'), { code: 'ECONNRESET' }));
+            }
+
+            expect(errors()).toHaveLength(1);
+            expect(errors()[0]!.message).toContain('Voice server socket error on UDP 127.0.0.1:0: recvmsg ECONNRESET');
+            expect(errors()[0]!.message).not.toContain('Voice is disabled');
+            expect(consoleError).not.toHaveBeenCalled();
+        });
+    });
 });
