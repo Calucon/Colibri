@@ -107,27 +107,6 @@ colibri.protocolMismatch.subscribe(error => {
 
 ## Usage
 
-### Web Interface for Logging
-
-Colibri provides a _web logger_ with web interface to send diagnostic data (currently: console logs) to the server. This may be useful for devices (e.g., VR devices, smartphones) where access to the console is not easily available.
-
-To setup, import the `RemoteLogger` and construct a new instance. Any subsequent `console` calls should now also appear on your colibri server's web interface, which can be accessed via `http://<your-server-ip>:9011`. The server also prints them to its console output (`docker logs` for a Docker server), apart from `console.debug` lines unless it runs with `CONSOLE_LOG_LEVEL=debug`.
-
-```ts
-import { RemoteLogger } from '@hcikn/colibri';
-const logger = new RemoteLogger();
-
-// en-/disable RemoteLogger
-logger.enable();
-logger.disable();
-```
-
-Create only one `RemoteLogger`, since every instance forwards every line. It may be created before `new Colibri()`:
-the first 100 lines logged until then are kept and sent once Colibri exists, and any further lines are counted and
-reported in one warning. Forwarding never makes a `console` call throw.
-
-See also [the remote-logging sample](samples/remote-logging.ts) (run sample with `npm run samples/remote-logging`).
-
 ### Sending Data between Clients
 
 Colibri supports simple data transmission via pub/sub communication. Data can be published from anywhere in  
@@ -303,6 +282,27 @@ A stored value can be any JSON value up to 5 MiB, `null` included; `undefined` i
 `setRestObject(key, undefined)` stores nothing. `setRestObject` resolves to `false` if the server did not store it,
 and `getRestObject` to `null` if there is no such key or the server answered with an error; both reject if the server
 cannot be reached. Keys become part of the URL as they are, so stick to letters, digits, `-` and `_`.
+
+### Web Interface for Logging
+
+Colibri provides a _web logger_ with web interface to send diagnostic data (currently: console logs) to the server. This may be useful for devices (e.g., VR devices, smartphones) where access to the console is not easily available.
+
+To setup, import the `RemoteLogger` and construct a new instance. Any subsequent `console` calls should now also appear on your colibri server's web interface, which can be accessed via `http://<your-server-ip>:9011`. The server also prints them to its console output (`docker logs` for a Docker server), apart from `console.debug` lines unless it runs with `CONSOLE_LOG_LEVEL=debug`.
+
+```ts
+import { RemoteLogger } from '@hcikn/colibri';
+const logger = new RemoteLogger();
+
+// en-/disable RemoteLogger
+logger.enable();
+logger.disable();
+```
+
+Create only one `RemoteLogger`, since every instance forwards every line. It may be created before `new Colibri()`:
+the first 100 lines logged until then are kept and sent once Colibri exists, and any further lines are counted and
+reported in one warning. Forwarding never makes a `console` call throw.
+
+See also [the remote-logging sample](samples/remote-logging.ts) (run sample with `npm run samples/remote-logging`).
 
 ## Samples
 
