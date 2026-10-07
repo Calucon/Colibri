@@ -201,16 +201,6 @@ such as the timeout or the refusal above — and is `null` once a connection has
 
 ## Documentation
 
-### Web Interface for Logging
-
-<img src="img/weblogger.png" alt="WebLogger" width=400/>
-
-Colibri provides a *web logger* with web interface to send diagnostic data (currently: console logs) to the server. This may be useful for devices (e.g., VR devices, smartphones) where access to the console is not easily available.
-
-To setup, add the `[RemoteLogger]` prefab to your scene. The Unity log output should be redirect to your server's webinterface, which can be accessed via `http://<your-server-ip>:9011`.
-
-Log lines are sent once a second, and identical lines in one batch are sent once. At most the newest 1000 lines are kept between two sends — while the connection is down, that is the whole outage — and sent once it is back. Where older lines had to be dropped, the server's log shows one line in their place, `Colibri: N log lines are missing here …`; the device's own log keeps everything. If the server refuses the client's protocol version, the kept lines are discarded.
-
 ### Sending Data between Clients
 
 Colibri supports simple data transmission via pub/sub communication. Data can be published from anywhere in
@@ -366,44 +356,6 @@ Limitations:
 - Only one client can update the each attribute of the object simultaneously
 - Scene will be reset once all clients disconnect
 
-### Remote Store
-
-Colibri offers persistent data storage on the server, so that data can be saved easily between sessions. Anything Newtonsoft JSON can serialize — an object of your own class (without Unity types in it, see below), a list, or a plain number or string — can be uploaded via a RESTful interface of the `Store` object, up to 5 MiB of JSON per name. Data is kept per *app name*:
-
-```c#
-// Create example object
-ExampleClass exampleObject = new ExampleClass();
-exampleObject.Id = 1234;
-exampleObject.Name = "Charly Sharp";
-
-// Save example object using REST API
-bool putSuccess = await Store.Put("exampleObject", exampleObject);
-Debug.Log($"Success: {putSuccess}");
-```
-
-or retrieved again:
-
-```c#
-ExampleClass exampleObject = await Store.Get<ExampleClass>("exampleObject");
-if (exampleObject != null)
-{
-    // Use fetched "exampleObject"
-}
-else
-{
-    Debug.LogError("Get Example Object failed!");
-}
-```
-
-`await Store.Delete("exampleObject")` removes it again.
-
-Limitations:
-
-- Data fetching happens manually (data won’t be automatically updated!)
-- Values are converted with Newtonsoft JSON, which saves the public fields and properties of your class; `[Serializable]` is not needed, and a private `[SerializeField]` field is not saved
-- A `Vector3`, `Quaternion` or `Color` inside your class cannot be converted (see [Sending Data between Clients](#sending-data-between-clients)): `await Store.Put(…)` throws a `JsonSerializationException` instead of returning `false`. Save a `JObject` built with `ToJson()` instead, and load it with `Store.Get<JObject>`
-- `await Store.Get<T>(…)` throws a Newtonsoft `JsonException` when the saved value does not fit `T`. It returns `default`, and logs why, only when the request itself fails — for a name that was never saved, for example
-
 ### SyncBehaviour
 
 For more complex scenarios, Colibri supports synchronization of data models (e.g., for use in model-view-controller architectures). For this, we need a model script and a manager script.
@@ -499,6 +451,44 @@ the configuration alone; a negative value throws an `ArgumentOutOfRangeException
 limit off — an update in every frame in which something changed, as in Colibri 1.x — and the
 configuration window warns about it. A configuration saved before this setting existed uses 30.
 
+### Remote Store
+
+Colibri offers persistent data storage on the server, so that data can be saved easily between sessions. Anything Newtonsoft JSON can serialize — an object of your own class (without Unity types in it, see below), a list, or a plain number or string — can be uploaded via a RESTful interface of the `Store` object, up to 5 MiB of JSON per name. Data is kept per *app name*:
+
+```c#
+// Create example object
+ExampleClass exampleObject = new ExampleClass();
+exampleObject.Id = 1234;
+exampleObject.Name = "Charly Sharp";
+
+// Save example object using REST API
+bool putSuccess = await Store.Put("exampleObject", exampleObject);
+Debug.Log($"Success: {putSuccess}");
+```
+
+or retrieved again:
+
+```c#
+ExampleClass exampleObject = await Store.Get<ExampleClass>("exampleObject");
+if (exampleObject != null)
+{
+    // Use fetched "exampleObject"
+}
+else
+{
+    Debug.LogError("Get Example Object failed!");
+}
+```
+
+`await Store.Delete("exampleObject")` removes it again.
+
+Limitations:
+
+- Data fetching happens manually (data won’t be automatically updated!)
+- Values are converted with Newtonsoft JSON, which saves the public fields and properties of your class; `[Serializable]` is not needed, and a private `[SerializeField]` field is not saved
+- A `Vector3`, `Quaternion` or `Color` inside your class cannot be converted (see [Sending Data between Clients](#sending-data-between-clients)): `await Store.Put(…)` throws a `JsonSerializationException` instead of returning `false`. Save a `JObject` built with `ToJson()` instead, and load it with `Store.Get<JObject>`
+- `await Store.Get<T>(…)` throws a Newtonsoft `JsonException` when the saved value does not fit `T`. It returns `default`, and logs why, only when the request itself fails — for a name that was never saved, for example
+
 ### Connection and outages
 
 Colibri opens the connection by itself the first time anything calls `Sync.Send` or
@@ -549,6 +539,16 @@ reconnecting, and whatever was queued or is sent afterwards is dropped, with a o
 re-enabling the `WebServerConnection` component tries again. A mismatch the server could not
 report — see [Requirements](#requirements) — shows up in `SuspectedProtocolMismatch` instead, while
 the client keeps retrying.
+
+### Web Interface for Logging
+
+<img src="img/weblogger.png" alt="WebLogger" width=400/>
+
+Colibri provides a *web logger* with web interface to send diagnostic data (currently: console logs) to the server. This may be useful for devices (e.g., VR devices, smartphones) where access to the console is not easily available.
+
+To setup, add the `[RemoteLogger]` prefab to your scene. The Unity log output should be redirect to your server's webinterface, which can be accessed via `http://<your-server-ip>:9011`.
+
+Log lines are sent once a second, and identical lines in one batch are sent once. At most the newest 1000 lines are kept between two sends — while the connection is down, that is the whole outage — and sent once it is back. Where older lines had to be dropped, the server's log shows one line in their place, `Colibri: N log lines are missing here …`; the device's own log keeps everything. If the server refuses the client's protocol version, the kept lines are discarded.
 
 ### Voice Chat
 
