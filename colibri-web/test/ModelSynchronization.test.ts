@@ -157,7 +157,7 @@ describe('ModelSynchronization', () => {
     });
 
     describe('registerModel (locally created models)', () => {
-        it('sends the full toJson() as an initial model::update and lists the model', () => {
+        it('asks for the model by id, lists it, and sends all of it once the server has nothing for it', () => {
             const [models, registerModel] = RegisterModelSync({
                 name: 'widget',
                 type: Widget
@@ -172,7 +172,17 @@ describe('ModelSynchronization', () => {
 
             registerModel(w);
 
-            // Full toJson sent as the initial update.
+            // Asked for by id first, as a model this client has now; nothing sent yet.
+            expect(sendMessageMock.mock.calls).toEqual([['widget', 'model::request', { id: 'local-1' }]]);
+
+            // Model is present in the latest emission.
+            const current = latest(models);
+            expect(current).toContain(w);
+            expect(current.length).toBe(1);
+
+            // The server's answer for an id it has nothing for: the full toJson goes out.
+            capturedHandler()({ channel: 'widget', command: 'model::update', payload: { id: 'local-1' } });
+
             const calls = updateCalls();
             expect(calls.length).toBe(1);
             expect(calls[0][0]).toBe('widget');
@@ -181,11 +191,6 @@ describe('ModelSynchronization', () => {
                 label: 'hello',
                 count: 3
             });
-
-            // Model is present in the latest emission.
-            const current = latest(models);
-            expect(current).toContain(w);
-            expect(current.length).toBe(1);
         });
 
         it('sends only the changed key after a @Synced edit is buffered', async () => {
@@ -198,6 +203,7 @@ describe('ModelSynchronization', () => {
 
             const w = new Widget('local-1');
             registerModel(w);
+            capturedHandler()({ channel: 'widget', command: 'model::update', payload: { id: 'local-1' } });
             sendMessageMock.mockClear();
 
             // Local edit of a single synced field.

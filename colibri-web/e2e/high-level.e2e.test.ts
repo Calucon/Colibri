@@ -158,6 +158,45 @@ describe('RegisterModelSync high-level API', () => {
     });
 });
 
+const latest = <T>(models$: Observable<T[]>): T[] => {
+    let current: T[] = [];
+    models$.subscribe(m => (current = m)).unsubscribe();
+    return current;
+};
+
+/** What the server has stored for `id`, asked for through `client`, which receives the answer. */
+const storedOn = async (client: Colibri, channel: string, id: string) => {
+    const answer = nextMessage(client, { channel, command: 'model::update' });
+    client.sendMessage(channel, 'model::request', { id });
+    return (await answer).payload;
+};
+
+/**
+ * Resolves once the server has handled everything `client` sent before this, and `client` has
+ * been handed everything the server sent it until then. On a channel of its own, so that no
+ * RegisterModelSync mistakes the answer for a model.
+ */
+const roundTrip = async (client: Colibri) => {
+    const fence = uniqueApp('fence');
+    const answer = nextMessage(client, { channel: fence, command: 'model::update' });
+    client.sendMessage(fence, 'model::request', { id: 'fence' });
+    await answer;
+};
+
+/** Every model::update `client` receives on `channel` until `until` resolves. */
+const updatesDuring = async (client: Colibri, channel: string, until: () => Promise<unknown>) => {
+    const received: unknown[] = [];
+    const subscription = client.messages.subscribe(msg => {
+        if (msg.channel === channel && msg.command === 'model::update') received.push(msg.payload);
+    });
+    try {
+        await until();
+    } finally {
+        subscription.unsubscribe();
+    }
+    return received;
+};
+
 // The server forgets an app's models when its last client leaves, and a model a client had
 // registered itself was never sent again - so a client that joined after the outage never saw it.
 describe('RegisterModelSync own models after a reconnect', () => {
@@ -165,19 +204,6 @@ describe('RegisterModelSync own models after a reconnect', () => {
         @Synced()
         accessor value = '';
     }
-
-    const latest = <T>(models$: Observable<T[]>): T[] => {
-        let current: T[] = [];
-        models$.subscribe(m => (current = m)).unsubscribe();
-        return current;
-    };
-
-    /** What the server has stored for `id`, asked for through `client`, which receives the answer. */
-    const storedOn = async (client: Colibri, channel: string, id: string) => {
-        const answer = nextMessage(client, { channel, command: 'model::update' });
-        client.sendMessage(channel, 'model::request', { id });
-        return (await answer).payload;
-    };
 
     it('sends its own model again after the server forgot it, so a client joining later sees it', async () => {
         const app = uniqueApp('modelsync-own-forgotten');
@@ -189,6 +215,8 @@ describe('RegisterModelSync own models after a reconnect', () => {
         const model = new OwnModel('own-1');
         model.value = 'mine';
         registerModel(model);
+        // Sent once the server has answered the request for it, which is before the answer to this.
+        await roundTrip(singleton);
         expect(await storedOn(singleton, channel, 'own-1')).toEqual({ id: 'own-1', value: 'mine' });
 
         const admin = await connectAsAdminUi();
@@ -259,18 +287,6 @@ describe('RegisterModelSync own models after a reconnect', () => {
     // Longer than SyncModel's 1ms buffer, so a change has been reported - and sent, or not - by then.
     const reported = () => new Promise(resolve => setTimeout(resolve, 20));
 
-    /**
-     * Resolves once the server has handled everything `client` sent before this, and `client` has
-     * been handed everything the server sent it until then. On a channel of its own, so that no
-     * RegisterModelSync mistakes the answer for a model.
-     */
-    const roundTrip = async (client: Colibri) => {
-        const fence = uniqueApp('fence');
-        const answer = nextMessage(client, { channel: fence, command: 'model::update' });
-        client.sendMessage(fence, 'model::request', { id: 'fence' });
-        await answer;
-    };
-
     it('sends every field again after the server forgot its own model, also one it changed while away', async () => {
         const app = uniqueApp('modelsync-own-changed-away');
         const channel = uniqueApp('own');
@@ -282,6 +298,7 @@ describe('RegisterModelSync own models after a reconnect', () => {
         model.a = 'A';
         model.b = 'B';
         registerModel(model);
+        await roundTrip(singleton);
         expect(await storedOn(singleton, channel, 'own-3')).toEqual({ id: 'own-3', a: 'A', b: 'B' });
 
         const admin = await connectAsAdminUi();
@@ -334,20 +351,6 @@ describe('RegisterModelSync own models after a reconnect', () => {
         expect([model.a, model.b]).toEqual(['A2', 'B2']);
         expect(await storedOn(peer, channel, 'own-4')).toEqual({ id: 'own-4', a: 'A2', b: 'B2' });
     });
-
-    /** Every model::update `client` receives on `channel` until `until` resolves. */
-    const updatesDuring = async (client: Colibri, channel: string, until: () => Promise<unknown>) => {
-        const received: unknown[] = [];
-        const subscription = client.messages.subscribe(msg => {
-            if (msg.channel === channel && msg.command === 'model::update') received.push(msg.payload);
-        });
-        try {
-            await until();
-        } finally {
-            subscription.unsubscribe();
-        }
-        return received;
-    };
 
     /** Every model the server has on `channel`, asked for through `client`. */
     const modelsOn = (client: Colibri, channel: string) =>
@@ -432,6 +435,73 @@ describe('RegisterModelSync own models after a reconnect', () => {
             ['theirs-1', 'missed'],
             ['theirs-2', 'created']
         ]);
+    });
+});
+
+// The server may already have a model under the id a client registers: another client created it,
+// or the same page did before it was reloaded, while another client kept the app alive.
+describe('RegisterModelSync registering an id the server already has', () => {
+    class Shared extends SyncModel<Shared> {
+        @Synced()
+        accessor value = '';
+    }
+
+    // The registering client sent its fresh state at once, and the answer to the request for every
+    // model then put the old one back on that client only: it showed the old state, while the
+    // server and every other client had the fresh one.
+    it('takes what the server has, so that it agrees with the server and every other client', async () => {
+        const app = uniqueApp('modelsync-known-id');
+        const channel = uniqueApp('shared');
+        // Stays connected throughout, so the server keeps the app's models: a headset, say.
+        const peer = await createClient(app);
+        peer.sendMessage(channel, 'model::update', { id: 'session', value: 'running' });
+        await roundTrip(peer);
+
+        // A page loaded now registers the same id with a fresh state of its own.
+        const page = await createClient(app);
+        const [models$, registerModel] = RegisterModelSync<Shared>({ name: channel, type: Shared });
+        const session = new Shared('session');
+        session.value = 'fresh';
+
+        const peerSaw = await updatesDuring(peer, channel, async () => {
+            registerModel(session);
+            // The answers to both requests, then anything the page sent in reply, relayed.
+            await roundTrip(page);
+            await roundTrip(page);
+            await roundTrip(peer);
+        });
+
+        expect(latest(models$)).toEqual([session]);
+        expect(session.value).toBe('running');
+        expect(peerSaw).toEqual([]);
+        expect(await storedOn(peer, channel, 'session')).toEqual({ id: 'session', value: 'running' });
+    });
+
+    // The server drops an update for an id deleted a moment ago (MODEL_TOMBSTONE_SECONDS), so that
+    // one still on its way when the delete was made cannot bring the model back. Registering the id
+    // again is creating the model again on purpose, and must not be dropped.
+    it('creates a model again under an id another client deleted a moment ago', async () => {
+        const app = uniqueApp('modelsync-recreated-id');
+        const channel = uniqueApp('shared');
+        const { singleton, peer } = await createSingletonWithPeer(app);
+        const [models$, registerModel] = RegisterModelSync<Shared>({ name: channel, type: Shared });
+        await roundTrip(singleton);
+
+        peer.sendMessage(channel, 'model::update', { id: 'marker', value: 'old' });
+        peer.sendMessage(channel, 'model::delete', { id: 'marker' });
+        await roundTrip(peer);
+        // Seen to be deleted here too.
+        await roundTrip(singleton);
+        expect(latest(models$)).toEqual([]);
+
+        const marker = new Shared('marker');
+        marker.value = 'new';
+        const arrived = nextMessage(peer, { channel, command: 'model::update' }, 3000);
+        registerModel(marker);
+
+        expect((await arrived).payload).toEqual({ id: 'marker', value: 'new' });
+        expect(latest(models$)).toEqual([marker]);
+        expect(await storedOn(peer, channel, 'marker')).toEqual({ id: 'marker', value: 'new' });
     });
 });
 

@@ -63,9 +63,16 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
     // told it about. Only these are this client's to send again (see below).
     const ownModels = new WeakSet<T>();
 
-    // Own models asked for by id after a reconnect, whose answer has not arrived yet - and the
-    // instance that asked, which is the one to answer through.
+    // Own models asked for by id, on registerModel or after a reconnect, whose answer has not
+    // arrived yet - and the instance that asked, which is the one to answer through.
     const awaitingAnswer = new Map<string, Colibri>();
+
+    // Own models the server has answered for, on this connection or an earlier one: those this
+    // client held before an outage, and asks for again after it.
+    const answered = new WeakSet<T>();
+
+    // From a reconnect until everything else is asked for, the instance to ask through.
+    let catchingUpThrough: Colibri | undefined;
 
     // Own models whose wait for an answer a model::delete ended (see onDelete). That delete may
     // have been relayed from another client just before the answer, and a server that does not
@@ -81,6 +88,37 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
     // From a disconnect until the next connect.
     let disconnected = false;
 
+    // Asks the server for an own model by id; onUpdate or onDelete takes the answer. The server
+    // answers with what it has - or, for a model it does not have, a bare { id }, and only then
+    // does onUpdate send the model's full state. What the server does have is applied rather than
+    // overwritten, since it is what every other client has - except what this client changed
+    // itself since registering the model or while it waited, which it sends instead.
+    //
+    // A model this client held before an outage is asked for `again: true`. Another client may
+    // have deleted it meanwhile, and the delete it relayed never arrived here. The server
+    // remembers a delete for a while (MODEL_TOMBSTONE_SECONDS) and answers such a request with
+    // model::delete, which onDelete applies. Asked for without the flag, as a model this client
+    // has right now (registerModel, or one registered while the connection was down), the server
+    // forgets that delete and answers with the bare id: the model is in use again. Once that while
+    // is over, a deleted model looks the same as one the server forgot, and is sent again.
+    const askFor = (colibri: Colibri, model: T) => {
+        awaitingAnswer.set(model.id, colibri);
+        colibri.sendMessage(
+            name,
+            'model::request',
+            answered.has(model) ? { id: model.id, again: true } : { id: model.id }
+        );
+    };
+
+    // After a reconnect, everything else is asked for once every own model has its answer, so that
+    // that answer has what was sent in between.
+    const catchUpOnceAnswered = () => {
+        if (!catchingUpThrough || awaitingAnswer.size > 0) return;
+        const colibri = catchingUpThrough;
+        catchingUpThrough = undefined;
+        colibri.sendMessage(name, 'model::request');
+    };
+
     // initial data fetch - and the same again after every reconnect, since an update relayed while
     // this client was disconnected is gone for it, and only asking again brings it back. The
     // server answers with one model::update per model it has, which onUpdate applies to the
@@ -88,21 +126,8 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
     //
     // The server may have lost this client's own models meanwhile, though: it forgets every model
     // of an app when the app's last client leaves, and when it restarts. Nothing sent them again,
-    // so a client that joined later never saw them. So each own model is asked for by id first,
-    // which the server answers with what it has - or, for a model it does not have, a bare { id }.
-    // Only then does onUpdate send the model's full state. What the server does have, another
-    // client may have changed meanwhile, so it is applied rather than overwritten - except what
-    // this client changed itself while it waited, which it sends instead. Everything else is asked
-    // for once every own model has its answer, so that that answer has what was sent in between.
-    //
-    // Another client may also have deleted an own model while this one was away, and the delete
-    // it relayed never arrived here. So the request says `again: true`: this client held the
-    // model before the outage. The server remembers a delete for a while (MODEL_TOMBSTONE_SECONDS)
-    // and answers such a request with model::delete, which onDelete applies. Without the flag the
-    // server takes the request for one from a client that has the object now, and so forgets the
-    // delete and answers with the bare id, and the full state sent then brings the model back on
-    // every client. Once that while is over, a deleted model looks the same as one the server
-    // forgot, and is sent again.
+    // so a client that joined later never saw them. So after a reconnect each own model is asked
+    // for by id first (see askFor), and everything else only once they all have their answer.
     withColibri(colibri => {
         colibri.sendMessage(name, 'model::request');
         onColibriDisconnected(colibri, () => {
@@ -113,12 +138,11 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
             // Whatever was asked on the connection before this one is not going to be answered.
             awaitingAnswer.clear();
             deletedWhileAwaited.clear();
+            catchingUpThrough = colibri;
             for (const model of models.value) {
-                if (!ownModels.has(model)) continue;
-                awaitingAnswer.set(model.id, colibri);
-                colibri.sendMessage(name, 'model::request', { id: model.id, again: true });
+                if (ownModels.has(model)) askFor(colibri, model);
             }
-            if (awaitingAnswer.size === 0) colibri.sendMessage(name, 'model::request');
+            catchUpOnceAnswered();
         });
     });
 
@@ -148,10 +172,12 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
         const asker = id === undefined ? undefined : awaitingAnswer.get(id);
         if (id !== undefined && asker) {
             awaitingAnswer.delete(id);
+            if (model) answered.add(model);
             const held = model ? releaseHeldChanges(model) : [];
 
             if (isBare(modelData)) {
-                if (model) asker.sendMessage(name, 'model::update', model.toJson());
+                // Not for a model whose delete() was called since: that ended what it sends.
+                if (model && ownModels.has(model)) asker.sendMessage(name, 'model::update', model.toJson());
             } else if (model) {
                 applyUpdate(model, withoutChanges(modelData, model, held));
                 if (held.length > 0) asker.sendMessage(name, 'model::update', model.toJson(held));
@@ -159,7 +185,7 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
                 applyUpdate(model, modelData);
             }
 
-            if (awaitingAnswer.size === 0) asker.sendMessage(name, 'model::request');
+            catchUpOnceAnswered();
             return;
         }
 
@@ -212,32 +238,35 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
 
         // A request for an own model can be answered with model::delete instead of the model: the
         // server's answer for one another client deleted while this client was away. That settles
-        // the model as much as an update would, and once every own model is settled, everything
-        // else is still to be asked for. Left waiting, the id kept that from ever happening, and
-        // every other model stayed as it was before the outage.
-        const asker = awaitingAnswer.get(id);
-        if (asker) {
-            awaitingAnswer.delete(id);
+        // the model as much as an update would, and after a reconnect, once every own model is
+        // settled, everything else is still to be asked for. Left waiting, the id kept that from
+        // ever happening, and every other model stayed as it was before the outage.
+        if (awaitingAnswer.delete(id)) {
             deletedWhileAwaited.add(id);
-            if (awaitingAnswer.size === 0) asker.sendMessage(name, 'model::request');
+            catchUpOnceAnswered();
         }
     };
 
+    // The server may already have a model with this id: one another client created, or this
+    // client before the page was reloaded, kept while another client of the app stayed connected.
+    // Sending the model in full straight away overwrote that copy on the server and every other
+    // client, while the answer to the request for every model, already on its way, overwrote this
+    // client's copy with the old one, so the two ended up apart. So the model is asked for by id
+    // first, the way Unity's SyncBehaviour does it (see askFor): what the server has wins, and the
+    // model is sent in full only when the server has nothing for it.
     const registerModel = (model: T) => {
         model.modelChanges$.subscribe({
             next: changes => {
-                // Before `new Colibri()` a change has nowhere to go, and needs nowhere: the full
-                // model below is read when it is sent, so it already carries the change.
                 const colibri = Colibri.getInstance(false);
-                if (!colibri) return;
 
-                // Socket.IO would buffer a change made while disconnected and send it on the
-                // reconnect ahead of the request for the model. To a server that had forgotten the
-                // model, that change alone became all of it: the answer had fields in it, so the
-                // rest was never sent again. So it is held back until the answer has come - as is
-                // one made after the reconnect but before the answer, which the answer would
-                // otherwise undo.
-                if (disconnected || awaitingAnswer.has(model.id)) {
+                // Held back until the server has answered for the model, and then sent on top of
+                // what it has: a change made since registering (before `new Colibri()` included),
+                // or after a reconnect but before the answer, which the answer would otherwise
+                // undo. Also one made while disconnected, which Socket.IO would buffer and send on
+                // the reconnect ahead of the request for the model: to a server that had forgotten
+                // the model, that change alone became all of it, the answer had fields in it, and
+                // the rest was never sent again.
+                if (!colibri || disconnected || awaitingAnswer.has(model.id)) {
                     holdChanges(model, changes);
                     return;
                 }
@@ -251,12 +280,13 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
             }
         });
 
-        // send initial model - as it is when it can be sent, not as it was when registered
-        withColibri(colibri => {
-            colibri.sendMessage(name, 'model::update', model.toJson());
-        });
         ownModels.add(model);
         models.next([...models.value, model]);
+
+        // While disconnected, the reconnect asks for it.
+        withColibri(colibri => {
+            if (!disconnected && ownModels.has(model)) askFor(colibri, model);
+        });
     };
 
     return [models.asObservable(), registerModel];
