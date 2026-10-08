@@ -4,6 +4,7 @@ vi.mock('socket.io-client', () => ({
     connect: vi.fn()
 }));
 
+import { setTimeout as realTimeout } from 'node:timers/promises';
 import { firstValueFrom, type Observable } from 'rxjs';
 import { connect } from 'socket.io-client';
 import { Sync } from '../src/Broadcasting';
@@ -1562,7 +1563,11 @@ describe('keeping a change made after registerModel', () => {
     // (CLIENT_MESSAGE_RATE_LIMIT). The answer to asking again then lacks the change, and nothing
     // else may come for the model: waiting on would hold back every later change for good.
     it('stops waiting for an update that shows the change after a while, and sends what it held since', async () => {
-        vi.useFakeTimers();
+        // Only the timeouts: SyncModel's buffer runs on intervals, one for every model still around
+        // from earlier tests, and on a fake clock 5 seconds of them take as long as real ones.
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        // The 5 seconds also pass for the server identifying itself, which it does not do here.
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
         try {
             new Colibri('app', 'localhost', 9011);
             const [, registerModel] = RegisterModelSync({ name: 'reg', type: Pair });
@@ -1586,9 +1591,10 @@ describe('keeping a change made after registerModel', () => {
 
             fakeSocket.emit.mockClear();
             pair.b = 'now';
-            await vi.advanceTimersByTimeAsync(10);
+            await realTimeout(10);
             expect(sentInOrder()).toEqual([['model::update', { id: 'p1', b: 'now' }]]);
         } finally {
+            warnSpy.mockRestore();
             vi.useRealTimers();
         }
     });
