@@ -50,6 +50,10 @@ namespace HCIKonstanz.Colibri.E2E
             E2EServer.RequireTlsServer();
             yield return DestroyConnection();
 
+            // NUnit runs every test of a fixture on the same instance: without this, a test would
+            // see the earlier tests' attempts and warnings as its own.
+            lock (_log)
+                _log.Clear();
             Application.logMessageReceivedThreaded += Record;
         }
 
