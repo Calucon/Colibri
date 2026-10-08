@@ -854,9 +854,11 @@ The fixes it produced:
   sets a member back during the outage, to a value this client held in the 10 s before the outage
   was noticed, is undone. A member changed more than 8 times within about 100 ms of the last
   heartbeat before the link died, which needs a send-rate limit above about 80 a second, may not be
-  recognised, and takes the answer after the reconnect. A member whose very first value was lost
-  held nothing before it, and is not sent again. A delete sent again after an outage also removes
-  an object another client has created under the same id in the meantime.
+  recognised, and takes the answer after the reconnect. A member changed more than once between a
+  reconnect and a second drop, before all the answers are in, may not be recognised either. A member
+  whose very first value was lost held nothing before it, and is not sent again. A delete sent again
+  after an outage also removes an object another client has created under the same id in the
+  meantime.
 - `SyncBehaviourManager` must unsubscribe from `SyncBehaviour<T>.ModelCreated` / `ModelDestroyed` in
   `OnDestroy`, since static events do not do it themselves. It does; anything else subscribing to
   them has to as well, or it leaks across Play sessions when domain reload is disabled.
