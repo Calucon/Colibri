@@ -1,6 +1,7 @@
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
+import { readTlsFiles } from './modules/core/tls-files.js';
 
 // automatically load .env file. Quietly: dotenv 17 otherwise prints an "injected env"
 // line with a rotating advertising tip on every start, docker logs included.
@@ -39,6 +40,29 @@ const parseNonNegativeInt = function (name: string, raw: string | undefined, fal
     }
     return value;
 };
+
+// TLS_CERT and TLS_KEY: both or neither. Read and checked here, so that a server that cannot serve
+// TLS with them does not start at all, rather than start without TLS, or fail only once the first
+// client connects. Resolved like DATA_ROOT below.
+const parseTlsFiles = function (rawCert: string | undefined, rawKey: string | undefined): { cert: string; key: string } | undefined {
+    const cert = rawCert?.trim() ?? '';
+    const key = rawKey?.trim() ?? '';
+    if (cert === '' && key === '') return undefined;
+    if (cert === '' || key === '') {
+        const [set, missing] = cert === '' ? ['TLS_KEY', 'TLS_CERT'] : ['TLS_CERT', 'TLS_KEY'];
+        throw new Error(
+            `${set} is set, but ${missing} is not. Set both, to the PEM files of the certificate and of its private key, ` +
+                'to serve the TCP port and the web port over TLS only; or neither, to serve both unencrypted.'
+        );
+    }
+
+    const files = { cert: path.resolve(__dirname, cert), key: path.resolve(__dirname, key) };
+    // Throws, naming the variable, the file and the fix, if they cannot be used.
+    readTlsFiles(files.cert, files.key);
+    return files;
+};
+
+const tlsFiles = parseTlsFiles(process.env.TLS_CERT, process.env.TLS_KEY);
 
 export const Config = {
     TCP_HOST: process.env.TCP_HOST || '0.0.0.0',
@@ -93,4 +117,9 @@ export const Config = {
     // Seconds the server remembers that a synced model was deleted, refusing updates that would
     // create it again (see DataStore.removeModel); 0: not at all.
     MODEL_TOMBSTONE_SECONDS: parseNonNegativeInt('MODEL_TOMBSTONE_SECONDS', process.env.MODEL_TOMBSTONE_SECONDS, 600),
+
+    // Absolute paths of the PEM certificate and private key, or both undefined. Set, the TCP port
+    // accepts only TLS connections and the web port serves only HTTPS and WSS.
+    TLS_CERT: tlsFiles?.cert,
+    TLS_KEY: tlsFiles?.key,
 };

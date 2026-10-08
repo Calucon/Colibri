@@ -1,8 +1,9 @@
-import { describe, it, expect, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'fs/promises';
+import { describe, it, expect, afterEach, afterAll, beforeAll, vi } from 'vitest';
+import { chmod, mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
+import { TestCertificate, createTestCertificate, encryptTestKey } from '../tls-test-certificate.js';
 
 // configuration.ts resolves its paths against its own directory: src/server here,
 // dist/server in a build.
@@ -106,6 +107,109 @@ describe('Config', () => {
 
         it.each(['-1', '2.5', 'forever'])('refuses to start with "%s"', async (raw) => {
             await expect(loadConfig({ MODEL_TOMBSTONE_SECONDS: raw })).rejects.toThrow('MODEL_TOMBSTONE_SECONDS');
+        });
+    });
+
+    describe('TLS_CERT and TLS_KEY', () => {
+        let dir: string;
+        let server: TestCertificate;
+        let other: TestCertificate;
+
+        beforeAll(async () => {
+            dir = await mkdtemp(path.join(tmpdir(), 'colibri-config-tls-'));
+            server = createTestCertificate(dir, 'server');
+            other = createTestCertificate(dir, 'other');
+        });
+
+        afterAll(async () => {
+            await rm(dir, { recursive: true, force: true });
+        });
+
+        it('leave TLS off when neither is set, or both are empty', async () => {
+            const unset = await loadConfig({ TLS_CERT: undefined, TLS_KEY: undefined });
+            expect(unset.TLS_CERT).toBeUndefined();
+            expect(unset.TLS_KEY).toBeUndefined();
+
+            const empty = await loadConfig({ TLS_CERT: '', TLS_KEY: '' });
+            expect(empty.TLS_CERT).toBeUndefined();
+            expect(empty.TLS_KEY).toBeUndefined();
+        });
+
+        it('take a certificate and its key', async () => {
+            const config = await loadConfig({ TLS_CERT: server.certPath, TLS_KEY: server.keyPath });
+
+            expect(config.TLS_CERT).toBe(server.certPath);
+            expect(config.TLS_KEY).toBe(server.keyPath);
+        });
+
+        it('resolve relative paths like DATA_ROOT\'s', async () => {
+            const config = await loadConfig({
+                TLS_CERT: path.relative(CONFIG_DIR, server.certPath),
+                TLS_KEY: path.relative(CONFIG_DIR, server.keyPath),
+            });
+
+            expect(config.TLS_CERT).toBe(server.certPath);
+            expect(config.TLS_KEY).toBe(server.keyPath);
+        });
+
+        it.each([
+            [ 'TLS_CERT', 'TLS_KEY' ],
+            [ 'TLS_KEY', 'TLS_CERT' ],
+        ])('refuse to start with only %s set, naming %s', async (set, missing) => {
+            const env = { TLS_CERT: undefined as string | undefined, TLS_KEY: undefined as string | undefined };
+            env[set as 'TLS_CERT' | 'TLS_KEY'] = set === 'TLS_CERT' ? server.certPath : server.keyPath;
+
+            await expect(loadConfig(env)).rejects.toThrow(`${set} is set, but ${missing} is not`);
+        });
+
+        it('refuse to start with a file that does not exist, naming it', async () => {
+            const missing = path.join(dir, 'missing.pem');
+
+            await expect(loadConfig({ TLS_CERT: missing, TLS_KEY: server.keyPath }))
+                .rejects.toThrow(`Cannot read TLS_CERT (${missing})`);
+        });
+
+        it('refuse to start with a directory instead of a file', async () => {
+            await expect(loadConfig({ TLS_CERT: server.certPath, TLS_KEY: dir }))
+                .rejects.toThrow('has to name the PEM file itself');
+        });
+
+        // root reads any file, so there is nothing to refuse when the tests run as root.
+        it.skipIf(process.getuid?.() === 0)('refuse to start with a key the server cannot read, naming its uid', async () => {
+            const locked = path.join(dir, 'locked');
+            await mkdir(locked, { recursive: true });
+            const keyPath = path.join(locked, 'server.key');
+            await writeFile(keyPath, server.key);
+            await chmod(keyPath, 0o000);
+            try {
+                await expect(loadConfig({ TLS_CERT: server.certPath, TLS_KEY: keyPath }))
+                    .rejects.toThrow(new RegExp(`Cannot read TLS_KEY \\(${keyPath}\\).*runs as uid ${process.getuid?.()}`));
+            } finally {
+                await chmod(keyPath, 0o600);
+            }
+        });
+
+        it('refuse to start with a key where the certificate belongs', async () => {
+            await expect(loadConfig({ TLS_CERT: server.keyPath, TLS_KEY: server.keyPath }))
+                .rejects.toThrow(`TLS_CERT (${server.keyPath}) holds no certificate the server can use`);
+        });
+
+        it('refuse to start with a certificate where the key belongs', async () => {
+            await expect(loadConfig({ TLS_CERT: server.certPath, TLS_KEY: server.certPath }))
+                .rejects.toThrow(`TLS_KEY (${server.certPath}) holds no private key the server can use`);
+        });
+
+        it('refuse to start with the key of another certificate', async () => {
+            await expect(loadConfig({ TLS_CERT: server.certPath, TLS_KEY: other.keyPath }))
+                .rejects.toThrow(`TLS_KEY (${other.keyPath}) is not the private key of the certificate in TLS_CERT (${server.certPath})`);
+        });
+
+        // Node would otherwise either fail with an OpenSSL decoder error or, on a terminal, ask for it.
+        it.each([ 'pkcs8', 'traditional' ] as const)('refuse to start with a key protected by a passphrase (%s), and say so', async (format) => {
+            const keyPath = encryptTestKey(dir, server, format);
+
+            await expect(loadConfig({ TLS_CERT: server.certPath, TLS_KEY: keyPath }))
+                .rejects.toThrow(`TLS_KEY (${keyPath}) is protected by a passphrase`);
         });
     });
 
