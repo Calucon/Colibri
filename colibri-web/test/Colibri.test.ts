@@ -1262,6 +1262,69 @@ describe('registering a model whose id the server may already have', () => {
 
         expect(sentInOrder()).toEqual([['model::request', { id: 'p1' }]]);
     });
+
+    // Both used to stay listed, and every later update for the id went to the first of them only.
+    it('replaces the copy of the id the server told it about, instead of listing the id twice', async () => {
+        new Colibri('app', 'localhost', 9011);
+        const [models$, registerModel] = RegisterModelSync({ name: 'reg', type: Pair });
+        connectSocket();
+        deliver('reg', { command: 'model::update', payload: { id: 'p1', a: 'server-a', b: 'server-b' } });
+        const [copy] = latest(models$);
+        fakeSocket.emit.mockClear();
+
+        const pair = new Pair('p1');
+        registerModel(pair);
+        expect(latest(models$)).toEqual([pair]);
+
+        deliver('reg', { command: 'model::update', payload: { id: 'p1', a: 'server-a', b: 'server-b' } });
+        deliver('reg', { command: 'model::update', payload: { id: 'p1', b: 'changed by another client' } });
+        await settle();
+        expect([pair.a, pair.b]).toEqual(['server-a', 'changed by another client']);
+        expect(latest(models$)).toEqual([pair]);
+
+        // The copy no longer sends its changes.
+        copy.a = 'changed on the copy';
+        await settle();
+        expect(sentInOrder()).toEqual([['model::request', { id: 'p1' }]]);
+    });
+
+    it('does nothing when the model listed is registered again', async () => {
+        const { models$, registerModel, pair } = registered();
+        registerModel(pair);
+
+        deliver('reg', { command: 'model::update', payload: { id: 'p1' } });
+        await settle();
+
+        expect(latest(models$)).toEqual([pair]);
+        expect(sentInOrder()).toEqual([
+            ['model::request', { id: 'p1' }],
+            ['model::update', { id: 'p1', a: 'mine-a', b: 'mine-b' }]
+        ]);
+    });
+
+    it('replaces an own model registered earlier under the same id, and says so', async () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+        try {
+            const { models$, registerModel, pair } = registered();
+            deliver('reg', { command: 'model::update', payload: { id: 'p1' } });
+
+            const second = new Pair('p1');
+            registerModel(second);
+            expect(latest(models$)).toEqual([second]);
+            expect(warnSpy).toHaveBeenCalledTimes(1);
+            expect(warnSpy.mock.calls[0][0]).toContain("'p1'");
+
+            deliver('reg', { command: 'model::update', payload: { id: 'p1', a: 'mine-a', b: 'mine-b' } });
+            fakeSocket.emit.mockClear();
+            pair.a = 'changed on the first';
+            second.b = 'changed on the second';
+            await settle();
+
+            expect(sentInOrder()).toEqual([['model::update', { id: 'p1', b: 'changed on the second' }]]);
+        } finally {
+            warnSpy.mockRestore();
+        }
+    });
 });
 
 // Socket.IO retries a connection that fails, for as long as it takes, and a wrong address or a

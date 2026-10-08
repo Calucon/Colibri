@@ -254,7 +254,22 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
     // client's copy with the old one, so the two ended up apart. So the model is asked for by id
     // first, the way Unity's SyncBehaviour does it (see askFor): what the server has wins, and the
     // model is sent in full only when the server has nothing for it.
+    //
+    // The id can also be listed already: as the copy the server told this client about, or as
+    // another instance registered earlier. Both used to stay, and every later update for the id went
+    // to whichever came first, so the instance registered last never received one. Now the instance
+    // registered last replaces the listed one, in place, and the listed one is ended as delete()
+    // ends it: it no longer sends its changes. Registering the instance already listed does nothing.
     const registerModel = (model: T) => {
+        const listed = models.value.find(m => m.id === model.id);
+        if (listed === model) return;
+        if (listed && ownModels.has(listed)) {
+            console.warn(
+                `Colibri: registerModel was given a second model with the id '${model.id}' on channel ` +
+                    `'${name}'. It replaces the first one, which no longer syncs.`
+            );
+        }
+
         model.modelChanges$.subscribe({
             next: changes => {
                 const colibri = Colibri.getInstance(false);
@@ -281,7 +296,12 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
         });
 
         ownModels.add(model);
-        models.next([...models.value, model]);
+        if (listed) {
+            listed.delete();
+            models.next(models.value.map(m => (m === listed ? model : m)));
+        } else {
+            models.next([...models.value, model]);
+        }
 
         // While disconnected, the reconnect asks for it.
         withColibri(colibri => {

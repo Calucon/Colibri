@@ -503,6 +503,32 @@ describe('RegisterModelSync registering an id the server already has', () => {
         expect(latest(models$)).toEqual([marker]);
         expect(await storedOn(peer, channel, 'marker')).toEqual({ id: 'marker', value: 'new' });
     });
+
+    // Registered after the answer to the request for every model, on a button press say, the id is
+    // already listed. It used to be listed twice, and the instance registered never saw another
+    // client's change again: each went to the copy listed first.
+    it('replaces the copy of the id it already lists, and goes on receiving changes to it', async () => {
+        const app = uniqueApp('modelsync-listed-id');
+        const channel = uniqueApp('shared');
+        const peer = await createClient(app);
+        peer.sendMessage(channel, 'model::update', { id: 'session', value: 'running' });
+        await roundTrip(peer);
+
+        const page = await createClient(app);
+        const [models$, registerModel] = RegisterModelSync<Shared>({ name: channel, type: Shared });
+        await roundTrip(page);
+        expect(latest(models$).map(m => m.toJson())).toEqual([{ id: 'session', value: 'running' }]);
+
+        const session = new Shared('session');
+        registerModel(session);
+        await roundTrip(page);
+        peer.sendMessage(channel, 'model::update', { id: 'session', value: 'paused' });
+        await roundTrip(peer);
+        await roundTrip(page);
+
+        expect(latest(models$)).toEqual([session]);
+        expect(session.value).toBe('paused');
+    });
 });
 
 describe('RemoteLogger high-level API', () => {
