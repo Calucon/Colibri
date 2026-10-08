@@ -237,24 +237,36 @@ to sync new instantiations:
 
 ```ts
 const mySample = new SampleClass('myId'); // mySample is not synchronized across clients yet
-registerExampleClass(mySample); // mySample is sent out to all other clients and will be synchronized
+registerExampleClass(mySample); // from now on mySample is synchronized with the other clients
 ```
 
-The id identifies the instance on every client, so it has to be unique.
+The id identifies the instance on every client, so it has to be unique. `registerModel` first asks the server for that
+id. If the server already has a model with it (another client created it, or this page did before it was reloaded while
+another client of the app stayed connected), the server's copy wins: its values replace the ones the instance had when
+it was registered, and changes made after `registerModel` are sent on top of them. Otherwise the instance is sent to the
+other clients in full. An id that is already in the list, such as a copy the server sent earlier, is replaced by the
+instance you register; the replaced one stops syncing, and Colibri warns in the console if this client had registered it
+itself.
 
-`RegisterModelSync` and registering instances may happen before `new Colibri()`; the server is asked for the existing
-instances, and registered ones are sent, once it is created. After a reconnect, Colibri asks the server for the current
-instances again, so updates missed in the meantime are applied.
+`RegisterModelSync` and registering instances may happen before `new Colibri()`; the server is asked once it is
+created. After a reconnect, Colibri asks the server again for each instance this client registered, then for all the
+others, so what changed in the meantime is applied. An instance the server no longer has is sent again in full: the
+server forgets an app's models when it restarts and when the app's last client disconnects, which is what a lone
+client's outage looks like to it. A registered instance another client deleted during the outage is removed from the
+list, if the delete is no more than `MODEL_TOMBSTONE_SECONDS` (10 minutes by default) old. See
+[After a reconnect](../colibri-server/docs/protocol.md#after-a-reconnect) in the protocol docs.
 
 See also [the model-sync sample](samples/model-sync.ts) (run sample with `npm run samples/model-sync`).
 
 Limitations:
 
 - The server keeps synchronized models in memory only, per app name, and forgets them when the last client of that app
-  disconnects or the server restarts. Instances registered on this client are not sent again after a reconnect.
+  disconnects or the server restarts. This client sends the instances it registered again after a reconnect; any other
+  model comes back only from a client that has it.
 - colibri-web cannot delete an instance for the other clients: `delete()` only stops that instance sending its changes.
-  An instance another client (e.g. Unity) deletes is removed from the list, unless this client was disconnected at the
-  time.
+  An instance another client (e.g. Unity) deletes is removed from the list. If this client was disconnected at the
+  time, that happens on the reconnect only for an instance it registered itself, and only within
+  `MODEL_TOMBSTONE_SECONDS` of the delete; any other stays in the list.
 
 ### Remote Store
 
@@ -281,7 +293,9 @@ const stored = await GetRestApi(key);
 A stored value can be any JSON value up to 5 MiB, `null` included; `undefined` is not one, so
 `setRestObject(key, undefined)` stores nothing. `setRestObject` resolves to `false` if the server did not store it,
 and `getRestObject` to `null` if there is no such key or the server answered with an error; both reject if the server
-cannot be reached. Keys become part of the URL as they are, so stick to letters, digits, `-` and `_`.
+cannot be reached. A key is URL-encoded, so any key works, `/`, `#`, `?`, `%` and spaces included, and addresses the
+same value as Unity's `Store`. Whitespace around a key and slashes in front of it are stripped, and an empty key, `.`
+or `..` stores and finds nothing (`false` and `null`).
 
 ### Web Interface for Logging
 
