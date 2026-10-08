@@ -526,7 +526,8 @@ describe('WebServer over HTTPS', () => {
             transports: [ transport ],
             reconnection: false,
             forceNew: true,
-            ca: ca(),
+            // socket.io-client's types take PEM text only, unlike tls.connect.
+            ca: ca().map(pem => pem.toString()),
         });
         clients.push(socket);
         await new Promise<void>((resolve, reject) => {
