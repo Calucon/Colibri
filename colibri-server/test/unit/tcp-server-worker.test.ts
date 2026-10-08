@@ -1643,6 +1643,16 @@ describe('TCPServerWorker', () => {
         // 21 s, and the client was disconnected 10 s in, while reading all along; it reconnected and
         // never got the message.
         describe('a client reading a message larger than HEARTBEAT_EVERY_BYTES', () => {
+            // Fake timers stop process.hrtime between ticks too, so a heartbeat written ahead of a
+            // large message would be stamped exactly like the message, and the order writeToClient
+            // takes the two in would go untested: an echo of that heartbeat must not count as the
+            // message read. Here, as on a real clock, each call is later than the one before.
+            beforeEach(() => {
+                const clock = process.hrtime.bigint;
+                let calls = 0n;
+                vi.spyOn(process.hrtime, 'bigint').mockImplementation(() => clock() + ++calls);
+            });
+
             const big = (channel = 'big'): WireNetworkMessage =>
                 wireMessage(channel, 'broadcast::json', JSON.stringify('x'.repeat(4 * 1024 * 1024)));
             const send = function (msg: WireNetworkMessage): void {
