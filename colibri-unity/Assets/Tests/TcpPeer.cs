@@ -2,7 +2,9 @@ using System;
 using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Net.Security;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
@@ -42,8 +44,26 @@ namespace HCIKonstanz.Colibri.E2E
         /// test can assert on ordering and on what else did or did not arrive.</summary>
         private readonly List<DecodedFrame> _received = new List<DecodedFrame>();
 
-        private NetworkStream _stream;
+        private readonly int _port;
+        private readonly bool _useTls;
+        private Stream _stream;
         private int _heartbeats;
+
+        /// <summary>A peer on the test server, without TLS.</summary>
+        public TcpPeer() : this(E2EServer.TcpPort, false)
+        {
+        }
+
+        /// <param name="port">The server's binary port.</param>
+        /// <param name="useTls">
+        /// Whether the server has TLS on. The peer accepts whatever certificate it presents: the
+        /// peer is not what is under test, the Unity client's own check is.
+        /// </param>
+        public TcpPeer(int port, bool useTls)
+        {
+            _port = port;
+            _useTls = useTls;
+        }
 
         /// <summary>How many heartbeats the server has sent this peer, all of them echoed back.</summary>
         public int Heartbeats => Volatile.Read(ref _heartbeats);
@@ -73,8 +93,17 @@ namespace HCIKonstanz.Colibri.E2E
 
         private async Task ConnectAsync(string name, string version)
         {
-            await _client.ConnectAsync(E2EServer.Host, E2EServer.TcpPort);
-            _stream = _client.GetStream();
+            await _client.ConnectAsync(E2EServer.Host, _port);
+
+            Stream stream = _client.GetStream();
+            if (_useTls)
+            {
+                var tls = new SslStream(stream, false, (sender, certificate, chain, errors) => true);
+                await tls.AuthenticateAsClientAsync(E2EServer.Host);
+                stream = tls;
+            }
+
+            _stream = stream;
 
             // Started before the handshake so the server's first heartbeat is never missed.
             _ = ReadLoop(_lifetime.Token);

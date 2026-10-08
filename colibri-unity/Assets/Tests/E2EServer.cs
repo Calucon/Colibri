@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.IO;
 using System.Net.Sockets;
 using System.Threading.Tasks;
 using HCIKonstanz.Colibri.Setup;
@@ -24,6 +25,22 @@ namespace HCIKonstanz.Colibri.E2E
 
         /// <summary>The binary v3 port, which is the one Unity actually speaks.</summary>
         public static int TcpPort => EnvPort("COLIBRI_E2E_TCP_PORT", 9012);
+
+        /// <summary>
+        /// The binary port of a second server, with TLS turned on, for <see cref="TlsTests"/>: the
+        /// one in <c>colibri-unity/tls-test-server</c>, which run-tests.mjs starts. Same host.
+        /// </summary>
+        public static int TlsTcpPort => EnvPort("COLIBRI_E2E_TLS_TCP_PORT", 9112);
+
+        /// <summary>That server's web port, https.</summary>
+        public static int TlsWebPort => EnvPort("COLIBRI_E2E_TLS_PORT", 9111);
+
+        /// <summary>
+        /// That server's certificate, as PEM. By default the one in <c>tls-test-server</c>, found
+        /// from the project directory, which is the Editor's working directory.
+        /// </summary>
+        public static string TlsCertificatePath
+            => Env("COLIBRI_E2E_TLS_CERT", Path.Combine(Directory.GetCurrentDirectory(), "tls-test-server", "cert.pem"));
 
         /// <summary>
         /// One app name for the whole run, not one per test.
@@ -56,12 +73,52 @@ namespace HCIKonstanz.Colibri.E2E
                 + "or point the suite at a running one with COLIBRI_E2E_SERVER / COLIBRI_E2E_TCP_PORT.");
         }
 
-        private static bool IsReachable()
+        /// <summary>
+        /// Skips rather than fails when there is no TLS-enabled server, as <see cref="RequireReachable"/>
+        /// does for the plain one.
+        /// </summary>
+        public static void RequireTlsServer()
+        {
+            if (!IsReachable(TlsTcpPort))
+            {
+                Assert.Ignore(
+                    $"No colibri-server with TLS on {Host}:{TlsTcpPort}. run-tests.mjs starts one; to start it by hand, "
+                    + "`docker compose -f colibri-unity/tls-test-server/compose.yml up -d --build`, or point the suite at one "
+                    + "with COLIBRI_E2E_TLS_TCP_PORT, COLIBRI_E2E_TLS_PORT and COLIBRI_E2E_TLS_CERT.");
+            }
+
+            if (!File.Exists(TlsCertificatePath))
+                Assert.Ignore($"The TLS test server's certificate is not at {TlsCertificatePath}; set COLIBRI_E2E_TLS_CERT.");
+        }
+
+        /// <summary>
+        /// The SHA-256 fingerprint of the TLS test server's certificate, worked out here from the
+        /// PEM file rather than by the code under test, and written without colons in lower case,
+        /// which a pin has to accept as well.
+        /// </summary>
+        public static string TlsCertificateSha256
+        {
+            get
+            {
+                var pem = File.ReadAllText(TlsCertificatePath);
+                var begin = pem.IndexOf("-----BEGIN CERTIFICATE-----", StringComparison.Ordinal);
+                var end = pem.IndexOf("-----END CERTIFICATE-----", StringComparison.Ordinal);
+                var body = pem.Substring(begin + "-----BEGIN CERTIFICATE-----".Length, end - begin - "-----BEGIN CERTIFICATE-----".Length);
+                var der = Convert.FromBase64String(body.Replace("\r", "").Replace("\n", "").Trim());
+
+                using (var sha256 = System.Security.Cryptography.SHA256.Create())
+                    return BitConverter.ToString(sha256.ComputeHash(der)).Replace("-", "").ToLowerInvariant();
+            }
+        }
+
+        private static bool IsReachable() => IsReachable(TcpPort);
+
+        private static bool IsReachable(int port)
         {
             try
             {
                 using (var probe = new TcpClient())
-                    return probe.ConnectAsync(Host, TcpPort).Wait(TimeSpan.FromSeconds(2));
+                    return probe.ConnectAsync(Host, port).Wait(TimeSpan.FromSeconds(2));
             }
             catch (Exception)
             {
@@ -93,6 +150,24 @@ namespace HCIKonstanz.Colibri.E2E
             config.WebServerPort = WebPort;
             config.TcpServerPort = TcpPort;
             config.IsSSL = false;
+            config.AllowSelfSignedCertificate = false;
+            config.ServerCertificateSha256 = "";
+        }
+
+        /// <summary>
+        /// Points Colibri at the TLS test server, or at <paramref name="tcpPort"/> - a proxy in
+        /// front of it, or a server without TLS - with TLS on and the given certificate settings.
+        /// </summary>
+        public static void ConfigureTls(bool allowSelfSigned, string pin, int tcpPort = 0)
+        {
+            Configure();
+
+            var config = ColibriConfig.Load();
+            config.TcpServerPort = tcpPort > 0 ? tcpPort : TlsTcpPort;
+            config.WebServerPort = TlsWebPort;
+            config.IsSSL = true;
+            config.AllowSelfSignedCertificate = allowSelfSigned;
+            config.ServerCertificateSha256 = pin;
         }
 
 

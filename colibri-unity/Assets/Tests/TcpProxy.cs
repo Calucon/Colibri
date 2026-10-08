@@ -22,6 +22,7 @@ namespace HCIKonstanz.Colibri.E2E
         private readonly TcpListener _listener;
         private readonly string _upstreamHost;
         private readonly int _upstreamPort;
+        private readonly bool _recordMessages;
         private readonly CancellationTokenSource _lifetime = new CancellationTokenSource();
         private readonly List<TcpClient> _open = new List<TcpClient>();
         private readonly List<(int Session, DecodedFrame Frame)> _fromClient = new List<(int, DecodedFrame)>();
@@ -55,20 +56,25 @@ namespace HCIKonstanz.Colibri.E2E
             }
         }
 
-        private TcpProxy(TcpListener listener, string upstreamHost, int upstreamPort)
+        private TcpProxy(TcpListener listener, string upstreamHost, int upstreamPort, bool recordMessages)
         {
             _listener = listener;
             _upstreamHost = upstreamHost;
             _upstreamPort = upstreamPort;
+            _recordMessages = recordMessages;
             Port = ((IPEndPoint)listener.LocalEndpoint).Port;
         }
 
-        public static TcpProxy Start(string upstreamHost, int upstreamPort)
+        /// <param name="recordMessages">
+        /// False for a TLS connection, whose bytes cannot be read here: they are passed on as they
+        /// are, and <see cref="FromClient"/> stays empty.
+        /// </param>
+        public static TcpProxy Start(string upstreamHost, int upstreamPort, bool recordMessages = true)
         {
             var listener = new TcpListener(IPAddress.Loopback, 0);
             listener.Start();
 
-            var proxy = new TcpProxy(listener, upstreamHost, upstreamPort);
+            var proxy = new TcpProxy(listener, upstreamHost, upstreamPort, recordMessages);
             _ = proxy.AcceptLoop();
             return proxy;
         }
@@ -135,7 +141,7 @@ namespace HCIKonstanz.Colibri.E2E
 
                 await upstream.ConnectAsync(_upstreamHost, _upstreamPort).ConfigureAwait(false);
 
-                var toServer = Pump(downstream.GetStream(), upstream.GetStream(), session);
+                var toServer = Pump(downstream.GetStream(), upstream.GetStream(), _recordMessages ? session : 0);
                 var toClient = Pump(upstream.GetStream(), downstream.GetStream(), 0);
 
                 // Either direction ending ends the session, as a broken link would.

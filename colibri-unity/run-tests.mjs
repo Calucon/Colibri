@@ -20,6 +20,13 @@
  *   COLIBRI_E2E_NO_BUILD   skip `docker compose --build`
  *   UNITY_PATH             Unity executable to use, if it is not where Unity Hub puts it
  *
+ * The TLS tests (TlsTests, StoreOverTlsTests) need a second server with TLS turned on, which is
+ * started from tls-test-server/compose.yml in the same way, with a certificate for tests only:
+ *   COLIBRI_E2E_TLS_PORT       its web port (https), default 9111
+ *   COLIBRI_E2E_TLS_TCP_PORT   its binary port (TLS), default 9112
+ *   COLIBRI_E2E_TLS_CERT       its certificate, default tls-test-server/cert.pem
+ * Without it those tests are skipped, and this script says so.
+ *
  * A server already listening on the TCP port is used as it stands, whether or not the
  * environment says so - taking someone's running server down at the end of a test run would be a
  * poor way to repay them for it.
@@ -41,6 +48,11 @@ const RESULTS_DIR = path.join(PROJECT_DIR, 'TestResults');
 
 const HOST = process.env.COLIBRI_E2E_SERVER ?? '127.0.0.1';
 const TCP_PORT = Number(process.env.COLIBRI_E2E_TCP_PORT ?? 9012);
+
+const TLS_SERVER_DIR = path.join(PROJECT_DIR, 'tls-test-server');
+const TLS_WEB_PORT = Number(process.env.COLIBRI_E2E_TLS_PORT ?? 9111);
+const TLS_TCP_PORT = Number(process.env.COLIBRI_E2E_TLS_TCP_PORT ?? 9112);
+const TLS_CERT = process.env.COLIBRI_E2E_TLS_CERT ?? path.join(TLS_SERVER_DIR, 'cert.pem');
 
 const platforms = [];
 if (process.argv.includes('--editmode')) platforms.push('EditMode');
@@ -108,6 +120,45 @@ const startServer = async () => {
     return async () => {
         console.log('Stopping colibri-server...');
         await execFileAsync('docker', ['compose', 'down'], { cwd: SERVER_DIR }).catch(() => {});
+    };
+};
+
+/**
+ * The second server, with TLS on, for the TLS tests. Not being able to start it skips those tests
+ * rather than the whole run, but it is said, so that a run without them is not taken for a full one.
+ */
+const startTlsServer = async () => {
+    // Handed to the Editor, which inherits this environment.
+    process.env.COLIBRI_E2E_TLS_PORT = String(TLS_WEB_PORT);
+    process.env.COLIBRI_E2E_TLS_TCP_PORT = String(TLS_TCP_PORT);
+    process.env.COLIBRI_E2E_TLS_CERT = TLS_CERT;
+
+    if (await isListening(HOST, TLS_TCP_PORT)) {
+        console.log(`Using the TLS server already listening on ${HOST}:${TLS_TCP_PORT}.`);
+        return async () => {};
+    }
+
+    if (process.env.COLIBRI_E2E_SERVER) {
+        console.log(`No TLS server on ${HOST}:${TLS_TCP_PORT}; the TLS tests will be skipped.`);
+        return async () => {};
+    }
+
+    const args = ['compose', '-f', 'compose.yml', 'up', '-d'];
+    if (!process.env.COLIBRI_E2E_NO_BUILD) args.push('--build');
+
+    console.log(`Starting colibri-server with TLS (docker ${args.join(' ')} in tls-test-server)...`);
+    try {
+        await execFileAsync('docker', args, { cwd: TLS_SERVER_DIR });
+        await waitForPort(HOST, TLS_TCP_PORT, 180_000);
+    } catch (error) {
+        console.log(`Could not start the TLS server, so the TLS tests will be skipped: ${error.message}`);
+        return async () => {};
+    }
+    console.log(`colibri-server with TLS is up on ${HOST}:${TLS_TCP_PORT} (web ${TLS_WEB_PORT}).`);
+
+    return async () => {
+        console.log('Stopping the TLS server...');
+        await execFileAsync('docker', ['compose', '-f', 'compose.yml', 'down'], { cwd: TLS_SERVER_DIR }).catch(() => {});
     };
 };
 
@@ -370,12 +421,16 @@ const main = async () => {
     const stopServer = needsServer ? await startServer() : async () => {};
 
     const summaries = [];
+    let stopTlsServer = async () => {};
     try {
+        stopTlsServer = needsServer ? await startTlsServer() : stopTlsServer;
+
         for (const platform of platforms) {
             const run = await runUnity(unity, platform);
             summaries.push(summarize(platform, run.results));
         }
     } finally {
+        await stopTlsServer();
         await stopServer();
     }
 
