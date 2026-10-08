@@ -53,6 +53,13 @@ const warnIfMinified = (className: string, channel: string) => {
 // fields at all is ever sent like this.
 const isBare = (modelData: object) => Object.keys(modelData).every(key => key === 'id');
 
+// How long an own model asked for again after its held changes were sent (see takeAnswer) waits
+// for an update that shows them, before the changes held since go out anyway. The answer always
+// shows them, unless the server took the request ahead of the update: its limit on the updates a
+// client may send a second (CLIENT_MESSAGE_RATE_LIMIT) holds updates back, but never a request.
+// Nothing else for the model may come after that, and waiting on would hold its changes for good.
+const ASK_AGAIN_TIMEOUT_MS = 5000;
+
 export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyncRegistration<T>): ModelSync<T> => {
     const name = registration.name || registration.type.name.toLowerCase();
     if (!registration.name) warnIfMinified(registration.type.name, name);
@@ -89,6 +96,26 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
     // (it buffers for 1 ms) to go out together.
     const changesToSend = new WeakMap<T, Set<string>>();
 
+    // Own models asked for again after sending the changes held back for them (see takeAnswer),
+    // until an answer shows that the server has those changes: by id, the fields sent as they are
+    // sent (JSON), the properties they were sent for, how many updates have come since, and the
+    // timer that stops the wait (see ASK_AGAIN_TIMEOUT_MS).
+    interface Confirmation {
+        sent: Map<string, string>;
+        props: string[];
+        seen: number;
+        timer: ReturnType<typeof setTimeout>;
+    }
+    const confirming = new Map<string, Confirmation>();
+
+    const endConfirmation = (id: string) => {
+        const confirmation = confirming.get(id);
+        if (!confirmation) return undefined;
+        clearTimeout(confirmation.timer);
+        confirming.delete(id);
+        return confirmation;
+    };
+
     // From a disconnect until the next connect.
     let disconnected = false;
 
@@ -98,13 +125,15 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
     // overwritten, since it is what every other client has - except what this client changed
     // itself since registering the model or while it waited, which it sends instead.
     //
-    // A model this client held before an outage is asked for `again: true`. Another client may
-    // have deleted it meanwhile, and the delete it relayed never arrived here. The server
-    // remembers a delete for a while (MODEL_TOMBSTONE_SECONDS) and answers such a request with
-    // model::delete, which onDelete applies. Asked for without the flag, as a model this client
-    // has right now (registerModel, or one registered while the connection was down), the server
-    // forgets that delete and answers with the bare id: the model is in use again. Once that while
-    // is over, a deleted model looks the same as one the server forgot, and is sent again.
+    // A model the server has answered for is asked for `again: true`: one this client held before
+    // an outage, or one asked for again to see that the server has the changes sent for it (see
+    // takeAnswer). Another client may have deleted it meanwhile, and after an outage the delete it
+    // relayed never arrived here. The server remembers a delete for a while
+    // (MODEL_TOMBSTONE_SECONDS) and answers such a request with model::delete, which onDelete
+    // applies. Asked for without the flag, as a model this client has right now (registerModel,
+    // or one registered while the connection was down), the server forgets that delete and
+    // answers with the bare id: the model is in use again. Once that while is over, a deleted model
+    // looks the same as one the server forgot, and is sent again.
     const askFor = (colibri: Colibri, model: T) => {
         awaitingAnswer.set(model.id, colibri);
         colibri.sendMessage(
@@ -147,8 +176,15 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
         onColibriReconnected(colibri, () => {
             disconnected = false;
             // Whatever was asked on the connection before this one is not going to be answered.
+            // The changes sent before a model was asked for again may not have arrived either, so
+            // they are held back again, to go out with the answer.
             awaitingAnswer.clear();
             deletedWhileAwaited.clear();
+            for (const id of [...confirming.keys()]) {
+                const confirmation = endConfirmation(id);
+                const model = models.value.find(m => m.id === id);
+                if (confirmation && model && ownModels.has(model)) holdChanges(model, confirmation.props);
+            }
             catchingUpThrough = colibri;
             for (const model of models.value) {
                 if (ownModels.has(model)) askFor(colibri, model);
@@ -171,36 +207,106 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
     // Handle updates
     const onUpdate = (modelData: Partial<T>) => {
         const model = models.value.find(m => m.id === modelData.id);
-
-        // The first update for an own model after its request settles it. One with fields in it
-        // means the server has the model - the server stores an update before it relays it - and
-        // is applied like any other, save for what this client changed while it waited: that is
-        // sent instead, once the rest is applied, as it would have been when it was made. A bare
-        // one means the server has nothing for it: send all of it. No model any more - deleted
-        // since it was asked for - means nothing to send.
         const id = modelData.id;
         if (id !== undefined && deletedWhileAwaited.delete(id) && !model && isBare(modelData)) return;
         const asker = id === undefined ? undefined : awaitingAnswer.get(id);
-        if (id !== undefined && asker) {
-            awaitingAnswer.delete(id);
-            if (model) answered.add(model);
-            const held = model ? releaseHeldChanges(model) : [];
+        if (id !== undefined && asker) takeAnswer(id, asker, model, modelData);
+        else applyUpdate(model, modelData);
+    };
 
-            if (isBare(modelData)) {
+    // The first update for an own model after its request settles it. One with fields in it means
+    // the server has the model - the server stores an update before it relays it - and is applied
+    // like any other, save for what this client changed while it waited: that is sent instead,
+    // once the rest is applied, as it would have been when it was made. A bare one means the
+    // server has nothing for it: send all of it. No model any more - deleted since it was asked
+    // for - means nothing to send.
+    //
+    // That first update need not be the answer, though. The answer to the request for every model
+    // has the id in it too, and comes first when it was asked before the id; and an update another
+    // client made is relayed as it comes. The answer itself then follows, made before the server
+    // had the changes sent in between, and put the old values back here only: this client showed
+    // them while the server and every other client had its own. So when changes are sent in place
+    // of values the server had, the model is asked for again, the changes held back from then on
+    // too, and what was sent is kept out of every update until one shows that the server has it.
+    // The answer to the second request is such an update: it was made after the server had the
+    // changes. When the changes are what the server had anyway, nothing is asked: an answer still
+    // on its way has the same values, and applying them changes nothing.
+    //
+    // Should another client change one of the same fields meanwhile, no update may ever show what
+    // was sent. At most one answer made before the server had it can still be on its way, the one
+    // to the first request, so the second update since asking again is taken as the answer anyway.
+    const takeAnswer = (id: string, asker: Colibri, model: T | undefined, modelData: Partial<T>) => {
+        if (model) answered.add(model);
+
+        if (!model || isBare(modelData)) {
+            awaitingAnswer.delete(id);
+            endConfirmation(id);
+            if (model) {
+                heldChanges.delete(model);
                 // Not for a model whose delete() was called since: that ended what it sends.
-                if (model && ownModels.has(model)) asker.sendMessage(name, 'model::update', model.toJson());
-            } else if (model) {
-                applyUpdate(model, withoutChanges(modelData, model, held));
-                if (held.length > 0) asker.sendMessage(name, 'model::update', model.toJson(held));
-            } else {
+                if (ownModels.has(model)) asker.sendMessage(name, 'model::update', model.toJson());
+            } else if (!isBare(modelData)) {
                 applyUpdate(model, modelData);
             }
-
             catchUpOnceAnswered();
             return;
         }
 
-        applyUpdate(model, modelData);
+        const confirmation = confirming.get(id);
+        if (confirmation) {
+            confirmation.seen += 1;
+            if (confirmation.seen < 2 && !shows(modelData, confirmation.sent)) {
+                const held = [...(heldChanges.get(model) ?? [])];
+                applyUpdate(model, withoutKeys(withoutChanges(modelData, model, held), confirmation.sent.keys()));
+                return;
+            }
+            endConfirmation(id);
+        }
+
+        awaitingAnswer.delete(id);
+        const held = releaseHeldChanges(model);
+        applyUpdate(model, withoutChanges(modelData, model, held));
+        if (held.length > 0) {
+            const sent = model.toJson(held) as Record<string, unknown>;
+            asker.sendMessage(name, 'model::update', sent);
+
+            // A field without a JSON value (undefined) is not sent at all, so no update shows it.
+            const differs = new Map<string, string>();
+            for (const [key, value] of Object.entries(sent)) {
+                const json = JSON.stringify(value) as string | undefined;
+                if (key === 'id' || json === undefined) continue;
+                if (!(key in modelData) || JSON.stringify(modelData[key as keyof T]) !== json) differs.set(key, json);
+            }
+            if (differs.size > 0) {
+                const timer = setTimeout(() => {
+                    stopWaiting(id);
+                }, ASK_AGAIN_TIMEOUT_MS);
+                confirming.set(id, { sent: differs, props: held, seen: 0, timer });
+                askFor(asker, model);
+                return;
+            }
+        }
+        catchUpOnceAnswered();
+    };
+
+    // See ASK_AGAIN_TIMEOUT_MS: the changes held since asking again go out, without an answer.
+    const stopWaiting = (id: string) => {
+        const asker = awaitingAnswer.get(id);
+        if (!endConfirmation(id) || !asker) return;
+        awaitingAnswer.delete(id);
+        const model = models.value.find(m => m.id === id);
+        const held = model ? releaseHeldChanges(model) : [];
+        if (model && held.length > 0) asker.sendMessage(name, 'model::update', model.toJson(held));
+        catchUpOnceAnswered();
+    };
+
+    // Whether `modelData` has every field in `sent` with the value sent (as JSON).
+    const shows = (modelData: Partial<T>, sent: Map<string, string>) =>
+        [...sent].every(([key, json]) => key in modelData && JSON.stringify(modelData[key as keyof T]) === json);
+
+    const withoutKeys = (modelData: Partial<T>, keys: Iterable<string>): Partial<T> => {
+        const drop = new Set(keys);
+        return Object.fromEntries(Object.entries(modelData).filter(([key]) => !drop.has(key))) as Partial<T>;
     };
 
     const applyUpdate = (model: T | undefined, modelData: Partial<T>) => {
@@ -252,6 +358,7 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
         // the model as much as an update would, and after a reconnect, once every own model is
         // settled, everything else is still to be asked for. Left waiting, the id kept that from
         // ever happening, and every other model stayed as it was before the outage.
+        endConfirmation(id);
         if (awaitingAnswer.delete(id)) {
             deletedWhileAwaited.add(id);
             catchUpOnceAnswered();
@@ -322,6 +429,7 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
 
         ownModels.add(model);
         if (listed) {
+            endConfirmation(model.id);
             listed.delete();
             models.next(models.value.map(m => (m === listed ? model : m)));
         } else {

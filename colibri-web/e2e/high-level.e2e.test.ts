@@ -606,6 +606,23 @@ describe('RegisterModelSync registering an id the server already has', () => {
                 expect(latest(models$)).toEqual([session]);
             }
         });
+
+        it('registered while the answer for every model is still on its way', async () => {
+            for (let run = 0; run < 6; run++) {
+                const { app, channel, peer } = await peerWithSession('modelsync-change-in-flight');
+                const page = await createClient(app);
+                const [models$, registerModel] = RegisterModelSync<Shared>({ name: channel, type: Shared });
+                // Asked for every model by now, and not answered yet.
+                await new Promise(resolve => setTimeout(resolve, 0));
+
+                const session = new Shared('session');
+                registerModel(session);
+                session.value = 'mine';
+
+                expect({ run, ...(await outcome(page, peer, channel, session)) }).toEqual({ run, ...expected });
+                expect(latest(models$)).toEqual([session]);
+            }
+        });
     });
 });
 
