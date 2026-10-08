@@ -540,6 +540,14 @@ soon as the connection is back, ahead of anything sent afterwards:
   see. The console says so once per connection: `Colibri: more than 10000 messages are waiting to be
   sent…`.
 
+What arrives waits for `Update`. While `Update` does not run (the app is paused, such as a Quest
+with the headset off, or the Editor is in the background without *Run In Background*), Colibri
+keeps reading, so that the server does not take the client for gone. Past 1000 waiting messages,
+each update for an object is merged into the one already waiting for it, newer values winning, so
+a listener sees only the newest state of each object for that stretch; past 10 000, the oldest are
+dropped, broadcasts first. The console then says so once per connection: `Colibri: … received
+messages waited for Update, which did not run for a while…`.
+
 After reconnecting, Colibri asks the server again for every synced object in the scene, and for
 everything on the channels of its `SyncBehaviourManager`s, so what other clients changed in the
 meantime arrives. For each object, the server's answer is one of:
