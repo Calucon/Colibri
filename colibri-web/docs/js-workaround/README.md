@@ -1,6 +1,6 @@
 # JavaScript Workaround
 
-Colibri targets TypeScript — see the [web client documentation](../../README.md#syncmodel) for
+Colibri targets TypeScript. See the [web client documentation](../../README.md#syncmodel) for
 the regular way to use `SyncModel`. For projects that are tied to plain JavaScript, this folder
 documents a workaround.
 
@@ -22,11 +22,11 @@ synchronization breaks in ways that are hard to debug:
 
 1. **Register the property**, once per instance, via
    `registerSyncedProperty(syncedName, propertyName)`. `syncedName` is the name on the wire and
-   **must be lowercase** — `@Synced()` lowercases it for you, so `@Synced('billingAddress')` is
+   **must be lowercase**: `@Synced()` lowercases it for you, so `@Synced('billingAddress')` is
    transmitted as `billingaddress`. If the cases do not match, receiving clients log
    `Unknown property …` and drop the value.
 2. **Emit the change** by calling `modelChanges.next(propertyName)` from the setter. Note that
-   this is the _local_ property name, not the synced name — `toJson()` resolves it back.
+   this is the _local_ property name, not the synced name: `toJson()` resolves it back.
 3. **Stay silent while a remote update is applied**: skip the emission when
    `applyingRemoteUpdate` is `true`, otherwise every incoming update is echoed straight back to
    the network.
@@ -77,7 +77,7 @@ const [SampleClasses$, registerExampleClass] = RegisterModelSync({ name: 'sample
 ```
 
 `RegisterModelSync`, the Observable it returns, `update()`, `toJson()` and `delete()` need no
-workaround — they are ordinary runtime code and behave as documented.
+workaround: they are ordinary runtime code and behave as documented.
 
 ## Runnable example
 
