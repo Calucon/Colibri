@@ -604,6 +604,7 @@ namespace HCIKonstanz.Colibri.Tests
 
             Sync.RequestModelsAgain(disconnectedAt: 110);
             Assert.That(Sync.ReconnectRoundEndMarker, Is.Not.EqualTo(lostWithTheLink), "The round whose answers were lost with the link is still open");
+            EndOfAnswers();
 
             var model = SpawnModel();
             model.OnModelUpdate(Bare(model.Id));

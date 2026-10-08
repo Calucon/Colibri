@@ -193,10 +193,65 @@ namespace HCIKonstanz.Colibri.Tests
             Assert.That(Deletes(channel), Is.EqualTo(new[] { "destroyed at the drop" }));
         }
 
+        /// <summary>
+        /// The link drops again right after the reconnect, before the server has read the deletes
+        /// sent again ahead of the requests: they may have gone into that link too, and go out once
+        /// more, counted from the earlier outage. With no synced object left to ask for again, the
+        /// request that marks the end of the answers still goes out, for them.
+        /// </summary>
+        [Test]
+        public void ADeleteSentAgainGoesOutOnceMoreWhenTheLinkDropsAgainBeforeTheAnswers()
+        {
+            var channel = NewChannel();
+            Listen(channel, _ => { });
+            HeardFromTheServerAt(200);
+            LocallyDeletedModels.Remember(channel, "destroyed at the drop", 200.5);
+            Sync.OnDisconnected(now: 203);
+            Sync.RequestModelsAgain(disconnectedAt: 203);
+            Assert.That(Sync.ReconnectRoundEndMarker, Is.Not.Null, "Nothing marks the end of the answers, after which the server has read the deletes");
+
+            HeardFromTheServerAt(205);
+            Sync.OnDisconnected(now: 208);
+
+            Assert.That(Deletes(channel), Is.EqualTo(new[] { "destroyed at the drop", "destroyed at the drop" }));
+        }
+
+        /// <summary>
+        /// Once the answers are in, the server has read the deletes sent again ahead of the
+        /// requests, and the next outage counts from when this client last heard from the server.
+        /// </summary>
+        [Test]
+        public void ADeleteSentAgainDoesNotGoOutOnceMoreAfterTheAnswers()
+        {
+            var channel = NewChannel();
+            Listen(channel, _ => { });
+            HeardFromTheServerAt(200);
+            LocallyDeletedModels.Remember(channel, "destroyed at the drop", 200.5);
+            Sync.OnDisconnected(now: 203);
+            Sync.RequestModelsAgain(disconnectedAt: 203);
+            EndOfAnswers();
+
+            HeardFromTheServerAt(205);
+            Sync.OnDisconnected(now: 208);
+
+            Assert.That(Deletes(channel), Is.EqualTo(new[] { "destroyed at the drop" }));
+        }
+
 
         /*
          *  Helpers
          */
+
+        /// <summary>
+        /// The answer to the request sent after all the others (see Sync.ReconnectRound): the
+        /// answers to the requests made again are all in.
+        /// </summary>
+        private static void EndOfAnswers()
+        {
+            var marker = Sync.ReconnectRoundEndMarker;
+            Assert.That(marker, Is.Not.Null, "Precondition: the answers to a reconnect's requests are still coming in");
+            Sync.OnServerMessage(Sync.ReconnectRoundChannel, "model::update", new JObject { { "id", marker } });
+        }
 
         /// <summary>
         /// The payloads of the model::requests sent on <paramref name="channel"/> so far, in order:

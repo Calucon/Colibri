@@ -132,6 +132,11 @@ namespace HCIKonstanz.Colibri.Synchronization
         /// client has created the object anew meanwhile, with the same id: then that one goes, as
         /// it would for a delete made during the outage.
         /// </para>
+        /// <para>
+        /// The server has read those deletes once the answers to the reconnect's requests are in
+        /// (see <see cref="ReconnectRound"/>). If the link drops again before, they may have gone
+        /// into that link as well, and the deletes go out again counted from the earlier outage.
+        /// </para>
         /// </remarks>
         private static void OnDisconnected() => OnDisconnected(Time.unscaledTimeAsDouble);
 
@@ -141,13 +146,23 @@ namespace HCIKonstanz.Colibri.Synchronization
         {
             _disconnectedAt = now;
 
-            var deletes = LocallyDeletedModels.Since(LastHeardAt(now) - 1, now);
+            _deletesSince = LastHeardAt(now) - 1;
+            if (_reconnectRound != null)
+                _deletesSince = Math.Min(_deletesSince, _reconnectRound.DeletesSince);
+
+            var deletes = LocallyDeletedModels.Since(_deletesSince, now);
             if (deletes == null)
                 return;
 
             foreach (var (channel, id) in deletes)
                 SendModelDelete(channel, id);
         }
+
+        /// <summary>
+        /// From when the deletes made were sent again at the outage this client noticed last, on
+        /// SyncTicker's clock; positive infinity before it ever has. The next round takes it over.
+        /// </summary>
+        private static double _deletesSince = double.PositiveInfinity;
 
         /// <summary>
         /// When this client last heard from the server, on SyncTicker's clock, and how many times
@@ -189,7 +204,8 @@ namespace HCIKonstanz.Colibri.Synchronization
         /// <summary>
         /// The requests made again after one reconnect, from when they go out until the answers
         /// to all of them have arrived: the stretch in which a SyncBehaviour compares what it
-        /// receives with what it sent before the outage (see SyncBehaviour's OnModelUpdate).
+        /// receives with what it sent before the outage (see SyncBehaviour's OnModelUpdate), and
+        /// in which the deletes sent again ahead of the requests may not have reached the server.
         /// </summary>
         /// <remarks>
         /// <para>
@@ -212,7 +228,8 @@ namespace HCIKonstanz.Colibri.Synchronization
         /// Whatever arrives before that answer was sent by the server before it read the request,
         /// and so before it read anything this client sends in reply to an answer. Updates from
         /// other clients in that stretch hold the server's values at the time just as the answers
-        /// do, and are judged with them.
+        /// do, and are judged with them. Once it has arrived, the server has read everything this
+        /// client queued ahead of the request, the deletes sent again included.
         /// </para>
         /// </remarks>
         internal sealed class ReconnectRound
@@ -224,13 +241,24 @@ namespace HCIKonstanz.Colibri.Synchronization
             /// </summary>
             internal readonly double DisconnectedAt;
 
+            /// <summary>
+            /// From when the deletes made were sent again ahead of the requests, on SyncTicker's
+            /// clock (see OnDisconnected): like <see cref="DisconnectedAt"/>, counted from an earlier
+            /// outage if the link dropped again before that one's round was over.
+            /// </summary>
+            internal readonly double DeletesSince;
+
             /// <summary>The id the last request asks for, whose answer ends the round.</summary>
             internal readonly string EndMarkerId = Guid.NewGuid().ToString();
 
             /// <summary>Whether the answers are all in.</summary>
             internal bool IsOver;
 
-            internal ReconnectRound(double disconnectedAt) => DisconnectedAt = disconnectedAt;
+            internal ReconnectRound(double disconnectedAt, double deletesSince)
+            {
+                DisconnectedAt = disconnectedAt;
+                DeletesSince = deletesSince;
+            }
         }
 
         /// <summary>
@@ -277,11 +305,11 @@ namespace HCIKonstanz.Colibri.Synchronization
         internal static void RequestModelsAgain() => RequestModelsAgain(_disconnectedAt);
 
         /// <summary>
-        /// <see cref="RequestModelsAgain()"/>. If a SyncBehaviour's object was among the models
-        /// asked for, one more request follows them all, whose answer marks the end of theirs, and
-        /// each such SyncBehaviour is told about the round of answers it is part of (see
-        /// <see cref="ReconnectRound"/>), including when the connection was lost
-        /// (<paramref name="disconnectedAt"/>, on SyncTicker's clock).
+        /// <see cref="RequestModelsAgain()"/>. One more request follows them all, whose answer marks
+        /// the end of theirs, and each SyncBehaviour whose object was among the models asked for is
+        /// told about the round of answers it is part of (see <see cref="ReconnectRound"/>),
+        /// including when the connection was lost (<paramref name="disconnectedAt"/>, on
+        /// SyncTicker's clock).
         /// </summary>
         /// <remarks>Internal for the EditMode tests, which set the time of the outage with it.</remarks>
         internal static void RequestModelsAgain(double disconnectedAt)
@@ -328,23 +356,10 @@ namespace HCIKonstanz.Colibri.Synchronization
             }
 
             // A round still open lost its answers to this outage: the link dropped again soon after
-            // the last reconnect. Its objects are gone if none was asked for again, and it ends here:
-            // left open, it would outlive this reconnect, and a round much later would count from
-            // its outage, judging changes other clients made since as lost ones.
-            if (toTell == null)
-            {
-                if (_reconnectRound != null)
-                {
-                    _reconnectRound.IsOver = true;
-                    _reconnectRound = null;
-                }
-                return;
-            }
-
-            // Otherwise a change lost at the drop before that is still in question, so the new
-            // round counts from that earlier outage. Counted from this one, the lost change could
-            // lie before the window, and the answer, which still holds the value from before it,
-            // would be applied after all.
+            // the last reconnect. A change lost at the drop before that is still in question, so
+            // the new round counts from that earlier outage. Counted from this one, the lost change
+            // could lie before the window, and the answer, which still holds the value from before
+            // it, would be applied after all. OnDisconnected has counted the deletes from it too.
             if (_reconnectRound != null)
             {
                 disconnectedAt = Math.Min(disconnectedAt, _reconnectRound.DisconnectedAt);
@@ -352,9 +367,16 @@ namespace HCIKonstanz.Colibri.Synchronization
             }
 
             // After every other request, on every channel: its answer comes after all of theirs.
-            var round = new ReconnectRound(disconnectedAt);
+            // Sent even when no object was asked for again: its answer also says that the server
+            // has read the deletes sent again ahead of the requests. And only an answered round
+            // ends: one left open would carry its outage over to a round much later, which would
+            // judge as lost what other clients changed in between.
+            var round = new ReconnectRound(disconnectedAt, _deletesSince);
             _reconnectRound = round;
             SendCommand(ReconnectRoundChannel, "model::request", new JObject { { "id", round.EndMarkerId }, { "again", true } });
+
+            if (toTell == null)
+                return;
 
             foreach (var tell in toTell)
                 tell(round);
@@ -775,10 +797,11 @@ namespace HCIKonstanz.Colibri.Synchronization
             // listeners.
             ChannelListenerRegistry.Clear();
 
-            // The previous session's outage, on a clock that has gone on running since, its round
-            // of answers, which no object of this session is part of, and when its connection last
-            // heard from the server.
+            // The previous session's outage and the deletes it sent again, on a clock that has gone
+            // on running since, its round of answers, which no object of this session is part of,
+            // and when its connection last heard from the server.
             _disconnectedAt = double.NegativeInfinity;
+            _deletesSince = double.PositiveInfinity;
             _reconnectRound = null;
             _heardStamps = 0;
             _heardAt = double.NegativeInfinity;
