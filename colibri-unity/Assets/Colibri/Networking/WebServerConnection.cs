@@ -7,6 +7,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
@@ -1787,7 +1788,18 @@ namespace HCIKonstanz.Colibri.Networking
             return Utf8.GetBytes(payload.ToString(Formatting.None));
         }
 
-        private static JToken ParsePayload(byte[] payload)
+        /// <summary>
+        /// Reads a received payload as JSON, keeping every string exactly as it was sent.
+        /// </summary>
+        /// <remarks>
+        /// JToken.Parse reads a string that looks like a date - "2026-10-08T12:00:00Z", what
+        /// JavaScript's toISOString() and C#'s ToString("o") write - as a DateTime. A string
+        /// listener or a [Sync] string member then got "10/08/2026 12:00:00" instead, and a
+        /// timestamp with an offset was moved into this device's time zone, while colibri-web,
+        /// reading the same message with JSON.parse, kept the string. Internal for the EditMode
+        /// tests.
+        /// </remarks>
+        internal static JToken ParsePayload(byte[] payload)
         {
             if (payload == null || payload.Length == 0)
                 return JValue.CreateNull();
@@ -1795,7 +1807,19 @@ namespace HCIKonstanz.Colibri.Networking
             var text = Utf8.GetString(payload);
             try
             {
-                return JToken.Parse(text);
+                // What JToken.Parse does, but with dates left as strings.
+                using (var reader = new JsonTextReader(new StringReader(text)) { DateParseHandling = DateParseHandling.None })
+                {
+                    var token = JToken.ReadFrom(reader);
+
+                    // Anything but a comment after the value is an error, as in JToken.Parse: the
+                    // reader throws on it.
+                    while (reader.Read())
+                    {
+                    }
+
+                    return token;
+                }
             }
             catch (JsonException)
             {

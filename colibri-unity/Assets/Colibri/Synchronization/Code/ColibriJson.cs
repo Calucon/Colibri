@@ -38,9 +38,16 @@ namespace HCIKonstanz.Colibri.Synchronization
     public static class ColibriJson
     {
         /// <summary>New settings with Colibri's converters, for JsonConvert.</summary>
+        /// <remarks>
+        /// A string that looks like a date stays the string it is when it is read into a JToken,
+        /// an object or a string - as JSON.parse in colibri-web leaves it. Newtonsoft's default turns
+        /// "2026-10-08T12:00:00Z" into a DateTime there, which comes back as "10/08/2026 12:00:00",
+        /// or moved into this device's time zone. Read into a DateTime or DateTimeOffset, it is
+        /// still a date.
+        /// </remarks>
         public static JsonSerializerSettings CreateSettings()
         {
-            var settings = new JsonSerializerSettings();
+            var settings = new JsonSerializerSettings { DateParseHandling = DateParseHandling.None };
             AddConverters(settings.Converters);
             return settings;
         }

@@ -1,9 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
 using HCIKonstanz.Colibri.Core;
 using HCIKonstanz.Colibri.Networking;
 using HCIKonstanz.Colibri.Synchronization;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using NUnit.Framework;
 using UnityEngine;
@@ -223,8 +226,83 @@ namespace HCIKonstanz.Colibri.Tests
 
 
         /*
+         *  A string that looks like a date
+         *
+         *  Newtonsoft reads a string such as "2026-10-08T12:00:00Z" as a DateTime unless it is told
+         *  not to. A listener then got "10/08/2026 12:00:00" - or, for a time with an offset, the
+         *  time moved into this device's time zone - while colibri-web kept the string it was sent.
+         *  These go through the connection's own parsing of what arrives on the socket.
+         */
+
+        [TestCase("2026-10-08T12:00:00Z")]
+        [TestCase("2026-10-08T12:00:00.123Z")]
+        [TestCase("2026-10-08T12:00:00.1234567+02:00")]
+        [TestCase("2026-10-08")]
+        public void ATimestampReachesAStringListenerExactlyAsItWasSent(string timestamp)
+        {
+            var channel = NewChannel();
+            var received = new List<string>();
+            Register<string>(channel, value => received.Add(value));
+
+            Sync.OnServerMessage(channel, "broadcast::string", AsReceived(new JValue(timestamp).ToString(Formatting.None)));
+
+            Assert.That(received, Is.EqualTo(new[] { timestamp }));
+        }
+
+        [Test]
+        public void TimestampsInAStringArrayArriveExactlyAsTheyWereSent()
+        {
+            var channel = NewChannel();
+            var received = new List<string[]>();
+            Register<string[]>(channel, value => received.Add(value));
+
+            Sync.OnServerMessage(channel, "broadcast::string[]", AsReceived("[\"2026-10-08T12:00:00Z\",\"2026-10-08T14:00:00.5+02:00\"]"));
+
+            Assert.That(received.Single(), Is.EqualTo(new[] { "2026-10-08T12:00:00Z", "2026-10-08T14:00:00.5+02:00" }));
+        }
+
+        /// <summary>A JSON listener, and anything that writes the JSON out again, sees what was sent.</summary>
+        [Test]
+        public void TimestampsInJsonArriveExactlyAsTheyWereSent()
+        {
+            const string sent = "{\"trial\":3,\"started\":\"2026-10-08T12:00:00.1234567+02:00\",\"marks\":[\"2026-10-08T12:00:01Z\"]}";
+            var channel = NewChannel();
+            var received = new List<JToken>();
+            Register<JToken>(channel, value => received.Add(value));
+
+            Sync.OnServerMessage(channel, "broadcast::json", AsReceived(sent));
+
+            var token = received.Single();
+            Assert.That(token["started"].Type, Is.EqualTo(JTokenType.String));
+            Assert.That((string)token["started"], Is.EqualTo("2026-10-08T12:00:00.1234567+02:00"));
+            Assert.That(token.ToString(Formatting.None), Is.EqualTo(sent));
+        }
+
+        /// <summary>Everything else is read as it always was.</summary>
+        [TestCase("{\"a\":1,\"b\":1.5,\"c\":true,\"d\":null,\"e\":\"text\"}", "{\"a\":1,\"b\":1.5,\"c\":true,\"d\":null,\"e\":\"text\"}")]
+        [TestCase("  [1, 2]  ", "[1,2]")]
+        [TestCase("\"plain\"", "\"plain\"")]
+        public void OtherPayloadsAreReadAsBefore(string sent, string expected)
+            => Assert.That(AsReceived(sent).ToString(Formatting.None), Is.EqualTo(expected));
+
+        /// <summary>A payload that is not JSON - or has something after its JSON - still arrives, as the raw text.</summary>
+        [TestCase("a raw log line")]
+        [TestCase("{\"a\":1} trailing")]
+        public void APayloadThatIsNotJsonArrivesAsItsText(string sent)
+        {
+            var token = AsReceived(sent);
+
+            Assert.That(token.Type, Is.EqualTo(JTokenType.String));
+            Assert.That((string)token, Is.EqualTo(sent));
+        }
+
+
+        /*
          *  Helpers
          */
+
+        /// <summary>The payload as the connection hands it on when it arrives on the socket.</summary>
+        private static JToken AsReceived(string json) => WebServerConnection.ParsePayload(Encoding.UTF8.GetBytes(json));
 
         private void Register<T>(string channel, Action<T> listener)
         {
