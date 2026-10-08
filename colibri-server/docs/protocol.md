@@ -350,6 +350,23 @@ client (see [Version checking](#version-checking)). No v3 frame can start that w
 four bytes read as a length of at least 16 MiB. The 1.x handshake starts `\0\0\0h`, which reads
 as `Invalid frame length: 1744830464` (`0x68000000`, `'h' << 24`).
 
+### TLS
+
+With `TLS_CERT` and `TLS_KEY` set (see [TLS](guide.md#tls) in the guide), the TCP port accepts only
+TLS. TLS wraps the framing above unchanged, and the protocol version is not bumped: past the TLS
+handshake, a client sends and receives exactly the frames it would without TLS.
+
+On the TLS port the server reads the first 2 bytes of a connection. `0x16 0x03` starts a TLS
+handshake record. Read as a v3 length field, those bytes would mean a frame of at least 790 bytes
+(`0x0316`), longer than any handshake frame a client sends, so an unencrypted client is not
+mistaken for one with TLS. An unencrypted client on the TLS port is closed with nothing sent, and
+the server logs a warning naming it. On a port without TLS, a client whose first bytes are a TLS
+handshake is refused with a warning, rather than left waiting for a frame that never completes.
+Both warnings are logged at most once a minute per address.
+
+Web clients are not affected beyond the transport: with TLS on, the web port serves only HTTPS and
+WSS, and the [Socket.IO envelope](#socketio-envelope-web-clients) is the same.
+
 ### Backpressure
 
 Before writing a relayed frame to a TCP client's socket, the server checks how much relayed
