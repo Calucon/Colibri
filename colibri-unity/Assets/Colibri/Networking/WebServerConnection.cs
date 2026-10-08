@@ -1010,6 +1010,13 @@ namespace HCIKonstanz.Colibri.Networking
                 {
                     break;
                 }
+                catch (Exception) when (token.IsCancellationRequested)
+                {
+                    // Ended by OnDisable, which closed the socket under whatever was reading or
+                    // writing it. Nothing failed, and nothing is retried: saying "retrying" here
+                    // used to read as a failure of the session the next enable had just started.
+                    break;
+                }
                 catch (ProtocolMismatchException e)
                 {
                     mismatched = true;
@@ -1039,7 +1046,7 @@ namespace HCIKonstanz.Colibri.Networking
                 }
                 catch (ObjectDisposedException)
                 {
-                    // Socket closed underneath us by OnDisable or the heartbeat watchdog.
+                    // Socket closed underneath us by the heartbeat watchdog.
                 }
                 catch (Exception e) when (e is IOException || e is AuthenticationException)
                 {
@@ -1508,7 +1515,9 @@ namespace HCIKonstanz.Colibri.Networking
                     .ConfigureAwait(false);
                 if (received <= 0)
                 {
-                    Debug.Log("Colibri: server closed the connection");
+                    // Unless it was this end: OnDisable closes the socket of a loop it ends.
+                    if (!token.IsCancellationRequested)
+                        Debug.Log("Colibri: server closed the connection");
                     return;
                 }
 
