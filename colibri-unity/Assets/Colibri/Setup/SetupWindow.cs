@@ -18,7 +18,15 @@ namespace HCIKonstanz.Colibri.Setup
         private static bool _waitingToLoad;
         private static bool _portSettings = false;
 
+        /// <summary>The configuration asset, which Play mode and builds use.</summary>
         private ColibriConfig Config;
+
+        /// <summary>
+        /// What the fields show and change: a copy of <see cref="Config"/>, which gets a change only
+        /// if it passes the checks (see <see cref="ApplyIfValid"/>).
+        /// </summary>
+        private ColibriConfig _edited;
+
         private Vector2 _scroll;
 
         [DidReloadScripts]
@@ -84,6 +92,18 @@ namespace HCIKonstanz.Colibri.Setup
                 Config = CreateInstance<ColibriConfig>();
                 SaveConfig();
             }
+
+            _edited = CreateInstance<ColibriConfig>();
+            _edited.hideFlags = HideFlags.HideAndDontSave;
+            CopySettings(Config, _edited);
+        }
+
+        // Before every domain reload too, entering Play mode's included. OnEnable then copies the
+        // configuration in use again, so a value the checks refused does not survive one.
+        private void OnDisable()
+        {
+            if (_edited != null)
+                DestroyImmediate(_edited);
         }
 
         private void SaveConfig()
@@ -129,13 +149,15 @@ namespace HCIKonstanz.Colibri.Setup
 
             EditorGUILayout.HelpBox("Choose an App Name unique to this project. Every client that should share objects and messages "
                 + "must use the same App Name.", MessageType.Info);
-            Config.AppName = EditorGUILayout.TextField("App Name: ", Config.AppName);
 
-            var sharedAppName = ColibriConfig.SharedAppNameWarning(Config.AppName);
+            EditorGUI.BeginChangeCheck();
+            _edited.AppName = EditorGUILayout.TextField("App Name: ", _edited.AppName);
+
+            var sharedAppName = ColibriConfig.SharedAppNameWarning(_edited.AppName);
             if (sharedAppName != null)
                 EditorGUILayout.HelpBox(sharedAppName, MessageType.Warning);
 
-            Config.ServerAddress = EditorGUILayout.TextField("Server Address: ", Config.ServerAddress);
+            _edited.ServerAddress = EditorGUILayout.TextField("Server Address: ", _edited.ServerAddress);
             GUILayout.Space(16);
             _portSettings = EditorGUILayout.Foldout(_portSettings, "Optional Config");
             if (_portSettings)
@@ -144,62 +166,45 @@ namespace HCIKonstanz.Colibri.Setup
                 x.position = new Vector2(5, 5);
                 EditorGUILayout.HelpBox("The ports, SSL/TLS and the voice sampling rate must match the server. Change them only "
                     + "if the server does not use the defaults.", MessageType.Warning);
-                Config.IsSSL = EditorGUILayout.Toggle(new GUIContent("Server supports SSL/TLS?",
-                    "The server has TLS turned on (TLS_CERT and TLS_KEY): the TCP connection is encrypted, and the Store uses https."), Config.IsSSL);
-                if (Config.IsSSL)
+                _edited.IsSSL = EditorGUILayout.Toggle(new GUIContent("Server supports SSL/TLS?",
+                    "The server has TLS turned on (TLS_CERT and TLS_KEY): the TCP connection is encrypted, and the Store uses https."), _edited.IsSSL);
+                if (_edited.IsSSL)
                 {
                     // Only meaningful with TLS, so only shown with it.
                     EditorGUI.indentLevel++;
-                    Config.AllowSelfSignedCertificate = EditorGUILayout.Toggle(new GUIContent("Allow self-signed certificate",
+                    _edited.AllowSelfSignedCertificate = EditorGUILayout.Toggle(new GUIContent("Allow self-signed certificate",
                         "Also accept a server certificate this device does not trust, such as a self-signed one. The connection "
-                        + "is still encrypted, but nothing checks that it goes to your server."), Config.AllowSelfSignedCertificate);
-                    Config.ServerCertificateSha256 = EditorGUILayout.TextField(new GUIContent("Server certificate SHA-256",
+                        + "is still encrypted, but nothing checks that it goes to your server."), _edited.AllowSelfSignedCertificate);
+                    _edited.ServerCertificateSha256 = EditorGUILayout.TextField(new GUIContent("Server certificate SHA-256",
                         "Optional. The fingerprint of the one certificate to accept, trusted or not, as colibri-server logs it "
                         + "when it starts; every other certificate is rejected. Leave it empty for a certificate from Let's Encrypt, "
-                        + "which changes with every renewal."), Config.ServerCertificateSha256);
+                        + "which changes with every renewal."), _edited.ServerCertificateSha256);
                     EditorGUI.indentLevel--;
                 }
-                Config.WebServerPort = EditorGUILayout.IntField("Web server Port: ", Config.WebServerPort);
-                Config.TcpServerPort = EditorGUILayout.IntField("TCP server Port: ", Config.TcpServerPort);
-                Config.VoiceServerPort = EditorGUILayout.IntField("Voice server Port: ", Config.VoiceServerPort);
-                Config.VoiceServerSamplingRate = EditorGUILayout.IntField("Voice Sampling Rate: ", Config.VoiceServerSamplingRate);
-                Config.MaxSendRate = EditorGUILayout.IntField(new GUIContent("Max Send Rate (Hz): ",
+                _edited.WebServerPort = EditorGUILayout.IntField("Web server Port: ", _edited.WebServerPort);
+                _edited.TcpServerPort = EditorGUILayout.IntField("TCP server Port: ", _edited.TcpServerPort);
+                _edited.VoiceServerPort = EditorGUILayout.IntField("Voice server Port: ", _edited.VoiceServerPort);
+                _edited.VoiceServerSamplingRate = EditorGUILayout.IntField("Voice Sampling Rate: ", _edited.VoiceServerSamplingRate);
+                _edited.MaxSendRate = EditorGUILayout.IntField(new GUIContent("Max Send Rate (Hz): ",
                     "The most updates per second one synced object (SyncTransform, SyncBehaviour) sends. "
                     + "Nothing is lost: a single change goes out at once, and the latest values of quicker "
                     + "changes go out when the interval is up. 0 = no limit, one update per frame. "
-                    + "Code can change it at runtime through SyncSettings.MaxSendRate."), Config.MaxSendRate);
+                    + "Code can change it at runtime through SyncSettings.MaxSendRate."), _edited.MaxSendRate);
                 EditorGUILayout.EndVertical();
             }
 
-            var errors = new List<string>();
+            if (EditorGUI.EndChangeCheck())
+                ApplyIfValid(_edited, Config);
 
-            // The status window's test. A name of spaces only used to pass here, and the status
-            // window then reported the project as not configured.
-            if (!Config.IsConfigured)
-                errors.Add("App Name must not be empty!");
-            if (Config.ServerAddress.Contains("://"))
-                errors.Add("Server address should not contain a protocol (only IP or domain name)");
-            if (Config.WebServerPort <= 0 || Config.WebServerPort > 65535)
-                errors.Add("Web server port invalid (must be a number between 1 - 65535, default 9011)");
-            if (Config.TcpServerPort <= 0 || Config.TcpServerPort > 65535)
-                errors.Add("TCP server port invalid (must be a number between 1 - 65535, default 9012)");
-            if (Config.VoiceServerPort <= 0 || Config.VoiceServerPort > 65535)
-                errors.Add("Voice server port invalid (must be a number between 1 - 65535, default 9013)");
-            if ((new int[] { Config.WebServerPort, Config.TcpServerPort, Config.VoiceServerPort }).Distinct().Count() != 3)
-                errors.Add("Two ports may not have the same value!");
-            if (Config.VoiceServerSamplingRate < 16000 || Config.VoiceServerSamplingRate > 48000)
-                errors.Add("Voice server sampling rate invalid (must be a number between 16000 - 48000, default 48000)");
-            if (Config.MaxSendRate < 0)
-                errors.Add($"Max send rate invalid (updates per second per synced object; 0 = no limit, default {ColibriConfig.DEFAULT_MAX_SEND_RATE})");
-            var certificateError = CertificateSettingsError(Config);
-            if (certificateError != null)
-                errors.Add(certificateError);
+            var errors = ConfigurationErrors(_edited);
 
             GUILayout.Space(15f);
 
             EditorGUI.BeginDisabledGroup(errors.Count != 0);
             if (GUILayout.Button("Save Config"))
             {
+                // What the window shows, even if the asset was changed elsewhere after the last edit here.
+                ApplyIfValid(_edited, Config);
                 EditorUtility.SetDirty(Config);
                 SaveConfig();
                 Close();
@@ -211,7 +216,7 @@ namespace HCIKonstanz.Colibri.Setup
 
             // Outside the foldout: it is closed whenever the window opens, and this is not a
             // setting to forget about.
-            if (Config.MaxSendRate == 0)
+            if (_edited.MaxSendRate == 0)
             {
                 EditorGUILayout.HelpBox("Max Send Rate is 0, so there is no limit: every moving synced object sends an update "
                     + "in every frame, 72 to 120 a second on a headset. One server and one Wi-Fi network cannot keep up "
@@ -221,6 +226,61 @@ namespace HCIKonstanz.Colibri.Setup
             DrawAndroidIssues();
 
             EditorGUILayout.EndScrollView();
+        }
+
+        /// <summary>
+        /// Copies the settings as edited to the configuration in use, if they pass the checks that
+        /// Save makes, and otherwise leaves it as it was. So a valid change takes effect at once, as
+        /// it always has, while one that Save refuses is neither used in Play mode nor written to
+        /// disk by whatever saves the project's assets next. Writing the fields straight into the
+        /// configuration did both, though Save was disabled.
+        /// </summary>
+        /// <returns>Whether the settings were copied.</returns>
+        /// <remarks>Internal for the EditMode tests.</remarks>
+        internal static bool ApplyIfValid(ColibriConfig edited, ColibriConfig config)
+        {
+            if (ConfigurationErrors(edited).Count != 0)
+                return false;
+
+            CopySettings(edited, config);
+            return true;
+        }
+
+        /// <summary>
+        /// Every serialized field, so that a setting added later is not left behind; not the name
+        /// or the hide flags, which belong to the asset.
+        /// </summary>
+        internal static void CopySettings(ColibriConfig from, ColibriConfig to)
+            => JsonUtility.FromJsonOverwrite(JsonUtility.ToJson(from), to);
+
+        /// <summary>What keeps the configuration from being saved; empty if nothing does.</summary>
+        internal static List<string> ConfigurationErrors(ColibriConfig config)
+        {
+            var errors = new List<string>();
+
+            // The status window's test. A name of spaces only used to pass here, and the status
+            // window then reported the project as not configured.
+            if (!config.IsConfigured)
+                errors.Add("App Name must not be empty!");
+            if (config.ServerAddress.Contains("://"))
+                errors.Add("Server address should not contain a protocol (only IP or domain name)");
+            if (config.WebServerPort <= 0 || config.WebServerPort > 65535)
+                errors.Add("Web server port invalid (must be a number between 1 - 65535, default 9011)");
+            if (config.TcpServerPort <= 0 || config.TcpServerPort > 65535)
+                errors.Add("TCP server port invalid (must be a number between 1 - 65535, default 9012)");
+            if (config.VoiceServerPort <= 0 || config.VoiceServerPort > 65535)
+                errors.Add("Voice server port invalid (must be a number between 1 - 65535, default 9013)");
+            if ((new int[] { config.WebServerPort, config.TcpServerPort, config.VoiceServerPort }).Distinct().Count() != 3)
+                errors.Add("Two ports may not have the same value!");
+            if (config.VoiceServerSamplingRate < 16000 || config.VoiceServerSamplingRate > 48000)
+                errors.Add("Voice server sampling rate invalid (must be a number between 16000 - 48000, default 48000)");
+            if (config.MaxSendRate < 0)
+                errors.Add($"Max send rate invalid (updates per second per synced object; 0 = no limit, default {ColibriConfig.DEFAULT_MAX_SEND_RATE})");
+            var certificateError = CertificateSettingsError(config);
+            if (certificateError != null)
+                errors.Add(certificateError);
+
+            return errors;
         }
 
         /// <summary>
@@ -243,7 +303,7 @@ namespace HCIKonstanz.Colibri.Setup
         /// </summary>
         private void DrawAndroidIssues()
         {
-            var issues = AndroidSettingsCheck.FindIssues(Config);
+            var issues = AndroidSettingsCheck.FindIssues(_edited);
             if (issues.Count == 0)
                 return;
 
