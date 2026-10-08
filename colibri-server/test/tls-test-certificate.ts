@@ -2,6 +2,7 @@
 // fingerprint the server computes is checked against one it did not compute itself. Each one is
 // valid for localhost and 127.0.0.1, for two days: long enough for any run, and never committed.
 import { execFileSync } from 'child_process';
+import { X509Certificate } from 'crypto';
 import { readFileSync } from 'fs';
 import * as path from 'path';
 
@@ -12,6 +13,9 @@ export interface TestCertificate {
     key: Buffer;
     // As openssl prints it: colon-separated upper-case hex.
     fingerprint256: string;
+    // Milliseconds since the epoch.
+    validFrom: number;
+    validTo: number;
 }
 
 const openssl = function (args: string[]): string {
@@ -36,7 +40,12 @@ export const createTestCertificate = function (dir: string, name = 'server', com
     ]);
     // "sha256 Fingerprint=AB:CD:..." (the prefix's case differs between OpenSSL versions)
     const fingerprint256 = openssl([ 'x509', '-in', certPath, '-noout', '-fingerprint', '-sha256' ]).trim().split('=')[1]!;
-    return { certPath, keyPath, cert: readFileSync(certPath), key: readFileSync(keyPath), fingerprint256 };
+    const cert = readFileSync(certPath);
+    const x509 = new X509Certificate(cert);
+    return {
+        certPath, keyPath, cert, key: readFileSync(keyPath), fingerprint256,
+        validFrom: x509.validFromDate.getTime(), validTo: x509.validToDate.getTime(),
+    };
 };
 
 // Writes the key of `certificate`, protected by a passphrase, to <format>.key in `dir`: as PKCS #8

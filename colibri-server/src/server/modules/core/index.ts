@@ -8,6 +8,8 @@ export * from './ring-buffer.js';
 export * from './serializable.js';
 export * from './server-process.js';
 export * from './service.js';
+export * from './tls-certificate.js';
+export * from './tls-files.js';
 export * from './worker-message.js';
 export * from './worker-service-proxy.js';
 export * from './worker-service.js';

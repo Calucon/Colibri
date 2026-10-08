@@ -1,4 +1,5 @@
 import { readFileSync } from 'fs';
+import { readFile } from 'fs/promises';
 import { X509Certificate, createPrivateKey } from 'crypto';
 import * as tls from 'tls';
 
@@ -147,4 +148,17 @@ const readTlsFile = function (variable: string, filePath: string): Buffer {
 export const readTlsFiles = function (certPath: string, keyPath: string): { credentials: TlsCredentials; info: CertificateInfo } {
     const credentials = { cert: readTlsFile('TLS_CERT', certPath), key: readTlsFile('TLS_KEY', keyPath) };
     return { credentials, info: checkTlsCredentials(credentials, certPath, keyPath) };
+};
+
+/** Reads TLS_CERT and TLS_KEY without blocking the thread, and without checking them. */
+export const readTlsFilesAsync = async function (certPath: string, keyPath: string): Promise<TlsCredentials> {
+    const read = async (variable: string, filePath: string): Promise<Buffer> => {
+        try {
+            return await readFile(filePath);
+        } catch (err) {
+            throw new TlsFileError(describeReadError(variable, filePath, err));
+        }
+    };
+    const [cert, key] = await Promise.all([read('TLS_CERT', certPath), read('TLS_KEY', keyPath)]);
+    return { cert, key };
 };
