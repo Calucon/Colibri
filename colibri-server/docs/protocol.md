@@ -658,13 +658,16 @@ ping timeout, within 45 s with the server's defaults. What a client sends until 
 answer has the value from before. Applied, it would undo the change on the client that made it,
 while no other client ever saw it. So both clients compare the answer with what they sent:
 
-- **colibri-unity** keeps the last 8 values each `[Sync]` member sent. Everything it receives for
-  an object from its re-request until the end of the answers (see [Requests](#requests)), other
-  clients' updates included, is compared member by member with those sent in the 10 s before the
-  client noticed the outage, or since. The value sent last means nothing to do. An earlier one
-  means the last change was lost: the member keeps its value, sends it again once in an ordinary
-  update, and takes nothing more until the answers end. Any other value is applied, and a member
-  missing from an update is left alone. An object that has never sent anything applies everything.
+- **colibri-unity** keeps the last 8 values each `[Sync]` member sent, and the one it held before
+  them: the last one dropped from those 8, or the one it last took from another client. Everything
+  it receives for an object from its re-request until the end of the answers (see
+  [Requests](#requests)), other clients' updates included, is compared member by member with the
+  values the member held from 10 s before the client noticed the outage: those it sent since, and
+  the one it held at that point. The value sent last means nothing to do. An earlier one means the
+  last change was lost: the member keeps its value, sends it again once in an ordinary update, and
+  takes nothing more until the answers end. Any other value is applied, as is everything for a
+  member that sent nothing in those 10 s, and a member missing from an update is left alone. An
+  object that has never sent anything applies everything.
 - **colibri-web** checks only the answer to a registered model's re-request, field by field,
   against the value the server last showed it and the values it sent since. Of these it keeps the
   latest 8 up to when it last heard from the server, the first 8 after that, and the newest: the
@@ -742,12 +745,13 @@ placed in the scene, the scene's.
 the outage, to a value the reconnecting client had in the 10 s before the outage, looks like a lost
 change: the reconnecting client sends its own value over it. colibri-unity judges every update
 that arrives before the end of the answers like that, even one another client made after the
-reconnect. It recognises a lost change only by an earlier value the member sent in those 10 s,
-since it last took one from another client: otherwise the answer is applied and undoes the change,
-and a member whose very first value was lost is not sent again. colibri-web checks only the models
-it registered, and may miss a field that changed more than about 8 times within 100 ms of when it
-last heard from the server. A value sent again can cross a change another client makes right after
-the answers, like any two changes made at the same time.
+reconnect. As it keeps only 8 values and the one before them, a member that sent more than 8
+changes between the drop and the moment the outage was noticed takes the answer and goes back to
+its value at the drop, and a member whose very first value was lost is not sent again, having held
+nothing before it. colibri-web checks only the models it registered, and may miss a field that
+changed more than about 8 times within 100 ms of when it last heard from the server. A value sent
+again can cross a change another client makes right after the answers, like any two changes made
+at the same time.
 
 **Nobody is authenticated.** Any client that can reach the server can join any app under any name,
 and read and change its models and its REST store. The version check is not access control.
