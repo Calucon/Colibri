@@ -58,12 +58,21 @@ const isBare = (modelData: object) => Object.keys(modelData).every(key => key ==
 // the same connection, and a bare { id } there is that instance's answer, not a model.
 const ownOnChannel = new Map<string, Set<(id: string) => boolean>>();
 
-// The channel the request that ends the answers after a reconnect goes out on (see takeAnswer), the
-// one colibri-unity uses. No model is ever put on it.
-const RECONNECT_CHANNEL = 'colibri::reconnect';
+// The channel the requests that tell when the answers to the earlier ones are over go out on (see
+// askForEnd), the one colibri-unity uses after a reconnect. No model is ever put on it.
+const END_CHANNEL = 'colibri::reconnect';
 
 // How many of those requests this page has sent, so that each asks for an id of its own.
-let reconnectRequests = 0;
+let endRequests = 0;
+
+// Asks for an id nobody has, on a channel with no models, and returns it. The server handles one
+// client's messages in the order they come and answers them in that order, so its answer, the bare
+// id, comes after the answers to every request this client sent before.
+const askForEnd = (colibri: Colibri) => {
+    const id = `colibri-web-${++endRequests}`;
+    colibri.sendMessage(END_CHANNEL, 'model::request', { id, again: true });
+    return id;
+};
 
 // How long an own model asked for again after its held changes were sent (see takeAnswer) waits
 // for an update that shows them, before the changes held since go out anyway. The answer always
@@ -163,6 +172,14 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
     // request sent after theirs, whose answer comes after all of theirs (see takeAnswer).
     let roundEnd: string | undefined;
 
+    // While updates made before the server had what this client sends now may still arrive (see
+    // guardFrom): the id asked for by the request whose answer comes after them.
+    let guardEnd: string | undefined;
+
+    // For each model, own or not, the fields kept out of every update for it until guardEnd's answer
+    // comes, by the names they are sent under.
+    let keptOut = new WeakMap<T, Set<string>>();
+
     // When this client last heard from the server before the connection was lost (see lastHeardFrom).
     let lastHeardBeforeOutage = 0;
 
@@ -199,12 +216,39 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
     };
 
     // At first and after a reconnect, everything else is asked for once every own model asked for
-    // has its answer, so that that answer has what was sent in between.
+    // has its answer, so that that answer has what was sent in between. What is sent after it is
+    // not in it (see guardFrom). True if it asked.
     const catchUpOnceAnswered = () => {
-        if (!catchingUpThrough || awaitingAnswer.size > 0) return;
+        if (!catchingUpThrough || awaitingAnswer.size > 0) return false;
         const colibri = catchingUpThrough;
         catchingUpThrough = undefined;
         colibri.sendMessage(name, 'model::request');
+        guardFrom(colibri);
+        return true;
+    };
+
+    // From now until the answer to a request sent now, the fields this client sends for a model are
+    // kept out of every update for it. The answer to a request sent before, made before the server had
+    // them, may still be on its way: the server answers the request for every model with what it has
+    // when it reads that request, and reads a change sent just after it only then. Applied, that
+    // answer undid the change on this client alone, for good, since the server relays an update to
+    // every client but the one that sent it. Every update that arrives before the answer to the
+    // request sent now was made before the server read these fields, another client's too, so what
+    // it shows for them is older.
+    const guardFrom = (colibri: Colibri) => {
+        guardEnd = askForEnd(colibri);
+    };
+
+    const keepOut = (model: T, update: object) => {
+        if (guardEnd === undefined) return;
+        let kept = keptOut.get(model);
+        if (!kept) keptOut.set(model, (kept = new Set<string>()));
+        for (const key of Object.keys(update)) if (key !== 'id') kept.add(key);
+    };
+
+    const endGuard = () => {
+        guardEnd = undefined;
+        keptOut = new WeakMap<T, Set<string>>();
     };
 
     // initial data fetch - and the same again after every reconnect, since an update relayed while
@@ -240,6 +284,7 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
             awaitingAnswer.clear();
             deletedWhileAwaited.clear();
             askedAfterOutage.clear();
+            endGuard();
             for (const id of [...confirming.keys()]) {
                 const confirmation = endConfirmation(id);
                 const model = models.value.find(m => m.id === id);
@@ -251,11 +296,7 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
                 if (answered.has(model)) askedAfterOutage.set(model.id, { shown: new Map(), lost: new Set() });
                 askFor(colibri, model);
             }
-            roundEnd = undefined;
-            if (askedAfterOutage.size > 0) {
-                roundEnd = `colibri-web-${++reconnectRequests}`;
-                colibri.sendMessage(RECONNECT_CHANNEL, 'model::request', { id: roundEnd, again: true });
-            }
+            roundEnd = askedAfterOutage.size > 0 ? askForEnd(colibri) : undefined;
             catchUpOnceAnswered();
         });
     });
@@ -271,11 +312,15 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
         }
     });
 
-    // The answer to the request that ends the answers after a reconnect (see takeAnswer). Every
-    // RegisterModelSync receives each one sent on this connection, and takes only its own.
-    RegisterChannel(RECONNECT_CHANNEL, (message: Message) => {
-        const answer = message.payload as { id?: unknown } | undefined;
-        if (message.command === 'model::update' && roundEnd !== undefined && answer?.id === roundEnd) endRound();
+    // The answer to a request that tells when the answers to the earlier ones are over (see
+    // askForEnd): after a reconnect (see takeAnswer), or to stop keeping fields out (see guardFrom).
+    // Every RegisterModelSync receives each one sent on this connection, and takes only its own.
+    RegisterChannel(END_CHANNEL, (message: Message) => {
+        if (message.command !== 'model::update') return;
+        const id = (message.payload as { id?: unknown } | undefined)?.id;
+        if (id === undefined) return;
+        if (id === roundEnd) endRound();
+        if (id === guardEnd) endGuard();
     });
 
     // Handle updates
@@ -447,6 +492,7 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
     const sendUpdate = (colibri: Colibri, model: T, update: Partial<T>) => {
         colibri.sendMessage(name, 'model::update', update);
         remember(model, update, lastHeardFrom(colibri) ?? Number.POSITIVE_INFINITY);
+        keepOut(model, update);
     };
 
     // Remembers the values `fields` has for an own model (see knownValues): sent by this client, after
@@ -532,16 +578,20 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
 
     const applyUpdate = (model: T | undefined, modelData: Partial<T>) => {
         if (model) {
-            if (ownModels.has(model)) remember(model, modelData);
+            const kept = keptOut.get(model);
+            const update = kept ? withoutKeys(modelData, kept) : modelData;
+            if (ownModels.has(model)) remember(model, update);
 
             // Update existing model
-            model.update(modelData);
+            model.update(update);
             models.next([...models.value]);
         } else if (modelData.id) {
             const newModel = new registration.type(modelData.id);
 
             newModel.modelChanges$.subscribe(changes => {
-                SendMessage(name, 'model::update', newModel.toJson(changes));
+                const update = newModel.toJson(changes);
+                SendMessage(name, 'model::update', update);
+                keepOut(newModel, update);
                 models.next([...models.value]);
             });
 
