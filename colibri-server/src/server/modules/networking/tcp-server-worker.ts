@@ -261,6 +261,8 @@ interface TcpClient {
     droppedRepliesSinceWarning: number;
     // performance.now() of the last bytes received, or of the connection if none have been yet.
     lastInboundAt: number;
+    // Whether any bytes have been received from it yet; see handleSocketData.
+    receivedAny: boolean;
     // Model updates over a limit, waiting for room; see HeldUpdates.
     held: HeldUpdates;
 }
@@ -304,8 +306,10 @@ export class TCPServerWorker extends WorkerService {
 
     // When a Colibri 1.x client at each remote address was last warned about.
     private readonly v1WarnedAt = new AddressThrottle();
-    // The same for a client without TLS on the TLS port, and for a failed TLS handshake.
+    // The same for a client without TLS on the TLS port, a TLS client on an unencrypted one, and a
+    // failed TLS handshake.
     private readonly withoutTlsWarnedAt = new AddressThrottle();
+    private readonly tlsWithoutTlsPortWarnedAt = new AddressThrottle();
     private readonly tlsFailureLoggedAt = new AddressThrottle();
 
     public constructor() {
@@ -791,6 +795,7 @@ export class TCPServerWorker extends WorkerService {
             droppingReplies: false,
             droppedRepliesSinceWarning: 0,
             lastInboundAt: performance.now(),
+            receivedAny: false,
             held: new HeldUpdates(),
         };
         this.waitingClients.set(tcpClient.id, tcpClient);
@@ -820,6 +825,19 @@ export class TCPServerWorker extends WorkerService {
 
         const now = performance.now();
         client.lastInboundAt = now;
+
+        // A TLS client on an unencrypted port. Its handshake would otherwise go into the frame
+        // reader, which reads a length field of 790 bytes or more from it and waits, silently, for
+        // the rest of a frame that never comes, until the idle timeout; or rejects it as an invalid
+        // frame, which names neither the client's setting nor the server's.
+        if (!client.receivedAny) {
+            client.receivedAny = true;
+            if (!(client.socket as tls.TLSSocket).encrypted && looksLikeTlsHandshake(data)) {
+                this.reportTlsClientWithoutTlsPort(client);
+                this.closeClient(client);
+                return;
+            }
+        }
 
         let frames;
         try {
@@ -966,6 +984,19 @@ export class TCPServerWorker extends WorkerService {
             `Refusing a connection from ${client.address}: it looks like a Colibri 1.x client (it speaks the 1.x wire format), ` +
                 `but this server speaks protocol v${PROTOCOL_VERSION}. Upgrade the Colibri Unity package (de.uni.kn.colibri) ` +
                 'in that app to 2.x. This is logged at most once a minute per address.'
+        );
+    }
+
+    private reportTlsClientWithoutTlsPort(client: TcpClient): void {
+        if (!this.tlsWithoutTlsPortWarnedAt.shouldWarn(client.address, performance.now())) {
+            this.logDebug(`Refusing TLS client ${client.id} from ${client.address} (warned about this address already)`);
+            return;
+        }
+
+        this.logWarning(
+            `Refusing a connection from ${client.address}: it starts a TLS handshake, but this server's TCP port does not use ` +
+                'TLS (TLS_CERT and TLS_KEY are not set). Untick \'Server supports SSL/TLS?\' in that Unity app\'s Colibri ' +
+                'configuration, or set TLS_CERT and TLS_KEY on this server. This is logged at most once a minute per address.'
         );
     }
 

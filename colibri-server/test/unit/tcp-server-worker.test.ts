@@ -473,6 +473,61 @@ describe('TCPServerWorker', () => {
         });
     });
 
+    // A Unity app with 'Server supports SSL/TLS?' ticked, against a server without TLS_CERT and
+    // TLS_KEY. Its ClientHello used to go into the frame reader, which read a length field of 66326
+    // from it and waited, silently, for the rest of a frame that never came.
+    describe('a TLS client on this unencrypted port', () => {
+        // The start of a TLS 1.2/1.3 ClientHello record: handshake (0x16), TLS 1.0 record layer, 200 bytes.
+        const clientHello = Buffer.concat([ Buffer.from([ 0x16, 0x03, 0x01, 0x00, 0xc8, 0x01 ]), Buffer.alloc(199) ]);
+
+        const tlsWarnings = (): string[] =>
+            posted.filter(p => p.channel === 'log' && p.content.level === LogLevel.Warn).map(p => String(p.content.msg))
+                .filter(w => w.includes('TLS handshake'));
+
+        it('is refused at once, with a warning that names it and both ways to fix it', () => {
+            const { socket } = connect('10.0.0.42');
+            socket.emit('data', clientHello);
+
+            expect(socket.ended).toBe(true);
+            expect(socket.written).toEqual([]);
+            const [warning] = tlsWarnings();
+            expect(warning).toContain('10.0.0.42');
+            expect(warning).toContain('Server supports SSL/TLS?');
+            expect(warning).toContain('TLS_CERT and TLS_KEY');
+            expect(logs().filter(l => l.includes('Invalid frame'))).toEqual([]);
+            expect(posted.filter(p => p.channel === 'clientConnected$')).toEqual([]);
+        });
+
+        it('is warned about at most once a minute per address', () => {
+            vi.useFakeTimers();
+            try {
+                for (let i = 0; i < 5; i++) connect('10.0.0.42').socket.emit('data', clientHello);
+                expect(tlsWarnings()).toHaveLength(1);
+
+                vi.advanceTimersByTime(60_000);
+                connect('10.0.0.42').socket.emit('data', clientHello);
+                expect(tlsWarnings()).toHaveLength(2);
+            } finally {
+                vi.useRealTimers();
+            }
+        });
+
+        // Only the first bytes a client sends can be a TLS handshake.
+        it('is not looked for in the middle of a connection', () => {
+            const { socket, id } = connect();
+            socket.emit('data', encodeHandshakeFrame(PROTOCOL_VERSION, 'appA', 'a'));
+            const message = encodeMessageFrame({ channel: 'c', command: 'broadcast::string', payload: Buffer.from([ 0x16, 0x03, 0x01 ]) });
+
+            // The second chunk starts like a TLS handshake.
+            socket.emit('data', message.subarray(0, message.length - 3));
+            socket.emit('data', message.subarray(message.length - 3));
+
+            expect(socket.ended).toBe(false);
+            expect(internals.clients.has(id)).toBe(true);
+            expect(posted.filter(p => p.channel === 'clientMessage$' && p.content.channel === 'c')).toHaveLength(1);
+        });
+    });
+
     // Item 28: 'error' is always followed by the socket's own 'close', so without the
     // disconnected flag both paths would report the same client as gone.
     describe('disconnect deduplication', () => {

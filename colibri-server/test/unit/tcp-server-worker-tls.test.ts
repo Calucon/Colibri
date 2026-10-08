@@ -377,5 +377,20 @@ describe('TCPServerWorker with TLS', () => {
             await eventually(() => peer.count(FrameType.Heartbeat) > 0);
             expect(logs(LogLevel.Info)).toContain('Starting Colibri TCP server on 127.0.0.1:0');
         });
+
+        it('refuses a TLS client cleanly, saying what to change on either side', async () => {
+            await start({});
+            const socket = tls.connect({ host: '127.0.0.1', port, servername: 'localhost', ca: [ first.cert ] });
+            const failed = new Promise<Error>(resolve => socket.once('error', resolve));
+            const peer = new Peer(socket);
+            peers.push(peer);
+
+            expect((await failed).message).toMatch(/before secure TLS connection was established|ECONNRESET|socket hang up/);
+            await peer.closed;
+            const warnings = logs(LogLevel.Warn);
+            expect(warnings).toEqual([ expect.stringContaining('it starts a TLS handshake, but this server\'s TCP port does not use TLS') ]);
+            expect(logs(LogLevel.Error)).toEqual([]);
+            expect(posted.filter(p => p.channel === 'clientConnected$')).toEqual([]);
+        });
     });
 });
