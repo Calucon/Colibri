@@ -382,7 +382,7 @@ The manager just requires a declaration matching the model script:
 ```c#
 public class MyClassManager : SyncBehaviourManager<MyClass>
 {
-    // No code necessary – just add this script
+    // No code necessary: just add this script
     // to your scene (e.g., on an empty GameObject)
 }
 ```

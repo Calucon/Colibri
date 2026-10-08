@@ -299,7 +299,7 @@ for colour. This is the agreement:
 | command | JSON payload | colibri-unity | colibri-web |
 | --- | --- | --- | --- |
 | `broadcast::bool` | `true` | `Send(ch, bool)` | `sendBool` |
-| `broadcast::int` | `5` | `Send(ch, int)` | – (see below) |
+| `broadcast::int` | `5` | `Send(ch, int)` | none (see below) |
 | `broadcast::float` | `1.5` | `Send(ch, float)` | `sendNumber` / `sendFloat` / `sendInt` |
 | `broadcast::string` | `"text"` | `Send(ch, string)` | `sendString` |
 | `broadcast::vector2` | `[x, y]` | `Send(ch, Vector2)` | `sendVector2` |
