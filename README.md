@@ -22,7 +22,7 @@ Each component has its own README, the place to start for that component.
 | --- | --- |
 | [colibri-unity](colibri-unity/README.md) | Unity client, for Unity 2022.3 or newer |
 | [colibri-web](colibri-web/README.md) | TypeScript client, [`@hcikn/colibri`](https://www.npmjs.com/package/@hcikn/colibri) on npm |
-| [colibri-server](colibri-server/README.md) | The server, for Node.js 24 or as a [Docker image](https://hub.docker.com/r/hcikn/colibri) |
+| [colibri-server](colibri-server/README.md) | The server, for Node.js 24 or newer, or as a [Docker image](https://hub.docker.com/r/hcikn/colibri) |
 
 ## Features
 
