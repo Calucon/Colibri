@@ -534,8 +534,8 @@ A `model::request` comes in three forms. Any field other than `id` and `again` i
 A **bare `{ "id": "…" }`** means the server has no model for that id, so the requester's copy is
 all there is. The requester then sends its full state as a `model::update`, which creates the
 model on the server and reaches the other clients. A model the server does have wins: the
-requester takes its values. colibri-web then sends the changes made to the model since
-`registerModel`, or since the reconnect, on top of them.
+requester takes its values. colibri-web then sends on top of them the changes made to the model
+while it waited for that answer: since `registerModel`, or since the connection dropped.
 
 How the two clients use the three forms:
 
@@ -546,10 +546,13 @@ How the two clients use the three forms:
   object, and a fresh request would bring back one that was deleted a moment ago. After a
   reconnect, every object is re-requested by id, and every channel a manager listens on is asked
   for again as a whole.
-- **colibri-web.** `RegisterModelSync` asks for the whole channel, and `registerModel` sends a fresh
-  request for the model it registers. After a reconnect, each registered model that the server
-  had answered for is re-requested by id (one registered while the connection was down is asked
-  for afresh), and the whole channel is asked for once all of them have their answer.
+- **colibri-web.** `registerModel` sends a fresh request for the model it registers, and
+  `RegisterModelSync` asks for the whole channel once the models registered by then have their
+  answer. After a reconnect, each registered model that the server had answered for is
+  re-requested by id (one registered while the connection was down is asked for afresh), and the
+  whole channel is asked for once all of them have their answer. A registered model is also asked
+  for once more, with `again: true`, when the changes made while it waited replaced values the
+  server had, to see that the server has them.
 
 ### Deleted models
 
@@ -576,8 +579,8 @@ with the bare id, the requester sends the object again, and it comes back for ev
 A tombstone cannot stop an update the server relayed before the delete arrived: one another
 client sent a moment earlier, still on its way to the client that deleted the object. That client
 has to guard against it itself, by ignoring `model::update` for an id it deleted for a while
-afterwards, as colibri-unity does. Otherwise the update builds the object again on that client,
-and from there it can come back for everyone.
+afterwards, as colibri-unity does for a minute. Otherwise the update builds the object again on
+that client, and from there it can come back for everyone.
 
 ### After a reconnect
 
