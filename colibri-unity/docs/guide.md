@@ -750,6 +750,7 @@ node colibri-unity/run-tests.mjs              # both suites
 node colibri-unity/run-tests.mjs --editmode   # unit tests only, no server needed
 node colibri-unity/run-tests.mjs --playmode   # end-to-end only
 node colibri-unity/run-tests.mjs --editmode --stripping   # plus the code-stripping check
+node colibri-unity/run-tests.mjs --tls        # plus the PlayMode suite again, over TLS
 ```
 
 Two suites, and they need different things:
@@ -776,6 +777,15 @@ few minutes, and needs the IL2CPP module for that platform; without it, the chec
 notice rather than failed. The project's `ProjectSettings` are put back exactly as they were after
 the build.
 
+For the PlayMode suite, the script also starts a second server with TLS on, from
+`tls-test-server/compose.yml` (see its [README](../tls-test-server/README.md)), on 9111 (https) and
+9112 (TLS), for `TlsTests` and `StoreOverTlsTests`. Without that server those tests are skipped,
+and the script says so. `--tls` runs the PlayMode suite a second time with every connection over
+TLS, the tests' own fake server and proxy included, into `TestResults/PlayMode-TLS.xml` and `.log`.
+`ProtocolMismatchDetectionTests` skip themselves in that run. Without the TLS server, `--tls`
+fails rather than skips. The certificate files in `tls-test-server/` (`cert.pem`, `key.pem`,
+`cert.pfx`) are public and for tests only.
+
 Results land in `TestResults/` as NUnit XML plus the editor log. Without a reachable server the
 end-to-end tests report as *skipped* with the command that fixes it, rather than failing.
 
@@ -793,6 +803,11 @@ the timeout there by hand: with an unreachable server address, the client should
 | `COLIBRI_E2E_PORT` | Web/Socket.IO port, default `9011` |
 | `COLIBRI_E2E_TCP_PORT` | Binary v3 port, default `9012` |
 | `COLIBRI_E2E_NO_BUILD` | Skip `docker compose --build` |
+| `COLIBRI_E2E_TLS_PORT` | The TLS server's web port (https), default `9111` |
+| `COLIBRI_E2E_TLS_TCP_PORT` | The TLS server's binary v3 port (TLS), default `9112` |
+| `COLIBRI_E2E_TLS_CERT` | The TLS server's certificate, default `tls-test-server/cert.pem` |
+| `COLIBRI_E2E_TLS` | `1` runs the PlayMode suite over TLS; `run-tests.mjs --tls` sets it |
+| `COLIBRI_E2E_TLS_PFX` | The certificate the tests' own fake server and proxy serve over TLS, default `tls-test-server/cert.pfx` |
 | `UNITY_PATH` | The editor to use, if it is not where Unity Hub puts it |
 
 The script insists on the exact editor version in `ProjectSettings/ProjectVersion.txt` unless
@@ -805,7 +820,9 @@ The package itself supports **2022.3 LTS and newer**; the version pinned here is
 development project is opened with.
 
 Both suites can also be run from **Window → General → Test Runner** in the editor. The end-to-end
-ones need *Run In Background* on, which they set for themselves.
+ones need *Run In Background* on, which they set for themselves. For the TLS tests, start the TLS
+server by hand (`docker compose -f colibri-unity/tls-test-server/compose.yml up -d --build`). For a
+run over TLS, also set `COLIBRI_E2E_TLS=1` in the environment the Editor starts with.
 
 Voice chat has no end-to-end coverage: it needs a microphone. Only the choice of the server's
 address and the queue that hands received packets to the main thread are unit-tested.
