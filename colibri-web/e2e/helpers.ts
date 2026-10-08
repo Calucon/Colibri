@@ -1,3 +1,4 @@
+import * as net from 'node:net';
 import { firstValueFrom } from 'rxjs';
 import { filter, timeout } from 'rxjs/operators';
 import { connect, type Socket } from 'socket.io-client';
@@ -5,6 +6,8 @@ import { Colibri, PROTOCOL_VERSION, type Message } from '../src/Colibri';
 
 export const HOST = process.env.COLIBRI_E2E_SERVER ?? '127.0.0.1';
 export const PORT = Number(process.env.COLIBRI_E2E_PORT ?? 9011);
+// Where startLinkProxy listens; 0, the default, is any free port.
+const PROXY_PORT = Number(process.env.COLIBRI_E2E_PROXY_PORT ?? 0);
 
 let uniqueCounter = 0;
 
@@ -92,6 +95,91 @@ export async function dropConnectionUntilReleased(client: Colibri): Promise<() =
 
 export function isConnected(client: Colibri): boolean {
     return rawSocket(client).connected;
+}
+
+/** Resolves on `client`'s next connect, once Colibri itself has handled it (a reconnect included). */
+export function nextConnect(client: Colibri): Promise<void> {
+    return new Promise(resolve => {
+        rawSocket(client).once('connect', resolve);
+    });
+}
+
+/** A TCP proxy in front of the server, for a client to connect through (see {@link startLinkProxy}). */
+export interface LinkProxy {
+    readonly port: number;
+    /**
+     * From now on, drops whatever either end of each connection made so far writes, and tells
+     * neither: a network that drops out (Wi-Fi, say) closes nothing.
+     */
+    freeze(): void;
+    /**
+     * Closes the client's end of each connection made so far, which is how the client finally
+     * notices: Socket.IO's ping timeout, 45 s with the server's defaults, cut short. The server's
+     * end stays open, and frozen, as the server has not noticed either.
+     */
+    cut(): void;
+}
+
+const proxies: { server: net.Server; sockets: Set<net.Socket> }[] = [];
+
+/**
+ * Starts a {@link LinkProxy} to the server. A client connects through it with
+ * {@link createClientThrough}; {@link disconnectAll} closes it.
+ */
+export async function startLinkProxy(): Promise<LinkProxy> {
+    const sockets = new Set<net.Socket>();
+    const links: { client: net.Socket; upstream: net.Socket; frozen: boolean }[] = [];
+
+    const server = net.createServer(client => {
+        const upstream = net.connect(PORT, HOST);
+        const link = { client, upstream, frozen: false };
+        links.push(link);
+        for (const socket of [client, upstream]) {
+            sockets.add(socket);
+            socket.on('close', () => sockets.delete(socket));
+            // A reset after cut() is expected, and an unhandled 'error' would end the test run.
+            socket.on('error', () => undefined);
+        }
+
+        client.on('data', data => {
+            if (!link.frozen) upstream.write(data);
+        });
+        upstream.on('data', data => {
+            if (!link.frozen) client.write(data);
+        });
+        client.on('close', () => {
+            if (!link.frozen) upstream.destroy();
+        });
+        upstream.on('close', () => {
+            if (!link.frozen) client.destroy();
+        });
+    });
+    proxies.push({ server, sockets });
+
+    await new Promise<void>((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(PROXY_PORT, '127.0.0.1', () => {
+            resolve();
+        });
+    });
+
+    return {
+        port: (server.address() as net.AddressInfo).port,
+        freeze: () => {
+            for (const link of links) link.frozen = true;
+        },
+        cut: () => {
+            for (const link of links.splice(0)) {
+                link.frozen = true;
+                link.client.destroy();
+            }
+        }
+    };
+}
+
+/** Like {@link createClient}, but connecting through `proxy`. */
+export async function createClientThrough(app: string, proxy: LinkProxy): Promise<Colibri> {
+    return connectNew(() => new Colibri(app, '127.0.0.1', proxy.port));
 }
 
 /** Resolves once `client` has failed `count` connection attempts. */
@@ -211,7 +299,10 @@ export async function connectAsAdminUi(): Promise<{ disconnected(app: string): P
     };
 }
 
-/** Disconnects and forgets every client created via this module, and clears the singleton. */
+/**
+ * Disconnects and forgets every client created via this module, closes every proxy, and clears the
+ * singleton.
+ */
 export function disconnectAll(): void {
     let client: Colibri | undefined;
     while ((client = activeClients.pop()) !== undefined) {
@@ -220,6 +311,10 @@ export function disconnectAll(): void {
     let admin: Socket | undefined;
     while ((admin = adminSockets.pop()) !== undefined) {
         admin.disconnect();
+    }
+    for (const { server, sockets } of proxies.splice(0)) {
+        server.close();
+        for (const socket of sockets) socket.destroy();
     }
     resetSingleton();
 }
