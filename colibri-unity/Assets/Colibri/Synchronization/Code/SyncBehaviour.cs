@@ -340,15 +340,14 @@ namespace HCIKonstanz.Colibri.Synchronization
         // sent most recently. Null for an object that has never sent anything.
         private SentValues[] _sentValues;
 
-        // How many answers to the request made again after the last reconnect are still to come,
-        // at most, and how recently a value must have been sent to count against them, on
-        // SyncTicker's clock. See OnRequestedAgain.
-        private int _answersAwaited;
-        private double _judgeSince;
+        // The round of answers to the requests made again after the last reconnect, while they are
+        // still coming in (see Sync.ReconnectRound); null otherwise.
+        private Sync.ReconnectRound _round;
 
-        // Parallel to _attributeList: the members sent again for those answers. Both answers hold
-        // the same stale value, and one send is enough.
-        private bool[] _resent;
+        // Parallel to _attributeList: the members whose last change the round showed to have been
+        // lost with the connection. Each keeps its value, which goes out again, and takes nothing
+        // more from the round.
+        private bool[] _keptInRound;
 
         private bool _isQuitting;
         private bool _hasReceivedDestroyCommand;
@@ -625,24 +624,19 @@ namespace HCIKonstanz.Colibri.Synchronization
                 var isFirstUpdate = !_hasReceivedFirstUpdate;
                 _hasReceivedFirstUpdate = true;
 
-                // An answer to the request made again after the last reconnect, as far as can be
-                // told: on the wire an answer is an update like any other. Expected are one to the
-                // request for this object and, if the server holds the model, one to a request for
-                // the whole channel (see Sync.RequestModelsAgain); a bare { id } says it does not,
-                // and is the last. An update another client happens to send in between is taken for
-                // one of them, and judged the same way: it is still applied, unless it holds one of
-                // this object's own recent values. What it lacks is left alone: it carries only
-                // what that client changed.
-                var isAnswer = _answersAwaited > 0;
-                if (isAnswer)
-                    _answersAwaited = data.Count == 1 ? 0 : _answersAwaited - 1;
+                // While the answers to the requests made again after the last reconnect are
+                // coming in, everything received is judged against what this object sent before
+                // the outage: see "The answers to the requests made again after a reconnect" below.
+                var round = _round;
+                if (round != null && round.IsOver)
+                    round = _round = null;
 
                 foreach (var prop in data)
                 {
                     if (prop.Key == "id")
                         continue;
 
-                    if (isAnswer && KeepsLocalValue(prop.Key, prop.Value))
+                    if (round != null && KeepsLocalValue(prop.Key, prop.Value, round))
                         continue;
 
                     UpdateAttribute(prop.Key, prop.Value);
@@ -705,17 +699,21 @@ namespace HCIKonstanz.Colibri.Synchronization
 
 
         /*
-         *  The answers to the request made again after a reconnect.
+         *  The answers to the requests made again after a reconnect.
          *
          *  A change made the moment the connection dropped was written into a dead link and lost,
          *  and the server answers with what it held before that change. Applied like any other
          *  update, the answer put the object back on the very client that had changed it, and
-         *  every other client kept the old value too. So each member of an answer is compared with
-         *  the values that member sent recently (SentValues):
+         *  every other client kept the old value too. So each member of what arrives in the round
+         *  (see Sync.ReconnectRound) is compared with the values that member sent recently
+         *  (SentValues):
          *
          *  - the value sent last: it arrived, and there is nothing to do;
          *  - a value sent before that: what followed it was lost. The local value stays and goes
-         *    out again, as an ordinary update under the send-rate limit;
+         *    out again, as an ordinary update under the send-rate limit, and the member takes
+         *    nothing more from the round: whatever else the round brings for it, the server had
+         *    before it read the value sent again, which then replaces it there and on every other
+         *    client;
          *  - any other value: another client set it while this one was away, and it is applied,
          *    as it always was. So is a member that was not sent recently at all.
          *
@@ -726,47 +724,47 @@ namespace HCIKonstanz.Colibri.Synchronization
          *  very first value was the one lost stays unsent, as it did before.
          *
          *  An object that has never sent anything - one a manager built from another client's
-         *  update, say - applies its answers exactly as before, and so does every object once its
-         *  answers are in: an update from another client is applied as it arrives.
+         *  update, say - applies its answers exactly as before, and so does every object once the
+         *  round is over: an update from another client is applied as it arrives.
          */
 
         /// <summary>Told by Sync that the model has just been asked for again after a reconnect.</summary>
-        /// <param name="requestedWholeChannel">
-        /// Whether the whole channel was asked for as well, whose answer carries this model too if
-        /// the server holds it.
-        /// </param>
-        /// <param name="disconnectedAt">When this client noticed the outage, on SyncTicker's clock.</param>
-        private void OnRequestedAgain(bool requestedWholeChannel, double disconnectedAt)
+        private void OnRequestedAgain(Sync.ReconnectRound round)
         {
-            _answersAwaited = requestedWholeChannel ? 2 : 1;
-            _judgeSince = disconnectedAt - SentValues.WindowSeconds;
+            _round = round;
 
-            if (_resent != null)
-                Array.Clear(_resent, 0, _resent.Length);
+            if (_keptInRound != null)
+                Array.Clear(_keptInRound, 0, _keptInRound.Length);
         }
 
         /// <summary>
-        /// Judges one member of an answer. True when the server's value is not to be applied: the
-        /// value this object sent last arrived, or what it sent after the server's value was lost,
-        /// and goes out again now.
+        /// Judges one member of what arrived in the round. True when the server's value is not to
+        /// be applied: the value this object sent last arrived, or what it sent after the server's
+        /// value was lost, and goes out again now.
         /// </summary>
-        private bool KeepsLocalValue(string name, JToken serverValue)
+        private bool KeepsLocalValue(string name, JToken serverValue, Sync.ReconnectRound round)
         {
             if (_sentValues == null || !_syncedAttributes.TryGetValue(name, out var attribute))
                 return false;
 
             // A member that is switched off reads a placeholder, which is no value to keep or send.
-            var sent = _sentValues[attribute.Index];
-            if (sent == null || !IsSynced(attribute.MemberName))
+            if (!IsSynced(attribute.MemberName))
                 return false;
 
-            switch (sent.Judge(serverValue, _judgeSince))
+            if (_keptInRound != null && _keptInRound[attribute.Index])
+                return true;
+
+            var sent = _sentValues[attribute.Index];
+            if (sent == null)
+                return false;
+
+            switch (sent.Judge(serverValue, round.DisconnectedAt - SentValues.WindowSeconds))
             {
                 case SentValues.Verdict.Arrived:
                     return true;
 
                 case SentValues.Verdict.Lost:
-                    SendAgain(attribute);
+                    KeepAndSendAgain(attribute);
                     return true;
 
                 default:
@@ -774,19 +772,14 @@ namespace HCIKonstanz.Colibri.Synchronization
             }
         }
 
-        /// <summary>
-        /// Sends the member's local value again, once per reconnect: the server's answer to the
-        /// request for the whole channel and to the one for this object hold the same stale value.
-        /// </summary>
-        private void SendAgain(SyncedAttribute attribute)
+        /// <summary>Keeps the member's local value for the rest of the round, and sends it again.</summary>
+        private void KeepAndSendAgain(SyncedAttribute attribute)
         {
+            _keptInRound ??= new bool[_attributeList.Count];
+            _keptInRound[attribute.Index] = true;
+
             if (_hasReceivedDestroyCommand)
                 return;
-
-            _resent ??= new bool[_attributeList.Count];
-            if (_resent[attribute.Index])
-                return;
-            _resent[attribute.Index] = true;
 
             // Latched, as the poll would have: what goes out now is not a change to report again.
             var self = this as T;

@@ -29,15 +29,15 @@ namespace HCIKonstanz.Colibri.Synchronization
 
             /// <summary>
             /// A SyncBehaviour's model listener only: told each time the request for
-            /// <see cref="FetchId"/> is made again after a reconnect. See
-            /// <see cref="RequestModelsAgain(double)"/> for what it is told.
+            /// <see cref="FetchId"/> is made again after a reconnect, with the round of answers
+            /// it is part of. See <see cref="RequestModelsAgain(double)"/>.
             /// </summary>
-            public readonly Action<bool, double> RequestedAgain;
+            public readonly Action<ReconnectRound> RequestedAgain;
 
             private readonly UnityEngine.Object _owner;
             private readonly bool _isOwned;
 
-            public Listener(Action<T> callback, string fetchId = null, Action<bool, double> requestedAgain = null)
+            public Listener(Action<T> callback, string fetchId = null, Action<ReconnectRound> requestedAgain = null)
             {
                 Callback = callback;
                 FetchId = fetchId;
@@ -103,6 +103,61 @@ namespace HCIKonstanz.Colibri.Synchronization
         private static void OnDisconnected() => _disconnectedAt = Time.unscaledTimeAsDouble;
 
         /// <summary>
+        /// The requests made again after one reconnect, from when they go out until the answers
+        /// to all of them have arrived: the stretch in which a SyncBehaviour compares what it
+        /// receives with what it sent before the outage (see SyncBehaviour's OnModelUpdate).
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// On the wire an answer is an ordinary model::update, and so is an update that another
+        /// client sends meanwhile. The server relays those to this client as soon as it accepts the
+        /// connection, so they arrive before the answers, between them and after them, and nothing
+        /// in them tells them apart. Nor can the answers be counted off: an update from another
+        /// client would take the place of one, and the answer it stood in for would then be applied
+        /// as if it were news, putting back a value from before the outage.
+        /// </para>
+        /// <para>
+        /// What can be told is when the answers are over. The server handles one client's messages
+        /// in the order they were sent and writes its answers to that client in the same order, so
+        /// the answer to a request sent after all the others comes after all of theirs. That last
+        /// request asks for an id that no model has, on a channel that holds no models
+        /// (<see cref="ReconnectRoundChannel"/>), and the bare <c>{ id }</c> it is answered with can
+        /// be nothing else. The server needs nothing new for this: it answers any model::request.
+        /// </para>
+        /// <para>
+        /// Whatever arrives before that answer was sent by the server before it read the request,
+        /// and so before it read anything this client sends in reply to an answer. Updates from
+        /// other clients in that stretch hold the server's values at the time just as the answers
+        /// do, and are judged with them.
+        /// </para>
+        /// </remarks>
+        internal sealed class ReconnectRound
+        {
+            /// <summary>When this client noticed the outage, on SyncTicker's clock.</summary>
+            internal readonly double DisconnectedAt;
+
+            /// <summary>The id the last request asks for, whose answer ends the round.</summary>
+            internal readonly string EndMarkerId = Guid.NewGuid().ToString();
+
+            /// <summary>Whether the answers are all in.</summary>
+            internal bool IsOver;
+
+            internal ReconnectRound(double disconnectedAt) => DisconnectedAt = disconnectedAt;
+        }
+
+        /// <summary>
+        /// The channel the request that ends a <see cref="ReconnectRound"/> goes out on. No model
+        /// is ever put on it, and nothing received on it reaches a listener.
+        /// </summary>
+        internal const string ReconnectRoundChannel = "colibri::reconnect";
+
+        /// <summary>The round whose answers are still coming in, if any.</summary>
+        private static ReconnectRound _reconnectRound;
+
+        /// <summary>The id whose answer ends the current round; null when none is open. For the EditMode tests.</summary>
+        internal static string ReconnectRoundEndMarker => _reconnectRound?.EndMarkerId;
+
+        /// <summary>
         /// After a reconnect, every model this client holds may be stale: whatever other clients
         /// changed - or created - while it was offline never reached it, and nothing used to ask
         /// again. <c>model::request</c> was sent once, when a listener registered, so a Wi-Fi blip
@@ -134,17 +189,17 @@ namespace HCIKonstanz.Colibri.Synchronization
         internal static void RequestModelsAgain() => RequestModelsAgain(_disconnectedAt);
 
         /// <summary>
-        /// <see cref="RequestModelsAgain()"/>, and then each SyncBehaviour whose object was asked
-        /// for is told so: whether a request for the whole channel went out as well, and when the
-        /// connection was lost (<paramref name="disconnectedAt"/>, on SyncTicker's clock). The
-        /// answer to the request for the whole channel carries the object too, if the server holds
-        /// it, so it gets two answers then - and both hold what the server had before this client's
-        /// last changes, if those were lost with the connection. See
-        /// <see cref="SyncBehaviour{T}.OnModelUpdate"/>.
+        /// <see cref="RequestModelsAgain()"/>. If a SyncBehaviour's object was among the models
+        /// asked for, one more request follows them all, whose answer marks the end of theirs, and
+        /// each such SyncBehaviour is told about the round of answers it is part of (see
+        /// <see cref="ReconnectRound"/>), including when the connection was lost
+        /// (<paramref name="disconnectedAt"/>, on SyncTicker's clock).
         /// </summary>
         /// <remarks>Internal for the EditMode tests, which set the time of the outage with it.</remarks>
         internal static void RequestModelsAgain(double disconnectedAt)
         {
+            List<Action<ReconnectRound>> toTell = null;
+
             foreach (var entry in _modelUpdateListeners.ToArray())
             {
                 var channel = entry.Key;
@@ -177,14 +232,43 @@ namespace HCIKonstanz.Colibri.Synchronization
                     }
                 }
 
-                // Only once every request is out is it known whether one for the whole channel
-                // was among them.
                 foreach (var listener in channelListeners)
                 {
-                    if (listener.FetchId != null)
-                        listener.RequestedAgain?.Invoke(requestedAll, disconnectedAt);
+                    if (listener.FetchId != null && listener.RequestedAgain != null)
+                        (toTell ??= new List<Action<ReconnectRound>>()).Add(listener.RequestedAgain);
                 }
             }
+
+            if (toTell == null)
+                return;
+
+            // After every other request, on every channel: its answer comes after all of theirs.
+            var round = new ReconnectRound(disconnectedAt);
+            if (_reconnectRound != null)
+                _reconnectRound.IsOver = true;
+            _reconnectRound = round;
+            SendCommand(ReconnectRoundChannel, "model::request", new JObject { { "id", round.EndMarkerId }, { "again", true } });
+
+            foreach (var tell in toTell)
+                tell(round);
+        }
+
+        /// <summary>
+        /// The answer to the request that ends a <see cref="ReconnectRound"/>. One with an earlier
+        /// round's id answers a request that a failed write kept for this connection; that round is
+        /// over already.
+        /// </summary>
+        private static void EndReconnectRound(JToken data)
+        {
+            var round = _reconnectRound;
+            if (round == null || !(data is JObject answer) || !answer.TryGetValue("id", out var id)
+                || id.Type != JTokenType.String || (string)id != round.EndMarkerId)
+            {
+                return;
+            }
+
+            round.IsOver = true;
+            _reconnectRound = null;
         }
 
         /*
@@ -203,6 +287,13 @@ namespace HCIKonstanz.Colibri.Synchronization
         internal static void OnServerMessage(string channel, string command, JToken data)
         {
             RecordTraffic(true, channel, command);
+
+            // Colibri's own, and nothing a listener asked for: see ReconnectRound.
+            if (channel == ReconnectRoundChannel)
+            {
+                EndReconnectRound(data);
+                return;
+            }
 
             switch (command)
             {
@@ -577,15 +668,17 @@ namespace HCIKonstanz.Colibri.Synchronization
             // listeners.
             ChannelListenerRegistry.Clear();
 
-            // The previous session's outage, on a clock that has gone on running since.
+            // The previous session's outage, on a clock that has gone on running since, and its
+            // round of answers, which no object of this session is part of.
             _disconnectedAt = double.NegativeInfinity;
+            _reconnectRound = null;
         }
 
         // `track` is off for the model channels: they are Colibri's own SyncBehaviour plumbing,
         // they never go through Invoke<T>, and listing them would only bury the channels the
         // application code actually registered.
         private static void AddListener<T>(string channel, Dictionary<string, List<Listener<T>>> listeners, Action<T> listener,
-            bool track = true, string fetchId = null, Action<bool, double> requestedAgain = null)
+            bool track = true, string fetchId = null, Action<ReconnectRound> requestedAgain = null)
         {
             // Ensures the connection is in the scene and that this class is subscribed to it - on
             // every registration, not only a channel's first. A channel's entry below can outlive
@@ -714,7 +807,7 @@ namespace HCIKonstanz.Colibri.Synchronization
         /// <see cref="RequestModelsAgain(double)"/>).
         /// </summary>
         internal static void AddModelUpdateListener(string channel, Action<JObject> listener, string fetchInitialStateId,
-            Action<bool, double> requestedAgain)
+            Action<ReconnectRound> requestedAgain)
         {
             AddListener(channel, _modelUpdateListeners, listener, track: false, fetchId: fetchInitialStateId, requestedAgain: requestedAgain);
             SendCommand(channel, "model::request", new JObject { { "id", fetchInitialStateId } });
@@ -729,7 +822,7 @@ namespace HCIKonstanz.Colibri.Synchronization
         /// asked for again like every other one (see <see cref="RequestModelsAgain()"/>).
         /// </summary>
         internal static void AddModelUpdateListenerWithoutRequest(string channel, Action<JObject> listener, string id,
-            Action<bool, double> requestedAgain)
+            Action<ReconnectRound> requestedAgain)
             => AddListener(channel, _modelUpdateListeners, listener, track: false, fetchId: id, requestedAgain: requestedAgain);
 
         public static void RemoveModelUpdateListener(string channel, Action<JObject> listener) => RemoveListener(channel, _modelUpdateListeners, listener, track: false);

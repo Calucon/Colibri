@@ -89,6 +89,47 @@ namespace HCIKonstanz.Colibri.Tests
             }), "Only the request for one object says again; the request for every model on the channel is the same as before");
         }
 
+        /// <summary>
+        /// After the requests made again for a SyncBehaviour's object, on every channel, one more
+        /// goes out, for an id no model has: the server answers a client's requests in the order
+        /// they came, so its answer marks the end of theirs. See Sync.ReconnectRound.
+        /// </summary>
+        [Test]
+        public void TheRequestsMadeAgainForObjectsAreFollowedByOneWhoseAnswerEndsThem()
+        {
+            var doors = NewChannel();
+            var windows = NewChannel();
+            Sync.ReconnectRound told = null;
+            Action<JObject> door = _ => { };
+            Action<JObject> window = _ => { };
+            Sync.AddModelUpdateListener(doors, door, "door", round => told = round);
+            _cleanup.Add(() => Sync.RemoveModelUpdateListener(doors, door));
+            Sync.AddModelUpdateListener(windows, window, "window", round => { });
+            _cleanup.Add(() => Sync.RemoveModelUpdateListener(windows, window));
+            Listen(windows, _ => { });
+
+            Sync.RequestModelsAgain();
+
+            Assert.That(told, Is.Not.Null, "The object was not told about the round its answer is part of");
+            var marker = $"{{\"id\":\"{told.EndMarkerId}\",\"again\":true}}";
+            var requests = Requests(new[] { doors, windows, Sync.ReconnectRoundChannel });
+
+            Assert.That(requests.Take(3), Is.EqualTo(new[]
+            {
+                (doors, "{\"id\":\"door\"}"),
+                (windows, "{\"id\":\"window\"}"),
+                (windows, "null"),
+            }), "Precondition: the requests made when the listeners registered");
+            Assert.That(requests.Skip(3).Take(3), Is.EquivalentTo(new[]
+            {
+                (doors, "{\"id\":\"door\",\"again\":true}"),
+                (windows, "{\"id\":\"window\",\"again\":true}"),
+                (windows, "null"),
+            }), "The requests made again");
+            Assert.That(requests.Skip(6), Is.EqualTo(new[] { (Sync.ReconnectRoundChannel, marker) }),
+                "The request that marks the end of the answers should come last, after those on every channel");
+        }
+
 
         /*
          *  Helpers
@@ -100,6 +141,13 @@ namespace HCIKonstanz.Colibri.Tests
         /// is sent, up to an end marker queued last.
         /// </summary>
         private List<string> Requests(string channel)
+            => Requests(new[] { channel }).Select(request => request.Payload).ToList();
+
+        /// <summary>
+        /// The model::requests sent on any of <paramref name="channels"/> so far, in order, with
+        /// their channels. See the overload above.
+        /// </summary>
+        private List<(string Channel, string Payload)> Requests(string[] channels)
         {
             var connection = WebServerConnection.Instance;
             connection.SendCommand("model-request-test-end", "end", null);
@@ -138,8 +186,8 @@ namespace HCIKonstanz.Colibri.Tests
             }
 
             return frames
-                .Where(frame => frame.Channel == channel && frame.Command == "model::request")
-                .Select(frame => frame.Payload == null || frame.Payload.Length == 0 ? "null" : Encoding.UTF8.GetString(frame.Payload))
+                .Where(frame => channels.Contains(frame.Channel) && frame.Command == "model::request")
+                .Select(frame => (frame.Channel, frame.Payload == null || frame.Payload.Length == 0 ? "null" : Encoding.UTF8.GetString(frame.Payload)))
                 .ToList();
         }
     }

@@ -8,8 +8,8 @@ namespace HCIKonstanz.Colibri.Synchronization
 {
     /// <summary>
     /// The values one [Sync] member of one object sent most recently, kept for a single decision:
-    /// what to do with that member in the server's answer to the request a model makes again after
-    /// a reconnect (see <see cref="Judge"/>).
+    /// what to do with that member in the server's answers to the requests made again after a
+    /// reconnect (see <see cref="Judge"/> and Sync.ReconnectRound).
     /// </summary>
     /// <remarks>
     /// <para>

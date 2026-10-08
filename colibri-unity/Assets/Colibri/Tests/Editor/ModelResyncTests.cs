@@ -196,6 +196,17 @@ namespace HCIKonstanz.Colibri.Tests
         private static JObject Answer(ResyncModel model, string label, int count = 0)
             => new JObject { { "id", model.Id }, { "label", label }, { "count", count } };
 
+        /// <summary>
+        /// The answer to the request sent after all the others (see Sync.ReconnectRound): the
+        /// answers to the requests made again are all in.
+        /// </summary>
+        private static void EndOfAnswers()
+        {
+            var marker = Sync.ReconnectRoundEndMarker;
+            Assert.That(marker, Is.Not.Null, "Precondition: the answers to a reconnect's requests are still coming in");
+            Sync.OnServerMessage(Sync.ReconnectRoundChannel, "model::update", new JObject { { "id", marker } });
+        }
+
         /// <summary>A model::update another client sends, as the server relays it.</summary>
         private static JObject Relayed(ResyncModel model, string member, JToken value)
             => new JObject { { "id", model.Id }, { member, value } };
@@ -325,6 +336,7 @@ namespace HCIKonstanz.Colibri.Tests
             Assert.That(sent, Is.Null, $"Nothing was lost, so nothing should go out again: {sent}");
 
             model.OnModelUpdate(Answer(model, "theirs, live", 7));
+            EndOfAnswers();
 
             Assert.That(model.Label, Is.EqualTo("theirs, live"));
             Assert.That(model.Count, Is.EqualTo(7), "The count another client set during the outage was not applied");
@@ -334,11 +346,11 @@ namespace HCIKonstanz.Colibri.Tests
         /// <summary>
         /// A manager on the channel asks for every model on it again too, and the answer to that
         /// carries this model as well: two answers, both from before the lost change. Both are
-        /// judged, the lost value goes out once - and then the next update is applied as it
-        /// arrives, even one holding a value this object sent before.
+        /// judged, and the lost value goes out once. After the answer that marks the end of them,
+        /// an update is applied as it arrives, even one holding a value this object sent before.
         /// </summary>
         [Test]
-        public void BothAnswersAreJudgedWhenTheWholeChannelIsAskedForToo()
+        public void EverythingUntilTheEndOfTheAnswersIsJudged()
         {
             var model = SpawnModelThatSent("before");
             System.Action<JObject> manager = _ => { };
@@ -355,6 +367,7 @@ namespace HCIKonstanz.Colibri.Tests
                 Assert.That(model.Label, Is.EqualTo("lost at the drop"), "The second answer put the value from before the outage back");
                 Assert.That(SentAt(model, 105), Is.Null, "The second answer sent the lost value a second time");
 
+                EndOfAnswers();
                 model.OnModelUpdate(Answer(model, "before"));
                 Assert.That(model.Label, Is.EqualTo("before"), "An update after the answers should be applied as it arrives");
                 Assert.That(SentAt(model, 106), Is.Null);
@@ -365,19 +378,116 @@ namespace HCIKonstanz.Colibri.Tests
             }
         }
 
+        /// <summary>
+        /// Another client's update, relayed ahead of the answers, does not take the place of one:
+        /// both answers are still judged, and the value from before the outage is not put back
+        /// here after the lost one has gone out again to everyone else.
+        /// </summary>
         [Test]
-        public void AnUpdateAfterTheAnswerIsAppliedAsItArrives()
+        public void AnotherClientsUpdateAheadOfTheAnswersDoesNotLetOneThrough()
+        {
+            var model = SpawnModelThatSent("before");
+            System.Action<JObject> manager = _ => { };
+            Sync.AddModelUpdateListener(model.Channel, manager);
+            try
+            {
+                Change(model, "lost at the drop", 101);
+                Sync.RequestModelsAgain(disconnectedAt: 103);
+
+                model.OnModelUpdate(Relayed(model, "count", 3));
+                model.OnModelUpdate(Answer(model, "before", 3));
+                var sent = SentAt(model, 104);
+                model.OnModelUpdate(Answer(model, "before", 3));
+                EndOfAnswers();
+
+                Assert.That(model.Label, Is.EqualTo("lost at the drop"), "An answer put the value from before the outage back");
+                Assert.That(sent, Is.Not.Null, "The value that was lost was not sent again");
+                Assert.That((string)sent["label"], Is.EqualTo(model.Label), "What went out to everyone else differs from what this client shows");
+                Assert.That(model.Count, Is.EqualTo(3));
+                Assert.That(SentAt(model, 105), Is.Null);
+            }
+            finally
+            {
+                Sync.RemoveModelUpdateListener(model.Channel, manager);
+            }
+        }
+
+        /// <summary>
+        /// Once a member's last change is known to have been lost, nothing else that arrives before
+        /// the end of the answers is applied to it: the server had all of that before it read the
+        /// value sent again, which then replaces it there and on every other client. Applied here,
+        /// this client alone would show it.
+        /// </summary>
+        [Test]
+        public void AMemberFoundLostTakesNothingMoreFromTheAnswers()
         {
             var model = SpawnModelThatSent("before");
             Change(model, "lost at the drop", 101);
             Sync.RequestModelsAgain(disconnectedAt: 103);
-            model.OnModelUpdate(Answer(model, "before"));
-            Assert.That(SentAt(model, 104), Is.Not.Null);
 
             model.OnModelUpdate(Answer(model, "before"));
+            Assert.That((string)SentAt(model, 104)["label"], Is.EqualTo("lost at the drop"));
 
-            Assert.That(model.Label, Is.EqualTo("before"));
+            model.OnModelUpdate(Relayed(model, "label", "theirs, sent before the server read ours"));
+            Assert.That(model.Label, Is.EqualTo("lost at the drop"));
             Assert.That(SentAt(model, 105), Is.Null);
+
+            EndOfAnswers();
+            model.OnModelUpdate(Relayed(model, "label", "theirs, sent after"));
+            Assert.That(model.Label, Is.EqualTo("theirs, sent after"), "After the answers, another client's update should be applied as it arrives");
+            Assert.That(SentAt(model, 106), Is.Null);
+        }
+
+        /// <summary>
+        /// The end of the answers is the answer to the request sent after all the others, however
+        /// many answers came before it: one where two were expected, say. An update after it is
+        /// applied as it arrives, even long after and even one holding a value this object sent.
+        /// </summary>
+        [Test]
+        public void AnUpdateAfterTheEndOfTheAnswersIsAppliedAsItArrives()
+        {
+            var model = SpawnModelThatSent("before");
+            System.Action<JObject> manager = _ => { };
+            Sync.AddModelUpdateListener(model.Channel, manager);
+            try
+            {
+                Sync.RequestModelsAgain(disconnectedAt: 103);
+                model.OnModelUpdate(Answer(model, "before"));
+                EndOfAnswers();
+
+                Change(model, "a", 500);
+                Change(model, "b", 501);
+                model.OnModelUpdate(Relayed(model, "label", "a"));
+
+                Assert.That(model.Label, Is.EqualTo("a"));
+                Assert.That(SentAt(model, 600), Is.Null);
+            }
+            finally
+            {
+                Sync.RemoveModelUpdateListener(model.Channel, manager);
+            }
+        }
+
+        /// <summary>
+        /// The answer to an earlier round's last request - one a failed write kept for the next
+        /// connection - does not end the current round.
+        /// </summary>
+        [Test]
+        public void TheEndOfAnEarlierRoundDoesNotEndTheCurrentOne()
+        {
+            var model = SpawnModelThatSent("before");
+            Sync.RequestModelsAgain(disconnectedAt: 101);
+            var earlier = Sync.ReconnectRoundEndMarker;
+
+            Change(model, "lost at the drop", 102);
+            Sync.RequestModelsAgain(disconnectedAt: 104);
+            Sync.OnServerMessage(Sync.ReconnectRoundChannel, "model::update", new JObject { { "id", earlier } });
+            Assert.That(Sync.ReconnectRoundEndMarker, Is.Not.Null.And.Not.EqualTo(earlier));
+
+            model.OnModelUpdate(Answer(model, "before"));
+
+            Assert.That(model.Label, Is.EqualTo("lost at the drop"));
+            Assert.That((string)SentAt(model, 105)["label"], Is.EqualTo("lost at the drop"));
         }
 
         /// <summary>
