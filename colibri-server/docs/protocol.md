@@ -582,20 +582,23 @@ How the two clients use the three forms:
 - **colibri-web.** `registerModel` sends a fresh request for the model it registers, and
   `RegisterModelSync` asks for the whole channel once the models registered by then have their
   answer. After a reconnect, each registered model that the server had answered for is
-  re-requested by id (one registered while the connection was down is asked for afresh), and the
-  whole channel is asked for once all of them have their answer. A registered model is also asked
-  for once more, with `again: true`, when the changes made while it waited replaced values the
-  server had, to see that the server has them.
+  re-requested by id, and one more request marks the end of their answers (see below); one
+  registered while the connection was down is asked for afresh. The whole channel is asked for
+  once all of them have their answer and the end has come. A registered model is also asked for
+  once more, with `again: true`, when the changes made while it waited replaced values the server
+  had, to see that the server has them.
 
 **The end of the answers.** On the wire, an answer is an ordinary `model::update`, just like an
-update the server relays from another client meanwhile. So after every reconnect, colibri-unity
-sends one more request after all the others: `{ "id": "<fresh GUID>", "again": true }` on the
-channel `colibri::reconnect`, where Colibri never stores a model. The server answers it like any
-other, with the bare id, and colibri-unity takes that answer as the end of the answers to its
-re-requests, and as the point by which the server has read everything it queued before, the deletes
-it sent again included (see [After a reconnect](#after-a-reconnect)). Nothing on that channel
-reaches an application listener. The server has no code of its own for this. It works because of two
-things the server already does, which have to stay:
+update the server relays from another client meanwhile. So after a reconnect, a client sends one more
+request after all the others: `{ "id": "<fresh id>", "again": true }` on the channel
+`colibri::reconnect`, where Colibri never stores a model. colibri-unity sends one after every
+reconnect, with a GUID for the id; colibri-web sends one per `RegisterModelSync` that re-requested a
+model. The server answers it like any other, with the bare id, and the client takes that answer as
+the end of the answers to its re-requests. colibri-unity also takes it as the point by which the
+server has read everything it queued before, the deletes it sent again included (see
+[After a reconnect](#after-a-reconnect)). colibri-unity passes nothing on that channel to an
+application listener. The server has no code of its own for this. It works because of two things
+the server already does, which have to stay:
 
 - it handles one client's messages in the order they arrive, and
 - it writes its answers to that client in the same order.
@@ -680,14 +683,16 @@ while no other client ever saw it. So both clients compare the answer with what 
   again before the end of the answers, it sends them once more, however old, with every
   `model::delete` it has sent since it noticed the outage, except for an id it has asked for afresh
   since.
-- **colibri-web** checks only the answer to a registered model's re-request, field by field,
-  against the value the server last showed it and the values it sent since. Of these it keeps the
-  latest 8 up to when it last heard from the server, the first 8 after that, and the newest: the
-  server's latency message arrives every 100 ms, so the connection stopped working shortly after
-  that, and the value the server has was sent around then. An earlier value that the field still
-  had in the 10 s before that time means the last change was lost. The field is not applied, and
-  its local value goes out again in one `model::update` with the changes held back while
-  disconnected, followed by another request with `again: true`. Any other value is applied.
+- **colibri-web** compares everything it receives for a registered model from its re-request until
+  the end of the answers, other clients' updates included, field by field, with the value the
+  server last showed it and the values it sent since. Of these it keeps the latest 8 up to when it
+  last heard from the server, the first 8 after that, and the newest: the server's latency message
+  arrives every 100 ms, so the connection stopped working shortly after that, and the value the
+  server has was sent around then. An earlier value that the field still had in the 10 s before
+  that time means the last change was lost: the field keeps its value and takes nothing more until
+  the answers end. Its local value then goes out again in one `model::update` with the changes
+  held back since the outage, followed by another request with `again: true`. Any other value is
+  applied, and a field missing from an update is left alone.
 
 Both keep the answer's value for a lost member or field as the one the server holds, and judge
 from the earlier outage when the connection drops again before the answers to a reconnect are in.
@@ -759,8 +764,8 @@ placed in the scene, the scene's.
 **A lost change is told from another client's change by its value alone** (see
 [After a reconnect](#after-a-reconnect)). Another client that sets a member or field back during
 the outage, to a value the reconnecting client had in the 10 s before the outage, looks like a lost
-change: the reconnecting client sends its own value over it. colibri-unity judges every update
-that arrives before the end of the answers like that, even one another client made after the
+change: the reconnecting client sends its own value over it. Both clients judge every update that
+arrives before the end of the answers like that, even one another client made after the
 reconnect. Both clients may miss a member or field that changed more than about 8 times within
 100 ms of when they last heard from the server, which for colibri-unity takes a send-rate limit
 above about 80 updates a second. colibri-unity may also miss a member that changed more than once
