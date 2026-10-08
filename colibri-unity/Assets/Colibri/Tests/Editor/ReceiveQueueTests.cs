@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
+using System.Threading;
 using HCIKonstanz.Colibri.Networking;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -235,6 +236,39 @@ namespace HCIKonstanz.Colibri.Tests
                 Assert.That(_delivered.Last(), Is.EqualTo($"{Objects} model::update {{\"id\":\"X\",\"count\":2}}"));
             }
 
+            LogAssert.NoUnexpectedReceived();
+        }
+
+
+        /*
+         *  A connection loop that has been ended
+         */
+
+        /// <summary>
+        /// A disable and enable in one frame can leave the ended loop's receive loop still handing
+        /// over a batch it read before the disable, while the next loop's session is already
+        /// queueing. What it hands over from then on is not queued: an older state of an object
+        /// would otherwise be delivered after its newer one. What it queued before is delivered.
+        /// </summary>
+        [Test]
+        public void AnEndedLoopQueuesNothingBehindTheNextLoopsMessages()
+        {
+            using (var ended = new CancellationTokenSource())
+            {
+                _connection.EnqueueReceived(Objects, "model::update", new JObject { { "id", "X" }, { "count", 1 } }, ended.Token);
+                ended.Cancel();
+
+                Receive(Objects, "model::update", new JObject { { "id", "X" }, { "count", 3 } });
+                _connection.EnqueueReceived(Objects, "model::update", new JObject { { "id", "X" }, { "count", 2 } }, ended.Token);
+
+                _connection.DeliverReceivedMessages();
+            }
+
+            Assert.That(_delivered, Is.EqualTo(new[]
+            {
+                $"{Objects} model::update {{\"id\":\"X\",\"count\":1}}",
+                $"{Objects} model::update {{\"id\":\"X\",\"count\":3}}",
+            }));
             LogAssert.NoUnexpectedReceived();
         }
 
