@@ -646,7 +646,8 @@ After reconnecting, Colibri asks the server again for every synced object in the
 everything on the channels of its `SyncBehaviourManager`s, so what other clients changed in the
 meantime arrives. For each object, the server's answer is one of:
 
-- **The object's current state**, which is applied.
+- **The object's current state**, which is applied, unless it shows that this client's own last
+  change was lost (see below).
 - **Nothing for it.** The server forgets an app's synced objects when the app's last client
   disconnects, and when it restarts, and a single client whose connection drops is that last
   client. Colibri then sends the object's full state again, so the server has it back, and clients
@@ -660,6 +661,22 @@ update, with only the members that changed, and answers the request with those. 
 reach the server only when they change. Until then, a client that joins later builds the object
 with the template's values for them, shown even if it is hidden here; a placed object keeps its
 values from the scene.
+
+A change made as the Wi-Fi drops goes into a connection that is already dead, and is lost: the
+client notices only 2 s later, when the server's heartbeats stop. The answer then holds the value
+from before that change. So each `[Sync]` member remembers the last 8 values it sent, and until all
+the answers are in, everything that arrives for the object, other clients' updates included, is
+compared with those sent in the 10 s before the outage was noticed, or since. The value sent last
+means it arrived. One sent before it means the change after it was lost: the member keeps its
+value and sends it again, once. Any other value is another client's change during the outage and is
+applied, as is everything for an object that has never sent anything. This goes by values, so two
+cases come out wrong:
+
+- A lost change is recognised only by an earlier value the member sent in those 10 s, and since it
+  last took one from another client. Otherwise the answer undoes it, and a member whose very first
+  value was lost is not sent again.
+- Another client that sets a member back during the outage, to a value this client sent in those
+  10 s, is undone: this client's value replaces it.
 
 The server remembers a delete for `MODEL_TOMBSTONE_SECONDS`, 10 minutes by default. An object
 that another client deleted longer ago than that, while this client was away, is answered with
