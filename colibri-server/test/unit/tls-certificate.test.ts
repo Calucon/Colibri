@@ -89,6 +89,18 @@ describe('TlsCertificate', () => {
             expect(line).toContain('Server certificate SHA-256');
         });
 
+        it('calls a self-signed certificate self-signed even when it may not sign others', async () => {
+            const serverOnly = createTestCertificate(dir, 'server-only', { serverOnly: true });
+            await install(serverOnly, serverOnly);
+
+            open().start();
+
+            const [line] = logged(LogLevel.Info);
+            expect(line).toContain('self-signed');
+            expect(line).toContain('Allow self-signed certificate');
+            expect(line).not.toContain('issued by');
+        });
+
         it('names the authority that signed a certificate, and gives no advice for a self-signed one', async () => {
             const authority = createTestCertificate(dir, 'authority', { commonName: 'Colibri Test CA' });
             const signed = createTestCertificate(dir, 'signed', { signedBy: authority });

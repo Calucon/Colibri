@@ -38,6 +38,10 @@ export interface TestCertificateOptions {
     // Signed by this certificate (made by createTestCertificate too), as a certificate authority,
     // rather than by itself.
     signedBy?: TestCertificate;
+    // Marked as a certificate that may not sign others: not a CA, and a key usage without
+    // certificate signing. PowerShell's New-SelfSignedCertificate makes self-signed certificates
+    // like this, as do many guides; openssl's default for one is a CA.
+    serverOnly?: boolean;
 }
 
 const KEY_OPTIONS = {
@@ -45,14 +49,21 @@ const KEY_OPTIONS = {
     rsa: [ '-newkey', 'rsa:2048' ],
 } as const;
 
+const SERVER_ONLY_EXTENSIONS = [
+    '-addext', 'basicConstraints=critical,CA:FALSE',
+    '-addext', 'keyUsage=critical,digitalSignature,keyEncipherment',
+    '-addext', 'extendedKeyUsage=serverAuth',
+] as const;
+
 // Writes <name>.pem and <name>.key into `dir`.
 export const createTestCertificate = function (dir: string, name = 'server', options: TestCertificateOptions = {}): TestCertificate {
-    const { commonName = 'localhost', keyType = 'ec', signedBy } = options;
+    const { commonName = 'localhost', keyType = 'ec', signedBy, serverOnly = false } = options;
     const certPath = path.join(dir, `${name}.pem`);
     const keyPath = path.join(dir, `${name}.key`);
     const request = [
         ...KEY_OPTIONS[keyType], '-nodes', '-keyout', keyPath,
         '-subj', `/CN=${commonName}`, '-addext', 'subjectAltName=DNS:localhost,IP:127.0.0.1',
+        ...(serverOnly ? SERVER_ONLY_EXTENSIONS : []),
     ];
     if (signedBy) {
         const requestPath = path.join(dir, `${name}.csr`);

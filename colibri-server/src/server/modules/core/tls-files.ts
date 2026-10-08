@@ -107,7 +107,10 @@ export const describeCertificate = function (cert: Buffer): CertificateInfo {
         issuer: oneLine(x509.issuer),
         validFrom: x509.validFromDate,
         validTo: x509.validToDate,
-        selfSigned: x509.checkIssued(x509) && x509.verify(x509.publicKey),
+        // Its own name as issuer, and signed with its own key. Not checkIssued(itself), which also
+        // asks whether it may sign certificates, and so says no for a self-signed certificate
+        // marked as a server's only (PowerShell's New-SelfSignedCertificate makes them like that).
+        selfSigned: x509.subject === x509.issuer && x509.verify(x509.publicKey),
     };
 };
 
