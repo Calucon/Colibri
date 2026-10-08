@@ -622,7 +622,8 @@ that client, and from there it can come back for everyone.
 Both clients ask for the models again after every reconnect, as described under
 [Requests](#requests), and handle each answer for an object they hold:
 
-- **The model**: applied, so what other clients changed during the outage arrives.
+- **The model**: applied, so what other clients changed during the outage arrives, unless it
+  shows that the client's own last change was lost (see below).
 - **The bare id**: the server has forgotten the model, after a restart or because the app's last
   client had left, which is what a lone client's outage looks like to the server. The client sends
   its full state again, so the model is back on the server, and clients that join later see it.
@@ -636,6 +637,28 @@ state is not sent (see [Known limits](#known-limits)). colibri-web holds such ch
 the model's answer has arrived. It asks for the whole channel only once every one of its own
 models has its answer, so that this answer includes what it sent in between. What a reconnect does
 not catch up on is listed under [Known limits](#known-limits).
+
+**A change lost at the drop.** A connection that dies without closing, as when the Wi-Fi drops
+out, is noticed only later: by colibri-unity after 2 s without a heartbeat, by Socket.IO after its
+ping timeout, within 45 s with the server's defaults. What a client sends until then is lost, and the
+answer has the value from before. Applied, it would undo the change on the client that made it,
+while no other client ever saw it. So both clients compare the answer with what they sent:
+
+- **colibri-unity** keeps the last 8 values each `[Sync]` member sent. Everything it receives for
+  an object from its re-request until the end of the answers (see [Requests](#requests)), other
+  clients' updates included, is compared member by member with those sent in the 10 s before the
+  client noticed the outage, or since. The value sent last means nothing to do. An earlier one
+  means the last change was lost: the member keeps its value, sends it again once in an ordinary
+  update, and takes nothing more until the answers end. Any other value is applied, and a member
+  missing from an update is left alone. An object that has never sent anything applies everything.
+- **colibri-web** checks only the answer to a registered model's re-request, field by field,
+  against the value the server last showed it and the values it sent since. Of these it keeps the
+  latest 8 up to when it last heard from the server, the first 8 after that, and the newest: the
+  server's latency message arrives every 100 ms, so the connection stopped working shortly after
+  that, and the value the server has was sent around then. An earlier value that the field still
+  had in the 10 s before that time means the last change was lost. The field is not applied, and
+  its local value goes out again in one `model::update` with the changes held back while
+  disconnected, followed by another request with `again: true`. Any other value is applied.
 
 ## REST store
 
@@ -699,6 +722,18 @@ update goes out ahead of the request, so the server has those fields when it ans
 full state is not sent. Its other fields reach the server only when they change, and a client that
 joins in the meantime has its own starting values for them: the template's, or, for an object
 placed in the scene, the scene's.
+
+**A lost change is told from another client's change by its value alone** (see
+[After a reconnect](#after-a-reconnect)). Another client that sets a member or field back during
+the outage, to a value the reconnecting client had in the 10 s before the outage, looks like a lost
+change: the reconnecting client sends its own value over it. colibri-unity judges every update
+that arrives before the end of the answers like that, even one another client made after the
+reconnect. It recognises a lost change only by an earlier value the member sent in those 10 s,
+since it last took one from another client: otherwise the answer is applied and undoes the change,
+and a member whose very first value was lost is not sent again. colibri-web checks only the models
+it registered, and may miss a field that changed more than about 8 times within 100 ms of when it
+last heard from the server. A value sent again can cross a change another client makes right after
+the answers, like any two changes made at the same time.
 
 **Nobody is authenticated.** Any client that can reach the server can join any app under any name,
 and read and change its models and its REST store. The version check is not access control.
