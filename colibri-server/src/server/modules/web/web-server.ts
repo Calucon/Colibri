@@ -1,9 +1,11 @@
 import * as http from 'http';
+import * as https from 'https';
 import * as path from 'path';
 import express from 'express';
 import cors from 'cors';
+import { Subscription } from 'rxjs';
 
-import { Service } from '../core/index.js';
+import { Service, TlsCredentialSource, TlsCredentials } from '../core/index.js';
 import { MAX_FRAME_LENGTH } from '../networking/protocol.js';
 
 // Requests whose application/json body was empty; see hasEmptyJsonBody.
@@ -28,14 +30,17 @@ export class WebServer extends Service {
     }
 
     private app: express.Application;
-    private server!: http.Server;
+    private server!: http.Server | https.Server;
     private isRunning = false;
+    private tlsChanges: Subscription | undefined;
 
+    // `tls`: serve HTTPS (and Socket.IO's WSS) only, with this certificate and each renewed one.
     public constructor(
         private hostname: string,
         private webPort: number,
         private webRoot: string,
-        private baseUrl: string
+        private baseUrl: string,
+        private readonly tls?: TlsCredentialSource
     ) {
         super();
 
@@ -101,17 +106,39 @@ export class WebServer extends Service {
         this.isRunning = true;
 
         // start server
-        this.server = http.createServer(this.app);
+        this.server = this.tls ? this.createHttpsServer(this.tls) : http.createServer(this.app);
         this.server.listen(this.webPort, this.hostname, () => {
             this.logInfo(
-                `Web server listening on ${this.hostname}:${this.webPort}`
+                `Web server listening on ${this.hostname}:${this.webPort}${this.tls ? ', HTTPS and WSS only' : ''}`
             );
         });
 
         return this.server;
     }
 
+    // A renewed certificate is used for every connection from then on. Open ones, a keep-alive
+    // HTTP connection or a Socket.IO WebSocket, keep the certificate they started with.
+    private createHttpsServer(tls: TlsCredentialSource): https.Server {
+        const server = https.createServer(this.secureContextOptions(tls.credentials), this.app);
+        this.tlsChanges = tls.changes$.subscribe(credentials => {
+            // TlsCertificate hands on only credentials it has checked, so this should never throw.
+            // If it does all the same, this keeps the one in use instead of crashing the server.
+            try {
+                server.setSecureContext(this.secureContextOptions(credentials));
+            } catch (err) {
+                this.logError(`Could not switch the web server to the renewed TLS certificate: ${err instanceof Error ? err.message : String(err)}`, false);
+            }
+        });
+        return server;
+    }
+
+    private secureContextOptions(credentials: TlsCredentials): { cert: Buffer; key: Buffer } {
+        return { cert: credentials.cert, key: credentials.key };
+    }
+
     public stop(): void {
+        this.tlsChanges?.unsubscribe();
+        this.tlsChanges = undefined;
         if (this.isRunning) {
             this.server.close();
             this.isRunning = false;

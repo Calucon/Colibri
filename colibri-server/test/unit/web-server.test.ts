@@ -1,16 +1,21 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import { once } from 'events';
 import { mkdtemp, rm, writeFile } from 'fs/promises';
 import * as http from 'http';
+import * as https from 'https';
 import { AddressInfo } from 'net';
 import { tmpdir } from 'os';
 import * as path from 'path';
-import { Subscription } from 'rxjs';
+import * as tls from 'tls';
+import { Subject, Subscription, filter, firstValueFrom } from 'rxjs';
+import { io as connectClient, Socket as ClientSocket } from 'socket.io-client';
 import { gzipSync } from 'zlib';
-import { ConsoleLog, LogLevel, LogMessage, Service } from '../../src/server/modules/core/index.js';
+import { ConsoleLog, LogLevel, LogMessage, Service, TlsCredentials } from '../../src/server/modules/core/index.js';
 import { WebServer } from '../../src/server/modules/web/web-server.js';
 import { RestAPI } from '../../src/server/modules/web/rest-api.js';
-import { MAX_FRAME_LENGTH } from '../../src/server/modules/networking/protocol.js';
+import { SocketIOServer } from '../../src/server/modules/networking/socket-io-server.js';
+import { MAX_FRAME_LENGTH, PROTOCOL_VERSION } from '../../src/server/modules/networking/protocol.js';
+import { TestCertificate, createTestCertificate } from '../tls-test-certificate.js';
 
 // Unlike rest-api.test.ts, which drives the router directly, these go through the real
 // express app over HTTP - body parser, middleware order and error handling included.
@@ -464,5 +469,167 @@ describe('WebServer startup', () => {
             webServer.stop();
             await rm(webRoot, { recursive: true, force: true });
         }
+    });
+});
+
+// With TLS_CERT and TLS_KEY set, the admin UI, the REST API and Socket.IO are served over HTTPS
+// and WSS, and only so.
+describe('WebServer over HTTPS', () => {
+    let fixtures: string;
+    let first: TestCertificate;
+    let second: TestCertificate;
+
+    let webRoot: string;
+    let tlsChanges: Subject<TlsCredentials>;
+    let webServer: WebServer;
+    let socketIo: SocketIOServer;
+    let server: http.Server;
+    let port: number;
+    let logs: LogMessage[];
+    let logSubscription: Subscription;
+    let clients: ClientSocket[];
+    let agents: https.Agent[];
+
+    // Either certificate is trusted, so a connection succeeds whichever one it is served.
+    const ca = (): Buffer[] => [ first.cert, second.cert ];
+
+    interface Answer { status: number; body: string; fingerprint: string | undefined; socket: tls.TLSSocket }
+
+    const get = function (urlPath: string, agent?: https.Agent): Promise<Answer> {
+        return new Promise((resolve, reject) => {
+            const req = https.get({ host: '127.0.0.1', port, path: urlPath, servername: 'localhost', ca: ca(), agent }, res => {
+                const socket = res.socket as tls.TLSSocket;
+                const fingerprint = socket.getPeerX509Certificate()?.fingerprint256;
+                let body = '';
+                res.setEncoding('utf8');
+                res.on('data', chunk => (body += chunk));
+                res.on('end', () => resolve({ status: res.statusCode ?? 0, body, fingerprint, socket }));
+            });
+            req.on('error', reject);
+        });
+    };
+
+    // The certificate a new connection is served.
+    const servedFingerprint = function (): Promise<string | undefined> {
+        return new Promise((resolve, reject) => {
+            const socket = tls.connect({ host: '127.0.0.1', port, servername: 'localhost', ca: ca() }, () => {
+                resolve(socket.getPeerX509Certificate()?.fingerprint256);
+                socket.end();
+            });
+            socket.on('error', reject);
+        });
+    };
+
+    const connectSocketIo = async function (transport: 'websocket' | 'polling'): Promise<ClientSocket> {
+        const socket = connectClient(`https://localhost:${port}`, {
+            query: { app: 'tls-test', version: PROTOCOL_VERSION },
+            transports: [ transport ],
+            reconnection: false,
+            forceNew: true,
+            ca: ca(),
+        });
+        clients.push(socket);
+        await new Promise<void>((resolve, reject) => {
+            socket.once('connect', resolve);
+            socket.once('connect_error', reject);
+        });
+        return socket;
+    };
+
+    beforeAll(async () => {
+        fixtures = await mkdtemp(path.join(tmpdir(), 'colibri-web-server-tls-'));
+        first = createTestCertificate(fixtures, 'first');
+        second = createTestCertificate(fixtures, 'second');
+    });
+
+    afterAll(async () => {
+        await rm(fixtures, { recursive: true, force: true });
+    });
+
+    beforeEach(async () => {
+        logs = [];
+        logSubscription = Service.output$.subscribe(log => logs.push(log));
+        clients = [];
+        agents = [];
+
+        webRoot = await mkdtemp(path.join(tmpdir(), 'colibri-web-server-tls-root-'));
+        await writeFile(path.join(webRoot, 'index.html'), '<!doctype html><title>Colibri</title>', 'utf8');
+
+        tlsChanges = new Subject<TlsCredentials>();
+        webServer = new WebServer('127.0.0.1', 0, webRoot, '', { credentials: { cert: first.cert, key: first.key }, changes$: tlsChanges });
+        server = webServer.start();
+        socketIo = new SocketIOServer();
+        socketIo.start(server);
+        await once(server, 'listening');
+        port = (server.address() as AddressInfo).port;
+    });
+
+    afterEach(async () => {
+        logSubscription.unsubscribe();
+        for (const client of clients) client.disconnect();
+        for (const agent of agents) agent.destroy();
+        const closed = once(server, 'close');
+        // Closes the web server too.
+        socketIo.stop();
+        webServer.stop();
+        server.closeAllConnections();
+        await closed;
+        await rm(webRoot, { recursive: true, force: true });
+    });
+
+    it('serves the admin UI and the REST API with the certificate', async () => {
+        const page = await get('/log');
+        expect(page.status).toBe(200);
+        expect(page.body).toContain('<title>Colibri</title>');
+        expect(page.fingerprint).toBe(first.fingerprint256);
+
+        const api = await get('/api/nope');
+        expect(api.status).toBe(404);
+        expect(JSON.parse(api.body)).toEqual({ error: 'No API route for GET /api/nope' });
+    });
+
+    it('does not serve unencrypted HTTP', async () => {
+        await expect(fetch(`http://127.0.0.1:${port}/`)).rejects.toThrow();
+    });
+
+    it('says it serves HTTPS and WSS only', () => {
+        expect(logs.map(l => l.message)).toContain('Web server listening on 127.0.0.1:0, HTTPS and WSS only');
+    });
+
+    it.each([ 'websocket', 'polling' ] as const)('carries Socket.IO over %s', async (transport) => {
+        const socket = await connectSocketIo(transport);
+
+        expect(socket.connected).toBe(true);
+    });
+
+    it('serves a renewed certificate to new connections, and keeps open ones working', async () => {
+        const agent = new https.Agent({ keepAlive: true, maxSockets: 1 });
+        agents.push(agent);
+        const before = await get('/log', agent);
+        expect(before.fingerprint).toBe(first.fingerprint256);
+        const webSocket = await connectSocketIo('websocket');
+
+        tlsChanges.next({ cert: second.cert, key: second.key });
+
+        expect(await servedFingerprint()).toBe(second.fingerprint256);
+
+        // The same keep-alive connection, still on the TLS session it started with. (Node does
+        // not report the peer's certificate again on a reused connection, so that is not checked.)
+        const after = await get('/log', agent);
+        expect(after.socket).toBe(before.socket);
+        expect(after.status).toBe(200);
+
+        // The WebSocket, too.
+        const received = firstValueFrom(socketIo.messages$.pipe(filter(m => m.channel === 'after-reload')));
+        webSocket.emit('after-reload', { command: 'ping', payload: {} });
+        expect((await received).origin?.id).toBe(webSocket.id);
+    });
+
+    it('keeps the certificate it has when it cannot switch to a renewed one, and says so', async () => {
+        tlsChanges.next({ cert: Buffer.from('not a certificate'), key: second.key });
+
+        expect(logs.filter(l => l.level === LogLevel.Error).map(l => l.message))
+            .toEqual([ expect.stringContaining('Could not switch the web server to the renewed TLS certificate') ]);
+        expect(await servedFingerprint()).toBe(first.fingerprint256);
     });
 });
