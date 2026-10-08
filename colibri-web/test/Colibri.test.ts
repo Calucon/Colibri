@@ -2232,6 +2232,34 @@ describe('sending again a change lost in a connection that died', () => {
         expect(sentInOrder()).toEqual([['model::request', {}]]);
     });
 
+    // delete() stops this client sending the model's changes, a lost one sent again among them.
+    it('sends nothing for a model whose delete() was called before the answers are over', async () => {
+        const { models$, pair } = await connectedWithOwnPair();
+        await sendAndDie(pair, 'A2');
+
+        deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A', b: 'B' } });
+        pair.delete();
+        endOfAnswers();
+        await settle();
+
+        expect(latest(models$)).toEqual([pair]);
+        expect(sentInOrder()).toEqual([['model::request', {}]]);
+    });
+
+    it('sends nothing for a model whose delete() was called before the answer came', async () => {
+        const { models$, pair } = await connectedWithOwnPair();
+        await sendAndDie(pair, 'A2');
+
+        pair.delete();
+        deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A', b: 'B' } });
+        endOfAnswers();
+        await settle();
+
+        expect(sentInOrder()).toEqual([['model::request', {}]]);
+        expect(latest(models$)).toEqual([pair]);
+        expect(pair.a).toBe('A');
+    });
+
     it('sends it again after another reconnect when the update sending it again was lost too', async () => {
         const { pair } = await connectedWithOwnPair();
         await sendAndDie(pair, 'A2');

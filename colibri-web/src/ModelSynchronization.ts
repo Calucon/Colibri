@@ -372,14 +372,24 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
     const takeAnswer = (id: string, asker: Colibri, model: T | undefined, modelData: Partial<T>) => {
         if (model) answered.add(model);
 
+        // A model whose delete() was called since it was asked for: that ended what it sends, so it
+        // takes what comes like a model another client registered, and sends nothing.
+        if (model && !ownModels.has(model)) {
+            askedAfterOutage.delete(id);
+            awaitingAnswer.delete(id);
+            endConfirmation(id);
+            if (!isBare(modelData)) applyUpdate(model, modelData);
+            catchUpOnceAnswered();
+            return;
+        }
+
         if (!model || isBare(modelData)) {
             askedAfterOutage.delete(id);
             awaitingAnswer.delete(id);
             endConfirmation(id);
             if (model) {
                 heldChanges.delete(model);
-                // Not for a model whose delete() was called since: that ended what it sends.
-                if (ownModels.has(model)) sendUpdate(asker, model, model.toJson());
+                sendUpdate(asker, model, model.toJson());
             } else if (!isBare(modelData)) {
                 applyUpdate(model, modelData);
             }
@@ -425,6 +435,8 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
             if (!asker || !model) continue;
 
             awaitingAnswer.delete(id);
+            // delete() was called on it since an update for it came: that ended what it sends.
+            if (!ownModels.has(model)) continue;
             const held = releaseHeldChanges(model);
             // What the server showed for those is what it still holds. Should the value sent again
             // below be lost as well, in a connection that dies soon after, the next answer is told by
