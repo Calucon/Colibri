@@ -108,6 +108,38 @@ namespace HCIKonstanz.Colibri.Tests
         }
 
         /// <summary>
+        /// The case this is for: switched on long ago, switched off at the drop. Only the switch-off
+        /// was sent in the window, and the answer holding the value from before it means it was lost.
+        /// </summary>
+        [Test]
+        public void AfterAQuietSpellTheValueHeldWhenTheWindowBeganCounts()
+        {
+            var sent = new SentValues();
+            sent.Remember(true, 100);
+            sent.Remember(false, 200);
+
+            Assert.That(sent.Judge(Wire("true"), since: 190), Is.EqualTo(SentValues.Verdict.Lost));
+            Assert.That(sent.Judge(Wire("false"), since: 190), Is.EqualTo(SentValues.Verdict.Arrived));
+        }
+
+        /// <summary>
+        /// Pushed out of the ring by values sent in the window, the value from before them still
+        /// counts: it is what the member held when the window began, or one it sent in the window.
+        /// </summary>
+        [Test]
+        public void AValuePushedOutOfTheRingCountsAsTheOneHeldBeforeTheOldestKept()
+        {
+            var sent = new SentValues();
+            sent.Remember("held for a minute", 100);
+            for (var i = 0; i < SentValues.Capacity; i++)
+                sent.Remember($"moved {i}", 200 + i * 0.1);
+
+            Assert.That(sent.Judge(Wire("\"held for a minute\""), since: 190), Is.EqualTo(SentValues.Verdict.Lost));
+            Assert.That(sent.Judge(Wire("\"moved 0\""), since: 190), Is.EqualTo(SentValues.Verdict.Lost));
+            Assert.That(sent.Judge(Wire("\"elsewhere\""), since: 190), Is.EqualTo(SentValues.Verdict.ChangedElsewhere));
+        }
+
+        /// <summary>
         /// Once the member has taken a value from elsewhere, what it sent before says nothing about
         /// the server any more. The value it took does: the server held it, and holding it still
         /// after the member's next change means that change was lost.
@@ -129,6 +161,45 @@ namespace HCIKonstanz.Colibri.Tests
             Assert.That(sent.Judge(Wire("\"a\""), since: 190), Is.EqualTo(SentValues.Verdict.ChangedElsewhere),
                 "A value sent before the one taken was set back by someone else");
             Assert.That(sent.Judge(Wire("\"b\""), Always), Is.EqualTo(SentValues.Verdict.ChangedElsewhere));
+        }
+
+        /// <summary>A member that takes a value before it ever sends one has it all the same.</summary>
+        [Test]
+        public void AValueTakenBeforeTheFirstSendCounts()
+        {
+            var sent = new SentValues();
+            sent.TookFromElsewhere(Wire("[0,-3,0]"));
+            sent.Remember(new Vector3(7, 0, 7).ToJson(), 200);
+
+            Assert.That(sent.Judge(Wire("[0,-3,0]"), since: 190), Is.EqualTo(SentValues.Verdict.Lost));
+        }
+
+        /// <summary>
+        /// The residual: a member whose very first value is lost has held nothing before it, so any
+        /// answer is someone else's.
+        /// </summary>
+        [Test]
+        public void BeforeTheFirstValueNothingWasHeld()
+        {
+            var sent = new SentValues();
+            sent.Remember("first", 200);
+
+            Assert.That(sent.Judge(Wire("\"\""), since: 190), Is.EqualTo(SentValues.Verdict.ChangedElsewhere));
+        }
+
+        /// <summary>
+        /// The trade-off, accepted: another client that sets the member back during the outage, to
+        /// the value it held when the window began, looks exactly like the change after it being
+        /// lost, and is undone.
+        /// </summary>
+        [Test]
+        public void AnotherClientSettingTheValueHeldWhenTheWindowBeganBackLooksLikeALostChange()
+        {
+            var sent = new SentValues();
+            sent.Remember(true, 100);
+            sent.Remember(false, 200); // arrived; then another client set it back to true
+
+            Assert.That(sent.Judge(Wire("true"), since: 190), Is.EqualTo(SentValues.Verdict.Lost));
         }
 
 

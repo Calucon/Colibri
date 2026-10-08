@@ -535,12 +535,100 @@ namespace HCIKonstanz.Colibri.Tests
             var model = SpawnModelThatSent("first");
             Change(model, "second", 101);
             model.OnModelUpdate(Answer(model, "theirs"));
+            Change(model, "mine", 102);
 
             Sync.RequestModelsAgain(disconnectedAt: 103);
             model.OnModelUpdate(Answer(model, "first"));
 
             Assert.That(model.Label, Is.EqualTo("first"));
             Assert.That(SentAt(model, 104), Is.Null);
+        }
+
+        /// <summary>
+        /// The case the window alone missed: a member left alone for longer than the window, then
+        /// changed once at the drop - an object switched off after a minute switched on. Nothing but
+        /// the lost value was sent in the window, and the answer holds the value the member had held
+        /// all along: that change was lost.
+        /// </summary>
+        [Test]
+        public void AChangeAfterAQuietSpellLostWithTheConnectionIsKeptAndSentAgain()
+        {
+            var model = SpawnModelThatSent("held for a while");
+            Change(model, "lost at the drop", 200);
+
+            const double outage = 202;
+            Assert.That(100, Is.LessThan(outage - SentValues.WindowSeconds), "Precondition: the first value was sent before the window");
+            Sync.RequestModelsAgain(disconnectedAt: outage);
+            model.OnModelUpdate(Answer(model, "held for a while"));
+
+            Assert.That(model.Label, Is.EqualTo("lost at the drop"), "The answer put the value from before the quiet spell back");
+            var sent = SentAt(model, 203);
+            Assert.That(sent, Is.Not.Null, "The value that was lost was not sent again");
+            Assert.That(Members(sent), Is.EqualTo(new[] { "id", "label" }), $"Only what was lost goes out again: {sent}");
+            Assert.That((string)sent["label"], Is.EqualTo("lost at the drop"));
+        }
+
+        /// <summary>
+        /// The same for a value this object never sent: the server's, applied when the object came
+        /// up, and held ever since.
+        /// </summary>
+        [Test]
+        public void AChangeToTheStateTheObjectCameUpWithLostWithTheConnectionIsKeptAndSentAgain()
+        {
+            var model = SpawnModel();
+            model.OnModelUpdate(Answer(model, "the server's", 2));
+            Change(model, "lost at the drop", 200);
+
+            Sync.RequestModelsAgain(disconnectedAt: 202);
+            model.OnModelUpdate(Answer(model, "the server's", 2));
+
+            Assert.That(model.Label, Is.EqualTo("lost at the drop"), "The answer put the state the object came up with back");
+            var sent = SentAt(model, 203);
+            Assert.That(sent, Is.Not.Null, "The value that was lost was not sent again");
+            Assert.That(Members(sent), Is.EqualTo(new[] { "id", "label" }), $"Only what was lost goes out again: {sent}");
+        }
+
+        /// <summary>
+        /// Taking another client's value forgets what the member sent before, but not the value
+        /// taken: the first change after it, lost at the drop, is recognised by it.
+        /// </summary>
+        [Test]
+        public void TheFirstChangeAfterAnotherClientsValueLostWithTheConnectionIsKeptAndSentAgain()
+        {
+            var model = SpawnModelThatSent("mine");
+            model.OnModelUpdate(Relayed(model, "label", "theirs"));
+            Assert.That(model.Label, Is.EqualTo("theirs"), "Precondition: the other client's value is applied");
+            Change(model, "lost at the drop", 101);
+
+            Sync.RequestModelsAgain(disconnectedAt: 103);
+            model.OnModelUpdate(Answer(model, "theirs"));
+
+            Assert.That(model.Label, Is.EqualTo("lost at the drop"), "The answer put the other client's value back");
+            var sent = SentAt(model, 104);
+            Assert.That(sent, Is.Not.Null, "The value that was lost was not sent again");
+            Assert.That((string)sent["label"], Is.EqualTo("lost at the drop"));
+        }
+
+        /// <summary>
+        /// The value held when the window began counts, but nothing else does: after a quiet spell, a
+        /// value this member never held is another client's, and still wins over the one lost.
+        /// </summary>
+        [Test]
+        public void AValueThisMemberNeverHeldStillWinsAfterAQuietSpell()
+        {
+            var model = SpawnModelThatSent("held for a while");
+            model.OnModelUpdate(Relayed(model, "count", 4));
+            Change(model, "lost at the drop", 200);
+            model.Count = 5;
+            Poll(model);
+            Assert.That(SentAt(model, 200.5), Is.Not.Null);
+
+            Sync.RequestModelsAgain(disconnectedAt: 202);
+            model.OnModelUpdate(Answer(model, "theirs", 6));
+
+            Assert.That(model.Label, Is.EqualTo("theirs"), "The other client's label, set during the outage, was not applied");
+            Assert.That(model.Count, Is.EqualTo(6), "The other client's count, set during the outage, was not applied");
+            Assert.That(SentAt(model, 203), Is.Null);
         }
     }
 }
