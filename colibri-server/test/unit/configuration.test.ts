@@ -184,8 +184,9 @@ describe('Config', () => {
                 .rejects.toThrow('has to name the PEM file itself');
         });
 
-        // root reads any file, so there is nothing to refuse when the tests run as root.
-        it.skipIf(process.getuid?.() === 0)('refuse to start with a key the server cannot read, naming its uid', async () => {
+        // root reads any file, so there is nothing to refuse when the tests run as root. Nor on
+        // Windows, where chmod 0o000 only sets the read-only attribute and the file stays readable.
+        it.skipIf(process.getuid?.() === 0 || process.platform === 'win32')('refuse to start with a key the server cannot read, naming its uid', async () => {
             const locked = path.join(dir, 'locked');
             await mkdir(locked, { recursive: true });
             const keyPath = path.join(locked, 'server.key');
