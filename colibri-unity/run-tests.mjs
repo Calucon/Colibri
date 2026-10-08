@@ -6,6 +6,11 @@
  *   node colibri-unity/run-tests.mjs                 both suites
  *   node colibri-unity/run-tests.mjs --editmode      unit tests only, no server needed
  *   node colibri-unity/run-tests.mjs --playmode      end-to-end only
+ *   ... --stripping                                  also build a Release IL2CPP player with
+ *                                                    Managed Stripping High and check that every
+ *                                                    [Sync] member survives the linker (off by
+ *                                                    default; skipped with a notice when the
+ *                                                    IL2CPP module is not installed)
  *
  * Environment (the same contract colibri-web's e2e suite uses):
  *   COLIBRI_E2E_SERVER     host of a server to use instead of starting one. Setting this means
@@ -20,7 +25,7 @@
  * poor way to repay them for it.
  */
 import { execFile, spawn } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs';
 import * as net from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -41,6 +46,7 @@ const platforms = [];
 if (process.argv.includes('--editmode')) platforms.push('EditMode');
 if (process.argv.includes('--playmode')) platforms.push('PlayMode');
 if (platforms.length === 0) platforms.push('EditMode', 'PlayMode');
+const stripping = process.argv.includes('--stripping');
 
 
 /*
@@ -201,6 +207,112 @@ const runUnity = (unity, platform) =>
 
 
 /*
+ *  The stripping check
+ *
+ *  [Sync] members are only reached through reflection, and an Editor never strips, so only a
+ *  stripped player can show whether they survive the linker - with their [Sync], which is how
+ *  SyncBehaviour finds them. Assets/StrippingCheck has the player's self-check and the build.
+ */
+
+/** The IL2CPP variations of this Editor's desktop player, or null where that module is missing. */
+const il2cppVariations = unity => {
+    const editor = path.dirname(unity);
+    const candidates = {
+        win32: [path.join(editor, 'Data', 'PlaybackEngines', 'windowsstandalonesupport', 'Variations')],
+        linux: [path.join(editor, 'Data', 'PlaybackEngines', 'LinuxStandaloneSupport', 'Variations')],
+        // Unity.app/Contents/MacOS/Unity: Hub puts modules beside Unity.app, older installs inside it.
+        darwin: [
+            path.join(editor, '..', '..', '..', 'PlaybackEngines', 'MacStandaloneSupport', 'Variations'),
+            path.join(editor, '..', 'PlaybackEngines', 'MacStandaloneSupport', 'Variations'),
+        ],
+    }[process.platform] ?? [];
+    return candidates.find(dir => existsSync(dir) && readdirSync(dir).some(entry => entry.includes('il2cpp'))) ?? null;
+};
+
+const strippingPlayerPath = () => {
+    const dir = path.join(RESULTS_DIR, 'StrippingCheck');
+    return {
+        win32: path.join(dir, 'StrippingCheck.exe'),
+        linux: path.join(dir, 'StrippingCheck.x86_64'),
+        darwin: path.join(dir, 'StrippingCheck.app'),
+    }[process.platform];
+};
+
+/** On macOS the player is a bundle; what runs is the one file in Contents/MacOS. */
+const strippingPlayerExecutable = player => {
+    if (process.platform !== 'darwin') return player;
+    const macos = path.join(player, 'Contents', 'MacOS');
+    return path.join(macos, readdirSync(macos)[0]);
+};
+
+const runProcess = (file, args, options = {}) =>
+    new Promise(resolve => {
+        const child = spawn(file, args, { stdio: 'inherit', ...options });
+        child.once('close', code => resolve(code));
+    });
+
+const runStrippingCheck = async unity => {
+    const name = 'Stripping';
+    if (!il2cppVariations(unity)) {
+        console.log(
+            `\n${name}: skipped - this Editor has no IL2CPP build support for ${process.platform} ` +
+                '(Unity Hub > Installs > Add modules > the IL2CPP module for this platform).'
+        );
+        return { platform: name, ok: true, skipped: true };
+    }
+
+    const player = strippingPlayerPath();
+    const buildLog = path.join(RESULTS_DIR, 'StrippingCheck-build.log');
+    const playerLog = path.join(RESULTS_DIR, 'StrippingCheck-player.log');
+
+    // A player build rewrites ProjectSettings (the Standalone backend and stripping level the
+    // build sets and puts back, Unity Connect's settings), which would show up as an unrelated
+    // diff. Put every file there back exactly as it was.
+    const settingsDir = path.join(PROJECT_DIR, 'ProjectSettings');
+    const settings = new Map(
+        readdirSync(settingsDir, { withFileTypes: true })
+            .filter(entry => entry.isFile())
+            .map(entry => [entry.name, readFileSync(path.join(settingsDir, entry.name))])
+    );
+
+    console.log('\nBuilding the stripping-check player (Release, IL2CPP, Managed Stripping High)...');
+    let buildCode;
+    try {
+        buildCode = await runProcess(
+            unity,
+            ['-batchmode', '-nographics', '-projectPath', PROJECT_DIR, '-executeMethod',
+                'HCIKonstanz.Colibri.StrippingCheck.Editor.StrippingCheckBuild.Build', '-logFile', buildLog],
+            { env: { ...process.env, COLIBRI_STRIPPING_PLAYER: player } }
+        );
+    } finally {
+        for (const [file, contents] of settings) {
+            const target = path.join(settingsDir, file);
+            if (!existsSync(target) || !readFileSync(target).equals(contents)) writeFileSync(target, contents);
+        }
+    }
+    if (buildCode !== 0 || !existsSync(player)) {
+        console.log(`\n${name}: the player did not build (exit ${buildCode}) - see ${buildLog}`);
+        return { platform: name, ok: false };
+    }
+
+    console.log('Running it...');
+    const code = await runProcess(
+        strippingPlayerExecutable(player),
+        ['-batchmode', '-nographics', '-colibriStrippingCheck', '-logFile', playerLog],
+        // Its own output goes to the log; what matters is the exit code and the result lines.
+        { timeout: 120_000, stdio: 'ignore' }
+    );
+    const lines = existsSync(playerLog)
+        ? readFileSync(playerLog, 'utf8').split(/\r?\n/).filter(line => line.startsWith('[StrippingCheck]'))
+        : [];
+    console.log(`\n${name}: ${code === 0 ? 'passed' : `FAILED (exit ${code})`}`);
+    for (const line of lines) console.log(`  ${line}`);
+    if (lines.length === 0) console.log(`  The player logged no result - see ${playerLog}`);
+    return { platform: name, ok: code === 0 };
+};
+
+
+/*
  *  Results
  */
 
@@ -266,6 +378,9 @@ const main = async () => {
     } finally {
         await stopServer();
     }
+
+    // No server needed: the player checks itself and exits.
+    if (stripping) summaries.push(await runStrippingCheck(unity));
 
     const ok = summaries.every(summary => summary.ok);
     console.log(ok ? '\nAll suites passed.' : '\nSuite failed.');
