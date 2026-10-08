@@ -92,12 +92,14 @@ namespace HCIKonstanz.Colibri.Synchronization
                 _connection.OnDisconnected += OnDisconnected;
 
                 // The answers of a round still open were asked for on the connection replaced
-                // here, and never come on this one.
+                // here, and never come on this one; nor does the end of the deletes in question,
+                // which went with its queue.
                 if (_reconnectRound != null)
                 {
                     _reconnectRound.IsOver = true;
                     _reconnectRound = null;
                 }
+                ForgetUnreadDeletes();
 
                 // Nor has this one heard from the server yet, and it makes no requests again at
                 // its first connection.
@@ -136,8 +138,12 @@ namespace HCIKonstanz.Colibri.Synchronization
         /// </para>
         /// <para>
         /// The server has read those deletes once the answers to the reconnect's requests are in
-        /// (see <see cref="ReconnectRound"/>). If the link drops again before, they may have gone
-        /// into that link as well, and the deletes go out again counted from the earlier outage.
+        /// (see <see cref="ReconnectRound"/>), and the ones made during the outage, or while the
+        /// answers come in, are no different. If the link drops again before, they may have gone
+        /// into that link as well, and all of them go out again, however old: like a delete made
+        /// during the outage, which goes out however old, the server may never have had them. A
+        /// minute is all LocallyDeletedModels remembers, and an outage at the edge of Wi-Fi range
+        /// can last longer.
         /// </para>
         /// </remarks>
         private static void OnDisconnected() => OnDisconnected(Time.unscaledTimeAsDouble);
@@ -148,26 +154,55 @@ namespace HCIKonstanz.Colibri.Synchronization
         {
             _disconnectedAt = now;
 
-            _deletesSince = LastHeardAt(now) - 1;
-            if (_reconnectRound != null)
-                _deletesSince = Math.Min(_deletesSince, _reconnectRound.DeletesSince);
+            var madeAtTheDrop = LocallyDeletedModels.Since(LastHeardAt(now) - 1, now);
 
             // Until the requests go out again: see _heardAtHeld.
             _heardAtHeld = true;
 
-            var deletes = LocallyDeletedModels.Since(_deletesSince, now);
-            if (deletes == null)
-                return;
+            // From here until the answers are in, every delete sent is one the server may not have
+            // read.
+            _unreadDeletes ??= new List<(string Channel, string Id)>();
+            if (madeAtTheDrop != null)
+            {
+                foreach (var (channel, id) in madeAtTheDrop)
+                    NoteUnreadDelete(channel, id);
+            }
 
-            foreach (var (channel, id) in deletes)
-                SendModelDelete(channel, id);
+            foreach (var (channel, id) in _unreadDeletes)
+                SendCommand(channel, "model::delete", new JObject { { "id", id } });
         }
 
         /// <summary>
-        /// From when the deletes made were sent again at the outage this client noticed last, on
-        /// SyncTicker's clock; positive infinity before it ever has. The next round takes it over.
+        /// The deletes the server may not have read, oldest first: from when this client notices an
+        /// outage, those it sends again then and every one it sends afterwards, until the answers to
+        /// the requests made again after the reconnect are in (see <see cref="ReconnectRound"/>).
+        /// Null while none is in question.
         /// </summary>
-        private static double _deletesSince = double.PositiveInfinity;
+        private static List<(string Channel, string Id)> _unreadDeletes;
+        private static readonly HashSet<(string Channel, string Id)> _unreadDeleteKeys = new HashSet<(string Channel, string Id)>();
+
+        private static void NoteUnreadDelete(string channel, string id)
+        {
+            if (_unreadDeletes != null && _unreadDeleteKeys.Add((channel, id)))
+                _unreadDeletes.Add((channel, id));
+        }
+
+        /// <summary>
+        /// For a model asked for afresh: the id is in use again on the server, and a delete of it
+        /// sent once more would remove the object this client has now, there and on every other
+        /// client.
+        /// </summary>
+        private static void ForgetUnreadDelete(string channel, string id)
+        {
+            if (_unreadDeletes != null && _unreadDeleteKeys.Remove((channel, id)))
+                _unreadDeletes.Remove((channel, id));
+        }
+
+        private static void ForgetUnreadDeletes()
+        {
+            _unreadDeletes = null;
+            _unreadDeleteKeys.Clear();
+        }
 
         /// <summary>
         /// When this client last heard from the server, on SyncTicker's clock, how many times the
@@ -268,24 +303,13 @@ namespace HCIKonstanz.Colibri.Synchronization
             /// </summary>
             internal readonly double DisconnectedAt;
 
-            /// <summary>
-            /// From when the deletes made were sent again ahead of the requests, on SyncTicker's
-            /// clock (see OnDisconnected): like <see cref="DisconnectedAt"/>, counted from an earlier
-            /// outage if the link dropped again before that one's round was over.
-            /// </summary>
-            internal readonly double DeletesSince;
-
             /// <summary>The id the last request asks for, whose answer ends the round.</summary>
             internal readonly string EndMarkerId = Guid.NewGuid().ToString();
 
             /// <summary>Whether the answers are all in.</summary>
             internal bool IsOver;
 
-            internal ReconnectRound(double disconnectedAt, double deletesSince)
-            {
-                DisconnectedAt = disconnectedAt;
-                DeletesSince = deletesSince;
-            }
+            internal ReconnectRound(double disconnectedAt) => DisconnectedAt = disconnectedAt;
         }
 
         /// <summary>
@@ -386,7 +410,7 @@ namespace HCIKonstanz.Colibri.Synchronization
             // the last reconnect. A change lost at the drop before that is still in question, so
             // the new round counts from that earlier outage. Counted from this one, the lost change
             // could lie before the window, and the answer, which still holds the value from before
-            // it, would be applied after all. OnDisconnected has counted the deletes from it too.
+            // it, would be applied after all. OnDisconnected has sent that one's deletes again too.
             if (_reconnectRound != null)
             {
                 disconnectedAt = Math.Min(disconnectedAt, _reconnectRound.DisconnectedAt);
@@ -398,7 +422,7 @@ namespace HCIKonstanz.Colibri.Synchronization
             // has read the deletes sent again ahead of the requests. And only an answered round
             // ends: one left open would carry its outage over to a round much later, which would
             // judge as lost what other clients changed in between.
-            var round = new ReconnectRound(disconnectedAt, _deletesSince);
+            var round = new ReconnectRound(disconnectedAt);
             _reconnectRound = round;
             SendCommand(ReconnectRoundChannel, "model::request", new JObject { { "id", round.EndMarkerId }, { "again", true } });
 
@@ -429,6 +453,11 @@ namespace HCIKonstanz.Colibri.Synchronization
 
             round.IsOver = true;
             _reconnectRound = null;
+
+            // The server has read them, with everything queued ahead of the request. One sent
+            // after it may still be on its way, but from here on, like any other, it goes out
+            // again only if made around when the server was last heard from (see OnDisconnected).
+            ForgetUnreadDeletes();
         }
 
         /*
@@ -775,7 +804,11 @@ namespace HCIKonstanz.Colibri.Synchronization
         public static void Send(string channel, JToken data) => SendCommand(channel, "broadcast::json", data);
 
         public static void SendModelUpdate(string channel, JObject data) => SendCommand(channel, "model::update", data);
-        public static void SendModelDelete(string channel, string id) => SendCommand(channel, "model::delete", new JObject { { "id", id } });
+        public static void SendModelDelete(string channel, string id)
+        {
+            NoteUnreadDelete(channel, id);
+            SendCommand(channel, "model::delete", new JObject { { "id", id } });
+        }
 
 
 
@@ -832,7 +865,7 @@ namespace HCIKonstanz.Colibri.Synchronization
             // on running since, its round of answers, which no object of this session is part of,
             // and when its connection last heard from the server, as last asked and held.
             _disconnectedAt = double.NegativeInfinity;
-            _deletesSince = double.PositiveInfinity;
+            ForgetUnreadDeletes();
             _reconnectRound = null;
             _heardStamps = 0;
             _heardAt = double.NegativeInfinity;
@@ -976,6 +1009,7 @@ namespace HCIKonstanz.Colibri.Synchronization
             Action<ReconnectRound> requestedAgain)
         {
             AddListener(channel, _modelUpdateListeners, listener, track: false, fetchId: fetchInitialStateId, requestedAgain: requestedAgain);
+            ForgetUnreadDelete(channel, fetchInitialStateId);
             SendCommand(channel, "model::request", new JObject { { "id", fetchInitialStateId } });
         }
 

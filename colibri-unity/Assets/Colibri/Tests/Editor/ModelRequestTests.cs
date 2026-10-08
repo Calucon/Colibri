@@ -259,6 +259,81 @@ namespace HCIKonstanz.Colibri.Tests
         }
 
         /// <summary>
+        /// The same after an outage of more than a minute, longer than a delete is remembered: the
+        /// server may never have had it, and it goes out once more however old, as one made during
+        /// the outage goes out however old. Left out, it was never sent again, and the next
+        /// reconnect brought the object back for everyone.
+        /// </summary>
+        [Test]
+        public void ADeleteSentAgainGoesOutOnceMoreAfterALongOutageWhenTheLinkDropsAgain()
+        {
+            var channel = NewChannel();
+            Listen(channel, _ => { });
+            HeardFromTheServerAt(200);
+            LocallyDeletedModels.Remember(channel, "destroyed at the drop", 200.5);
+            Sync.OnDisconnected(now: 203);
+            Assert.That(283 - 200.5, Is.GreaterThan(LocallyDeletedModels.WindowSeconds), "Precondition: the delete is no longer remembered at the second drop");
+
+            HeardFromTheServerAt(280);
+            Sync.RequestModelsAgain();
+            HeardFromTheServerAt(280.5);
+            Sync.OnDisconnected(now: 283);
+
+            Assert.That(Deletes(channel), Is.EqualTo(new[] { "destroyed at the drop", "destroyed at the drop" }));
+        }
+
+        /// <summary>
+        /// A delete made during the outage, or while the answers come in, goes out once more too
+        /// when the link drops again before they are all in: the server may not have read it
+        /// either, however old it is.
+        /// </summary>
+        [Test]
+        public void ADeleteMadeSinceTheOutageGoesOutOnceMoreWhenTheLinkDropsAgainBeforeTheAnswers()
+        {
+            var channel = NewChannel();
+            Listen(channel, _ => { });
+            HeardFromTheServerAt(200);
+            Sync.OnDisconnected(now: 203);
+            Delete(channel, "destroyed during the outage", 210);
+
+            HeardFromTheServerAt(280);
+            Sync.RequestModelsAgain();
+            Delete(channel, "destroyed while the answers come in", 280.2);
+            Sync.OnDisconnected(now: 283);
+
+            Assert.That(Deletes(channel), Is.EqualTo(new[]
+            {
+                "destroyed during the outage",
+                "destroyed while the answers come in",
+                "destroyed during the outage",
+                "destroyed while the answers come in",
+            }));
+        }
+
+        /// <summary>
+        /// Not one whose object this client has created again since, under the same id, as a
+        /// scene loaded again does: asked for afresh, the id is in use again on the server, and the
+        /// delete sent once more would remove the object there and on every other client.
+        /// </summary>
+        [Test]
+        public void ADeleteWhoseObjectWasCreatedAgainDoesNotGoOutOnceMore()
+        {
+            var channel = NewChannel();
+            Listen(channel, _ => { });
+            HeardFromTheServerAt(200);
+            Sync.OnDisconnected(now: 203);
+            Delete(channel, "placed in the scene", 210);
+            Delete(channel, "destroyed for good", 210);
+            Created(channel, "placed in the scene");
+
+            HeardFromTheServerAt(215);
+            Sync.RequestModelsAgain();
+            Sync.OnDisconnected(now: 218);
+
+            Assert.That(Deletes(channel), Is.EqualTo(new[] { "placed in the scene", "destroyed for good", "destroyed for good" }));
+        }
+
+        /// <summary>
         /// Once the answers are in, the server has read the deletes sent again ahead of the
         /// requests, and the next outage counts from when this client last heard from the server.
         /// </summary>
@@ -283,6 +358,20 @@ namespace HCIKonstanz.Colibri.Tests
         /*
          *  Helpers
          */
+
+        /// <summary>An object destroyed at <paramref name="time"/>, on SyncTicker's clock, as SyncBehaviour's OnDestroy deletes it.</summary>
+        private static void Delete(string channel, string id, double time)
+        {
+            LocallyDeletedModels.Remember(channel, id, time);
+            Sync.SendModelDelete(channel, id);
+        }
+
+        /// <summary>An object placed in the scene or created here, as SyncBehaviour's Awake registers it.</summary>
+        private void Created(string channel, string id)
+        {
+            LocallyDeletedModels.Forget(channel, id);
+            Listen(channel, _ => { }, id);
+        }
 
         /// <summary>
         /// The answer to the request sent after all the others (see Sync.ReconnectRound): the
