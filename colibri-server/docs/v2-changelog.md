@@ -363,10 +363,10 @@ EditMode tests, which `npm run test:vectors` checks in CI.
 - **Answers keep their order.** After their re-requests, colibri-unity and colibri-web 2.0.0 send
   one more, `{ id, again: true }` for a fresh id on the channel `colibri::reconnect`, and take its
   bare answer as the end of the others. colibri-unity sends it after every reconnect and also takes
-  it as the point by which the server has read the deletes it sent again. The server needs no code
-  for this, but has to keep handling one client's messages in order and writing its answers to it in
-  that order. See
-  [Requests](./protocol.md#requests).
+  it as the point by which the server has read the deletes it sent again. colibri-web also sends one
+  after each request for a whole channel and each time it asks for one of its models once more. The
+  server needs no code for this, but has to keep handling one client's messages in order and
+  writing its answers to it in that order. See [Requests](./protocol.md#requests).
 
 ### Correctness & robustness
 

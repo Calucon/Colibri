@@ -583,20 +583,27 @@ How the two clients use the three forms:
   `RegisterModelSync` asks for the whole channel once the models registered by then have their
   answer. After a reconnect, each registered model that the server had answered for is
   re-requested by id, and one more request marks the end of their answers (see below); one
-  registered while the connection was down is asked for afresh. The whole channel is asked for
-  once all of them have their answer and the end has come. A registered model is also asked for
-  once more, with `again: true`, when the changes made while it waited replaced values the server
-  had, to see that the server has them.
+  registered while the connection was down is asked for afresh. A registered model is also asked
+  for once more, with `again: true`, when the changes made while it waited replaced values the
+  server had, and one more request marks the end of that answer too. The last value an update
+  showed for a field sent, by then, is what the server has: the value sent; another client's,
+  which is applied; or the value it replaced, which means the update has not arrived yet (the
+  server holds back the updates of a client over its rate limit, never a request), and it is sent
+  again. The changes made meanwhile then go out without asking once more. The whole channel is
+  asked for once all of these answers are in. One more request follows that too, and until its
+  answer the client keeps the fields it sends out of every update: whatever arrives before then
+  was made before the server had them.
 
 **The end of the answers.** On the wire, an answer is an ordinary `model::update`, just like an
 update the server relays from another client meanwhile. So after a reconnect, a client sends one more
 request after all the others: `{ "id": "<fresh id>", "again": true }` on the channel
 `colibri::reconnect`, where Colibri never stores a model. colibri-unity sends one after every
-reconnect, with a GUID for the id; colibri-web sends one per `RegisterModelSync` that re-requested a
-model. The server answers it like any other, with the bare id, and the client takes that answer as
-the end of the answers to its re-requests. colibri-unity also takes it as the point by which the
-server has read everything it queued before, the deletes it sent again included (see
-[After a reconnect](#after-a-reconnect)). colibri-unity passes nothing on that channel to an
+reconnect, with a GUID for the id. colibri-web sends one per `RegisterModelSync` that re-requested a
+model, and one more after each request for the whole channel and each time it asks for a model once
+more (see above). The server answers it like any other, with the bare id, and the client takes that
+answer as the end of the answers to the requests it sent before. colibri-unity also takes it as the
+point by which the server has read everything it queued before, the deletes it sent again included
+(see [After a reconnect](#after-a-reconnect)). colibri-unity passes nothing on that channel to an
 application listener. The server has no code of its own for this. It works because of two things
 the server already does, which have to stay:
 
@@ -771,10 +778,12 @@ reconnect. Both clients may miss a member or field that changed more than about 
 above about 80 updates a second. colibri-unity may also miss a member that changed more than once
 between a reconnect and a second drop before the end of the answers. It does not send again a
 member whose very first value was lost, having held nothing before it, and colibri-web checks only
-the models it registered. A value sent again can cross a change another client makes right after the
-answers, like any two changes made at the same time. A `model::delete` colibri-unity sends again
-after an outage also removes an object another client has created under the same id since, as a
-delete sent during the outage does.
+the models it registered. In the same way, colibri-web sends again a field it sent on top of an
+answer when the server still shows the value it replaced once it has asked for the model once more
+(see [Requests](#requests)), even if another client set it back in that round trip. A value sent
+again can cross a change another client makes right after the answers, like any two changes made at
+the same time. A `model::delete` colibri-unity sends again after an outage also removes an object
+another client has created under the same id since, as a delete sent during the outage does.
 
 **Nobody is authenticated.** Any client that can reach the server can join any app under any name,
 and read and change its models and its REST store. The version check is not access control.
