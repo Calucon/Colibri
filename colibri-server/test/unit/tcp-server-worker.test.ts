@@ -116,7 +116,7 @@ interface WorkerInternals {
     clients: Map<string, { id: string; app: string; socket: net.Socket }>;
     waitingClients: Map<string, { id: string; socket: net.Socket }>;
     clientsByApp: Map<string, Set<{ id: string }>>;
-    v1WarnedAt: Map<string, number>;
+    v1WarnedAt: { size: number };
     stop(): void;
 }
 
