@@ -67,6 +67,12 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
     // instance that asked, which is the one to answer through.
     const awaitingAnswer = new Map<string, Colibri>();
 
+    // Own models whose wait for an answer a model::delete ended (see onDelete). That delete may
+    // have been relayed from another client just before the answer, and a server that does not
+    // remember deletes (MODEL_TOMBSTONE_SECONDS=0) still answers with the bare id, which must not
+    // become a model of its own.
+    const deletedWhileAwaited = new Set<string>();
+
     // Changes to own models held back instead of sent, by the property names SyncModel reports
     // them under: made while the connection was down, or since the reconnect but before the
     // server answered for the model (see registerModel).
@@ -106,6 +112,7 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
             disconnected = false;
             // Whatever was asked on the connection before this one is not going to be answered.
             awaitingAnswer.clear();
+            deletedWhileAwaited.clear();
             for (const model of models.value) {
                 if (!ownModels.has(model)) continue;
                 awaitingAnswer.set(model.id, colibri);
@@ -135,9 +142,9 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
         // is applied like any other, save for what this client changed while it waited: that is
         // sent instead, once the rest is applied, as it would have been when it was made. A bare
         // one means the server has nothing for it: send all of it. No model any more - deleted
-        // since it was asked for - means nothing to send, and the bare id must not become a model
-        // of its own either.
+        // since it was asked for - means nothing to send.
         const id = modelData.id;
+        if (id !== undefined && deletedWhileAwaited.delete(id) && !model && isBare(modelData)) return;
         const asker = id === undefined ? undefined : awaitingAnswer.get(id);
         if (id !== undefined && asker) {
             awaitingAnswer.delete(id);
@@ -202,6 +209,18 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
         if (model) heldChanges.delete(model);
         model?.delete();
         models.next(models.value.filter(m => m.id !== id));
+
+        // A request for an own model can be answered with model::delete instead of the model: the
+        // server's answer for one another client deleted while this client was away. That settles
+        // the model as much as an update would, and once every own model is settled, everything
+        // else is still to be asked for. Left waiting, the id kept that from ever happening, and
+        // every other model stayed as it was before the outage.
+        const asker = awaitingAnswer.get(id);
+        if (asker) {
+            awaitingAnswer.delete(id);
+            deletedWhileAwaited.add(id);
+            if (awaitingAnswer.size === 0) asker.sendMessage(name, 'model::request');
+        }
     };
 
     const registerModel = (model: T) => {

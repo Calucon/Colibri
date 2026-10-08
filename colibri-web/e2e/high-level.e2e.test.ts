@@ -389,6 +389,50 @@ describe('RegisterModelSync own models after a reconnect', () => {
         expect(latest(models$)).toEqual([]);
         expect(await modelsOn(peer, channel)).toEqual([]);
     });
+
+    // The server answers the request for such a model with model::delete rather than an update. The
+    // client went on waiting for an update that never came, so it never asked for anything else
+    // either, and missed every change and every model made while it was away.
+    it('catches up on the other models after its own model was deleted while it was away', async () => {
+        const app = uniqueApp('modelsync-own-deleted-catch-up');
+        const channel = uniqueApp('own');
+        // The peer stays connected throughout, so the server keeps the app's models.
+        const { singleton, peer } = await createSingletonWithPeer(app);
+
+        const [models$, registerModel] = RegisterModelSync<OwnModel>({ name: channel, type: OwnModel });
+        const model = new OwnModel('own-6');
+        model.value = 'mine';
+        const arrived = nextMessage(peer, { channel, command: 'model::update' });
+        registerModel(model);
+        await arrived;
+
+        peer.sendMessage(channel, 'model::update', { id: 'theirs-1', value: 'before' });
+        await firstValueFrom(
+            models$.pipe(
+                filter(ms => ms.some(m => m.id === 'theirs-1')),
+                timeout(5000)
+            )
+        );
+
+        const reconnect = await dropConnectionUntilReleased(singleton);
+        peer.sendMessage(channel, 'model::delete', { id: 'own-6' });
+        peer.sendMessage(channel, 'model::update', { id: 'theirs-1', value: 'missed' });
+        peer.sendMessage(channel, 'model::update', { id: 'theirs-2', value: 'created' });
+        await roundTrip(peer);
+
+        await reconnect();
+        // The answer for own-6, then the answer to what the client asked for next.
+        await roundTrip(singleton);
+        await roundTrip(singleton);
+
+        const models = latest(models$)
+            .map(m => [m.id, m.value])
+            .sort(([a], [b]) => a.localeCompare(b));
+        expect(models).toEqual([
+            ['theirs-1', 'missed'],
+            ['theirs-2', 'created']
+        ]);
+    });
 });
 
 describe('RemoteLogger high-level API', () => {

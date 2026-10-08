@@ -842,6 +842,37 @@ describe('sending its own models again after a reconnect', () => {
         expect(sent('model::update')).toEqual([]);
     });
 
+    // The server's answer for an own model another client deleted while this one was away.
+    it('drops an own model the server answers with model::delete, and asks for everything else', () => {
+        const { models$ } = reconnectedWithOwnModel();
+        fakeSocket.emit.mockClear();
+
+        deliver('own', { command: 'model::delete', payload: { id: 'w1' } });
+
+        expect(sentInOrder()).toEqual([['model::request', {}]]);
+        expect(latest(models$)).toEqual([]);
+    });
+
+    it('asks for everything else once every own model is answered, a delete among the answers', () => {
+        new Colibri('app', 'localhost', 9011);
+        const [models$, registerModel] = RegisterModelSync({ name: 'own', type: Widget });
+        const kept = new Widget('w2');
+        registerModel(new Widget('w1'));
+        registerModel(kept);
+        connectSocket();
+        connectSocket();
+        fakeSocket.emit.mockClear();
+
+        deliver('own', { command: 'model::delete', payload: { id: 'w1' } });
+        expect(sent('model::request')).toEqual([]);
+
+        deliver('own', { command: 'model::update', payload: { id: 'w2', label: 'kept' } });
+        expect(sentInOrder()).toEqual([['model::request', {}]]);
+        expect(latest(models$)).toEqual([kept]);
+    });
+
+    // A delete relayed just before the answer, from a server that does not remember deletes
+    // (MODEL_TOMBSTONE_SECONDS=0) and so answers with the bare id.
     it('does not bring back an own model deleted before the answer came', () => {
         const { models$ } = reconnectedWithOwnModel();
         fakeSocket.emit.mockClear();
@@ -849,7 +880,7 @@ describe('sending its own models again after a reconnect', () => {
         deliver('own', { command: 'model::delete', payload: { id: 'w1' } });
         deliver('own', { command: 'model::update', payload: { id: 'w1' } });
 
-        expect(sent('model::update')).toEqual([]);
+        expect(sentInOrder()).toEqual([['model::request', {}]]);
         expect(latest(models$)).toEqual([]);
     });
 
