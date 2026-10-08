@@ -64,6 +64,45 @@ namespace HCIKonstanz.Colibri.Tests
             }
         }
 
+        /// <summary>
+        /// A socket closed under the attempt ends it at once, as closed, and not as a server that
+        /// did not answer once the time is up.
+        /// </summary>
+        [Test]
+        public void ClosingTheSocketEndsTheAttemptAtOnce()
+        {
+            var port = UnansweredPort();
+            var socket = NewSocket();
+
+            var clock = Stopwatch.StartNew();
+            var attempt = WebServerConnection.ConnectAsync(socket, "127.0.0.1", port, 10000, CancellationToken.None);
+            Thread.Sleep(100);
+            socket.Close();
+
+            Assert.Throws<ObjectDisposedException>(() => Wait(attempt));
+            Assert.That(clock.ElapsedMilliseconds, Is.LessThan(2000), "Closing the socket did not end the attempt");
+        }
+
+        /// <summary>
+        /// The same on Mono, where a connect whose socket is closed neither completes nor fails: a
+        /// connect that never completes stands in for it here. The attempt used to wait out the
+        /// whole timeout, and then said a server that may well have answered had not.
+        /// </summary>
+        [Test]
+        public void ClosingTheSocketEndsTheAttemptAtOnceEvenIfTheConnectNeverNotices()
+        {
+            var socket = NewSocket();
+            var neverCompletes = new TaskCompletionSource<bool>().Task;
+
+            var clock = Stopwatch.StartNew();
+            var attempt = WebServerConnection.WaitForConnectAsync(socket, neverCompletes, "127.0.0.1", 9012, 10000, CancellationToken.None);
+            Thread.Sleep(100);
+            socket.Close();
+
+            Assert.Throws<ObjectDisposedException>(() => Wait(attempt));
+            Assert.That(clock.ElapsedMilliseconds, Is.LessThan(2000), "Closing the socket did not end the attempt");
+        }
+
         [Test]
         public void AnAnsweredAttemptConnects()
         {
