@@ -284,6 +284,8 @@ namespace HCIKonstanz.Colibri.E2E
 
                 Assert.That(request, Is.GreaterThanOrEqualTo(0), "The client never asked for the model again after reconnecting");
                 Assert.That((string)TcpPeer.Json(secondSession[request])["id"], Is.EqualTo(id));
+                Assert.That((bool?)TcpPeer.Json(secondSession[request])["again"], Is.True,
+                    "The request after reconnecting did not say it was a request again, so the server would treat the object as fresh");
                 Assert.That(queuedDuringOutage, Is.GreaterThanOrEqualTo(0).And.LessThan(request),
                     "The request went out ahead of the messages queued during the outage, so the server answered without them");
             }

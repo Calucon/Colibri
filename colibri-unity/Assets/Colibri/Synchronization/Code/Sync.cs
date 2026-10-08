@@ -105,7 +105,16 @@ namespace HCIKonstanz.Colibri.Synchronization
             RequestModelsAgain();
         }
 
-        private static void RequestModelsAgain()
+        /// <summary>
+        /// Asks again for every model a listener asked for. A request for one object says
+        /// <c>again: true</c>: this client held the object before the outage, and it is not putting
+        /// it into the scene now. The server answers it with <c>model::delete</c> if another client
+        /// deleted the object meanwhile, and keeps the object deleted. A request without it - what a
+        /// listener sends when it registers - says the object is in this client's scene now, or being
+        /// created, and makes the server forget such a delete: the id is in use again.
+        /// </summary>
+        /// <remarks>Internal for the EditMode tests, which stand in for a reconnect with it.</remarks>
+        internal static void RequestModelsAgain()
         {
             foreach (var entry in _modelUpdateListeners.ToArray())
             {
@@ -135,7 +144,7 @@ namespace HCIKonstanz.Colibri.Synchronization
                     }
                     else if (requestedIds.Add(listener.FetchId))
                     {
-                        SendCommand(channel, "model::request", new JObject { { "id", listener.FetchId } });
+                        SendCommand(channel, "model::request", new JObject { { "id", listener.FetchId }, { "again", true } });
                     }
                 }
             }
