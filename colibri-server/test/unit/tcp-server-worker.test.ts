@@ -45,18 +45,35 @@ class FakeSocket extends EventEmitter {
     public failWritesWith: Error | undefined;
 
     // Set for a peer that reads slower than it is sent to: each write then waits, counted in
-    // writableLength, until flush() hands it to the kernel, as a real socket's writes do.
+    // writableLength, until flush() or take() hands it to the kernel, as a real socket's writes do.
     public holdWrites = false;
-    private readonly heldWrites: { data: Buffer; callback?: (err?: Error) => void }[] = [];
+    private readonly heldWrites: { data: Buffer; taken: number; callback?: (err?: Error) => void }[] = [];
 
-    // Lets the oldest `count` held writes go, as the kernel takes them, and returns them.
+    // Lets the oldest `count` held writes go, as the kernel takes them, and returns what take() had
+    // left of them.
     public flush(count = this.heldWrites.length): Buffer[] {
         const flushed = this.heldWrites.splice(0, count);
         for (const write of flushed) {
             this.writableLength -= write.data.length;
             write.callback?.();
         }
-        return flushed.map(write => write.data);
+        return flushed.map(write => write.data.subarray(write.taken));
+    }
+
+    // Lets `bytes` more of the held writes go, oldest first, as a slow link takes them: a large write
+    // a part at a time. As with a real socket, a write is done, and leaves writableLength, only once
+    // all of it has gone. Returns what went.
+    public take(bytes: number): Buffer[] {
+        const taken: Buffer[] = [];
+        while (bytes > 0 && this.heldWrites.length > 0) {
+            const write = this.heldWrites[0]!;
+            const part = write.data.subarray(write.taken, write.taken + bytes);
+            write.taken += part.length;
+            bytes -= part.length;
+            taken.push(part);
+            if (write.taken === write.data.length) this.flush(1);
+        }
+        return taken;
     }
 
     // Modelled on what a real net.Socket does with a write after end(): the write fails, the
@@ -80,7 +97,7 @@ class FakeSocket extends EventEmitter {
         this.written.push(data);
         if (this.holdWrites) {
             this.writableLength += data.length;
-            this.heldWrites.push({ data, callback });
+            this.heldWrites.push({ data, taken: 0, callback });
             return false;
         }
         callback?.();
@@ -1618,6 +1635,111 @@ describe('TCPServerWorker', () => {
 
                 expect(disconnected()).toEqual([spectator.id]);
                 expect(warnings().filter(w => w.includes('spectator') && w.includes('has sent nothing for 10 s'))).toHaveLength(1);
+            });
+        });
+
+        // A message larger than HEARTBEAT_EVERY_BYTES has no heartbeat inside it, so a client reading
+        // one echoes nothing until it is through. A 4 MiB broadcast over a link of 200 KB/s takes about
+        // 21 s, and the client was disconnected 10 s in, while reading all along; it reconnected and
+        // never got the message.
+        describe('a client reading a message larger than HEARTBEAT_EVERY_BYTES', () => {
+            const big = (channel = 'big'): WireNetworkMessage =>
+                wireMessage(channel, 'broadcast::json', JSON.stringify('x'.repeat(4 * 1024 * 1024)));
+            const send = function (msg: WireNetworkMessage): void {
+                internals.handleParentMessage({ channel: 'm:broadcastToApp', content: { msg, app: 'appA' } });
+            };
+            // An answer to the client's own request, which unlike relayed traffic is still queued for
+            // a client that has more than the high-water mark waiting.
+            const answer = function (msg: WireNetworkMessage, id: string): void {
+                internals.handleParentMessage({ channel: 'm:broadcast', content: { msg, clients: [id], reply: true } });
+            };
+
+            // A client that reads `bytesPerTick` of what was written to it each tick, a part of a large
+            // message at a time, and echoes every heartbeat it finds. Returns the channels of the
+            // messages it read in full.
+            const slowLink = function (socket: FakeSocket, bytesPerTick: number): { each: () => void; read: string[] } {
+                const frames = new FrameReader();
+                const read: string[] = [];
+                return {
+                    read,
+                    each: () => {
+                        for (const chunk of socket.take(bytesPerTick)) {
+                            for (const frame of frames.append(chunk)) {
+                                if (frame.type === FrameType.Heartbeat) socket.emit('data', encodeHeartbeatFrame(frame.pingTimestamp));
+                                else if (frame.type === FrameType.Message) read.push(frame.channel);
+                            }
+                        }
+                    },
+                };
+            };
+
+            it('is kept while it reads it, however long that takes, also with another one behind it', () => {
+                const client = handshaked('downloader');
+                client.socket.holdWrites = true;
+                const link = slowLink(client.socket, 20 * 1024);
+
+                // About 200 KiB a second: 41 s for both. Between them is a heartbeat, which it echoes
+                // once it has read the first, but that one says nothing about the second.
+                answer(big('first'), client.id);
+                answer(big('second'), client.id);
+                run(50_000, link.each);
+
+                expect(link.read).toEqual(['first', 'second']);
+                expect(disconnected()).toEqual([]);
+                expect(client.socket.destroyed).toBe(false);
+            });
+
+            it('is kept while it reads one the kernel took all at once, and so is not seen being read', () => {
+                const client = handshaked('downloader');
+                send(big());
+
+                // 21 s to read it, and nothing to echo in that time.
+                run(21_000);
+                expect(disconnected()).toEqual([]);
+
+                // Then the first heartbeat behind it.
+                const frames = new FrameReader().append(Buffer.concat(client.socket.written));
+                const message = frames.findIndex(frame => frame.type === FrameType.Message);
+                const next = frames.slice(message + 1).find(frame => frame.type === FrameType.Heartbeat);
+                if (next?.type !== FrameType.Heartbeat) throw new Error('no heartbeat was written after the message');
+                client.socket.emit('data', encodeHeartbeatFrame(next.pingTimestamp));
+
+                // Having read it, it is held to the timeout itself again.
+                run(9_900);
+                expect(disconnected()).toEqual([]);
+                run(100);
+                expect(disconnected()).toEqual([client.id]);
+                expect(warnings().filter(w => w.includes('has sent nothing for 10 s (TCP_IDLE_TIMEOUT_SECONDS)'))).toHaveLength(1);
+            });
+
+            it('is ended once it has read nothing for one more timeout per HEARTBEAT_EVERY_BYTES of it', () => {
+                const client = handshaked('gone');
+                client.socket.holdWrites = true;
+                const link = slowLink(client.socket, 20 * 1024);
+                // A heartbeat ahead of the message, which it reads and echoes...
+                run(100, link.each);
+                send(big());
+                // ...then a quarter of the message, and nothing more.
+                run(5_100, link.each);
+
+                // 10 s for each 64 KiB of it: 640 s on top of the 10 s.
+                run(640_000);
+                expect(disconnected()).toEqual([]);
+                run(10_000);
+
+                expect(disconnected()).toEqual([client.id]);
+                const [warning] = warnings().filter(w => w.includes('gone'));
+                expect(warning).toContain('(TCP_IDLE_TIMEOUT_SECONDS, and 640 s more for reading a 4.0 MiB message sent to it)');
+            });
+
+            it('gets no more time for messages up to HEARTBEAT_EVERY_BYTES', () => {
+                const client = handshaked('gone');
+                client.socket.holdWrites = true;
+                send(wireMessage('small', 'broadcast::json', JSON.stringify('x'.repeat(HEARTBEAT_EVERY_BYTES - 1024))));
+
+                run(10_000);
+
+                expect(disconnected()).toEqual([client.id]);
             });
         });
 

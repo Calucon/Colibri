@@ -92,6 +92,18 @@ type Refusal = 'rate' | 'backlog';
 //
 // That holds only as long as the client finds heartbeats in what it reads, also while it is still
 // reading a backlog: see HEARTBEAT_EVERY_BYTES and writeHeartbeat.
+//
+// A message larger than HEARTBEAT_EVERY_BYTES has no heartbeat inside it, though, so a client
+// reading one can echo nothing until it is through: a 4 MiB broadcast takes about 21 s over a link
+// of 200 KB/s. Nor can this server watch it being read. A write is done for Node.js once the kernel
+// has taken it, and the kernel's buffers, and those of a proxy in between such as Docker's port
+// forwarding, take megabytes at once: on loopback, all of that broadcast within 0.2 s. Such a client
+// was disconnected 10 s in while reading all along, and once it had reconnected it never got the
+// message. So until a client echoes a heartbeat sent after its largest such message, it may stay
+// quiet one more idle timeout for every HEARTBEAT_EVERY_BYTES of that message (idleAllowanceMillis):
+// the rate the heartbeats between messages already assume, 6.4 KiB/s at the default. The price is
+// that a client that has gone while such a message was on its way to it is noticed that much later,
+// at most 81 idle timeouts (13.5 minutes) for a message of MAX_FRAME_LENGTH.
 export const DEFAULT_IDLE_TIMEOUT_MILLIS = 10_000;
 
 // After this many bytes of messages written to a client since its last heartbeat, it is sent one
@@ -102,7 +114,8 @@ export const DEFAULT_IDLE_TIMEOUT_MILLIS = 10_000;
 // store say, used to have no heartbeat in it: the tick's next one queued behind all of it. On a
 // slow link such a client, reading all along, went quiet for longer than the idle timeout and was
 // disconnected, and asked for the whole store again when it reconnected. With a heartbeat every
-// 64 KiB it echoes one at least every 10 s down to about 6.4 KiB/s.
+// 64 KiB it echoes one at least every 10 s down to about 6.4 KiB/s. A single message larger than
+// this still has none inside it; see DEFAULT_IDLE_TIMEOUT_MILLIS for those.
 export const HEARTBEAT_EVERY_BYTES = 64 * 1024;
 
 // If the worker's own 100 ms tick comes this late, the thread itself was stalled (a long GC, a
@@ -144,6 +157,12 @@ const PEER_GONE_ERRORS: ReadonlySet<string> = new Set([
 // What a write still queued for a socket fails with once the socket is destroyed - one callback
 // per queued write, and a client whose connection stalled can have thousands queued.
 const WRITE_CANCELLED_ERRORS: ReadonlySet<string> = new Set(['ECANCELED', 'ERR_STREAM_DESTROYED']);
+
+// A message size for the log: in MiB from 1 MiB, in KiB below.
+const describeSize = function (bytes: number): string {
+    const mebibyte = 1024 * 1024;
+    return bytes >= mebibyte ? `${(bytes / mebibyte).toFixed(1)} MiB` : `${Math.round(bytes / 1024)} KiB`;
+};
 
 const errorCode = function (error: Error): string | undefined {
     const code = (error as NodeJS.ErrnoException).code;
@@ -261,6 +280,12 @@ interface TcpClient {
     droppedRepliesSinceWarning: number;
     // performance.now() of the last bytes received, or of the connection if none have been yet.
     lastInboundAt: number;
+    // The size of the largest message over HEARTBEAT_EVERY_BYTES written to this client that it has
+    // not shown it has read, 0 if there is none; and when the latest such message was written, on
+    // the clock heartbeats carry. It has read them all once it echoes a heartbeat from after that.
+    // See DEFAULT_IDLE_TIMEOUT_MILLIS.
+    unreadLargeBytes: number;
+    lastLargeWrittenAt: bigint;
     // Whether any bytes have been received from it yet; see handleSocketData.
     receivedAny: boolean;
     // Model updates over a limit, waiting for room; see HeldUpdates.
@@ -569,10 +594,10 @@ export class TCPServerWorker extends WorkerService {
         if (!stalled) this.endIdleClients(now);
     }
 
-    // Ends every client that has sent nothing for idleTimeoutMillis, exactly as if it had
-    // disconnected: out of every index, clientDisconnected$ posted, and so its app's models
-    // dropped once it was the app's last client. Destroyed rather than ended - a peer that is
-    // gone will neither read what is still queued for it nor answer a FIN.
+    // Ends every client that has sent nothing for idleTimeoutMillis, plus its idleAllowanceMillis,
+    // exactly as if it had disconnected: out of every index, clientDisconnected$ posted, and so its
+    // app's models dropped once it was the app's last client. Destroyed rather than ended - a peer
+    // that is gone will neither read what is still queued for it nor answer a FIN.
     //
     // A client still waiting for its handshake is held to the same limit, counted from when it
     // connected: a real client handshakes at once, and since nothing is sent to a waiting client
@@ -580,16 +605,19 @@ export class TCPServerWorker extends WorkerService {
     private endIdleClients(now: number): void {
         if (this.idleTimeoutMillis <= 0) return;
 
-        const idleSince = now - this.idleTimeoutMillis;
         for (const client of [...this.clients.values(), ...this.waitingClients.values()]) {
-            if (client.lastInboundAt > idleSince) continue;
+            const allowance = this.idleAllowanceMillis(client);
+            if (client.lastInboundAt > now - this.idleTimeoutMillis - allowance) continue;
 
             const seconds = Math.round((now - client.lastInboundAt) / 1000);
             if (this.clients.has(client.id)) {
+                const reading = allowance > 0
+                    ? `, and ${Math.round(allowance / 1000)} s more for reading a ${describeSize(client.unreadLargeBytes)} message sent to it`
+                    : '';
                 this.logWarning(
                     `Unity client '${client.name}' (${client.id}, app '${client.app}', ${client.address}) has sent nothing for ` +
-                        `${seconds} s (TCP_IDLE_TIMEOUT_SECONDS); disconnecting it as gone. A headset that left the Wi-Fi or ` +
-                        'went to sleep without closing its connection looks like this.'
+                        `${seconds} s (TCP_IDLE_TIMEOUT_SECONDS${reading}); disconnecting it as gone. A headset that left the ` +
+                        'Wi-Fi or went to sleep without closing its connection looks like this.'
                 );
             } else {
                 this.logDebug(`Disconnecting client ${client.id} from ${client.address}: no handshake within ${seconds} s`);
@@ -598,6 +626,13 @@ export class TCPServerWorker extends WorkerService {
             this.handleSocketDisconnect(client);
             client.socket.destroy();
         }
+    }
+
+    // How much longer than idleTimeoutMillis the client may stay quiet: one more idle timeout for
+    // every HEARTBEAT_EVERY_BYTES of the largest message it has not shown it has read yet, the time
+    // that message takes at the rate the heartbeats already assume. See DEFAULT_IDLE_TIMEOUT_MILLIS.
+    private idleAllowanceMillis(client: TcpClient): number {
+        return this.idleTimeoutMillis * client.unreadLargeBytes / HEARTBEAT_EVERY_BYTES;
     }
 
     // Tolerates being called before start() (an 'm:stop' racing startup) and destroys live
@@ -669,6 +704,12 @@ export class TCPServerWorker extends WorkerService {
 
         if (client.bytesSinceHeartbeat >= HEARTBEAT_EVERY_BYTES) {
             this.writeHeartbeat(client, encodeHeartbeatFrame(process.hrtime.bigint()));
+        }
+        // After the heartbeat just written ahead of it, which comes before it on the wire, so an
+        // echo of that one does not count as the client having read it.
+        if (packet.length > HEARTBEAT_EVERY_BYTES) {
+            client.unreadLargeBytes = Math.max(client.unreadLargeBytes, packet.length);
+            client.lastLargeWrittenAt = process.hrtime.bigint();
         }
         client.bytesSinceHeartbeat += packet.length;
         this.write(client, packet, reply ? 'reply' : 'relayed');
@@ -795,6 +836,8 @@ export class TCPServerWorker extends WorkerService {
             droppingReplies: false,
             droppedRepliesSinceWarning: 0,
             lastInboundAt: performance.now(),
+            unreadLargeBytes: 0,
+            lastLargeWrittenAt: 0n,
             receivedAny: false,
             held: new HeldUpdates(),
         };
@@ -880,6 +923,8 @@ export class TCPServerWorker extends WorkerService {
                     break;
 
                 case FrameType.Heartbeat:
+                    // One written after the client's large messages: it has read them all.
+                    if (frame.pingTimestamp > client.lastLargeWrittenAt) client.unreadLargeBytes = 0;
                     this.handlePong(client, frame.pingTimestamp);
                     break;
 
