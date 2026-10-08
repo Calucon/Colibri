@@ -428,8 +428,12 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
         return true;
     };
 
-    // See ASK_AGAIN_TIMEOUT_MS: the changes held since asking again go out, without an answer.
+    // See ASK_AGAIN_TIMEOUT_MS: the changes held since asking again go out, without an answer. Not
+    // while disconnected: Socket.IO would send them on the reconnect ahead of asking for the model
+    // again, and a server that had forgotten the model took them for all of it. The reconnect holds
+    // them again, to go out with the answer.
     const stopWaiting = (id: string) => {
+        if (disconnected) return;
         const asker = awaitingAnswer.get(id);
         if (!endConfirmation(id) || !asker) return;
         awaitingAnswer.delete(id);

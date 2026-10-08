@@ -1646,6 +1646,47 @@ describe('keeping a change made after registerModel', () => {
         }
     });
 
+    // Run out while the connection was down, the wait sent what was held into Socket.IO's buffer,
+    // which sends it on the reconnect ahead of asking for the model again: a server that had forgotten
+    // the model took that one change for all of it, and the rest was never sent.
+    it('sends nothing when the wait runs out while disconnected, and sends it all after the reconnect', async () => {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+        try {
+            new Colibri('app', 'localhost', 9011);
+            const [, registerModel] = RegisterModelSync({ name: 'reg', type: Pair });
+            connectSocket();
+            await vi.advanceTimersByTimeAsync(1);
+            fakeSocket.emit.mockClear();
+            const pair = new Pair('p1');
+            registerModel(pair);
+
+            pair.a = 'mine';
+            deliver('reg', { command: 'model::update', payload: server });
+            await vi.advanceTimersByTimeAsync(10);
+            expect(sentInOrder()).toHaveLength(3);
+            disconnectSocket();
+            pair.b = 'later';
+            await vi.advanceTimersByTimeAsync(5000);
+            expect(sentInOrder()).toHaveLength(3);
+
+            connectSocket();
+            // The server restarted meanwhile.
+            deliver('reg', { command: 'model::update', payload: { id: 'p1' } });
+            endOfAnswers();
+            await vi.advanceTimersByTimeAsync(10);
+            expect(sentInOrder().slice(3)).toEqual([
+                ['model::request', { id: 'p1', again: true }],
+                ['model::request', { id: endId, again: true }],
+                ['model::update', { id: 'p1', a: 'mine', b: 'later' }],
+                ['model::request', {}]
+            ]);
+        } finally {
+            warnSpy.mockRestore();
+            vi.useRealTimers();
+        }
+    });
+
     // A field set to undefined is left out of what is sent, so no update could ever show it.
     it('does not wait for an update to show a field set to undefined', async () => {
         class Note extends SyncModel<Note> {
