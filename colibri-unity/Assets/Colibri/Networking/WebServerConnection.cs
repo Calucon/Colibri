@@ -716,17 +716,25 @@ namespace HCIKonstanz.Colibri.Networking
         /// <see cref="RECEIVED_FOLDING_THRESHOLD"/> waiting messages a model::update is folded into
         /// the one queued for the same object, and past <see cref="MAX_RECEIVED_MESSAGES"/> the
         /// oldest messages are dropped, broadcasts first.
+        ///
+        /// Not once OnDisable has ended the connection loop that <paramref name="token"/> belongs
+        /// to: the next loop's messages may be queued by then, and this one would land behind them.
         /// </summary>
         /// <remarks>
         /// Called from the receive loop; internal so the EditMode tests can queue one too. The
         /// queue owns <paramref name="payload"/> from here on: a fold writes newer fields into it.
         /// </remarks>
-        internal void EnqueueReceived(string channel, string command, JToken payload)
+        internal void EnqueueReceived(string channel, string command, JToken payload, CancellationToken token = default)
         {
             var canDrop = IsDroppable(command);
 
             lock (_queuedCommandsLock)
             {
+                // Checked under the lock: the next loop starts only after OnDisable has cancelled the
+                // token, so whatever it queues is queued after this check could still pass.
+                if (token.IsCancellationRequested)
+                    return;
+
                 if (!_isReceivedBacklog && _queuedCommands.Count >= RECEIVED_FOLDING_THRESHOLD)
                     _isReceivedBacklog = true;
 
@@ -1586,6 +1594,11 @@ namespace HCIKonstanz.Colibri.Networking
 
                 for (var i = 0; i < frames.Count; i++)
                 {
+                    // Ended by OnDisable after this batch was read: the rest of it goes the way of
+                    // the bytes still unread on the closed socket, and changes nothing the next loop
+                    // shares.
+                    token.ThrowIfCancellationRequested();
+
                     var frame = frames[i];
 
                     // Checked before the session counts as connected: colibri-server says nothing
@@ -1619,7 +1632,7 @@ namespace HCIKonstanz.Colibri.Networking
                             // message would leave every application to recognize it for itself.
                             // It throws, so the session unwinds through the one place that decides
                             // whether to retry.
-                            EnqueueReceived(frame.Channel, frame.Command, ParsePayload(frame.Payload));
+                            EnqueueReceived(frame.Channel, frame.Command, ParsePayload(frame.Payload), token);
                             break;
 
                         case FrameType.Handshake:
