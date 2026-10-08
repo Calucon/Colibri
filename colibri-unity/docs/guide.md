@@ -664,22 +664,33 @@ values from the scene.
 
 A change made as the Wi-Fi drops goes into a connection that is already dead, and is lost: the
 client notices only 2 s later, when the server's heartbeats stop. The answer then holds the value
-from before that change. So each `[Sync]` member remembers the last 8 values it sent, and the one
-it held before them: the last one dropped from those 8, or the one it last took from another
-client. Until all the answers are in, everything that arrives for the object, other clients'
-updates included, is compared with the values the member held from 10 s before the outage was
-noticed: those it sent since, and the one it held at that point, such as `true` for an object
-switched on a minute ago. The value sent last means it arrived. An earlier one means the change
-after it was lost: the member keeps its value and sends it again, once. A value the member did not
-hold is another client's change during the outage and is applied, as is everything for a member
-that sent nothing in those 10 s and for an object that has never sent anything. This goes by
-values, so some cases come out wrong:
+from before that change. So each `[Sync]` member remembers the values it sent around the time the
+client last heard from the server, which heartbeats every 100 ms: the latest 8 up to then, the
+first 8 after it, and the newest. An object moved through the drop thus keeps the position the
+server has, however many moves were lost after it. The member also remembers the value it held
+before those: the last one dropped, or the one the server last showed it, in another client's
+update or in an answer. Until all the answers are in, everything that arrives for the object,
+other clients' updates included, is compared with the values the member held from 10 s before the
+outage was noticed: those it sent since, and the one it held at that point, such as `true` for an
+object switched on a minute ago. The value sent last means it arrived. An earlier one means the
+change after it was lost: the member keeps its value and sends it again, once. A value the member
+did not hold is another client's change during the outage and is applied, as is everything for a
+member that sent nothing in those 10 s and for an object that has never sent anything. If the
+connection drops again before all the answers are in, the next reconnect still counts from the
+first outage. This goes by values, so some cases come out wrong:
 
 - Another client that sets a member back during the outage, to a value this client held in those
   10 s, is undone: this client's value replaces it.
-- A member that sent more than 8 changes between the drop and the moment it was noticed, such as
-  an object being moved, takes the answer: it goes back to its value at the drop.
+- A member changed more than 8 times within about 100 ms of the last heartbeat before the link
+  died may not be recognised, and takes the answer. That needs a send-rate limit above about 80
+  updates a second, or none.
 - A member whose very first value was lost held nothing before it, and is not sent again.
+
+An object destroyed as the Wi-Fi drops loses its delete the same way. When the outage is noticed,
+the deletes made since the client last heard from the server, or in the second before, are sent
+again, so the object goes on the server and the other clients after the reconnect. Like a delete
+made during the outage, it also removes an object another client has created under the same id in
+the meantime.
 
 The server remembers a delete for `MODEL_TOMBSTONE_SECONDS`, 10 minutes by default. An object
 that another client deleted longer ago than that, while this client was away, is answered with
