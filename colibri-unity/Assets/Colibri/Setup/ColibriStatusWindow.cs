@@ -175,16 +175,28 @@ namespace HCIKonstanz.Colibri.Setup
         /// How the server's certificate was accepted, and its fingerprint, selectable so that it
         /// can be copied into "Server certificate SHA-256" to accept only this certificate.
         /// </summary>
+        /// <remarks>
+        /// Both wrap: on one line, they ran past the edge of the window at its default width and
+        /// were cut off.
+        /// </remarks>
         private static void DrawCertificate(WebServerConnection connection)
         {
             if (!connection.UsesTls || connection.CertificateAcceptance == null)
                 return;
 
-            EditorGUILayout.LabelField("Certificate", connection.CertificateAcceptance);
+            EditorGUILayout.LabelField("Certificate", connection.CertificateAcceptance, EditorStyles.wordWrappedLabel);
+
+            // A selectable label takes the height it is given, so that is worked out here, for the
+            // width next to the label column less the window's margins and scrollbar. The
+            // fingerprint has no spaces: it breaks between characters.
+            var fingerprint = connection.ServerCertificateSha256 ?? "";
+            var width = EditorGUIUtility.currentViewWidth - EditorGUIUtility.labelWidth - 40f;
+            var height = Mathf.Max(EditorGUIUtility.singleLineHeight,
+                EditorStyles.wordWrappedLabel.CalcHeight(new GUIContent(fingerprint), width));
 
             EditorGUILayout.BeginHorizontal();
             EditorGUILayout.PrefixLabel("SHA-256");
-            EditorGUILayout.SelectableLabel(connection.ServerCertificateSha256 ?? "", GUILayout.Height(EditorGUIUtility.singleLineHeight));
+            EditorGUILayout.SelectableLabel(fingerprint, EditorStyles.wordWrappedLabel, GUILayout.Height(height));
             EditorGUILayout.EndHorizontal();
         }
 
