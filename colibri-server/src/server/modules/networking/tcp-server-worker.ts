@@ -1,4 +1,5 @@
 import * as net from 'net';
+import * as tls from 'tls';
 import { WorkerMessage, WorkerService } from '../core/index.js';
 import * as threads from 'worker_threads';
 import { fileURLToPath } from 'url';
@@ -11,9 +12,11 @@ import {
     MAX_FRAME_LENGTH,
     PROTOCOL_REJECTED_COMMAND,
     PROTOCOL_VERSION,
+    TLS_HANDSHAKE_PREFIX_LENGTH,
     V1FramingError,
     encodeHeartbeatFrame,
     encodeMessageFrame,
+    looksLikeTlsHandshake,
     ownBytes,
     protocolRejection,
 } from './protocol.js';
@@ -111,6 +114,20 @@ const TICK_STALL_MILLIS = 2000;
 // When the kernel starts probing a socket with nothing in flight; see handleConnection.
 const KEEPALIVE_INITIAL_DELAY_MILLIS = 5000;
 
+// How long a connection to the TLS port has to send its first bytes, and then, separately, to
+// complete its TLS handshake. colibri-unity gives up on a connect after 5 s, handshake included.
+export const TLS_HANDSHAKE_TIMEOUT_MILLIS = 10_000;
+
+// What the log suggests when a client may not have accepted the certificate. The two settings are
+// colibri-unity's, in its Colibri configuration.
+const CERTIFICATE_HINT =
+    'If it is a Unity app and the certificate is self-signed, tick \'Allow self-signed certificate\' in its Colibri ' +
+    'configuration, or enter the certificate\'s SHA-256 fingerprint (logged at startup) as its \'Server certificate SHA-256\'. ' +
+    'Otherwise check that the certificate has not expired and names the address the client connects to.';
+
+// OpenSSL's alerts for a certificate the peer did not accept.
+const CERTIFICATE_REFUSED_ALERT = /alert (bad certificate|unknown ca|certificate unknown|certificate expired|certificate revoked|unsupported certificate|access denied)/i;
+
 // Socket error codes that say only that the peer is gone: it reset the connection (an app that
 // was killed or crashed, a headset put to sleep), a write found it closed, or the network lost it
 // (keepalive gave up, no route to it any more). On Wi-Fi these are part of normal operation, and
@@ -133,6 +150,39 @@ const errorCode = function (error: Error): string | undefined {
     return typeof code === 'string' ? code : undefined;
 };
 
+// Why a TLS handshake failed, as a sentence for the log.
+const describeTlsFailure = function (error: Error, timeoutMillis: number): string {
+    const code = errorCode(error);
+    if (code === 'ERR_TLS_HANDSHAKE_TIMEOUT') {
+        return `it did not complete within ${timeoutMillis / 1000} s.`;
+    }
+    // A Node.js or .NET client that refuses the certificate closes the connection without a word.
+    if (code === 'ECONNRESET' || code === 'EPIPE') {
+        return `the client closed the connection during the handshake (${error.message}), as a client that does not ` +
+            `accept this server's certificate does. ${CERTIFICATE_HINT}`;
+    }
+    if (CERTIFICATE_REFUSED_ALERT.test(error.message)) {
+        return `the client refused this server's certificate (${error.message}). ${CERTIFICATE_HINT}`;
+    }
+    return `${error.message}.`;
+};
+
+// The TLS socket of a failed handshake has usually been destroyed already, and then no longer knows
+// its peer's address. The TCP socket underneath it, which Node.js keeps as TLSSocket._parent, still
+// does: handleTlsPortConnection read the address when the connection was accepted, which cached it.
+const tlsPeerAddress = function (socket: tls.TLSSocket): string {
+    return socket.remoteAddress
+        ?? (socket as tls.TLSSocket & { _parent?: net.Socket })._parent?.remoteAddress
+        ?? 'an unknown address';
+};
+
+// The certificate (with its chain) and private key the TCP port serves TLS with, both PEM. Buffers
+// on the main thread, plain Uint8Arrays once they have been cloned into this one.
+export interface TcpTlsCredentials {
+    cert: Uint8Array;
+    key: Uint8Array;
+}
+
 // Settings the proxy sends along with 'm:start'; anything left out keeps its default.
 export interface TcpServerOptions {
     // TCPServerProxy's backlog counter. Without it the backlog is neither counted nor limited.
@@ -143,6 +193,9 @@ export interface TcpServerOptions {
     rateLimit?: RateLimit;
     // See DEFAULT_IDLE_TIMEOUT_MILLIS. 0 never times a client out.
     idleTimeoutMillis?: number;
+    // Set, the port accepts only TLS connections, served with this certificate; see
+    // handleTlsPortConnection. 'm:tlsCredentials' replaces it.
+    tls?: TcpTlsCredentials;
 }
 
 // The worker thread only ever deals in raw payload bytes (straight off the wire, or
@@ -167,6 +220,10 @@ export interface WireNetworkMessage {
 const toBuffer = function (value: Buffer | Uint8Array): Buffer {
     if (Buffer.isBuffer(value)) return value;
     return Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+};
+
+const secureContextOptions = function (credentials: TcpTlsCredentials): { cert: Buffer; key: Buffer } {
+    return { cert: toBuffer(credentials.cert), key: toBuffer(credentials.key) };
 };
 
 interface TcpClient {
@@ -210,6 +267,14 @@ interface TcpClient {
 
 export class TCPServerWorker extends WorkerService {
     private server: net.Server | undefined;
+    // With TLS on: never listens itself, but is handed each connection to the port that starts a TLS
+    // handshake, and hands it on to handleConnection once the handshake is done.
+    private tlsServer: tls.Server | undefined;
+    private tlsCredentials: TcpTlsCredentials | undefined;
+    private tlsHandshakeTimeoutMillis = TLS_HANDSHAKE_TIMEOUT_MILLIS;
+    // The TCP sockets of every connection to the TLS port, from when it is accepted until it closes,
+    // so that stop() can end those still in their handshake too.
+    private readonly tlsPortSockets = new Set<net.Socket>();
 
     // waiting for client to specify app name
     private readonly waitingClients = new Map<string, TcpClient>();
@@ -239,6 +304,9 @@ export class TCPServerWorker extends WorkerService {
 
     // When a Colibri 1.x client at each remote address was last warned about.
     private readonly v1WarnedAt = new AddressThrottle();
+    // The same for a client without TLS on the TLS port, and for a failed TLS handshake.
+    private readonly withoutTlsWarnedAt = new AddressThrottle();
+    private readonly tlsFailureLoggedAt = new AddressThrottle();
 
     public constructor() {
         super(true);
@@ -273,6 +341,10 @@ export class TCPServerWorker extends WorkerService {
                 this.stop();
                 break;
 
+            case 'm:tlsCredentials':
+                this.useTlsCredentials(msg.content.tls as TcpTlsCredentials);
+                break;
+
             case 'm:broadcast': {
                 const ids = msg.content.clients as string[];
                 const clients = ids
@@ -302,6 +374,23 @@ export class TCPServerWorker extends WorkerService {
         );
         this.rateLimiter = this.createRateLimiter(options.rateLimit ?? DEFAULT_RATE_LIMIT);
         this.idleTimeoutMillis = options.idleTimeoutMillis ?? DEFAULT_IDLE_TIMEOUT_MILLIS;
+        this.tlsCredentials = options.tls;
+    }
+
+    // A renewed certificate, for every connection from now on. Open ones keep the one they started
+    // with: TLS has no way to change it under them.
+    public useTlsCredentials(credentials: TcpTlsCredentials): void {
+        this.tlsCredentials = credentials;
+        if (!this.tlsServer) return;
+
+        try {
+            this.tlsServer.setSecureContext(secureContextOptions(credentials));
+        } catch (err) {
+            this.logError(
+                `Could not switch the TCP server to the renewed TLS certificate: ${err instanceof Error ? err.message : String(err)}`,
+                false
+            );
+        }
     }
 
     private createRateLimiter(limit: RateLimit): InboundRateLimiter<TcpClient> {
@@ -317,13 +406,136 @@ export class TCPServerWorker extends WorkerService {
     }
 
     public start(port: number, host: string): void {
-        this.server = net.createServer((socket) =>
-            this.handleConnection(socket)
-        );
+        const credentials = this.tlsCredentials;
+        if (credentials) {
+            this.tlsServer = this.createTlsServer(credentials);
+            this.server = net.createServer((socket) => this.handleTlsPortConnection(socket));
+        } else {
+            this.server = net.createServer((socket) => this.handleConnection(socket));
+        }
         this.server.listen(port, host);
 
-        this.logInfo(`Starting Colibri TCP server on ${host}:${port}`);
+        this.logInfo(`Starting Colibri TCP server on ${host}:${port}${credentials ? ', TLS only' : ''}`);
         this.heartbeatInterval = setInterval(() => this.tick(), 100);
+    }
+
+    // TLS wraps the same frames, unchanged: past the handshake, a TLS client is handled exactly like
+    // an unencrypted one.
+    private createTlsServer(credentials: TcpTlsCredentials): tls.Server {
+        const server = tls.createServer({
+            ...secureContextOptions(credentials),
+            handshakeTimeout: this.tlsHandshakeTimeoutMillis,
+        });
+        server.on('secureConnection', (socket: tls.TLSSocket) => this.handleConnection(socket));
+        server.on('tlsClientError', (error: Error, socket: tls.TLSSocket) => this.handleTlsClientError(error, socket));
+        return server;
+    }
+
+    // A connection to the TLS port. Its first bytes say whether it starts a TLS handshake: if so, it
+    // is handed to tlsServer; if not, it is refused, and the warning can name it and the fix. Handed
+    // to tlsServer straight away, it would only fail its handshake with OpenSSL's "wrong version
+    // number", which names neither.
+    private handleTlsPortConnection(socket: net.Socket): void {
+        // Read now, which caches it for tlsPeerAddress.
+        const address = socket.remoteAddress || 'UNDEFINED';
+        // Set on the TCP socket: the TLS socket on top of it does not pass either one down.
+        socket.setNoDelay(true);
+        socket.setKeepAlive(true, KEEPALIVE_INITIAL_DELAY_MILLIS);
+        this.tlsPortSockets.add(socket);
+
+        let firstBytes: Buffer = Buffer.alloc(0);
+        const silence = setTimeout(() => {
+            this.logDebug(`Disconnecting ${address}: it sent nothing within ${this.tlsHandshakeTimeoutMillis / 1000} s of connecting`);
+            socket.destroy();
+        }, this.tlsHandshakeTimeoutMillis);
+        silence.unref();
+
+        const onError = (error: Error) => {
+            this.logDebug(`Lost the connection to ${address} before it started TLS: ${error.message}`);
+        };
+        const onData = (chunk: Buffer) => {
+            firstBytes = firstBytes.length === 0 ? chunk : Buffer.concat([firstBytes, chunk]);
+            if (firstBytes.length < TLS_HANDSHAKE_PREFIX_LENGTH) return;
+
+            clearTimeout(silence);
+            socket.off('data', onData);
+            socket.pause();
+
+            if (!looksLikeTlsHandshake(firstBytes)) {
+                this.refuseClientWithoutTls(socket, address, firstBytes);
+                return;
+            }
+            if (!this.tlsServer) {
+                socket.destroy();
+                return;
+            }
+
+            // The TLS socket reads what was read here from the TCP socket's buffer first, and reports
+            // the TCP socket's errors from now on, as tlsClientError until the handshake is done.
+            socket.unshift(firstBytes);
+            socket.off('error', onError);
+            this.tlsServer.emit('connection', socket);
+        };
+
+        socket.on('data', onData);
+        socket.on('error', onError);
+        socket.on('close', () => {
+            clearTimeout(silence);
+            this.tlsPortSockets.delete(socket);
+        });
+    }
+
+    // Nothing is sent to such a client: it speaks neither TLS nor, necessarily, this protocol. A
+    // Unity app sees the connection closed, and this warning is the diagnostic.
+    private refuseClientWithoutTls(socket: net.Socket, address: string, firstBytes: Buffer): void {
+        let v1 = false;
+        let who = '';
+        try {
+            const handshake = new FrameReader(maxBufferSize).append(firstBytes).find(frame => frame.type === FrameType.Handshake);
+            if (handshake) who = ` (Unity client '${handshake.name}', app '${handshake.app}')`;
+        } catch (err) {
+            v1 = err instanceof V1FramingError;
+        }
+
+        if (!this.withoutTlsWarnedAt.shouldWarn(address, performance.now())) {
+            this.logDebug(`Refusing a connection without TLS from ${address}${who} (warned about this address already)`);
+        } else if (v1) {
+            this.logWarning(
+                `Refusing a connection from ${address}: it looks like a Colibri 1.x client, which cannot use TLS, and this ` +
+                    'server\'s TCP port accepts only TLS connections (TLS_CERT and TLS_KEY are set). Upgrade the Colibri Unity ' +
+                    'package (de.uni.kn.colibri) in that app to 2.x, and tick \'Server supports SSL/TLS?\' in its Colibri ' +
+                    'configuration. This is logged at most once a minute per address.'
+            );
+        } else {
+            this.logWarning(
+                `Refusing a connection from ${address}${who}: it does not use TLS, and this server's TCP port accepts only TLS ` +
+                    'connections (TLS_CERT and TLS_KEY are set). Tick \'Server supports SSL/TLS?\' in that Unity app\'s Colibri ' +
+                    'configuration. This is logged at most once a minute per address.'
+            );
+        }
+
+        // Ended rather than destroyed, so the client sees the connection closed, not reset. Whatever
+        // else it sends is read and dropped, so that its own close is seen.
+        socket.resume();
+        socket.end();
+        const grace = setTimeout(() => socket.destroy(), CLOSE_GRACE_MILLIS);
+        grace.unref();
+        socket.once('close', () => clearTimeout(grace));
+    }
+
+    // At info, not as an error: a client that does not accept the certificate, or gives up on a slow
+    // network, is no fault of this server.
+    private handleTlsClientError(error: Error, socket: tls.TLSSocket): void {
+        // tls.Server leaves a socket whose handshake timed out open.
+        socket.destroy();
+
+        const address = tlsPeerAddress(socket);
+        const text = `TLS handshake with ${address} failed: ${describeTlsFailure(error, this.tlsHandshakeTimeoutMillis)}`;
+        if (this.tlsFailureLoggedAt.shouldWarn(address, performance.now())) {
+            this.logInfo(`${text} This is logged at most once a minute per address.`);
+        } else {
+            this.logDebug(text);
+        }
     }
 
     private tick(): void {
@@ -391,13 +603,19 @@ export class TCPServerWorker extends WorkerService {
     public stop(): void {
         clearInterval(this.heartbeatInterval);
         this.server?.close();
+        this.tlsServer = undefined;
 
         for (const client of [...this.clients.values(), ...this.waitingClients.values()]) {
             client.socket.destroy();
         }
+        // And those still in their TLS handshake, or yet to start it.
+        for (const socket of this.tlsPortSockets) {
+            socket.destroy();
+        }
         this.clients.clear();
         this.waitingClients.clear();
         this.clientsByApp.clear();
+        this.tlsPortSockets.clear();
     }
 
     // `reply`: the server's answer to the recipients' own request; see MAX_REPLY_BACKLOG_BYTES.

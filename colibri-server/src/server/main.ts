@@ -21,11 +21,19 @@ dataStore.tombstoneMillis = Config.MODEL_TOMBSTONE_SECONDS * 1000;
 /**
  *    Servers
  */
+
+// With TLS_CERT and TLS_KEY set, the TCP port and the web port serve TLS with the same certificate,
+// and take up a renewed one together. Config has checked both files already.
+const tlsCertificate = Config.TLS_CERT && Config.TLS_KEY
+    ? new colibri.TlsCertificate(Config.TLS_CERT, Config.TLS_KEY)
+    : undefined;
+
 const webServer = new colibri.WebServer(
     Config.WEBSERVER_HOST,
     Config.WEBSERVER_PORT,
     Config.WEBSERVER_ROOT,
-    Config.BASE_URL
+    Config.BASE_URL,
+    tlsCertificate
 );
 const voiceServer = new colibri.VoiceServer(Config.VOICE_SAMPLING_RATE, Config.DATA_ROOT, Config.VOICE_RECORDING);
 
@@ -80,6 +88,8 @@ const startup = async () => {
     // After every init(), so the admin UI's WebLog is listening for it too. Not fatal: the
     // server is still useful without persistence, it just has to say so.
     await dataRootCheck.check();
+    // Likewise: logs the certificate's fingerprint.
+    tlsCertificate?.start();
 
     const rateLimit = { messagesPerSecond: Config.CLIENT_MESSAGE_RATE_LIMIT, burst: Config.CLIENT_MESSAGE_RATE_BURST };
     const httpServer = webServer.start();
@@ -88,7 +98,7 @@ const startup = async () => {
         inboundBacklogLimit: Config.TCP_INBOUND_BACKLOG_LIMIT,
         rateLimit,
         idleTimeoutMillis: Config.TCP_IDLE_TIMEOUT_SECONDS * 1000,
-    });
+    }, tlsCertificate);
     voiceServer.start(Config.VOICE_PORT, Config.VOICE_HOST);
 };
 

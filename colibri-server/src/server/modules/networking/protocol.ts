@@ -118,6 +118,23 @@ const looksLikeV1Frame = function (buffer: Buffer, offset: number): boolean {
     return header === V1_HANDSHAKE_HEADER || (header !== undefined && header >= ASCII_0 && header <= ASCII_9);
 };
 
+// How many bytes a connection has to send before looksLikeTlsHandshake can tell.
+export const TLS_HANDSHAKE_PREFIX_LENGTH = 2;
+
+const TLS_HANDSHAKE_RECORD = 0x16;
+const TLS_MAJOR_VERSION = 0x03;
+
+// Whether a connection's first bytes start a TLS handshake: every TLS client starts with a handshake
+// record (0x16) of a TLS version 3.x record layer (0x03). Read as this protocol's u32 LE length field,
+// those two bytes make it 790 (0x0316), or more by a multiple of 64 KiB: no handshake frame a client
+// sends is anywhere near that long, so a client that speaks this protocol unencrypted is not mistaken
+// for TLS. Nor is a Colibri 1.x client, which starts with a NUL byte.
+export const looksLikeTlsHandshake = function (firstBytes: Buffer): boolean {
+    return firstBytes.length >= TLS_HANDSHAKE_PREFIX_LENGTH
+        && firstBytes[0] === TLS_HANDSHAKE_RECORD
+        && firstBytes[1] === TLS_MAJOR_VERSION;
+};
+
 // Returns a Buffer whose backing ArrayBuffer holds exactly these bytes and nothing else: the
 // input itself when it already does, otherwise a copy outside Node's Buffer pool.
 //

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Subject, config as rxjsConfig } from 'rxjs';
+import { TlsCredentials } from '../../src/server/modules/core/tls-files.js';
 import { TCPServerProxy } from '../../src/server/modules/networking/tcp-server-proxy.js';
 import { WorkerServiceProxy } from '../../src/server/modules/core/worker-service-proxy.js';
 import { WorkerMessage } from '../../src/server/modules/core/worker-message.js';
@@ -302,6 +303,66 @@ describe('TCPServerProxy', () => {
             } finally {
                 vi.useRealTimers();
             }
+        });
+    });
+
+    // The worker serves TLS with whatever certificate it was last sent: the one in the start
+    // message, then each renewed one. A restarted worker must start with the latest.
+    describe('the TLS certificate', () => {
+        let sent: { channel: string; content: Record<string, unknown> }[];
+        const credentials = (name: string): TlsCredentials => ({ cert: Buffer.from(`${name} cert`), key: Buffer.from(`${name} key`) });
+
+        beforeEach(() => {
+            sent = [];
+            vi.spyOn(WorkerServiceProxy.prototype as unknown as { postMessage(channel: string, content?: Record<string, unknown>): void }, 'postMessage')
+                .mockImplementation((channel, content) => {
+                    sent.push({ channel, content: content ?? {} });
+                });
+        });
+
+        const startOptions = () => sent.filter(m => m.channel === 'm:start').map(m => m.content.options as { tls?: TlsCredentials });
+
+        it('goes to the worker with the start message', () => {
+            const current = credentials('first');
+            proxy.start(9012, '0.0.0.0', { idleTimeoutMillis: 1 }, { credentials: current, changes$: new Subject<TlsCredentials>() });
+
+            expect(startOptions()).toEqual([ expect.objectContaining({ idleTimeoutMillis: 1, tls: current }) ]);
+        });
+
+        it('is left out without TLS', () => {
+            proxy.start(9012, '0.0.0.0', {});
+
+            expect(startOptions()[0]).not.toHaveProperty('tls');
+        });
+
+        it('is sent again when renewed, and a restarted worker starts with the renewed one', () => {
+            vi.useFakeTimers();
+            try {
+                vi.spyOn(WorkerServiceProxy.prototype as unknown as { restartWorker(): boolean }, 'restartWorker').mockReturnValue(true);
+                const changes = new Subject<TlsCredentials>();
+                proxy.start(9012, '0.0.0.0', {}, { credentials: credentials('first'), changes$: changes });
+
+                const renewed = credentials('second');
+                changes.next(renewed);
+                expect(sent.filter(m => m.channel === 'm:tlsCredentials').map(m => m.content.tls)).toEqual([ renewed ]);
+
+                (proxy as unknown as ProxyInternals).onWorkerExited();
+                vi.advanceTimersByTime(1000);
+                expect(startOptions().map(o => o.tls)).toEqual([ credentials('first'), renewed ]);
+            } finally {
+                vi.useRealTimers();
+            }
+        });
+
+        it('is not sent any more once stopped', async () => {
+            vi.spyOn(WorkerServiceProxy.prototype as unknown as { terminateWorker(): Promise<void> }, 'terminateWorker').mockResolvedValue();
+            const changes = new Subject<TlsCredentials>();
+            proxy.start(9012, '0.0.0.0', {}, { credentials: credentials('first'), changes$: changes });
+
+            await proxy.stop();
+            changes.next(credentials('second'));
+
+            expect(sent.filter(m => m.channel === 'm:tlsCredentials')).toEqual([]);
         });
     });
 });

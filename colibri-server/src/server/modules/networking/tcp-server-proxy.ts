@@ -1,7 +1,7 @@
 import { TCP_SERVER_WORKER, TCP_SERVER_WORKER_ROLE, TcpServerOptions, WireNetworkMessage } from './tcp-server-worker.js';
-import { Payload, WorkerServiceProxy } from '../core/index.js';
+import { Payload, TlsCredentialSource, WorkerServiceProxy } from '../core/index.js';
 import { ownBytes } from './protocol.js';
-import { Observable, Subject } from 'rxjs';
+import { Observable, Subject, Subscription } from 'rxjs';
 import { Delivery, NetworkClient, NetworkMessage, NetworkServer } from '../command-hooks/index.js';
 
 const toBuffer = function (value: Buffer | Uint8Array): Buffer {
@@ -40,10 +40,12 @@ export class TCPServerProxy
     private readonly inboundBacklog = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
 
     // What the worker needs to know beyond the port: everything in TcpServerOptions except the
-    // backlog counter, which is this proxy's own.
+    // backlog counter, which is this proxy's own. The TLS certificate in it is always the latest, so
+    // that a restarted worker starts with that one.
     private startOptions: { port: number; host: string; options: Omit<TcpServerOptions, 'inboundBacklog'> } | undefined;
     private restartAttempts = 0;
     private restartTimer: NodeJS.Timeout | undefined;
+    private tlsChanges: Subscription | undefined;
 
     public get clients$(): Observable<ReadonlyArray<NetworkClient>> {
         return this.clientStream.asObservable();
@@ -101,8 +103,23 @@ export class TCPServerProxy
         });
     }
 
-    public start(port: number, host: string, options: Omit<TcpServerOptions, 'inboundBacklog'> = {}): void {
-        this.startOptions = { port, host, options };
+    // `tls`: accept only TLS connections, with this certificate and each renewed one.
+    public start(
+        port: number,
+        host: string,
+        options: Omit<TcpServerOptions, 'inboundBacklog' | 'tls'> = {},
+        tls?: TlsCredentialSource
+    ): void {
+        this.startOptions = { port, host, options: tls ? { ...options, tls: tls.credentials } : options };
+
+        this.tlsChanges?.unsubscribe();
+        this.tlsChanges = tls?.changes$.subscribe((credentials) => {
+            if (this.startOptions) {
+                this.startOptions = { ...this.startOptions, options: { ...this.startOptions.options, tls: credentials } };
+            }
+            this.postMessage('m:tlsCredentials', { tls: credentials });
+        });
+
         this.postStart();
         this.clientStream.next(this.currentClients);
     }
@@ -118,6 +135,8 @@ export class TCPServerProxy
         // Cleared first so a worker exit triggered by the terminate below isn't mistaken
         // for a crash and restarted underneath the shutdown.
         this.startOptions = undefined;
+        this.tlsChanges?.unsubscribe();
+        this.tlsChanges = undefined;
         if (this.restartTimer) {
             clearTimeout(this.restartTimer);
             this.restartTimer = undefined;
