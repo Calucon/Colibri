@@ -690,6 +690,109 @@ describe('RegisterModelSync own models after a change lost in a dead link', () =
     });
 });
 
+// A page whose own model changes while it catches up after a reconnect, on a link with some latency.
+describe('RegisterModelSync own models changing through the reconnect', () => {
+    class Pair extends SyncModel<Pair> {
+        @Synced()
+        accessor value = '';
+        @Synced()
+        accessor other = '';
+    }
+
+    /** Registers `model` through `client`, and resolves once `peer` has it and `client` is caught up. */
+    const registeredOn = async (
+        client: Colibri,
+        peer: Colibri,
+        channel: string,
+        model: Pair,
+        registerModel: (m: Pair) => void
+    ) => {
+        const arrived = nextMessage(peer, { channel, command: 'model::update' });
+        registerModel(model);
+        await arrived;
+        await roundTrip(client);
+    };
+
+    // A model that changes all the time, a tracked pose say, changed again before every answer to
+    // asking for it once more: it stayed asked for, one update a round trip went out, and the models
+    // created during the outage never arrived.
+    it('catches up on a model created during the outage while its own model changes all the time', async () => {
+        const app = uniqueApp('modelsync-own-moving');
+        const channel = uniqueApp('own');
+        const peer = await createClient(app);
+        const link = await startLinkProxy(25);
+        const singleton = await createClientThrough(app, link);
+
+        const [models$, registerModel] = RegisterModelSync<Pair>({ name: channel, type: Pair });
+        const model = new Pair('me');
+        model.value = '0';
+        await registeredOn(singleton, peer, channel, model, registerModel);
+
+        let moves = 0;
+        const moving = setInterval(() => {
+            moves += 1;
+            model.value = String(moves);
+        }, 33);
+        try {
+            link.freeze();
+            peer.sendMessage(channel, 'model::update', { id: 'theirs', value: 'created meanwhile' });
+            await roundTrip(peer);
+            const reconnected = nextConnect(singleton);
+            link.cut();
+            await reconnected;
+
+            await firstValueFrom(
+                models$.pipe(
+                    filter(ms => ms.some(m => m.id === 'theirs')),
+                    timeout(3000)
+                )
+            );
+            const peerSaw = await updatesDuring(peer, channel, () => new Promise(resolve => setTimeout(resolve, 1000)));
+            // About 30 a second; one a round trip was about 18.
+            expect(peerSaw.length).toBeGreaterThanOrEqual(25);
+        } finally {
+            clearInterval(moving);
+        }
+        expect(latest(models$).map(m => m.id)).toEqual(['me', 'theirs']);
+    });
+
+    // The server answers the request for every model with what it has when it reads that request, and
+    // reads a change sent just after it only then. Applied, that answer undid the change on this page
+    // alone: the server never sends a client's own update back to it.
+    it('keeps a change sent just after asking for every model after a reconnect', async () => {
+        const app = uniqueApp('modelsync-own-catch-up');
+        const channel = uniqueApp('own');
+        const peer = await createClient(app);
+        const link = await startLinkProxy(25);
+        const singleton = await createClientThrough(app, link);
+
+        const [, registerModel] = RegisterModelSync<Pair>({ name: channel, type: Pair });
+        const model = new Pair('kept-1');
+        model.value = 'A';
+        model.other = 'X';
+        await registeredOn(singleton, peer, channel, model, registerModel);
+
+        // Changes `other` in the same tick as the request for every model goes out after the reconnect.
+        const send = singleton.sendMessage.bind(singleton);
+        let armed = true;
+        singleton.sendMessage = (ch: string, command: string, payload?: unknown) => {
+            send(ch, command, payload);
+            if (armed && ch === channel && command === 'model::request' && payload === undefined) {
+                armed = false;
+                model.other = 'Y';
+            }
+        };
+        const reconnected = nextConnect(singleton);
+        link.cut();
+        await reconnected;
+        for (let i = 0; i < 3; i++) await roundTrip(singleton);
+
+        expect(armed).toBe(false);
+        expect(model.other).toBe('Y');
+        expect(await storedOn(peer, channel, 'kept-1')).toEqual({ id: 'kept-1', value: 'A', other: 'Y' });
+    });
+});
+
 // The server may already have a model under the id a client registers: another client created it,
 // or the same page did before it was reloaded, while another client kept the app alive.
 describe('RegisterModelSync registering an id the server already has', () => {
