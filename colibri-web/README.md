@@ -1,55 +1,44 @@
-# Colibri - Web Client
+# Colibri Web
 
-The TypeScript client for Colibri, a toolkit for connecting cross-reality research prototypes. It sends data between
-clients on named channels, keeps objects in sync with other web and Unity clients, stores JSON values on the server and
-can forward console logs to it. Every client connects to a [colibri-server](../colibri-server/).
+TypeScript client for [Colibri](../README.md): messaging and object synchronization with web and Unity clients, a
+[key-value store](docs/guide.md#remote-store) and [remote logging](docs/guide.md#web-interface-for-logging). Requires a
+[colibri-server](../colibri-server/README.md).
 
-This page is the short version. The [full guide](docs/guide.md) has every option and detail. Release notes are in
-[CHANGELOG.md](CHANGELOG.md), and upgrading all components from 1.x is in [MIGRATION.md](../MIGRATION.md).
+Full documentation: [docs/guide.md](docs/guide.md)
 
 ## Requirements
 
-- **A running colibri-server 2.x** ([how to start one](../colibri-server/)). A 2.x server refuses 1.x web clients,
-  and this client warns about a 1.x server.
-- **TypeScript 5.0 or newer**, with standard decorators: `experimentalDecorators` off (unset or `false`) in
-  `tsconfig.json`.
-- **rxjs 7.8.1 or a newer 7.x**, a peer dependency. npm 7 and newer install it for you; otherwise add it to your
-  project yourself.
+- colibri-server 2.x. A 2.x server refuses 1.x web clients, and this client warns about a 1.x server.
+- TypeScript 5.0 or newer with standard decorators. Leave `experimentalDecorators` unset or `false`.
+- rxjs 7.8.1 or a newer 7.x as a peer dependency. npm 7 and newer install it automatically.
 
-## Install
+## Installation
 
 ```sh
 npm install @hcikn/colibri@2
-# or
-yarn add @hcikn/colibri@2
 ```
 
-Keep the `@2`, so that you never get a 1.x release by accident. If npm answers
-`No matching version found for @hcikn/colibri@2` (yarn: `Couldn't find any versions`), build the package from a
-checkout of this repository instead ([how](docs/guide.md#installation)).
+Keep the `@2` to avoid installing a 1.x release. If npm reports `No matching version found for @hcikn/colibri@2`,
+[build the package from source](docs/guide.md#installation).
 
 ## Quick start
-
-### Sending data between clients
 
 ```ts
 import { Colibri, Sync } from '@hcikn/colibri';
 
-// your colibri-server; 9011 is its default port
-new Colibri('your-app-name', 'http://<your-server>:9011');
+new Colibri('your-app-name', 'http://<your-server>:9011'); // 9011 is the default port
 
 Sync.receiveNumber('temperature', value => console.log('temperature', value));
 Sync.sendNumber('temperature', 21.5);
 ```
 
-Only clients with the same app name see each other's data, web and Unity alike. Give every client of your prototype
-the same one, and pick one nobody else on the server uses (`colibri` is taken by the admin UI). The sender does not
-receive its own data, so try it with two clients, such as two browser tabs, or a tab and a Unity client.
+- Only clients with the same app name exchange data, web and Unity alike. Use a name no other project on the server
+  uses. The admin UI uses the app name `colibri`.
+- The sender does not receive its own messages. Test with two clients, such as two browser tabs.
+
+## Usage
 
 ### SyncModel
-
-Synchronized objects extend `SyncModel` and mark their fields with `@Synced()`. This example needs the
-`new Colibri()` from the one above:
 
 ```ts
 import { RegisterModelSync, SyncModel, Synced } from '@hcikn/colibri';
@@ -62,51 +51,45 @@ class Player extends SyncModel<Player> {
 const [players$, registerPlayer] = RegisterModelSync<Player>({ name: 'player', type: Player });
 players$.subscribe(players => console.log(players.map(p => `${p.id}: ${p.score}`)));
 
-// the id names this object on every client, so give each object its own
-const me = new Player(`player-${Date.now()}`);
+const me = new Player(`player-${Date.now()}`); // the id must be unique across clients
 registerPlayer(me);
 me.score = 10; // sent to the other clients
 ```
 
-Open the page in a second tab, and each tab lists both players.
+- Requires the `new Colibri()` call from the quick start. With the page open in two tabs, each tab lists both players.
+- Always pass `name`. Without it, the channel is the class name in lower case, which minification changes.
+- To sync with a Unity `SyncBehaviour<T>`, set `name` to the Unity class name in lower case, followed by `_<ModelId>`
+  if the component's `ModelId` is set ([details](docs/guide.md#syncmodel)).
 
-Always pass `name`. To sync with a Unity `SyncBehaviour<T>`, use the Unity class name in lower case, followed by
-`_<ModelId>` if that component's `ModelId` is set. More in [SyncModel](docs/guide.md#syncmodel).
+## Configuration
 
-## Common problems
+`new Colibri(app, server, port)` takes the server as a host name or IP address, optionally with `http://`, `https://`,
+`ws://` or `wss://` and a port. The port defaults to `9011`. Without `server`, a browser connects to the page's host.
+Only one instance may exist. `Colibri.getInstance()` returns it. Details: [Configuration](docs/guide.md#configuration).
 
-- **`new Colibri()` throws a `ColibriError`.** The address has a path such as `/log`, a query or a fragment after the
-  host and port, a scheme other than `http`, `https`, `ws` or `wss`, or a port that disagrees with the third argument.
-  Or an instance already exists: use `Colibri.getInstance()`.
-- **Clients do not see each other.** They use different app names or servers. A listener only receives what is sent
-  while it is registered and connected.
-- **Nothing connects from an `https://` page.** Browsers block `ws://` and `http://` from it (mixed content). Use
-  `https://` or `wss://`, which needs [TLS on the server](docs/guide.md#tls) or a proxy in front of it that adds TLS.
-- **`colibri.protocolMismatch` emits.** With `fatal: true` the server refused this client and the connection is
-  closed; with `fatal: false` the server is suspected to be older than 2.0.0, and the connection keeps working. Use
-  2.x on both sides. See [Protocol version](docs/guide.md#protocol-version).
-- **`@Synced()` fails to compile or does not sync.** Remove `experimentalDecorators` from `tsconfig.json` and declare
-  every synced member with `accessor`.
-- **Models sync during development but not in a production build, or not with Unity.** Pass `name` to
-  `RegisterModelSync`. Without it the channel is the class name in lower case, which minifying changes.
-- **Unity never receives numbers from the web.** Every number sent from here is a `float`: receive it in Unity with
-  `Sync.Receive<float>`, never `Sync.Receive<int>`.
-- **A colour is sometimes a string and sometimes an array.** Unity sends `"#RRGGBBAA"`, colibri-web `[r, g, b, a]`.
-  Pass it through `toHexColor()` or `toRgbaColor()`.
-- **`Sync.send*` does nothing.** A call before `new Colibri()` is dropped with a console warning.
+## Troubleshooting
 
-## Full guide
+| Symptom                                                                | Cause                                                                                                                                      | Fix                                                                        |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------- |
+| `new Colibri()` throws a `ColibriError`                                | Path such as `/log`, query or fragment in the address, another scheme, a port that conflicts with the third argument, or a second instance | Pass only scheme, host and port. Use `Colibri.getInstance()`.              |
+| Clients do not see each other                                          | Different app names or servers, or the listener was not registered and connected at send time                                              | Use the same app name and server. Register listeners first.                |
+| Nothing connects from an `https://` page                               | The browser blocks `ws://` and `http://` (mixed content)                                                                                   | Use `https://` or `wss://` with [TLS](docs/guide.md#tls) or a TLS proxy    |
+| `colibri.protocolMismatch` emits with `fatal: true`                    | The server refused this client and closed the connection                                                                                   | Use 2.x on both sides ([Protocol version](docs/guide.md#protocol-version)) |
+| `colibri.protocolMismatch` emits with `fatal: false`                   | The server is probably older than 2.0.0. The connection keeps working.                                                                     | Upgrade the server to 2.x                                                  |
+| `@Synced()` fails to compile or does not sync                          | `experimentalDecorators` is on, or a member lacks `accessor`                                                                               | Remove `experimentalDecorators`. Declare synced members with `accessor`.   |
+| Models sync in development but not in a production build or with Unity | No `name` in `RegisterModelSync`                                                                                                           | Pass `name`                                                                |
+| Unity never receives numbers from the web                              | colibri-web sends every number as `float`                                                                                                  | Receive with `Sync.Receive<float>` in Unity, not `Sync.Receive<int>`       |
+| A colour is sometimes a string, sometimes an array                     | Unity sends `"#RRGGBBAA"`, colibri-web `[r, g, b, a]`                                                                                      | Normalize with `toHexColor()` or `toRgbaColor()`                           |
+| `Sync.send*` does nothing                                              | Called before `new Colibri()`, dropped with a console warning                                                                              | Create the `Colibri` instance first                                        |
 
-- [Installation](docs/guide.md#installation): building the package from a checkout
-- [Configuration](docs/guide.md#configuration): app name, server address, port, HTTPS
-- [TLS](docs/guide.md#tls): a server with TLS on, self-signed certificates in browsers and Node
-- [Protocol version](docs/guide.md#protocol-version): what `protocolMismatch` reports
-- [Sending data between clients](docs/guide.md#sending-data-between-clients): types, colours, numbers, rate limits
-- [SyncModel](docs/guide.md#syncmodel): ids, channel names, reconnects, deleting
-- [Remote Store](docs/guide.md#remote-store): JSON values stored on the server
-- [Web Interface for Logging](docs/guide.md#web-interface-for-logging): forwarding console logs with `RemoteLogger`
-- [Samples](docs/guide.md#samples): runnable examples
-- [For maintainers](docs/guide.md#for-maintainers): tests and releases
+## Documentation
 
-Further reading: the [protocol docs](../colibri-server/docs/protocol.md), and a
-[plain JavaScript workaround](docs/js-workaround/README.md) for projects that cannot use TypeScript (not supported).
+- [Guide](docs/guide.md), including [message types](docs/guide.md#sending-data-between-clients) and
+  [samples](docs/guide.md#samples)
+- [CHANGELOG](CHANGELOG.md), [upgrading from 1.x](../MIGRATION.md), [protocol](../colibri-server/docs/protocol.md)
+- [Plain JavaScript workaround](docs/js-workaround/README.md), unsupported
+
+## Testing
+
+`npm test` runs the unit tests. `npm run test:e2e` runs the end-to-end tests and starts a colibri-server with Docker
+Compose unless `COLIBRI_E2E_SERVER` is set ([details](docs/guide.md#for-maintainers)).
