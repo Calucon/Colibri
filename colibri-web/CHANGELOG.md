@@ -36,7 +36,24 @@ Colibri component from 1.x.
 - `rxjs` moved from a regular dependency to a `peerDependency`, since its types are part of
   this package's public API (`SyncModel`, `RegisterModelSync`, `Colibri.messages`).
 - `typescript` is no longer installed as a dependency of this package, and `engines` asks for
-  Node 22 or newer.
+  Node 18 or newer, so `yarn add @hcikn/colibri` works on Node 18 and 20. Working on the
+  repository needs Node 22, which `devEngines` asks for.
+- **`registerModel` asks the server for the model's id first**, and `RegisterModelSync` asks for
+  every model only once the models registered in the same block of code, or before
+  `new Colibri()`, have their answer. If the server already has the id, its copy wins over the
+  values set before `registerModel`. Changes made after `registerModel` are held until the
+  answer, then sent on top of it, and kept on this client. When they replace values the server
+  had, the model is asked for once more, and changes made meanwhile wait for that answer (5
+  seconds at most). If the server has nothing for the id, the model is sent in full. So a
+  reloaded page that registers a fixed id no longer shows old values while everyone else has new
+  ones, and an id deleted a moment ago can be registered again. A new model reaches other clients
+  one round trip after `registerModel`.
+- After a reconnect, the models registered on this client are asked for again with
+  `model::request { id, again: true }`, so a model another client deleted during the outage
+  (within `MODEL_TOMBSTONE_SECONDS`) is dropped here instead of being sent back to everyone.
+  This needs colibri-server 2.0.0 with its model tombstones.
+- The README says that `registerModel` takes the server's copy of an existing id, that registered
+  models are sent again after a reconnect, and that REST keys are URL-encoded.
 - For maintainers: the `publish` npm script is now `release`. Under its old name npm also ran
   it after every `npm publish`, which tried to publish a second time and failed.
 
@@ -98,7 +115,18 @@ Colibri component from 1.x.
   called before it take back a pending registration.
 - **Model updates missed during a disconnect were never caught up.** After every reconnect,
   each `RegisterModelSync` asks the server for the current state again; existing models are
-  updated in place. A model deleted while this client was away is still not removed.
+  updated in place, and a model registered on this client that the server has forgotten is sent
+  again. A model from another client that was deleted while this client was away is still not
+  removed.
+- After a reconnect, a model registered on this client that another client deleted during the
+  outage no longer stops the catch-up. The delete counts as the answer for it, the model is
+  dropped, and the request for every other model still goes out, so the changes and new models
+  made meanwhile arrive.
+- `registerModel` with an id that `models$` already lists replaces that entry instead of listing
+  the id twice. The replaced instance stops syncing (with a console warning if it was registered
+  on this client), and registering the same instance again does nothing.
+- With two `RegisterModelSync` on the same channel in one page, the server's bare answer to one
+  of them does not appear in the other as a model with no fields.
 - `new RemoteLogger()` before `new Colibri()` overflowed the stack on the first `console`
   call. Lines logged before Colibri exists are now kept (the first 100) and sent once it is
   constructed; any further lines are counted and reported in one warning.
