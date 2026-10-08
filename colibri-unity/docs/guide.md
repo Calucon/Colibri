@@ -74,7 +74,7 @@ Alternatively, import the `.unitypackage` attached to the 2.0.0 release on the [
    nobody else on the server should use it) and the **Server Address** of your colibri-server,
    then press *Save Config*. The window warns about names many people pick, such as `test` or
    `myAppName`. The server can be a shared colibri-server 2.x instance or one you run yourself
-   ([Docker setup](../../colibri-server/README.md#docker-recommended)). The address is preset to the
+   ([Docker setup](../../colibri-server/README.md#docker)). The address is preset to the
    public test server `colibri.hci.uni-konstanz.de`, which this package can only use while it runs
    colibri-server 2.x: against a 1.x server, *Window → Colibri Status* reports a suspected protocol
    mismatch (see [Requirements](#requirements)).

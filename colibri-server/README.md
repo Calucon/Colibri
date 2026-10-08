@@ -1,22 +1,22 @@
-# Colibri - Server
+# Colibri Server
 
-The server connects the Unity clients (TCP) and web clients (Socket.IO) of each app: it relays
-their messages (`broadcast::`) and changes to synced objects (models) to each other, and keeps a
-copy of each app's models. It also stores values through a small REST API, relays voice over UDP,
-and serves an admin UI showing what every client logs.
+Server for [Colibri](../README.md). It relays messages and synchronized-object updates between the
+Unity and web clients of each app and keeps the current object state. It also provides a REST
+key-value store, a UDP voice relay and an admin UI with all client logs.
 
-Colibri has no authentication: anyone who can reach these ports can join any app, read and change
-its data, and read the log. Run it on a network you trust.
+Full documentation: [docs/guide.md](docs/guide.md)
 
-**Requirements:** Docker, or NodeJS 24+ to run from source. Clients need colibri-unity 2.x or
-colibri-web 2.x; the server refuses 1.x clients. Upgrading a 1.x project:
-[MIGRATION.md](../MIGRATION.md).
+## Requirements
 
-## Setup
+- Docker, or Node.js 24 or newer
+- Clients: colibri-unity 2.x, colibri-web 2.x. The server refuses 1.x clients ([upgrading](../MIGRATION.md)).
 
-### [Docker](https://hub.docker.com/r/hcikn/colibri) _(recommended)_
+## Installation
 
-Save the following as `docker-compose.yml` and run `docker compose up -d`:
+### Docker
+
+Save as `docker-compose.yml` and run `docker compose up -d`. The image is
+[`hcikn/colibri`](https://hub.docker.com/r/hcikn/colibri) on Docker Hub.
 
 ```yaml
 services:
@@ -24,10 +24,7 @@ services:
     image: hcikn/colibri:2.0.0
     restart: unless-stopped
     container_name: colibri
-    # The server logs to stdout/stderr, client log lines included, and Docker's default
-    # json-file log never rotates: cap it rather than let a long study fill the disk. And no
-    # `tty: true`: with a TTY, `docker logs` has no stderr, and the warnings and errors are
-    # mixed into stdout.
+    # Cap the log size. Do not set `tty: true`, which mixes stderr into stdout.
     logging:
       driver: json-file
       options:
@@ -44,64 +41,57 @@ volumes:
   colibri-data:
 ```
 
-The admin UI is then at `http://<your-server-ip>:9011`, and `docker logs colibri` shows the log.
-Next, connect a client: [Getting started](../docs/getting-started.md) walks through Unity, and
-[colibri-web](../colibri-web/README.md) covers the browser. Each needs this server's address and
-an app name you choose.
+The admin UI is at `http://<server-ip>:9011`. `docker logs colibri` shows the log. Client setup:
+[Unity](../docs/getting-started.md), [web](../colibri-web/README.md).
 
-- **Data:** `/srv/colibri/data` holds the REST store's `store.json` and any voice recordings.
-  Mount a volume or a host directory there, e.g. `./data:/srv/colibri/data`, and leave
-  `DATA_ROOT` unset. A host directory, one left behind by colibri-server 1.x included, ends up
-  owned by uid 1000. With `--user`, see
+- **Data:** `/srv/colibri/data` holds `store.json` and voice recordings. Mount a volume or a host
+  directory there, e.g. `./data:/srv/colibri/data`, and leave `DATA_ROOT` unset. The container makes
+  uid 1000 the owner of a host directory, including one from colibri-server 1.x. With `--user`, see
   [Running as another user](docs/guide.md#running-as-another-user).
-- **Settings** go into an `environment:` section, e.g. `CONSOLE_LOG_LEVEL: debug`, or into a
-  `.env` file mounted at `/srv/colibri/.env`.
-- **Other ports:** change only the host side of `ports:`, e.g. `"8011:9011"`.
+- **Settings:** an `environment:` section, e.g. `CONSOLE_LOG_LEVEL: debug`, or a `.env` file
+  mounted at `/srv/colibri/.env`.
+- **Ports:** change only the host side of `ports:`, e.g. `"8011:9011"`.
 
-### Node
+### Node.js
 
-Clone this repository, then in `colibri-server` run `npm ci`, `npm run build` and `npm start`.
-The ports and the admin UI are the same as with Docker; the data goes to `colibri-server/data`.
+Clone the repository. In `colibri-server`, run `npm ci`, `npm run build` and `npm start`. Ports and
+admin UI are the same as with Docker. Data is stored in `colibri-server/data`.
 
 ## Configuration
 
-Settings are environment variables, or lines in a `.env` file in the directory the server is
-started from: `colibri-server` for `npm start`, `/srv/colibri` in the Docker image.
-[`.env.example`](.env.example) lists every one with its default, and the
-[guide](docs/guide.md#configuration) explains each. `TLS_CERT` and `TLS_KEY` turn on
-[TLS](docs/guide.md#tls) for both client ports.
+Set environment variables or a `.env` file in the working directory, which is `colibri-server` for
+`npm start` and `/srv/colibri` in the Docker image. [`.env.example`](.env.example) lists all
+variables with defaults ([reference](docs/guide.md#configuration)).
 
-## Common problems
+`TLS_CERT` and `TLS_KEY` enable [TLS](docs/guide.md#tls) on ports 9011 and 9012. All clients must
+then use TLS. Voice chat stays unencrypted.
 
-| What you see | What to do |
-| --- | --- |
-| At startup, on stderr: the server cannot write to its data directory | It keeps running but saves nothing. The message names the path, the uid and the fix; see [When the server cannot save](docs/guide.md#when-the-server-cannot-save) |
-| A client never appears in the admin UI, and the server log has a `Refusing ...` warning or error | Its protocol version does not match: 1.x clients cannot use a 2.x server. Update colibri-unity or colibri-web to 2.x. If the warning names TLS, the Unity app's *Server supports SSL/TLS?* does not match the server: see [TLS](docs/guide.md#tls-in-the-log) |
-| A Unity client is disconnected while you are stopped at a breakpoint | A debugger usually pauses the thread that answers heartbeats too. On your own server, raise `TCP_IDLE_TIMEOUT_SECONDS` (10 s) or set it to `0` |
-| `App 'MyApp' now has 9 clients, more than 8 ...` | Usually separate projects that kept the same app name. Give each project its own |
-| Warnings naming `TCP_INBOUND_BACKLOG_LIMIT` or `CLIENT_MESSAGE_RATE_LIMIT`; synced objects lag and broadcasts go missing | Backlog: sync fewer objects, less often, or with fewer clients per app. Rate: the named client sends too much, usually every frame with no rate cap. See [Load limits](docs/guide.md#load-limits) |
-| With several apps on one server, you hear a voice from another app | The voice relay does not separate apps, and receivers pick voices by user id: give each app distinct voice user ids |
-| The admin UI's Log page is empty after a restart | It keeps the last 20,000 messages in memory only. They also go to stdout and stderr (`docker logs colibri`), filtered by `CONSOLE_LOG_LEVEL` |
+## Security
+
+Colibri has no authentication. Anyone who can reach the ports can join any app, read and change its
+data, and read the log. Run the server on a trusted network.
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| Startup error on stderr about the data directory | The server cannot write there. It keeps running but saves nothing. | Apply the fix named in the message ([details](docs/guide.md#when-the-server-cannot-save)) |
+| A client is missing from the admin UI, and the log shows `Refusing ...` | A 1.x client, or the Unity app's *Server supports SSL/TLS?* does not match the server | Update the client to 2.x, or fix the TLS setting ([TLS in the log](docs/guide.md#tls-in-the-log)) |
+| A Unity client disconnects while stopped at a breakpoint | The debugger also pauses heartbeat replies | Raise `TCP_IDLE_TIMEOUT_SECONDS` (default 10) or set it to `0` |
+| `App 'MyApp' now has 9 clients, more than 8 ...` | Separate projects use the same app name | Give each project its own app name |
+| Warning naming `TCP_INBOUND_BACKLOG_LIMIT`, synced objects lag, broadcasts missing | The server is overloaded | Sync fewer objects, less often, or with fewer clients per app ([Load limits](docs/guide.md#load-limits)) |
+| Warning naming `CLIENT_MESSAGE_RATE_LIMIT` | The named client sends too much, usually every frame | Cap that client's send rate |
+| Voice from another app | The voice relay does not separate apps | Use distinct voice user ids per app |
+| Admin UI Log page empty after a restart | It keeps the last 20,000 messages in memory only | Use `docker logs colibri`, filtered by `CONSOLE_LOG_LEVEL` |
 
 ## Development
 
-`npm ci`, then `npm run watch` for a development server that compiles and reloads on file changes,
-`npm test` for the unit tests and `npm run lint`.
+Run `npm ci`, then `npm run watch` for a development server that recompiles and reloads on changes.
+`npm test` runs the unit tests and `npm run lint` the linter ([all scripts](docs/guide.md#development)).
 
-## Full guide
+## Documentation
 
-[docs/guide.md](docs/guide.md) has everything else:
-
-- [What the server does](docs/guide.md#features): the admin UI's Log and Statistics pages, the
-  REST store at `/api/store`, the voice relay
-- [Docker in detail](docs/guide.md#docker-recommended): building from a checkout, host
-  directories, `--user`, clean shutdown
-- [Configuration](docs/guide.md#configuration): every variable, and what stops the server at startup
-- [TLS](docs/guide.md#tls): certificates, Docker, renewal, what the clients need, what it costs
-- [Logs](docs/guide.md#logs), [Load limits](docs/guide.md#load-limits) and
-  [Lost connections](docs/guide.md#lost-connections)
-- [Protocol and version checking](docs/guide.md#protocol)
-- [Development](docs/guide.md#development): every npm script
-
-The wire protocol for both transports is in [docs/protocol.md](docs/protocol.md), and everything
-that changed since 1.x in [docs/v2-changelog.md](docs/v2-changelog.md).
+- [Guide](docs/guide.md): [Docker](docs/guide.md#docker-recommended), [logs](docs/guide.md#logs),
+  [load limits](docs/guide.md#load-limits), [lost connections](docs/guide.md#lost-connections)
+- [Version checking](docs/guide.md#protocol), [wire protocol](docs/protocol.md),
+  [changes since 1.x](docs/v2-changelog.md)
