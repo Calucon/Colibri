@@ -100,11 +100,23 @@ type Refusal = 'rate' | 'backlog';
 // forwarding, take megabytes at once: on loopback, all of that broadcast within 0.2 s. Such a client
 // was disconnected 10 s in while reading all along, and once it had reconnected it never got the
 // message. So until a client echoes a heartbeat sent after its largest such message, it may stay
-// quiet one more idle timeout for every HEARTBEAT_EVERY_BYTES of that message (idleAllowanceMillis):
-// the rate the heartbeats between messages already assume, 6.4 KiB/s at the default. The price is
-// that a client that has gone while such a message was on its way to it is noticed that much later,
-// at most 81 idle timeouts (13.5 minutes) for a message of MAX_FRAME_LENGTH.
+// quiet one more idle timeout for every HEARTBEAT_EVERY_BYTES of that message, the rate the
+// heartbeats between messages already assume (6.4 KiB/s at the default), up to
+// MAX_IDLE_ALLOWANCE_TIMEOUTS more (idleAllowanceMillis). The extra time ends once it echoes a
+// heartbeat sent after the message; a client that never echoes heartbeats keeps it from its first
+// such message on. The price is that a client that is gone by the time such a message is sent to
+// it, or goes while it is being read, is noticed that much later.
 export const DEFAULT_IDLE_TIMEOUT_MILLIS = 10_000;
+
+// The most idle timeouts a client reading a large message may stay quiet on top of its own; see
+// DEFAULT_IDLE_TIMEOUT_MILLIS. Each one keeps a client that has gone connected, and its app's models
+// alive, that much longer, and behind Docker Desktop's port forwarding or another proxy nothing else
+// notices it at all: the server's connection is to the proxy, so the kernel never gives up on it
+// either. Without a limit that was up to 81 idle timeouts in all, 13.5 minutes, for a message of
+// MAX_FRAME_LENGTH. With 6, 60 s at the default, a 4 MiB message still gets through at about
+// 60 KB/s or faster (the link it was reproduced on did 200 KB/s), and a client that has gone is
+// noticed within 7 idle timeouts at worst.
+const MAX_IDLE_ALLOWANCE_TIMEOUTS = 6;
 
 // After this many bytes of messages written to a client since its last heartbeat, it is sent one
 // more ahead of the next message, between the ticks' heartbeats.
@@ -614,10 +626,11 @@ export class TCPServerWorker extends WorkerService {
                 const reading = allowance > 0
                     ? `, and ${Math.round(allowance / 1000)} s more for reading a ${describeSize(client.unreadLargeBytes)} message sent to it`
                     : '';
+                const tooSlow = allowance > 0 ? ', and so does a link too slow to read that message in that time' : '';
                 this.logWarning(
                     `Unity client '${client.name}' (${client.id}, app '${client.app}', ${client.address}) has sent nothing for ` +
                         `${seconds} s (TCP_IDLE_TIMEOUT_SECONDS${reading}); disconnecting it as gone. A headset that left the ` +
-                        'Wi-Fi or went to sleep without closing its connection looks like this.'
+                        `Wi-Fi or went to sleep without closing its connection looks like this${tooSlow}.`
                 );
             } else {
                 this.logDebug(`Disconnecting client ${client.id} from ${client.address}: no handshake within ${seconds} s`);
@@ -630,9 +643,10 @@ export class TCPServerWorker extends WorkerService {
 
     // How much longer than idleTimeoutMillis the client may stay quiet: one more idle timeout for
     // every HEARTBEAT_EVERY_BYTES of the largest message it has not shown it has read yet, the time
-    // that message takes at the rate the heartbeats already assume. See DEFAULT_IDLE_TIMEOUT_MILLIS.
+    // that message takes at the rate the heartbeats already assume, but no more than
+    // MAX_IDLE_ALLOWANCE_TIMEOUTS. See DEFAULT_IDLE_TIMEOUT_MILLIS.
     private idleAllowanceMillis(client: TcpClient): number {
-        return this.idleTimeoutMillis * client.unreadLargeBytes / HEARTBEAT_EVERY_BYTES;
+        return this.idleTimeoutMillis * Math.min(client.unreadLargeBytes / HEARTBEAT_EVERY_BYTES, MAX_IDLE_ALLOWANCE_TIMEOUTS);
     }
 
     // Tolerates being called before start() (an 'm:stop' racing startup) and destroys live

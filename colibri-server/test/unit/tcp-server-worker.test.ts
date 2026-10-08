@@ -3,7 +3,7 @@ import { EventEmitter } from 'events';
 import type * as net from 'net';
 import { HEARTBEAT_EVERY_BYTES, MAX_REPLY_BACKLOG_BYTES, TCPServerWorker, TcpServerOptions, WireNetworkMessage } from '../../src/server/modules/networking/tcp-server-worker.js';
 import { MAX_HELD_OBJECTS } from '../../src/server/modules/networking/inbound-limits.js';
-import { FrameReader, FrameType, PROTOCOL_VERSION, encodeHandshakeFrame, encodeHeartbeatFrame, encodeMessageFrame } from '../../src/server/modules/networking/protocol.js';
+import { FrameReader, FrameType, MAX_FRAME_LENGTH, PROTOCOL_VERSION, encodeHandshakeFrame, encodeHeartbeatFrame, encodeMessageFrame } from '../../src/server/modules/networking/protocol.js';
 import { LogLevel } from '../../src/server/modules/core/log-message.js';
 
 // Vitest runs suites inside worker threads, so the real `parentPort` here is the test
@@ -1673,7 +1673,7 @@ describe('TCPServerWorker', () => {
                 };
             };
 
-            it('is kept while it reads it, however long that takes, also with another one behind it', () => {
+            it('is kept while it reads it, also with another one behind it', () => {
                 const client = handshaked('downloader');
                 client.socket.holdWrites = true;
                 const link = slowLink(client.socket, 20 * 1024);
@@ -1718,18 +1718,39 @@ describe('TCPServerWorker', () => {
                 const link = slowLink(client.socket, 20 * 1024);
                 // A heartbeat ahead of the message, which it reads and echoes...
                 run(100, link.each);
-                send(big());
+                send(wireMessage('big', 'broadcast::json', JSON.stringify('x'.repeat(256 * 1024))));
                 // ...then a quarter of the message, and nothing more.
-                run(5_100, link.each);
+                run(300, link.each);
 
-                // 10 s for each 64 KiB of it: 640 s on top of the 10 s.
-                run(640_000);
+                // 10 s for each 64 KiB of it: 40 s on top of the 10 s.
+                run(49_000);
                 expect(disconnected()).toEqual([]);
-                run(10_000);
+                run(1_000);
 
                 expect(disconnected()).toEqual([client.id]);
                 const [warning] = warnings().filter(w => w.includes('gone'));
-                expect(warning).toContain('(TCP_IDLE_TIMEOUT_SECONDS, and 640 s more for reading a 4.0 MiB message sent to it)');
+                expect(warning).toContain('has sent nothing for 50 s (TCP_IDLE_TIMEOUT_SECONDS, and 40 s more for reading a 256 KiB message sent to it)');
+                expect(warning).toContain('and so does a link too slow to read that message in that time.');
+            });
+
+            // Otherwise a headset that has gone by the time such a message is sent to it keeps its app's
+            // models alive for up to 13.5 minutes.
+            it('gets no more than 6 more timeouts, however large the message', () => {
+                const client = handshaked('gone');
+                client.socket.holdWrites = true;
+                const link = slowLink(client.socket, 20 * 1024);
+                run(100, link.each);
+                // The largest a message can be: 80 more timeouts' worth, 800 s.
+                send({ channel: 'huge', command: 'broadcast::json', payload: Buffer.alloc(MAX_FRAME_LENGTH - 1024, 0x31) });
+                run(300, link.each);
+
+                run(69_000);
+                expect(disconnected()).toEqual([]);
+                run(1_000);
+
+                expect(disconnected()).toEqual([client.id]);
+                const [warning] = warnings().filter(w => w.includes('gone'));
+                expect(warning).toContain('has sent nothing for 70 s (TCP_IDLE_TIMEOUT_SECONDS, and 60 s more for reading a 5.0 MiB message sent to it)');
             });
 
             it('gets no more time for messages up to HEARTBEAT_EVERY_BYTES', () => {
