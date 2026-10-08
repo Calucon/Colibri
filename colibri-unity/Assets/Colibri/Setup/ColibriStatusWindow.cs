@@ -93,7 +93,7 @@ namespace HCIKonstanz.Colibri.Setup
                 EditorGUILayout.HelpBox(ColibriConfig.NOT_CONFIGURED_MESSAGE, MessageType.Error);
 
             EditorGUILayout.LabelField("App Name", string.IsNullOrEmpty(config.AppName) ? "(not set)" : config.AppName);
-            EditorGUILayout.LabelField("Server", $"{config.ServerAddress}  (tcp {config.TcpServerPort}, web {config.WebServerPort})");
+            EditorGUILayout.LabelField("Server", $"{config.ServerAddress}  (tcp {config.TcpServerPort}, web {config.WebServerPort}{(config.IsSSL ? ", TLS" : "")})");
         }
 
         private void DrawConnection()
@@ -120,7 +120,7 @@ namespace HCIKonstanz.Colibri.Setup
             EditorGUILayout.LabelField("Status", status.ToString());
             GUI.contentColor = previous;
 
-            EditorGUILayout.LabelField("Server", $"{connection.ServerAddress}:{connection.TcpPort}");
+            EditorGUILayout.LabelField("Server", $"{connection.ServerAddress}:{connection.TcpPort}{(connection.UsesTls ? "  TLS" : "")}");
             EditorGUILayout.LabelField("App Name", string.IsNullOrEmpty(connection.AppName) ? "(not set)" : connection.AppName);
             EditorGUILayout.LabelField("Protocol", status == ConnectionStatus.ProtocolMismatch
                 ? $"v{WebServerConnection.ClientVersion} (binary TCP) - server speaks v{connection.ServerVersion ?? "unknown"}"
@@ -147,6 +147,7 @@ namespace HCIKonstanz.Colibri.Setup
                         ? "OK"
                         : $"missing for {gap / 1000f:0.0} s - dropping the connection soon");
 
+                DrawCertificate(connection);
                 DrawDeliveryRate(connection);
             }
             else if (!string.IsNullOrEmpty(connection.SuspectedProtocolMismatch))
@@ -168,6 +169,23 @@ namespace HCIKonstanz.Colibri.Setup
                     + (failure == null ? "" : $"\n\nLast attempt: {failure}."),
                     MessageType.Warning);
             }
+        }
+
+        /// <summary>
+        /// How the server's certificate was accepted, and its fingerprint, selectable so that it
+        /// can be copied into "Server certificate SHA-256" to accept only this certificate.
+        /// </summary>
+        private static void DrawCertificate(WebServerConnection connection)
+        {
+            if (!connection.UsesTls || connection.CertificateAcceptance == null)
+                return;
+
+            EditorGUILayout.LabelField("Certificate", connection.CertificateAcceptance);
+
+            EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.PrefixLabel("SHA-256");
+            EditorGUILayout.SelectableLabel(connection.ServerCertificateSha256 ?? "", GUILayout.Height(EditorGUIUtility.singleLineHeight));
+            EditorGUILayout.EndHorizontal();
         }
 
         /// <summary>
