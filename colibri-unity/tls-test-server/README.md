@@ -1,7 +1,7 @@
 # TLS test server
 
 A second colibri-server with TLS turned on, for the PlayMode tests in `Assets/Tests/TlsTests.cs`
-and for the whole PlayMode suite run over TLS (`COLIBRI_E2E_TLS=1`). `run-tests.mjs` starts it
+and for the whole PlayMode suite run over TLS (`run-tests.mjs --tls`). `run-tests.mjs` starts it
 next to the plain test server and stops it again afterwards.
 
 **`cert.pem`, `key.pem` and `cert.pfx` are for these tests only.** The private key is public, here
@@ -13,8 +13,8 @@ that other people connect to; generate your own certificate as described in the 
 - Made with:
   `openssl req -x509 -newkey rsa:2048 -nodes -keyout key.pem -out cert.pem -days 36500 -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:::1" -addext "keyUsage=critical,digitalSignature,keyEncipherment" -addext "extendedKeyUsage=serverAuth" -addext "basicConstraints=critical,CA:FALSE"`
 - `cert.pfx` is the same certificate with its key as PKCS#12 (password `colibri-test`), for the
-  TLS that the tests' own fake server and proxy serve in a run over TLS (`COLIBRI_E2E_TLS=1`). It
-  uses 3DES and a SHA-1 MAC, which Mono can read:
+  TLS that the tests' own fake server and proxy serve in a run over TLS (`run-tests.mjs --tls`, or
+  `COLIBRI_E2E_TLS=1`). It uses 3DES and a SHA-1 MAC, which Mono can read:
   `openssl pkcs12 -export -in cert.pem -inkey key.pem -out cert.pfx -passout pass:colibri-test -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg sha1`
 
 To start it by hand, for running `TlsTests` from the Test Runner window:

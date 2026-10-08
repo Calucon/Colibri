@@ -11,6 +11,12 @@
  *                                                    [Sync] member survives the linker (off by
  *                                                    default; skipped with a notice when the
  *                                                    IL2CPP module is not installed)
+ *   ... --tls                                        also run the end-to-end tests a second time
+ *                                                    over TLS: every connection they make, to the
+ *                                                    TLS test server below or to the test's own
+ *                                                    servers, with the plain-TCP-only fixtures
+ *                                                    skipped (COLIBRI_E2E_TLS=1 does the same in
+ *                                                    the Test Runner window)
  *
  * Environment (the same contract colibri-web's e2e suite uses):
  *   COLIBRI_E2E_SERVER     host of a server to use instead of starting one. Setting this means
@@ -20,12 +26,13 @@
  *   COLIBRI_E2E_NO_BUILD   skip `docker compose --build`
  *   UNITY_PATH             Unity executable to use, if it is not where Unity Hub puts it
  *
- * The TLS tests (TlsTests, StoreOverTlsTests) need a second server with TLS turned on, which is
- * started from tls-test-server/compose.yml in the same way, with a certificate for tests only:
+ * The TLS tests (TlsTests, StoreOverTlsTests) and --tls need a second server with TLS turned on,
+ * which is started from tls-test-server/compose.yml in the same way, with a certificate for tests
+ * only:
  *   COLIBRI_E2E_TLS_PORT       its web port (https), default 9111
  *   COLIBRI_E2E_TLS_TCP_PORT   its binary port (TLS), default 9112
  *   COLIBRI_E2E_TLS_CERT       its certificate, default tls-test-server/cert.pem
- * Without it those tests are skipped, and this script says so.
+ * Without it those tests are skipped, and this script says so; --tls then fails.
  *
  * A server already listening on the TCP port is used as it stands, whether or not the
  * environment says so - taking someone's running server down at the end of a test run would be a
@@ -59,6 +66,7 @@ if (process.argv.includes('--editmode')) platforms.push('EditMode');
 if (process.argv.includes('--playmode')) platforms.push('PlayMode');
 if (platforms.length === 0) platforms.push('EditMode', 'PlayMode');
 const stripping = process.argv.includes('--stripping');
+const overTls = process.argv.includes('--tls');
 
 
 /*
@@ -133,14 +141,15 @@ const startTlsServer = async () => {
     process.env.COLIBRI_E2E_TLS_TCP_PORT = String(TLS_TCP_PORT);
     process.env.COLIBRI_E2E_TLS_CERT = TLS_CERT;
 
+    const nothingToStop = async () => {};
     if (await isListening(HOST, TLS_TCP_PORT)) {
         console.log(`Using the TLS server already listening on ${HOST}:${TLS_TCP_PORT}.`);
-        return async () => {};
+        return { up: true, stop: nothingToStop };
     }
 
     if (process.env.COLIBRI_E2E_SERVER) {
         console.log(`No TLS server on ${HOST}:${TLS_TCP_PORT}; the TLS tests will be skipped.`);
-        return async () => {};
+        return { up: false, stop: nothingToStop };
     }
 
     const args = ['compose', '-f', 'compose.yml', 'up', '-d'];
@@ -152,13 +161,16 @@ const startTlsServer = async () => {
         await waitForPort(HOST, TLS_TCP_PORT, 180_000);
     } catch (error) {
         console.log(`Could not start the TLS server, so the TLS tests will be skipped: ${error.message}`);
-        return async () => {};
+        return { up: false, stop: nothingToStop };
     }
     console.log(`colibri-server with TLS is up on ${HOST}:${TLS_TCP_PORT} (web ${TLS_WEB_PORT}).`);
 
-    return async () => {
-        console.log('Stopping the TLS server...');
-        await execFileAsync('docker', ['compose', '-f', 'compose.yml', 'down'], { cwd: TLS_SERVER_DIR }).catch(() => {});
+    return {
+        up: true,
+        stop: async () => {
+            console.log('Stopping the TLS server...');
+            await execFileAsync('docker', ['compose', '-f', 'compose.yml', 'down'], { cwd: TLS_SERVER_DIR }).catch(() => {});
+        },
     };
 };
 
@@ -234,9 +246,10 @@ const findUnity = () => {
     throw new Error(`Unity ${version} (from ProjectSettings/ProjectVersion.txt) is not installed.\n${alternatives}`);
 };
 
-const runUnity = (unity, platform) =>
+/** `name` names the results and the log, for a second run of the same platform; `env` is added to this one's. */
+const runUnity = (unity, platform, { name = platform, env = {} } = {}) =>
     new Promise(resolve => {
-        const results = path.join(RESULTS_DIR, `${platform}.xml`);
+        const results = path.join(RESULTS_DIR, `${name}.xml`);
         const args = [
             '-batchmode',
             '-nographics',
@@ -248,11 +261,11 @@ const runUnity = (unity, platform) =>
             '-testResults',
             results,
             '-logFile',
-            path.join(RESULTS_DIR, `${platform}.log`),
+            path.join(RESULTS_DIR, `${name}.log`),
         ];
 
-        console.log(`\nRunning ${platform} tests...`);
-        const child = spawn(unity, args, { stdio: 'inherit' });
+        console.log(`\nRunning ${name} tests...`);
+        const child = spawn(unity, args, { stdio: 'inherit', env: { ...process.env, ...env } });
         child.once('close', code => resolve({ platform, code, results }));
     });
 
@@ -417,20 +430,31 @@ const main = async () => {
     const unity = findUnity();
     console.log(`Unity: ${unity}`);
 
-    const needsServer = platforms.includes('PlayMode');
+    const needsServer = platforms.includes('PlayMode') || overTls;
     const stopServer = needsServer ? await startServer() : async () => {};
 
     const summaries = [];
-    let stopTlsServer = async () => {};
+    let tlsServer = { up: false, stop: async () => {} };
     try {
-        stopTlsServer = needsServer ? await startTlsServer() : stopTlsServer;
+        if (needsServer) tlsServer = await startTlsServer();
 
         for (const platform of platforms) {
             const run = await runUnity(unity, platform);
             summaries.push(summarize(platform, run.results));
         }
+
+        if (overTls) {
+            const name = 'PlayMode-TLS';
+            if (tlsServer.up) {
+                const run = await runUnity(unity, 'PlayMode', { name, env: { COLIBRI_E2E_TLS: '1' } });
+                summaries.push(summarize(name, run.results));
+            } else {
+                console.log(`\n${name}: not run - there is no TLS server to run it against (see above).`);
+                summaries.push({ platform: name, ok: false, total: 0, passed: 0, failed: 0, skipped: 0 });
+            }
+        }
     } finally {
-        await stopTlsServer();
+        await tlsServer.stop();
         await stopServer();
     }
 

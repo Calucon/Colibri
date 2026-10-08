@@ -21,11 +21,11 @@ namespace HCIKonstanz.Colibri.E2E
         public static string Host => Env("COLIBRI_E2E_SERVER", "127.0.0.1");
 
         /// <summary>
-        /// Whether the suite runs over TLS: COLIBRI_E2E_TLS=1. Every connection the tests make is
-        /// TLS then: the Unity client's, to the TLS test server and pinned to its certificate, the
-        /// raw peers', and the ones to <see cref="FakeColibriServer"/> and <see cref="TcpProxy"/>,
-        /// which serve TLS in this process. A fixture whose subject is plain TCP skips itself
-        /// (<see cref="RequirePlainTcp"/>).
+        /// Whether the suite runs over TLS: COLIBRI_E2E_TLS=1, which <c>run-tests.mjs --tls</c> sets
+        /// for a second PlayMode run. Every connection the tests make is TLS then: the Unity
+        /// client's, to the TLS test server and pinned to its certificate, the raw peers', and the
+        /// ones to <see cref="FakeColibriServer"/> and <see cref="TcpProxy"/>, which serve TLS in
+        /// this process. A fixture whose subject is plain TCP skips itself (<see cref="RequirePlainTcp"/>).
         /// </summary>
         public static bool OverTls
         {
