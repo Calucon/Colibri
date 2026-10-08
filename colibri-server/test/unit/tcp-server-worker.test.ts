@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import type * as net from 'net';
 import { HEARTBEAT_EVERY_BYTES, MAX_REPLY_BACKLOG_BYTES, TCPServerWorker, TcpServerOptions, WireNetworkMessage } from '../../src/server/modules/networking/tcp-server-worker.js';
+import { MAX_HELD_OBJECTS } from '../../src/server/modules/networking/inbound-limits.js';
 import { FrameReader, FrameType, PROTOCOL_VERSION, encodeHandshakeFrame, encodeHeartbeatFrame, encodeMessageFrame } from '../../src/server/modules/networking/protocol.js';
 import { LogLevel } from '../../src/server/modules/core/log-message.js';
 
@@ -1156,6 +1157,30 @@ describe('TCPServerWorker', () => {
             }
         });
 
+        // Updates for more objects than one client can have held back are lost for good, however
+        // short the stall; that used to be summed up only at debug level.
+        it('warns about updates it lost, however short the stall', () => {
+            vi.useFakeTimers();
+            try {
+                configure({ inboundBacklogLimit: 1 });
+                const socket = handshaked();
+                send(socket, 'objects', 'model::update');
+                for (let i = 0; i < MAX_HELD_OBJECTS + 5; i++) send(socket, 'objects', 'model::update', `{"id":"new-${i}"}`);
+
+                caughtUp();
+                vi.advanceTimersByTime(1000);
+                internals.tick();
+
+                const summaries = warnings().filter(l => l.includes('TCP messages behind'));
+                expect(summaries).toHaveLength(1);
+                expect(summaries[0]).toContain('briefly 1 TCP messages behind');
+                expect(summaries[0]).toContain(`held back ${MAX_HELD_OBJECTS} model::update(s), merged per object and lost 5 model::update(s) for good`);
+                expect(summaries[0]).toContain(`more objects than the ${MAX_HELD_OBJECTS} one client can have held back at once`);
+            } finally {
+                vi.useRealTimers();
+            }
+        });
+
         // A token taken for an update the backlog then held back, and another when it went on,
         // would put a client at a legitimate rate over its own limit whenever the server is behind.
         it('does not spend a client\'s rate limit on what the backlog holds back', () => {
@@ -1289,6 +1314,24 @@ describe('TCPServerWorker', () => {
             expect(summaries).toHaveLength(1);
             expect(summaries[0]).toContain('Unity client \'runaway-quest\'');
             expect(summaries[0]).toContain('was briefly over the message rate limit; held back 50 model::update(s)');
+        });
+
+        // A client creating thousands of objects at once - a scene with many synced objects loading,
+        // or a manager spawning them - is over its limit for well under a second, and the updates
+        // for objects past what it can have held back are lost for good. That used to be summed up
+        // only at debug level, below the default log level.
+        it('warns about updates to more objects than it can hold back, however short the burst', () => {
+            const spawner = handshaked('spawner');
+            spawner.socket.emit('data', burstOf(200 + MAX_HELD_OBJECTS + 50));
+
+            vi.advanceTimersByTime(1000);
+            internals.tick();
+
+            const lost = warnings().filter(w => w.includes('lost 50 model::update(s) for good'));
+            expect(lost).toHaveLength(1);
+            expect(lost[0]).toContain('Unity client \'spawner\'');
+            expect(lost[0]).toContain(`was briefly over the message rate limit; held back ${MAX_HELD_OBJECTS} model::update(s)`);
+            expect(lost[0]).toContain('reach the store and the other clients only when they change again');
         });
 
         it('passes what it held back on at the client\'s sustained rate', () => {

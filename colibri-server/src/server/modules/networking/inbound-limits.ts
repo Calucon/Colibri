@@ -25,8 +25,13 @@ export const isLimitable = function (channel: string, command: string): boolean 
     return command === MODEL_UPDATE_COMMAND || command.startsWith('broadcast::');
 };
 
-// What happened to a message over a limit.
-export type Limited = 'held' | 'dropped';
+// What happened to a message over a limit:
+// - 'held': a model::update held back, to be merged and passed on later (see HeldUpdates).
+// - 'dropped': a broadcast::*, or an update the server could not have applied anyway.
+// - 'lost': a model::update that could neither pass nor be held back, for one object more than
+//   MAX_HELD_OBJECTS. Unlike a dropped broadcast it is state that nothing sends again: the object
+//   reaches the store and the other clients only when it changes again.
+export type Limited = 'held' | 'dropped' | 'lost';
 
 // An episode is over once nothing has been over the limit for this long. Long enough that a load
 // sitting right at the limit - over it in bursts with gaps between them - is one episode with one
@@ -43,14 +48,25 @@ export const EPISODE_WARNING_MILLIS = 1000;
 export interface EpisodeSummary {
     // model::update messages held back (and merged per object) rather than passed on at once.
     held: number;
-    // Messages lost: broadcasts, and updates there was nothing to merge into.
+    // Broadcasts dropped, and updates the server could not have applied anyway.
     dropped: number;
+    // model::update messages lost for good: see Limited.
+    lost: number;
     // From the first message over the limit to the last.
     seconds: number;
     // Whether the episode lasted long enough to be warned about (see EPISODE_WARNING_MILLIS). The
-    // caller sums up such an episode as a warning too, and a shorter one at debug level.
+    // caller sums up such an episode as a warning too, and a shorter one at debug level - unless it
+    // lost updates (see warnsAtEnd).
     warned: boolean;
 }
+
+// Whether the summary of an episode is a warning rather than a debug line: one long enough to have
+// been warned about, or one that lost model updates, however short. A client creating a few
+// thousand objects at once is over its limit for well under a second, and the objects past
+// MAX_HELD_OBJECTS were lost with nothing but a debug line, below the default log level, to say so.
+export const warnsAtEnd = function (summary: EpisodeSummary): boolean {
+    return summary.warned || summary.lost > 0;
+};
 
 // One stretch of being over a limit, from the first message held back or dropped until
 // EPISODE_QUIET_MILLIS pass without another. The caller logs a warning when record() says the
@@ -60,12 +76,13 @@ export interface EpisodeSummary {
 export class LimitEpisode {
     private held = 0;
     private dropped = 0;
+    private lost = 0;
     private startedAt = 0;
     private lastAt = 0;
     private warned = false;
 
     public get active(): boolean {
-        return this.held + this.dropped > 0;
+        return this.held + this.dropped + this.lost > 0;
     }
 
     // Returns true for the one message that makes the episode worth a warning: the first that is
@@ -78,6 +95,7 @@ export class LimitEpisode {
         this.lastAt = now;
 
         if (limited === 'held') this.held += 1;
+        else if (limited === 'lost') this.lost += 1;
         else this.dropped += 1;
 
         if (this.warned || now - this.startedAt < EPISODE_WARNING_MILLIS) return false;
@@ -96,11 +114,13 @@ export class LimitEpisode {
         const summary = {
             held: this.held,
             dropped: this.dropped,
+            lost: this.lost,
             seconds: (this.lastAt - this.startedAt) / 1000,
             warned: this.warned,
         };
         this.held = 0;
         this.dropped = 0;
+        this.lost = 0;
         this.warned = false;
         return summary;
     }
@@ -110,7 +130,18 @@ export const describeEpisode = function (summary: EpisodeSummary): string {
     const parts: string[] = [];
     if (summary.held > 0) parts.push(`held back ${summary.held} model::update(s), merged per object`);
     if (summary.dropped > 0) parts.push(`dropped ${summary.dropped} message(s)`);
+    if (summary.lost > 0) parts.push(`lost ${summary.lost} model::update(s) for good`);
     return `${parts.join(' and ')} over ${summary.seconds.toFixed(1)} s`;
+};
+
+// The sentence that follows an episode's summary when it lost updates, with a space ahead of it;
+// otherwise nothing.
+export const lostUpdatesNote = function (summary: EpisodeSummary): string {
+    if (summary.lost === 0) return '';
+    return (
+        ` The ${summary.lost} lost were for more objects than the ${MAX_HELD_OBJECTS} one client can have held back at once ` +
+        '(MAX_HELD_OBJECTS): those objects reach the store and the other clients only when they change again.'
+    );
 };
 
 // A model::update payload the server can apply: a JSON object with a string id, the same test
@@ -298,14 +329,15 @@ export const rateLimitStartWarning = function (who: string, limit: RateLimit): s
     );
 };
 
-// The summary of an episode: a warning for one that was warned about, a debug line for a short one.
+// The summary of an episode: a warning for one warnsAtEnd says is one, a debug line otherwise.
 export const rateLimitEndWarning = function (who: string, summary: EpisodeSummary, left: boolean): string {
     const over = summary.warned ? 'over the message rate limit' : 'briefly over the message rate limit';
-    return left
+    const text = left
         ? `${who} disconnected while ${over}; ${describeEpisode(summary)}.`
         : summary.warned
             ? `${who} is back under the message rate limit; ${describeEpisode(summary)}.`
             : `${who} was ${over}; ${describeEpisode(summary)}.`;
+    return text + lostUpdatesNote(summary);
 };
 
 // The worker side of the count of TCP messages posted to the main thread and not yet dispatched

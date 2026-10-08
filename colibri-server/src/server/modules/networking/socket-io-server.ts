@@ -25,6 +25,7 @@ import {
     isLimitable,
     rateLimitEndWarning,
     rateLimitStartWarning,
+    warnsAtEnd,
 } from './inbound-limits.js';
 
 // How often held-back updates are passed on as a limited client's tokens refill, and finished
@@ -109,7 +110,7 @@ export class SocketIOServer extends Service implements NetworkServer {
             started: (client) => this.logWarning(rateLimitStartWarning(describe(client), limit)),
             ended: (client, summary, left) => {
                 const text = rateLimitEndWarning(describe(client), summary, left);
-                if (summary.warned) this.logWarning(text);
+                if (warnsAtEnd(summary)) this.logWarning(text);
                 else this.logDebug(text);
             },
         });
@@ -126,14 +127,20 @@ export class SocketIOServer extends Service implements NetworkServer {
             return;
         }
 
+        // A broadcast, or an update the server could not apply anyway, is dropped; an update for one
+        // object too many is lost (see Limited).
         const model = msg.command === MODEL_UPDATE_COMMAND ? asModelUpdate(value) : undefined;
+        if (!model) {
+            this.rateLimiter.record(client, now, 'dropped');
+            return;
+        }
+
         let held = this.heldUpdates.get(client);
-        if (model && !held) {
+        if (!held) {
             held = new HeldUpdates();
             this.heldUpdates.set(client, held);
         }
-
-        this.rateLimiter.record(client, now, model && held?.hold(msg.channel, model) ? 'held' : 'dropped');
+        this.rateLimiter.record(client, now, held.hold(msg.channel, model) ? 'held' : 'lost');
     }
 
     // Passes on as many of the client's held updates as its rate limit allows, oldest first.

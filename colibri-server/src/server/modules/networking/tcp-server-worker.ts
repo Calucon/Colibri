@@ -31,8 +31,10 @@ import {
     asModelUpdate,
     describeEpisode,
     isLimitable,
+    lostUpdatesNote,
     rateLimitEndWarning,
     rateLimitStartWarning,
+    warnsAtEnd,
 } from './inbound-limits.js';
 
 export const TCP_SERVER_WORKER = fileURLToPath(import.meta.url);
@@ -314,7 +316,7 @@ export class TCPServerWorker extends WorkerService {
             started: (client) => this.logWarning(rateLimitStartWarning(describe(client), limit)),
             ended: (client, summary, left) => {
                 const text = rateLimitEndWarning(describe(client), summary, left);
-                if (summary.warned) this.logWarning(text);
+                if (warnsAtEnd(summary)) this.logWarning(text);
                 else this.logDebug(text);
             },
         });
@@ -340,13 +342,16 @@ export class TCPServerWorker extends WorkerService {
         const backlogSummary = this.backlogEpisode.endIfQuiet(now);
         if (backlogSummary?.warned) {
             this.logWarning(
-                `The main thread has caught up with TCP messages again; ${describeEpisode(backlogSummary)} while it was behind.`
+                `The main thread has caught up with TCP messages again; ${describeEpisode(backlogSummary)} while it was behind.` +
+                    lostUpdatesNote(backlogSummary)
             );
         } else if (backlogSummary) {
-            this.logDebug(
+            const text =
                 `The main thread was briefly ${this.inboundBacklog.limit} TCP messages behind (TCP_INBOUND_BACKLOG_LIMIT) and has ` +
-                    `caught up; ${describeEpisode(backlogSummary)} while it was behind.`
-            );
+                `caught up; ${describeEpisode(backlogSummary)} while it was behind.` +
+                lostUpdatesNote(backlogSummary);
+            if (warnsAtEnd(backlogSummary)) this.logWarning(text);
+            else this.logDebug(text);
         }
 
         const stalled = this.lastTickAt !== undefined && now - this.lastTickAt > TICK_STALL_MILLIS;
@@ -837,13 +842,9 @@ export class TCPServerWorker extends WorkerService {
             return;
         }
 
-        if (command === MODEL_UPDATE_COMMAND && this.hold(client, channel, payload)) {
-            this.recordLimited(client, refusedBy, 'held', now);
-        } else {
-            // A broadcast, or an update the server could not apply anyway (not a JSON object with
-            // a string id, which ModelSynchronization refuses) or for one object too many.
-            this.recordLimited(client, refusedBy, 'dropped', now);
-        }
+        // A broadcast is dropped; see hold() for an update.
+        const limited = command === MODEL_UPDATE_COMMAND ? this.hold(client, channel, payload) : 'dropped';
+        this.recordLimited(client, refusedBy, limited, now);
     }
 
     // Which limit, if any, keeps a client from passing on one more limitable message now. The
@@ -856,17 +857,21 @@ export class TCPServerWorker extends WorkerService {
         return undefined;
     }
 
-    private hold(client: TcpClient, channel: string, payload: Buffer): boolean {
+    // Holds a model update back. It is dropped if the server could not apply it anyway (not a JSON
+    // object with a string id, which ModelSynchronization refuses), and lost if it is for one object
+    // too many (see Limited).
+    private hold(client: TcpClient, channel: string, payload: Buffer): Limited {
         let model;
         try {
             model = asModelUpdate(JSON.parse(payload.toString('utf8')));
         } catch {
-            return false;
+            return 'dropped';
         }
-        if (!model || !client.held.hold(channel, model)) return false;
+        if (!model) return 'dropped';
+        if (!client.held.hold(channel, model)) return 'lost';
 
         this.clientsHolding.add(client);
-        return true;
+        return 'held';
     }
 
     // Passes on as many of the client's held updates as the limits allow, oldest first. Returns

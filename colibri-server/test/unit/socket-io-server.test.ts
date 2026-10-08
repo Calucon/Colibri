@@ -5,6 +5,7 @@ import { Subscription, filter, firstValueFrom, tap } from 'rxjs';
 import { io as connectClient, Socket as ClientSocket } from 'socket.io-client';
 import { SocketIOServer } from '../../src/server/modules/networking/socket-io-server.js';
 import { MAX_FRAME_LENGTH, PROTOCOL_VERSION, encodeMessageFrame } from '../../src/server/modules/networking/protocol.js';
+import { MAX_HELD_OBJECTS } from '../../src/server/modules/networking/inbound-limits.js';
 import { Service } from '../../src/server/modules/core/service.js';
 import { LogLevel, LogMessage } from '../../src/server/modules/core/log-message.js';
 import { NetworkClient, NetworkMessage } from '../../src/server/modules/command-hooks/connection-pool.js';
@@ -370,5 +371,25 @@ describe('SocketIOServer rate limit', () => {
         expect(warnings().filter(w => w.includes('rate limit'))).toEqual([]);
         expect(logs.filter(l => l.level === LogLevel.Debug).some(l =>
             l.message.includes('disconnected while briefly over the message rate limit; held back 3 model::update(s)'))).toBe(true);
+    });
+
+    // Updates for more new objects than can be held back are lost for good; that used to be summed
+    // up at debug level when it was over in under a second, below the default log level.
+    it('warns about updates it lost, however short the episode', async () => {
+        await start({ messagesPerSecond: 1, burst: 1 });
+        const socket = await connect();
+        const id = socket.id;
+        const gone = firstValueFrom(server.clientDisconnected$);
+
+        for (let i = 0; i < 1 + MAX_HELD_OBJECTS + 3; i++) socket.emit('objects', { command: 'model::update', payload: { id: `o${i}` } });
+        await flush(socket);
+        socket.disconnect();
+        await gone;
+
+        expect(received.filter(m => m.origin?.id === id && m.command === 'model::update')).toHaveLength(1 + MAX_HELD_OBJECTS);
+        const lost = warnings().filter(w => w.includes('lost 3 model::update(s) for good'));
+        expect(lost).toHaveLength(1);
+        expect(lost[0]).toContain('disconnected while briefly over the message rate limit');
+        expect(lost[0]).toContain(`more objects than the ${MAX_HELD_OBJECTS} one client can have held back at once`);
     });
 });

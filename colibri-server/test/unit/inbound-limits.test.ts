@@ -12,8 +12,10 @@ import {
     asModelUpdate,
     describeEpisode,
     isLimitable,
+    lostUpdatesNote,
     rateLimitEndWarning,
     rateLimitStartWarning,
+    warnsAtEnd,
 } from '../../src/server/modules/networking/inbound-limits.js';
 
 describe('inbound limits', () => {
@@ -69,7 +71,7 @@ describe('inbound limits', () => {
             for (let t = 0; t <= 350; t += 10) if (episode.record(t, 'held')) warnedAt.push(t);
 
             expect(warnedAt).toEqual([]);
-            expect(episode.endIfQuiet(350 + EPISODE_QUIET_MILLIS)).toEqual({ held: 36, dropped: 0, seconds: 0.35, warned: false });
+            expect(episode.endIfQuiet(350 + EPISODE_QUIET_MILLIS)).toEqual({ held: 36, dropped: 0, lost: 0, seconds: 0.35, warned: false });
         });
 
         it('ends once nothing has been over the limit for a while, with what became of what and for how long', () => {
@@ -81,14 +83,14 @@ describe('inbound limits', () => {
             expect(episode.endIfQuiet(3500 + EPISODE_QUIET_MILLIS - 1)).toBeUndefined();
             const summary = episode.endIfQuiet(3500 + EPISODE_QUIET_MILLIS);
 
-            expect(summary).toEqual({ held: 2, dropped: 1, seconds: 2.5, warned: true });
+            expect(summary).toEqual({ held: 2, dropped: 1, lost: 0, seconds: 2.5, warned: true });
             expect(describeEpisode(summary!)).toBe('held back 2 model::update(s), merged per object and dropped 1 message(s) over 2.5 s');
             expect(episode.active).toBe(false);
         });
 
         it('only mentions what happened', () => {
-            expect(describeEpisode({ held: 4, dropped: 0, seconds: 1, warned: true })).toBe('held back 4 model::update(s), merged per object over 1.0 s');
-            expect(describeEpisode({ held: 0, dropped: 3, seconds: 0, warned: false })).toBe('dropped 3 message(s) over 0.0 s');
+            expect(describeEpisode({ held: 4, dropped: 0, lost: 0, seconds: 1, warned: true })).toBe('held back 4 model::update(s), merged per object over 1.0 s');
+            expect(describeEpisode({ held: 0, dropped: 3, lost: 0, seconds: 0, warned: false })).toBe('dropped 3 message(s) over 0.0 s');
         });
 
         it('keeps one episode going while the limit bites in bursts closer together than the quiet period', () => {
@@ -110,7 +112,7 @@ describe('inbound limits', () => {
 
             expect(episode.record(5000, 'held')).toBe(false);
             expect(episode.record(5000 + EPISODE_WARNING_MILLIS - 1, 'held')).toBe(false);
-            expect(episode.end()).toEqual({ held: 2, dropped: 0, seconds: 0.999, warned: false });
+            expect(episode.end()).toEqual({ held: 2, dropped: 0, lost: 0, seconds: 0.999, warned: false });
         });
 
         it('has nothing to end when nothing was over the limit', () => {
@@ -118,6 +120,34 @@ describe('inbound limits', () => {
 
             expect(episode.endIfQuiet(100_000)).toBeUndefined();
             expect(episode.end()).toBeUndefined();
+        });
+
+        // An update for one object more than can be held back is state nothing sends again, unlike
+        // a dropped broadcast: it is counted on its own, and its summary is a warning however short.
+        it('counts lost updates apart from dropped messages, and sums up an episode that lost any as a warning', () => {
+            const episode = new LimitEpisode();
+            episode.record(0, 'held');
+            episode.record(10, 'dropped');
+            episode.record(20, 'lost');
+            episode.record(30, 'lost');
+
+            const summary = episode.endIfQuiet(30 + EPISODE_QUIET_MILLIS)!;
+
+            expect(summary).toEqual({ held: 1, dropped: 1, lost: 2, seconds: 0.03, warned: false });
+            expect(warnsAtEnd(summary)).toBe(true);
+            expect(describeEpisode(summary)).toBe(
+                'held back 1 model::update(s), merged per object and dropped 1 message(s) and lost 2 model::update(s) for good over 0.0 s'
+            );
+            expect(lostUpdatesNote(summary)).toBe(
+                ` The 2 lost were for more objects than the ${MAX_HELD_OBJECTS} one client can have held back at once (MAX_HELD_OBJECTS): ` +
+                    'those objects reach the store and the other clients only when they change again.'
+            );
+        });
+
+        it('sums up a short episode that lost nothing at debug level, a long one as a warning', () => {
+            expect(warnsAtEnd({ held: 5, dropped: 5, lost: 0, seconds: 0.5, warned: false })).toBe(false);
+            expect(warnsAtEnd({ held: 5, dropped: 5, lost: 0, seconds: 2, warned: true })).toBe(true);
+            expect(lostUpdatesNote({ held: 5, dropped: 5, lost: 0, seconds: 2, warned: true })).toBe('');
         });
     });
 
@@ -309,7 +339,7 @@ describe('inbound limits', () => {
             rateLimiter.sweep(499 + EPISODE_QUIET_MILLIS);
 
             // From the first refused message (t = 1; the burst took t = 0) to the last (t = 499).
-            expect(events).toEqual([['ended', 'a', { held: 0, dropped: 495, seconds: 0.498, warned: false }, false]]);
+            expect(events).toEqual([['ended', 'a', { held: 0, dropped: 495, lost: 0, seconds: 0.498, warned: false }, false]]);
         });
 
         // Left open, a short episode would take the next one's messages as its own - and with its
@@ -337,7 +367,7 @@ describe('inbound limits', () => {
 
             rateLimiter.sweep(EPISODE_QUIET_MILLIS);
 
-            expect(events).toEqual([['ended', 'a', { held: 1, dropped: 0, seconds: 0, warned: false }, false]]);
+            expect(events).toEqual([['ended', 'a', { held: 1, dropped: 0, lost: 0, seconds: 0, warned: false }, false]]);
         });
 
         it('reports the end once the client has stayed under the limit for the quiet period', () => {
@@ -353,7 +383,7 @@ describe('inbound limits', () => {
             rateLimiter.sweep(1050 + EPISODE_QUIET_MILLIS);
             rateLimiter.sweep(1050 + 2 * EPISODE_QUIET_MILLIS);
 
-            expect(events).toEqual([['started', 'a'], ['ended', 'a', { held: 0, dropped: 3, seconds: 1.05, warned: true }, false]]);
+            expect(events).toEqual([['started', 'a'], ['ended', 'a', { held: 0, dropped: 3, lost: 0, seconds: 1.05, warned: true }, false]]);
         });
 
         it('reports a client that leaves mid-episode as having left, and forgets it', () => {
@@ -364,7 +394,7 @@ describe('inbound limits', () => {
             rateLimiter.forget('a');
             rateLimiter.sweep(10_000);
 
-            expect(events).toEqual([['ended', 'a', { held: 0, dropped: 1, seconds: 0, warned: false }, true]]);
+            expect(events).toEqual([['ended', 'a', { held: 0, dropped: 1, lost: 0, seconds: 0, warned: false }, true]]);
             // A client of the same identity that comes back starts with a full bucket.
             expect(rateLimiter.take('a', 0)).toBe(true);
         });
@@ -392,19 +422,27 @@ describe('inbound limits', () => {
             expect(start).toContain('CLIENT_MESSAGE_RATE_LIMIT');
             expect(start).toContain('the latest value of every field still arrives');
 
-            expect(rateLimitEndWarning('c', { held: 0, dropped: 3, seconds: 1.25, warned: true }, false)).toBe(
+            expect(rateLimitEndWarning('c', { held: 0, dropped: 3, lost: 0, seconds: 1.25, warned: true }, false)).toBe(
                 'c is back under the message rate limit; dropped 3 message(s) over 1.3 s.'
             );
-            expect(rateLimitEndWarning('c', { held: 0, dropped: 3, seconds: 1.25, warned: true }, true)).toBe(
+            expect(rateLimitEndWarning('c', { held: 0, dropped: 3, lost: 0, seconds: 1.25, warned: true }, true)).toBe(
                 'c disconnected while over the message rate limit; dropped 3 message(s) over 1.3 s.'
             );
         });
 
+        it('says what lost updates mean after the summary', () => {
+            expect(rateLimitEndWarning('c', { held: 1000, dropped: 0, lost: 3, seconds: 0.25, warned: false }, false)).toBe(
+                'c was briefly over the message rate limit; held back 1000 model::update(s), merged per object and lost 3 ' +
+                    'model::update(s) for good over 0.3 s.' +
+                    lostUpdatesNote({ held: 1000, dropped: 0, lost: 3, seconds: 0.25, warned: false })
+            );
+        });
+
         it('words the summary of a short episode as one', () => {
-            expect(rateLimitEndWarning('c', { held: 2, dropped: 0, seconds: 0.25, warned: false }, false)).toBe(
+            expect(rateLimitEndWarning('c', { held: 2, dropped: 0, lost: 0, seconds: 0.25, warned: false }, false)).toBe(
                 'c was briefly over the message rate limit; held back 2 model::update(s), merged per object over 0.3 s.'
             );
-            expect(rateLimitEndWarning('c', { held: 2, dropped: 0, seconds: 0.25, warned: false }, true)).toBe(
+            expect(rateLimitEndWarning('c', { held: 2, dropped: 0, lost: 0, seconds: 0.25, warned: false }, true)).toBe(
                 'c disconnected while briefly over the message rate limit; held back 2 model::update(s), merged per object over 0.3 s.'
             );
         });
