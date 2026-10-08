@@ -222,11 +222,10 @@ export class SampleClass extends SyncModel<SampleClass> {
 
 Any `accessor` member marked with `@Synced()` will be synchronized across all network clients.
 
-> **Migrating from 1.x:** `@Synced()` now requires standard TC39 decorators instead of legacy
-> (`experimentalDecorators`) ones. To migrate: remove `experimentalDecorators` from your
-> `tsconfig.json`, and turn every synced field/property into an `accessor` (e.g.
-> `@Synced() private age = 0;` → `@Synced() accessor age = 0;`). This also fixes field
-> synchronization in frameworks like React, which never worked correctly under the legacy decorator.
+> **Migrating from 1.x:** remove `experimentalDecorators` from your `tsconfig.json`, and turn every
+> synced field/property into an `accessor` (e.g. `@Synced() private age = 0;` → `@Synced() accessor age = 0;`).
+> This also fixes field synchronization in frameworks like React, which never worked correctly under
+> the legacy decorator.
 
 Lastly, we need to register the class with the Synchronization mechanism by calling `RegisterModelSync`:
 
