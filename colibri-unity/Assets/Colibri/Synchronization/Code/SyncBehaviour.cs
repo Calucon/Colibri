@@ -595,6 +595,8 @@ namespace HCIKonstanz.Colibri.Synchronization
         /// </summary>
         private void RememberSent(JObject update, double now, double heardAt)
         {
+            var answersPending = _round != null && !_round.IsOver;
+
             // Walked by hand: Properties() would allocate an enumerator for every update sent.
             for (var token = update.First; token != null; token = token.Next)
             {
@@ -602,7 +604,7 @@ namespace HCIKonstanz.Colibri.Synchronization
                 if (!_syncedAttributes.TryGetValue(property.Name, out var attribute))
                     continue;
 
-                SentValuesOf(attribute).Remember(ToKeep(attribute, property.Value), now, heardAt);
+                SentValuesOf(attribute).Remember(ToKeep(attribute, property.Value), now, heardAt, answersPending);
             }
         }
 
@@ -742,6 +744,11 @@ namespace HCIKonstanz.Colibri.Synchronization
          *  An object that has never sent anything - one a manager built from another client's
          *  update, say - applies its answers exactly as before, and so does every object once the
          *  round is over: an update from another client is applied as it arrives.
+         *
+         *  Until then, each member keeps the values it had sent when the requests went out
+         *  (SentValues.KeepUntilAnswered): what it sends after them cannot be in an answer, and an
+         *  object moved on right after the reconnect would push out the values sent into the dead
+         *  link, so that the answer holding one was applied.
          */
 
         /// <summary>Told by Sync that the model has just been asked for again after a reconnect.</summary>
@@ -751,6 +758,12 @@ namespace HCIKonstanz.Colibri.Synchronization
 
             if (_keptInRound != null)
                 Array.Clear(_keptInRound, 0, _keptInRound.Length);
+
+            if (_sentValues != null)
+            {
+                foreach (var sent in _sentValues)
+                    sent?.KeepUntilAnswered();
+            }
         }
 
         /// <summary>

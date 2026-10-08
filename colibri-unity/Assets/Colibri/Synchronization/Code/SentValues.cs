@@ -47,6 +47,14 @@ namespace HCIKonstanz.Colibri.Synchronization
     /// connection works, this client hears from the server all the time, and a value dropped from
     /// in between was replaced by a later one that reached the server as well.
     /// </para>
+    /// <para>
+    /// While the answers to the requests made again after a reconnect are coming in, the values
+    /// kept when the requests went out stay as they are (see <see cref="KeepUntilAnswered"/>), and
+    /// of those sent since, only the newest is kept besides: the answers hold what the server had
+    /// before it read anything sent after the requests. Hearing from the server on the new
+    /// connection says nothing about the values sent into the dead one, and an object moved on
+    /// right after the reconnect used to push them out.
+    /// </para>
     /// </remarks>
     internal sealed class SentValues
     {
@@ -120,19 +128,44 @@ namespace HCIKonstanz.Colibri.Synchronization
         // there is neither.
         private JToken _heldBefore;
 
+        // While the answers to the requests made again after a reconnect are coming in, how many of
+        // the values, oldest first, were kept when the requests went out; zero otherwise.
+        private int _keptForAnswers;
+
         /// <param name="value">
         /// The value as it went into the update. It must not change afterwards; the caller copies
         /// one that may.
         /// </param>
         /// <param name="time">When it was sent, on <see cref="SyncTicker"/>'s clock.</param>
         /// <param name="heardAt">When this client last heard from the server, on the same clock.</param>
-        internal void Remember(JToken value, double time, double heardAt)
+        /// <param name="answersPending">
+        /// Whether the answers to the requests made again after a reconnect are still coming in.
+        /// </param>
+        internal void Remember(JToken value, double time, double heardAt, bool answersPending = false)
         {
             if (_values == null)
             {
                 _values = new JToken[2 * Capacity + 2];
                 _times = new double[2 * Capacity + 2];
             }
+
+            if (!answersPending)
+                _keptForAnswers = 0;
+
+            // Sent after the requests, so no answer holds it: kept as the newest only, after the
+            // values kept for the answers.
+            if (_keptForAnswers > 0)
+            {
+                _values[_keptForAnswers] = value;
+                _times[_keptForAnswers] = time;
+                _count = _keptForAnswers + 1;
+                return;
+            }
+
+            // Once the answers are in, the newest value sent while they came in may still have the
+            // slot that is otherwise free for the value coming in.
+            if (_count == _values.Length)
+                DropOldest(1);
 
             _values[_count] = value;
             _times[_count] = time;
@@ -144,26 +177,45 @@ namespace HCIKonstanz.Colibri.Synchronization
 
             // Of those, the latest are kept, and the one before them is what the member held before
             // the oldest one kept.
-            var dropped = _heard - Capacity;
-            if (dropped > 0)
-            {
-                _heldBefore = _values[dropped - 1];
-                _count -= dropped;
-                _heard = Capacity;
-                Array.Copy(_values, dropped, _values, 0, _count);
-                Array.Copy(_times, dropped, _times, 0, _count);
-                Array.Clear(_values, _count, dropped);
-            }
+            if (_heard > Capacity)
+                DropOldest(_heard - Capacity);
 
             // Of those sent after, the first are kept, and the newest: the value before the newest
             // goes unless it is one of the first.
-            if (_count - _heard > Capacity + 1)
+            while (_count - _heard > Capacity + 1)
             {
                 _count--;
                 _values[_count - 1] = _values[_count];
                 _times[_count - 1] = _times[_count];
                 _values[_count] = null;
             }
+        }
+
+        /// <summary>
+        /// For when the requests made again after a reconnect go out: until their answers are in
+        /// (see <see cref="Remember"/>), the values kept now stay as they are. A round that follows
+        /// one whose answers never came keeps that one's values, and the newest sent since: should
+        /// that fill every slot, the oldest goes.
+        /// </summary>
+        internal void KeepUntilAnswered()
+        {
+            if (_count == 0)
+                return;
+
+            if (_count == _values.Length)
+                DropOldest(1);
+
+            _keptForAnswers = _count;
+        }
+
+        private void DropOldest(int dropped)
+        {
+            _heldBefore = _values[dropped - 1];
+            _count -= dropped;
+            _heard = Math.Max(0, _heard - dropped);
+            Array.Copy(_values, dropped, _values, 0, _count);
+            Array.Copy(_times, dropped, _times, 0, _count);
+            Array.Clear(_values, _count, dropped);
         }
 
         /// <summary>
@@ -182,6 +234,7 @@ namespace HCIKonstanz.Colibri.Synchronization
                 Array.Clear(_values, 0, _count);
             _count = 0;
             _heard = 0;
+            _keptForAnswers = 0;
             _heldBefore = value;
         }
 

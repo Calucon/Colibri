@@ -204,6 +204,50 @@ namespace HCIKonstanz.Colibri.Tests
         }
 
         /// <summary>
+        /// Not while the answers to the requests made again after a reconnect are coming in: they
+        /// hold what the server had before it read anything sent after the requests, and hearing
+        /// from the server on the new connection says nothing about what went into the dead one.
+        /// The values kept when the requests went out stay, and of those sent since, the newest is
+        /// kept besides. Once the answers are in, the values follow the last-heard time again.
+        /// </summary>
+        [Test]
+        public void UntilTheAnswersAreInTheValuesKeptWhenTheRequestsWentOutStay()
+        {
+            var sent = MovedAcrossTheDrop();
+            sent.KeepUntilAnswered();
+
+            sent.Remember("moved on", 210, heardAt: 209.9, answersPending: true);
+            sent.Remember("moved on again", 210.1, heardAt: 210, answersPending: true);
+
+            foreach (var kept in new[] { "x22", "x23", "x30", "x31", "x38", "x90" })
+                Assert.That(sent.Judge(Wire($"\"{kept}\""), Always), Is.EqualTo(SentValues.Verdict.Lost), kept);
+            Assert.That(sent.Judge(Wire("\"moved on again\""), Always), Is.EqualTo(SentValues.Verdict.Arrived));
+
+            sent.Remember("after the answers", 211, heardAt: 210.9);
+            Assert.That(sent.Judge(Wire("\"x31\""), Always), Is.EqualTo(SentValues.Verdict.ChangedElsewhere),
+                "Once the answers are in, only the latest values sent by the time the server was last heard from are kept");
+        }
+
+        /// <summary>
+        /// A round that follows one whose answers never came keeps that one's values, and the newest
+        /// sent in between, in the same slots: should they fill every one, the oldest goes.
+        /// </summary>
+        [Test]
+        public void ARoundAfterOneWhoseAnswersNeverCameKeepsTheValuesOfBoth()
+        {
+            var sent = MovedAcrossTheDrop();
+            sent.KeepUntilAnswered();
+            sent.Remember("sent on the second link", 210, heardAt: 210, answersPending: true);
+
+            sent.KeepUntilAnswered();
+            sent.Remember("sent on the third link", 220, heardAt: 220, answersPending: true);
+
+            foreach (var kept in new[] { "x23", "x31", "x38", "x90", "sent on the second link" })
+                Assert.That(sent.Judge(Wire($"\"{kept}\""), Always), Is.EqualTo(SentValues.Verdict.Lost), kept);
+            Assert.That(sent.Judge(Wire("\"sent on the third link\""), Always), Is.EqualTo(SentValues.Verdict.Arrived));
+        }
+
+        /// <summary>
         /// Once the member has taken a value from elsewhere, what it sent before says nothing about
         /// the server any more. The value it took does: the server held it, and holding it still
         /// after the member's next change means that change was lost.

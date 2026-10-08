@@ -302,6 +302,45 @@ namespace HCIKonstanz.Colibri.Tests
         }
 
         /// <summary>
+        /// The same, but moved on as soon as the connection is back, before the answers arrive. The
+        /// client hears from the server again, but that says nothing about the positions sent into
+        /// the dead link: the answer holding one is still recognised, and the object stays where it
+        /// is now. Those moves pushed the positions out, and the answer put the object back.
+        /// </summary>
+        [Test]
+        public void AnObjectMovedOnBeforeTheAnswersStillTellsThePositionLostAtTheDrop()
+        {
+            var sync = Spawn<ResyncTransform>("resync-transform");
+            sync.Wake();
+            sync.OnModelUpdate(Bare(sync.Id));
+
+            // Heard from until 200, after x = 30 was sent; the link died a moment later.
+            for (var x = 1; x <= 60; x++)
+            {
+                var time = 199 + x / 30.0;
+                sync.transform.position = new Vector3(x, 0, 0);
+                Poll(sync);
+                Assert.That(sync.TakeDueUpdate(time, interval: 0, heardAt: System.Math.Min(time, 200)), Is.Not.Null,
+                    "Precondition: the move goes out");
+            }
+
+            // Back at 203, heard from from then on, and moved on twice before the answers arrive.
+            Sync.RequestModelsAgain(disconnectedAt: 202);
+            for (var x = 61; x <= 62; x++)
+            {
+                sync.transform.position = new Vector3(x, 0, 0);
+                Poll(sync);
+                Assert.That(SentAt(sync, 203 + (x - 60) / 30.0), Is.Not.Null, "Precondition: the move goes out");
+            }
+            sync.OnModelUpdate(JObject.Parse($"{{\"id\":\"{sync.Id}\",\"active\":true,\"position\":[31,0,0],\"scale\":[1,1,1]}}"));
+
+            Assert.That(sync.transform.position, Is.EqualTo(new Vector3(62, 0, 0)), "The answer put the object back where it was when the link died");
+            var sent = SentAt(sync, 204);
+            Assert.That(sent, Is.Not.Null, "The position the object is at now was not sent again");
+            Assert.That(sent["position"].ToVector3(), Is.EqualTo(new Vector3(62, 0, 0)));
+        }
+
+        /// <summary>
         /// The other side: what the server holds is no value of this client's, so another client set
         /// it while this one was away - and that is the newer change.
         /// </summary>
