@@ -44,7 +44,7 @@ function closeSocket(client: Colibri): void {
  * Resolves once `client`'s underlying socket has completed its handshake.
  * Broadcast/model-sync relay is fire-and-forget with no replay for a client
  * that connects late, so every propagation test must await this for both
- * sides before sending the message under test — otherwise the message can
+ * sides before sending the message under test; otherwise the message can
  * reach the server before the recipient has finished connecting and is lost
  * for good.
  */
@@ -153,9 +153,9 @@ async function connectNew(construct: () => Colibri): Promise<Colibri> {
 
 /**
  * Creates a raw peer client (constructed first, never the singleton) plus a
- * singleton client (constructed last) on the *same* app — broadcast/model-sync
+ * singleton client (constructed last) on the *same* app (broadcast/model-sync
  * relay is scoped per-app server-side, so the two must share one to talk to
- * each other at all — for exercising the high-level API
+ * each other at all) for exercising the high-level API
  * (Sync/RegisterModelSync/RemoteLogger) which only ever talks through
  * Colibri.getInstance().
  */
