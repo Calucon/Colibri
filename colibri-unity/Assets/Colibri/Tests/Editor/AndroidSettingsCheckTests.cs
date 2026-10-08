@@ -35,10 +35,17 @@ namespace HCIKonstanz.Colibri.Tests
             Assert.That(Issues(http: InsecureHttpOption.AlwaysAllowed, internet: true), Is.Empty);
         }
 
-        [Test]
-        public void OtherBuildTargetsAreLeftAlone()
+        /// <summary>
+        /// Internet Access is an Android setting; Allow downloads over HTTP is enforced by every
+        /// player, as a Windows IL2CPP player refusing Store's plain HTTP showed.
+        /// </summary>
+        [TestCase(BuildTarget.StandaloneWindows64)]
+        [TestCase(BuildTarget.StandaloneLinux64)]
+        [TestCase(BuildTarget.iOS)]
+        public void OtherBuildTargetsAreCheckedForHttpOnly(BuildTarget target)
         {
-            Assert.That(Issues(target: BuildTarget.StandaloneWindows64), Is.Empty);
+            Assert.That(Issues(target: target), Is.EqualTo(new[] { Setting.AllowDownloadsOverHttp }));
+            Assert.That(Issues(target: target, http: InsecureHttpOption.AlwaysAllowed), Is.Empty);
         }
 
         [Test]
@@ -82,9 +89,28 @@ namespace HCIKonstanz.Colibri.Tests
             try
             {
                 LogAssert.Expect(LogType.Warning, new Regex(@"^Colibri \(Android build\): Internet Access is set to Auto"));
-                LogAssert.Expect(LogType.Warning, new Regex(@"^Colibri \(Android build\): Allow downloads over HTTP is 'Not allowed'"));
+                LogAssert.Expect(LogType.Warning, new Regex(@"^Colibri \(build\): Allow downloads over HTTP is 'Not allowed'"));
 
                 AndroidSettingsBuildCheck.Check(BuildTarget.Android, false, config, InsecureHttpOption.NotAllowed, false);
+
+                LogAssert.NoUnexpectedReceived();
+            }
+            finally
+            {
+                Object.DestroyImmediate(config);
+            }
+        }
+
+        [Test]
+        public void AWindowsBuildWithHttpNotAllowedLogsOnlyTheHttpWarning()
+        {
+            var config = RemoteConfig();
+            try
+            {
+                LogAssert.Expect(LogType.Warning, new Regex(@"^Colibri \(build\): Allow downloads over HTTP is 'Not allowed'"));
+
+                // Internet Access is Android's alone: false here must not add a warning.
+                AndroidSettingsBuildCheck.Check(BuildTarget.StandaloneWindows64, false, config, InsecureHttpOption.NotAllowed, false);
 
                 LogAssert.NoUnexpectedReceived();
             }
@@ -101,7 +127,7 @@ namespace HCIKonstanz.Colibri.Tests
             try
             {
                 AndroidSettingsBuildCheck.Check(BuildTarget.Android, false, config, InsecureHttpOption.AlwaysAllowed, true);
-                AndroidSettingsBuildCheck.Check(BuildTarget.StandaloneWindows64, false, config, InsecureHttpOption.NotAllowed, false);
+                AndroidSettingsBuildCheck.Check(BuildTarget.StandaloneWindows64, false, config, InsecureHttpOption.AlwaysAllowed, false);
                 // HTTP allowed in development builds, and this is one.
                 AndroidSettingsBuildCheck.Check(BuildTarget.Android, true, config, InsecureHttpOption.DevelopmentOnly, true);
                 // A project without a Colibri configuration has no server address to judge.

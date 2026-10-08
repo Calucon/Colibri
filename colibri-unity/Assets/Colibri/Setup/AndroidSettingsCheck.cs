@@ -10,12 +10,13 @@ using UnityEngine;
 namespace HCIKonstanz.Colibri.Setup
 {
     /// <summary>
-    /// Two Player settings that let an Android build - every Meta Quest build - compile, install
-    /// and start normally, and then fail on the headset, where there is no console to say why.
+    /// Two Player settings that let a build compile, install and start normally, and then fail
+    /// where there is no console to say why: Internet Access on Android (every Meta Quest build),
+    /// and Allow downloads over HTTP on every player platform.
     /// </summary>
     /// <remarks>
     /// Checked after every domain reload - which switching the build target causes too - and at
-    /// the start of every Android build, and reported as a console warning. The Colibri Setup
+    /// the start of every player build, and reported as a console warning. The Colibri Setup
     /// window (Window -> Colibri Configuration) shows the same issues, each with a button that
     /// fixes it.
     /// </remarks>
@@ -62,10 +63,8 @@ namespace HCIKonstanz.Colibri.Setup
             InsecureHttpOption httpOption, bool developmentBuild, bool forceInternetPermission)
         {
             var issues = new List<Issue>();
-            if (target != BuildTarget.Android)
-                return issues;
 
-            if (!forceInternetPermission)
+            if (target == BuildTarget.Android && !forceInternetPermission)
             {
                 issues.Add(new Issue(
                     Setting.InternetAccess,
@@ -77,6 +76,8 @@ namespace HCIKonstanz.Colibri.Setup
                     () => PlayerSettings.Android.forceInternetPermission = true));
             }
 
+            // Every player platform, not only Android: a Windows IL2CPP player refused Store's plain
+            // HTTP to a LAN server just the same.
             if (!isSsl && !string.IsNullOrWhiteSpace(serverAddress) && !IsLoopback(serverAddress)
                 && !AllowsHttp(httpOption, developmentBuild))
             {
@@ -84,7 +85,7 @@ namespace HCIKonstanz.Colibri.Setup
                     Setting.AllowDownloadsOverHttp,
                     $"Allow downloads over HTTP is '{Describe(httpOption)}', but the Colibri server is reached over plain "
                     + $"http://{serverAddress.Trim()} (SSL is off in the Colibri configuration). Unity refuses every such request "
-                    + "with \"Insecure connection not allowed\", so Store calls fail on the headset. Set Project Settings > "
+                    + "with \"Insecure connection not allowed\", so Store calls fail in the built app. Set Project Settings > "
                     + "Player > Other Settings > Allow downloads over HTTP to Always allowed - or turn SSL on if the server "
                     + "supports it.",
                     "Allow downloads over HTTP",
@@ -161,12 +162,15 @@ namespace HCIKonstanz.Colibri.Setup
         internal static void LogIssues(IEnumerable<Issue> issues)
         {
             foreach (var issue in issues)
-                Debug.LogWarning($"Colibri (Android build): {issue.Message}\nWindow -> Colibri Configuration can fix this with one click.");
+            {
+                var scope = issue.Setting == Setting.InternetAccess ? "Android build" : "build";
+                Debug.LogWarning($"Colibri ({scope}): {issue.Message}\nWindow -> Colibri Configuration can fix this with one click.");
+            }
         }
     }
 
     /// <summary>
-    /// The same check when the settings take effect: at the start of an Android build. The
+    /// The same check when the settings take effect: at the start of a player build. The
     /// warnings go into the build log, and the build goes ahead regardless.
     /// </summary>
     internal sealed class AndroidSettingsBuildCheck : IPreprocessBuildWithReport

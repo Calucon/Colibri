@@ -206,7 +206,7 @@ namespace HCIKonstanz.Colibri.Setup
         }
 
         /// <summary>
-        /// Settings that break a Meta Quest / Android build silently - see <see cref="AndroidSettingsCheck"/>.
+        /// Settings that break a build silently - see <see cref="AndroidSettingsCheck"/>.
         /// Checked against the configuration as edited here, so turning SSL on clears the HTTP one.
         /// </summary>
         private void DrawAndroidIssues()
@@ -216,7 +216,9 @@ namespace HCIKonstanz.Colibri.Setup
                 return;
 
             GUILayout.Space(15f);
-            EditorGUILayout.LabelField("Android / Meta Quest", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField(EditorUserBuildSettings.activeBuildTarget == BuildTarget.Android
+                ? "Android / Meta Quest"
+                : "Player build", EditorStyles.boldLabel);
 
             foreach (var issue in issues)
             {
