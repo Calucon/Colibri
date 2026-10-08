@@ -57,15 +57,11 @@ but then Newtonsoft JSON (`com.unity.nuget.newtonsoft-json`) has to be added by 
 ```c#
 using HCIKonstanz.Colibri.Synchronization;
 
-void Start() {
-    Sync.Receive<float>("MyChannel", OnNumber); // register before anything is sent
-}
+// On one client. Register before anything is sent:
+void Start() => Sync.Receive<float>("MyChannel", OnNumber);
+void OnNumber(float myNumber) { /* runs whenever a float arrives on "MyChannel" */ }
 
-private void OnNumber(float myNumber) {
-    // runs whenever a float arrives on "MyChannel"
-}
-
-// anywhere, on another client:
+// Anywhere, on another client:
 Sync.Send("MyChannel", 5f);
 ```
 
@@ -102,10 +98,8 @@ where the object registers, and it never syncs (only compiler warning CS0114 say
 
 ## Meta Quest
 
-A Quest app is an Android build: switch the platform to Android under *File → Build Settings* (*File
-→ Build Profiles* on Unity 6). Quest needs ARM64, which on Android requires the IL2CPP scripting
-backend. With the Android target active, *Window → Colibri Configuration* checks two Player settings
-that otherwise only fail on the headset, each with a button that fixes it:
+A Quest app is an Android build, and ARM64 needs the IL2CPP backend. For an Android target, *Window →
+Colibri Configuration* checks two settings that would only fail on the headset, with a fix for each:
 
 - **Internet Access** must be *Require*.
 - **Allow downloads over HTTP** must be *Always allowed* while `SSL/TLS` is off and the server is not
@@ -117,7 +111,8 @@ More in [Meta Quest and Android](docs/guide.md#meta-quest-and-android).
 
 Open **Window → Colibri Status** while the game runs. It shows whether you are connected, to which
 server and as which app name, why the last attempt failed, which channels have listeners, and the
-last 20 messages in and out. Colibri also reports the common mistakes in the console:
+last 20 messages in and out. Colibri also reports the common mistakes in the console
+([full list](docs/guide.md#troubleshooting)):
 
 | Symptom | Cause |
 |---|---|
@@ -131,11 +126,7 @@ last 20 messages in and out. Colibri also reports the common mistakes in the con
 | `NullReferenceException` in `TMP_Settings` in a sample | [TextMeshPro's essential resources](docs/guide.md#samples) are missing |
 | Works in the Editor, not on the Quest | Look for `Colibri (Android build): …` in the console ([Meta Quest](#meta-quest)) |
 
-Every message and what to do about it: [Troubleshooting](docs/guide.md#troubleshooting).
-
-## Full guide
-
-[docs/guide.md](docs/guide.md) has everything in detail:
+## [Full guide](docs/guide.md)
 
 - [Configuration](docs/guide.md#configuration): ports, plain HTTP, voice sampling rate, send rate
 - [Meta Quest and Android](docs/guide.md#meta-quest-and-android): build checks, code stripping, IL2CPP
@@ -148,9 +139,8 @@ Every message and what to do about it: [Troubleshooting](docs/guide.md#troublesh
 - [Web Interface for Logging](docs/guide.md#web-interface-for-logging): a device's console logs in the server's web interface
 - [Voice Chat](docs/guide.md#voice-chat): broadcasting, receiving, Opus, spatial audio
 
-Also: [MIGRATION.md](../MIGRATION.md) (upgrading a 1.x project), [CHANGELOG.md](CHANGELOG.md), [how
-the sync loop and diagnostics work](docs/v2-ease-of-use-and-performance.md), [v3 wire
-protocol](../colibri-server/docs/protocol.md).
+Also: [MIGRATION.md](../MIGRATION.md) (upgrading from 1.x), [CHANGELOG.md](CHANGELOG.md), [how the
+sync loop works](docs/v2-ease-of-use-and-performance.md), [v3 protocol](../colibri-server/docs/protocol.md).
 
 ## License
 
