@@ -2,7 +2,7 @@ import { TCP_SERVER_WORKER, TCP_SERVER_WORKER_ROLE, TcpServerOptions, WireNetwor
 import { Payload, WorkerServiceProxy } from '../core/index.js';
 import { ownBytes } from './protocol.js';
 import { Observable, Subject } from 'rxjs';
-import { NetworkClient, NetworkMessage, NetworkServer } from '../command-hooks/index.js';
+import { Delivery, NetworkClient, NetworkMessage, NetworkServer } from '../command-hooks/index.js';
 
 const toBuffer = function (value: Buffer | Uint8Array): Buffer {
     if (Buffer.isBuffer(value)) return value;
@@ -169,11 +169,13 @@ export class TCPServerProxy
 
     public broadcast(
         msg: NetworkMessage,
-        clients: ReadonlyArray<NetworkClient> = this.currentClients
+        clients: ReadonlyArray<NetworkClient> = this.currentClients,
+        delivery: Delivery = 'relay'
     ): void {
         this.postMessage('m:broadcast', {
             msg: this.toWireMessage(msg),
             clients: clients.map((c) => c.id),
+            reply: delivery === 'reply',
         });
     }
 

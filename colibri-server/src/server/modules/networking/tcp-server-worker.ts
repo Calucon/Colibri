@@ -49,7 +49,19 @@ const maxBufferSize = MAX_FRAME_LENGTH;
 // already this full is not keeping up - queuing yet another update behind it only grows
 // process memory without bound (the old `socket.write()`'s return value was ignored
 // entirely). Dropping a stale update for a slow client is the correct behaviour here.
+// Replies (see MAX_REPLY_BACKLOG_BYTES) neither count towards it nor are dropped by it.
 const highWaterMark = 1024 * 1024;
+
+// How many bytes of replies, the server's answers to a client's own requests, may wait to be sent
+// to one client before further replies to it are dropped too.
+//
+// A reply is not dropped at highWaterMark like relayed traffic: nothing would ever send it again.
+// The answer to a model::request for a whole channel is one frame per model, all written at once,
+// so on any link slower than loopback a store larger than highWaterMark used to reach a late joiner
+// only in part, and the models cut off stayed missing on it until they next changed. This bound is
+// many full stores and many maximum-size frames; it only stops a client that keeps asking without
+// ever reading from taking up memory without limit.
+export const MAX_REPLY_BACKLOG_BYTES = 64 * 1024 * 1024;
 
 // How long a socket this server has ended (a refusal, or a framing error) may stay half-open
 // waiting for the peer's FIN before it is destroyed. Ending first rather than destroying is what
@@ -171,6 +183,12 @@ interface TcpClient {
     // byte count is interpolated into the message.
     dropping: boolean;
     droppedSinceWarning: number;
+    // Bytes of replies handed to the socket that it has not flushed to the kernel yet; see
+    // MAX_REPLY_BACKLOG_BYTES. Taken off writableLength before it is compared with highWaterMark.
+    replyBytesQueued: number;
+    // The same as dropping and droppedSinceWarning, for replies past MAX_REPLY_BACKLOG_BYTES.
+    droppingReplies: boolean;
+    droppedRepliesSinceWarning: number;
     // performance.now() of the last bytes received, or of the connection if none have been yet.
     lastInboundAt: number;
     // Model updates over a limit, waiting for room; see HeldUpdates.
@@ -249,7 +267,7 @@ export class TCPServerWorker extends WorkerService {
                     .map((id) => this.clients.get(id))
                     .filter((c): c is TcpClient => !!c);
 
-                this.broadcast(msg.content.msg as WireNetworkMessage, clients);
+                this.broadcast(msg.content.msg as WireNetworkMessage, clients, msg.content.reply === true);
                 break;
             }
 
@@ -367,9 +385,11 @@ export class TCPServerWorker extends WorkerService {
         this.clientsByApp.clear();
     }
 
+    // `reply`: the server's answer to the recipients' own request; see MAX_REPLY_BACKLOG_BYTES.
     public broadcast(
         msg: WireNetworkMessage,
-        clients: ReadonlyArray<TcpClient>
+        clients: ReadonlyArray<TcpClient>,
+        reply = false
     ): void {
         if (clients.length === 0) {
             return;
@@ -394,11 +414,11 @@ export class TCPServerWorker extends WorkerService {
         }
 
         for (const client of clients) {
-            this.writeToClient(client, packet);
+            this.writeToClient(client, packet, reply);
         }
     }
 
-    private writeToClient(client: TcpClient, packet: Buffer): void {
+    private writeToClient(client: TcpClient, packet: Buffer, reply = false): void {
         // Writing after end() is an error that destroys the socket - logged twice, and able to
         // cut off a refusal frame that was still being flushed. A socket gets here ended
         // between the peer's FIN (which ends our side too) and its 'close' event.
@@ -406,26 +426,15 @@ export class TCPServerWorker extends WorkerService {
             return;
         }
 
-        if (client.socket.writableLength > highWaterMark) {
-            client.droppedSinceWarning += 1;
-            if (!client.dropping) {
-                client.dropping = true;
-                this.logWarning(
-                    `Dropping messages to client ${client.id}: writable buffer exceeds high-water mark (${client.socket.writableLength} bytes)`
-                );
-            }
+        if (reply ? !this.admitReply(client) : !this.admitRelayed(client)) {
             return;
         }
 
-        if (client.dropping) {
-            client.dropping = false;
-            this.logWarning(
-                `Client ${client.id} caught up; dropped ${client.droppedSinceWarning} message(s) while backed up`
-            );
-            client.droppedSinceWarning = 0;
-        }
-
+        if (reply) client.replyBytesQueued += packet.length;
         client.socket.write(packet, (err) => {
+            // Called once the kernel has taken the packet, or the write failed: either way it is
+            // no longer waiting.
+            if (reply) client.replyBytesQueued -= packet.length;
             if (!err) return;
 
             // A peer that is gone fails every write still queued for it, each with a callback of
@@ -439,6 +448,60 @@ export class TCPServerWorker extends WorkerService {
                 `Failed to send message to client ${client.id}: ${err.message} `
             );
         });
+    }
+
+    // Whether relayed traffic (and heartbeats) may still be queued for the client: not once more
+    // than highWaterMark of it is waiting. Replies waiting ahead of it do not count, so a client
+    // still reading the answer to its model::request gets the updates made meanwhile too.
+    private admitRelayed(client: TcpClient): boolean {
+        const relayedBytes = client.socket.writableLength - client.replyBytesQueued;
+        if (relayedBytes > highWaterMark) {
+            client.droppedSinceWarning += 1;
+            if (!client.dropping) {
+                client.dropping = true;
+                this.logWarning(
+                    `Dropping messages to client ${client.id}: writable buffer exceeds high-water mark (${relayedBytes} bytes)`
+                );
+            }
+            return false;
+        }
+
+        if (client.dropping) {
+            client.dropping = false;
+            this.logWarning(
+                `Client ${client.id} caught up; dropped ${client.droppedSinceWarning} message(s) while backed up`
+            );
+            client.droppedSinceWarning = 0;
+        }
+        return true;
+    }
+
+    // Whether one more reply may be queued for the client: always, unless MAX_REPLY_BACKLOG_BYTES of
+    // replies are waiting already.
+    private admitReply(client: TcpClient): boolean {
+        if (client.replyBytesQueued > MAX_REPLY_BACKLOG_BYTES) {
+            client.droppedRepliesSinceWarning += 1;
+            if (!client.droppingReplies) {
+                client.droppingReplies = true;
+                this.logWarning(
+                    `Dropping answers to Unity client '${client.name}' (${client.id}, app '${client.app}', ${client.address}): ` +
+                        `more than ${MAX_REPLY_BACKLOG_BYTES / (1024 * 1024)} MiB of answers to its own requests (model::request) ` +
+                        'are still waiting to be sent to it. The models it asked for from here on are missing on it until they ' +
+                        'change. A client that keeps asking for every model without reading the answers looks like this.'
+                );
+            }
+            return false;
+        }
+
+        if (client.droppingReplies) {
+            client.droppingReplies = false;
+            this.logWarning(
+                `Unity client '${client.name}' (${client.id}) is taking answers again; dropped ${client.droppedRepliesSinceWarning} ` +
+                    'answer(s) to its requests while too many were waiting'
+            );
+            client.droppedRepliesSinceWarning = 0;
+        }
+        return true;
     }
 
     private handleConnection(socket: net.Socket): void {
@@ -464,6 +527,9 @@ export class TCPServerWorker extends WorkerService {
             closeTimer: undefined,
             dropping: false,
             droppedSinceWarning: 0,
+            replyBytesQueued: 0,
+            droppingReplies: false,
+            droppedRepliesSinceWarning: 0,
             lastInboundAt: performance.now(),
             held: new HeldUpdates(),
         };

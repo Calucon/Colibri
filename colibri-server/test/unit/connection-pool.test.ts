@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Subject, Subscription, config as rxjsConfig } from 'rxjs';
 import {
     ConnectionPool,
+    Delivery,
     MAX_UNHANDLED_COMMAND_WARNINGS,
     NetworkClient,
     NetworkMessage,
@@ -48,8 +49,12 @@ class FakeServer implements NetworkServer {
 
     public broadcastToApp?: (message: NetworkMessage, app: string, exceptClientId?: string) => void;
 
-    public broadcast(message: NetworkMessage, clients: ReadonlyArray<NetworkClient>): void {
+    // What each broadcast() was told about delivery, in order.
+    public deliveries: (Delivery | undefined)[] = [];
+
+    public broadcast(message: NetworkMessage, clients: ReadonlyArray<NetworkClient>, delivery?: Delivery): void {
         this.broadcasts.push({ message, clients });
+        this.deliveries.push(delivery);
     }
 
     public connectClient(client: NetworkClient): void {
@@ -303,6 +308,22 @@ describe('ConnectionPool', () => {
 
             expect(serverA.broadcasts).toHaveLength(0);
             expect(serverB.broadcasts).toEqual([{ message, clients: [client] }]);
+        });
+
+        // A transport may drop relayed traffic for a client that is behind, but never the answer to
+        // its own request.
+        it('sends as a reply, where a broadcast is relayed traffic', () => {
+            const server = new FakeServer();
+            const pool = new ConnectionPool(server);
+            const client = makeClient('c1', 'appA');
+            const other = makeClient('c2', 'appA');
+            server.connectClient(client);
+            server.connectClient(other);
+
+            pool.emit({ channel: 'c', command: 'model::update' }, client);
+            pool.broadcast({ channel: 'c', command: 'model::update', origin: other });
+
+            expect(server.deliveries).toEqual(['reply', undefined]);
         });
 
         it('does nothing once the client has disconnected', () => {

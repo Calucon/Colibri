@@ -164,6 +164,66 @@ describe('TCPServerProxy', () => {
         });
     });
 
+    // The worker drops relayed traffic for a client too far behind, but must not drop an answer
+    // to the client's own request: nothing would ever send that again.
+    describe('answers to a client\'s own request', () => {
+        let sent: { channel: string; content: Record<string, unknown> }[];
+
+        beforeEach(() => {
+            sent = [];
+            vi.spyOn(WorkerServiceProxy.prototype as unknown as { postMessage(channel: string, content?: Record<string, unknown>): void }, 'postMessage')
+                .mockImplementation((channel, content) => {
+                    sent.push({ channel, content: content ?? {} });
+                });
+            new ModelSynchronization(new ConnectionPool(proxy), new DataStore());
+            handshake('joiner', 'appA');
+            handshake('owner', 'appA');
+        });
+
+        const request = function (payload: Record<string, unknown>): void {
+            fromWorker('clientMessage$', {
+                channel: 'objects',
+                command: 'model::request',
+                payload: Buffer.from(JSON.stringify(payload), 'utf8'),
+                origin: { id: 'joiner', app: 'appA', name: 'joiner', version: '2', metadata: {} },
+            });
+        };
+
+        const posts = () => sent.filter(m => m.channel === 'm:broadcast' || m.channel === 'm:broadcastToApp')
+            .map(m => `${m.channel} ${(m.content.msg as { command: string }).command} reply=${m.content.reply}`);
+
+        it('are marked as replies for the worker, relayed traffic is not', () => {
+            modelUpdate('owner', 'objects', { id: 'm1', x: 1 });
+            modelUpdate('owner', 'objects', { id: 'm2', x: 1 });
+            fromWorker('clientMessage$', {
+                channel: 'objects',
+                command: 'model::delete',
+                payload: Buffer.from('{"id":"gone"}', 'utf8'),
+                origin: { id: 'owner', app: 'appA', name: 'owner', version: '2', metadata: {} },
+            });
+            sent.length = 0;
+
+            request({});
+            request({ id: 'unknown' });
+            request({ id: 'gone', again: true });
+            modelUpdate('owner', 'objects', { id: 'm1', x: 2 });
+
+            expect(posts()).toEqual([
+                'm:broadcast model::update reply=true',
+                'm:broadcast model::update reply=true',
+                'm:broadcast model::update reply=true',
+                'm:broadcast model::delete reply=true',
+                'm:broadcastToApp model::update reply=undefined',
+            ]);
+        });
+
+        it('are relayed traffic unless said otherwise', () => {
+            proxy.broadcast({ channel: 'objects', command: 'model::update', payload: Payload.fromString('{"id":"m1"}') }, proxy.currentClients);
+
+            expect(posts()).toEqual(['m:broadcast model::update reply=false']);
+        });
+    });
+
     // The worker counts every message it posts here; this side has to count each one back down
     // once it is dispatched, or the worker would think the main thread is further behind than it
     // is - and, past the limit, drop updates for good.

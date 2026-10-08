@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import type * as net from 'net';
-import { TCPServerWorker, TcpServerOptions, WireNetworkMessage } from '../../src/server/modules/networking/tcp-server-worker.js';
+import { MAX_REPLY_BACKLOG_BYTES, TCPServerWorker, TcpServerOptions, WireNetworkMessage } from '../../src/server/modules/networking/tcp-server-worker.js';
 import { FrameReader, FrameType, PROTOCOL_VERSION, encodeHandshakeFrame, encodeHeartbeatFrame, encodeMessageFrame } from '../../src/server/modules/networking/protocol.js';
 import { LogLevel } from '../../src/server/modules/core/log-message.js';
 
@@ -43,6 +43,19 @@ class FakeSocket extends EventEmitter {
     // queued for a peer that has gone.
     public failWritesWith: Error | undefined;
 
+    // Set for a peer that reads slower than it is sent to: each write then waits, counted in
+    // writableLength, until flush() hands it to the kernel, as a real socket's writes do.
+    public holdWrites = false;
+    private readonly heldWrites: { length: number; callback?: (err?: Error) => void }[] = [];
+
+    // Lets the oldest `count` held writes go, as the kernel takes them.
+    public flush(count = this.heldWrites.length): void {
+        for (const write of this.heldWrites.splice(0, count)) {
+            this.writableLength -= write.length;
+            write.callback?.();
+        }
+    }
+
     // Modelled on what a real net.Socket does with a write after end(): the write fails, the
     // socket emits 'error' and destroys itself - which is how a heartbeat to a refused client
     // used to log twice and could cut off the refusal frame still being flushed.
@@ -62,6 +75,11 @@ class FakeSocket extends EventEmitter {
         }
 
         this.written.push(data);
+        if (this.holdWrites) {
+            this.writableLength += data.length;
+            this.heldWrites.push({ length: data.length, callback });
+            return false;
+        }
         callback?.();
         return true;
     }
@@ -643,6 +661,110 @@ describe('TCPServerWorker', () => {
 
             expect(socket.written).toHaveLength(1);
             expect(logs().some(msg => msg.includes('caught up; dropped 5 message(s)'))).toBe(true);
+        });
+
+        // The answer to a model::request for a whole channel is one frame per model, written all at
+        // once. A store over 1 MiB used to reach a late joiner only up to the high-water mark; the
+        // rest was dropped, and nothing ever sent it again.
+        describe('replies to a client\'s own request', () => {
+            const handshaked = function (): FakeSocket {
+                const { socket } = connect();
+                socket.emit('data', encodeHandshakeFrame(PROTOCOL_VERSION, 'appA', 'late-joiner'));
+                socket.written.length = 0;
+                socket.holdWrites = true;
+                posted = [];
+                return socket;
+            };
+
+            const clientId = (): string => Array.from(internals.clients.keys())[0]!;
+
+            const reply = function (payload: string): void {
+                internals.handleParentMessage({
+                    channel: 'm:broadcast',
+                    content: { msg: wireMessage('store', 'model::update', payload), clients: [clientId()], reply: true },
+                });
+            };
+
+            const relay = function (payload: string): void {
+                internals.handleParentMessage({
+                    channel: 'm:broadcastToApp',
+                    content: { msg: wireMessage('store', 'model::update', payload), app: 'appA' },
+                });
+            };
+
+            const commandsWritten = (socket: FakeSocket): string[] => {
+                const reader = new FrameReader();
+                return socket.written.flatMap(chunk => reader.append(chunk)).map(f => (f.type === FrameType.Message ? f.payload.toString() : 'heartbeat'));
+            };
+
+            const model = (i: number): string => JSON.stringify({ id: `m${i}`, data: 'x'.repeat(2000) });
+
+            it('are all written, however far over the high-water mark the client is', () => {
+                const socket = handshaked();
+
+                for (let i = 0; i < 3000; i++) reply(model(i));
+
+                expect(socket.written).toHaveLength(3000);
+                expect(socket.writableLength).toBeGreaterThan(5 * 1024 * 1024);
+                expect(logs().filter(msg => msg.includes('Dropping'))).toEqual([]);
+            });
+
+            // Relayed traffic is still dropped past the mark, but replies waiting ahead of it do not
+            // count: a late joiner still reading its answer gets the changes made meanwhile too.
+            it('do not count towards the high-water mark for relayed traffic, which is still dropped past it', () => {
+                const socket = handshaked();
+                for (let i = 0; i < 3000; i++) reply(model(i));
+
+                relay(model(9000));
+                internals.handleHeartbeat();
+                expect(socket.written).toHaveLength(3002);
+
+                // 1 MiB of relayed traffic behind the replies, and the next is dropped.
+                for (let i = 0; i < 600; i++) relay(model(10_000 + i));
+                internals.handleHeartbeat();
+                const relayedWritten = socket.written.length - 3002;
+                expect(relayedWritten).toBeGreaterThan(500);
+                expect(relayedWritten).toBeLessThan(600);
+                expect(logs().filter(msg => msg.includes('Dropping messages to client'))).toHaveLength(1);
+
+                // Once the client has read it all, relayed traffic goes out again.
+                socket.flush();
+                relay(model(20_000));
+                expect(commandsWritten(socket).at(-1)).toContain('"m20000"');
+                expect(logs().some(msg => msg.includes('caught up; dropped'))).toBe(true);
+            });
+
+            it('are counted off once the socket has flushed them', () => {
+                const socket = handshaked();
+                for (let i = 0; i < 1000; i++) reply(model(i));
+                socket.flush();
+                socket.writableLength = 2 * 1024 * 1024;
+
+                relay(model(9000));
+
+                expect(socket.written).toHaveLength(1000);
+                expect(logs().filter(msg => msg.includes('Dropping messages to client'))).toHaveLength(1);
+            });
+
+            it('are dropped past MAX_REPLY_BACKLOG_BYTES, with a warning when it starts and a summary when it ends', () => {
+                const socket = handshaked();
+                const big = 'y'.repeat(4 * 1024 * 1024);
+                const fitting = MAX_REPLY_BACKLOG_BYTES / big.length;
+
+                for (let i = 0; i < fitting + 2; i++) reply(big);
+
+                expect(socket.written).toHaveLength(fitting);
+                const started = logs().filter(msg => msg.includes('Dropping answers to Unity client'));
+                expect(started).toHaveLength(1);
+                expect(started[0]).toContain('\'late-joiner\'');
+                expect(started[0]).toContain(`${MAX_REPLY_BACKLOG_BYTES / (1024 * 1024)} MiB`);
+
+                socket.flush();
+                reply(model(1));
+
+                expect(socket.written).toHaveLength(fitting + 1);
+                expect(logs().filter(msg => msg.includes('is taking answers again; dropped 2 answer(s)'))).toHaveLength(1);
+            });
         });
     });
 

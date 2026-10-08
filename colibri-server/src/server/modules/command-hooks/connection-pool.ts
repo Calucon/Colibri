@@ -16,12 +16,19 @@ export interface NetworkClient {
     metadata: Record<string, unknown>;
 }
 
+// What a transport may do with a message for a client that is not keeping up with what it is sent.
+// - 'relay', the default: traffic relayed between clients, the latest of which is all that counts.
+//   It may be dropped for a recipient too far behind (see TCPServerWorker.writeToClient).
+// - 'reply': the server's answer to one client's own request, such as the models a model::request
+//   asked for. Nothing would ever send it again, so it is queued rather than dropped.
+export type Delivery = 'relay' | 'reply';
+
 export abstract class NetworkServer {
     public abstract get currentClients(): ReadonlyArray<NetworkClient>;
     public abstract get messages$(): Observable<NetworkMessage>;
     public abstract get clientConnected$(): Observable<NetworkClient>;
     public abstract get clientDisconnected$(): Observable<NetworkClient>;
-    public abstract broadcast(message: NetworkMessage, clients: ReadonlyArray<NetworkClient>): void;
+    public abstract broadcast(message: NetworkMessage, clients: ReadonlyArray<NetworkClient>, delivery?: Delivery): void;
 
     // Optional fast path for "broadcast to every client of one app": transports that can
     // group clients server-side (Socket.IO rooms) encode the packet once for the whole
@@ -280,8 +287,10 @@ export class ConnectionPool extends Service {
         }
     }
 
+    // Answers one client's own request: delivered as a reply, which is never dropped for being
+    // behind (see Delivery).
     public emit(message: NetworkMessage, client: NetworkClient): void {
-        this.serverByClientId.get(client.id)?.broadcast(message, [ client ]);
+        this.serverByClientId.get(client.id)?.broadcast(message, [ client ], 'reply');
     }
 
     private clientsForApp(app: string, connection: NetworkServer, excludeClientId?: string): NetworkClient[] {
