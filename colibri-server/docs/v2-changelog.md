@@ -330,6 +330,14 @@ EditMode tests, which `npm run test:vectors` checks in CI.
   after every 64 KiB it sends, and never drops a heartbeat for a client that is behind. It queues
   at most one 100 ms heartbeat at a time for a client that is not reading, so a client that sends
   but never reads does not grow the server's memory.
+- **A client reading a large message over a slow link is not taken for gone.** A message larger
+  than 64 KiB has no heartbeat inside it, so a Unity client reading one echoes nothing until it is
+  through: one reading a 4 MiB `broadcast::json` over a 200 KB/s link was disconnected 10 s in, and
+  never got the message. Until such a client echoes a heartbeat sent after the message, it now gets
+  one more `TCP_IDLE_TIMEOUT_SECONDS` for every 64 KiB of it, at most 6 more (60 s at the default),
+  enough for a 4 MiB message at about 60 KB/s. A client that is gone by the time such a message is
+  sent to it, or goes while it is being read, is noticed that much later, within 70 s at the
+  default.
 - **A late joiner gets the whole store.** The 1 MiB backpressure drop applies to what is relayed
   from other clients, not to the server's answers to a TCP client's own requests: the models a
   `model::request` asks for, the client list, a `model::delete` answer. Those are queued however
