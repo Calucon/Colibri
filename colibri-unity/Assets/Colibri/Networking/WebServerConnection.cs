@@ -155,16 +155,31 @@ namespace HCIKonstanz.Colibri.Networking
         // volatile: written by the connection loop off the main thread, read by Update()'s
         // heartbeat watchdog and by OnDisable. The send path uses _outboxSocket instead.
         private volatile Socket _socket;
+
+        /// <remarks>Internal for the tests, which shrink its send buffer to stand in for a slow link.</remarks>
+        internal Socket CurrentSocket => _socket;
+
         private CancellationTokenSource _lifetime;
         private string _hostname = "";
 
         // Serializes every write to the socket - the outbox's messages and the receive loop's
         // heartbeat echoes. Concurrent writes used to interleave their bytes and corrupt the
-        // framing for everything that followed.
+        // framing for everything that followed. The receive loop never waits for it: see
+        // EchoHeartbeat.
         private readonly SemaphoreSlim _sendLock = new SemaphoreSlim(1, 1);
 
-        /// <remarks>Internal for the EditMode tests, which hold it to stand in for a slow write.</remarks>
+        /// <remarks>Internal for the tests, which hold it to stand in for a slow write.</remarks>
         internal SemaphoreSlim SendLock => _sendLock;
+
+        // The newest heartbeat echo not written yet, with the socket of the session it answers, or
+        // null. Set by the receive loop, taken by whoever holds _sendLock. See EchoHeartbeat.
+        private PendingEcho _pendingEcho;
+
+        private sealed class PendingEcho
+        {
+            public Socket Socket;
+            public byte[] Frame;
+        }
 
         // Every outgoing message, in the order it was sent, until it has been written to a socket.
         // See "The outbox" below. Everything from here to _hasWarnedAboutRefusal is under _outboxLock:
@@ -954,9 +969,8 @@ namespace HCIKonstanz.Colibri.Networking
                             // reading and is never interpreted here. Since 2.0.0 this echo is the
                             // sole source of the server's TCP latency measurements; the old
                             // `colibri`/`latency` message echo is Socket.IO-only and nothing
-                            // sends it to a TCP client any more.
-                            await SendFrame(socket, FrameCodec.EncodeHeartbeat(frame.PingTimestamp), token)
-                                .ConfigureAwait(false);
+                            // sends it to a TCP client any more. Not awaited: see EchoHeartbeat.
+                            EchoHeartbeat(socket, frame.PingTimestamp);
                             break;
 
                         case FrameType.Message:
@@ -1124,30 +1138,113 @@ namespace HCIKonstanz.Colibri.Networking
          *  Sending
          */
 
-        // All socket writes funnel through here so that a frame is never interleaved with
-        // another frame's bytes, and so that a partial send is completed rather than silently
-        // truncating the frame.
+        // All socket writes go under _sendLock so that a frame is never interleaved with another
+        // frame's bytes. Messages come through here; heartbeat echoes through EchoHeartbeat, which
+        // never waits for the lock, and are written between two frames.
         private async Task SendFrame(Socket socket, byte[] frame, CancellationToken token)
         {
             await _sendLock.WaitAsync(token).ConfigureAwait(false);
             try
             {
-                var offset = 0;
-                while (offset < frame.Length)
-                {
-                    var sent = await socket
-                        .SendAsync(new ArraySegment<byte>(frame, offset, frame.Length - offset), SocketFlags.None)
-                        .ConfigureAwait(false);
-                    if (sent <= 0)
-                        throw new SocketException((int)SocketError.ConnectionReset);
-
-                    offset += sent;
-                }
+                // An echo that came in while someone else had the socket goes first, and one that
+                // came in while this frame was being written - a large one on a slow link takes
+                // seconds - goes straight after it.
+                await WritePendingEcho(socket).ConfigureAwait(false);
+                await WriteAll(socket, frame).ConfigureAwait(false);
+                await WritePendingEcho(socket).ConfigureAwait(false);
             }
             finally
             {
-                _sendLock.Release();
+                ReleaseSendLock();
             }
+        }
+
+        // Under _sendLock. Completes a partial send rather than silently truncating the frame.
+        private static async Task WriteAll(Socket socket, byte[] frame)
+        {
+            var offset = 0;
+            while (offset < frame.Length)
+            {
+                var sent = await socket
+                    .SendAsync(new ArraySegment<byte>(frame, offset, frame.Length - offset), SocketFlags.None)
+                    .ConfigureAwait(false);
+                if (sent <= 0)
+                    throw new SocketException((int)SocketError.ConnectionReset);
+
+                offset += sent;
+            }
+        }
+
+        /// <summary>
+        /// Answers a server heartbeat without waiting for the socket. The receive loop calls this,
+        /// and it must never wait for a write: a large message on a slow link holds the socket for
+        /// as long as it takes to write, and a receive loop waiting behind it stopped reading - the
+        /// server's heartbeats included - so the watchdog in <see cref="Update"/> dropped a healthy
+        /// connection after 2 s. The next session sent the same message first, and was dropped the
+        /// same way, again and again, with nothing else getting through.
+        ///
+        /// So the echo is left in a slot, and written by whoever has the socket: at once if nobody
+        /// does, otherwise by the write in progress as soon as its frame is complete - a frame cannot
+        /// be split by another frame's bytes. Only the newest echo is kept. While a long write holds
+        /// the socket the server is still receiving its bytes, and that is what its idle timeout
+        /// looks at; a skipped echo only costs it one latency sample.
+        /// </summary>
+        private void EchoHeartbeat(Socket socket, ulong pingTimestamp)
+        {
+            Volatile.Write(ref _pendingEcho, new PendingEcho { Socket = socket, Frame = FrameCodec.EncodeHeartbeat(pingTimestamp) });
+
+            if (_sendLock.Wait(0))
+                _ = WritePendingEchoAndRelease();
+        }
+
+        // Called holding _sendLock, which it releases.
+        private async Task WritePendingEchoAndRelease()
+        {
+            try
+            {
+                await WritePendingEcho(null).ConfigureAwait(false);
+            }
+            finally
+            {
+                ReleaseSendLock();
+            }
+        }
+
+        /// <summary>
+        /// Under _sendLock: writes the pending echo, if there is one. With
+        /// <paramref name="session"/>, only an echo that belongs to that socket - an echo left over
+        /// from an earlier session answers nothing any more, and is dropped.
+        /// </summary>
+        /// <remarks>Never throws: a write that fails closes the socket, which ends the session.</remarks>
+        private async Task WritePendingEcho(Socket session)
+        {
+            var echo = Interlocked.Exchange(ref _pendingEcho, null);
+            if (echo == null || (session != null && !ReferenceEquals(echo.Socket, session)))
+                return;
+
+            try
+            {
+                await WriteAll(echo.Socket, echo.Frame).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // The connection is gone. Closing the socket makes the receive loop notice now,
+                // and a message written next fails and stays queued for the next session.
+                CloseSocket(echo.Socket);
+            }
+        }
+
+        /// <summary>
+        /// Lets go of the socket. An echo that arrived after the holder last looked would otherwise
+        /// wait for the next write or the next heartbeat, so it is written now - unless another
+        /// write has taken the socket in the meantime, which then writes it.
+        /// </summary>
+        private void ReleaseSendLock()
+        {
+            _sendLock.Release();
+
+            if (Volatile.Read(ref _pendingEcho) != null && _sendLock.Wait(0))
+                _ = WritePendingEchoAndRelease();
         }
 
         /*

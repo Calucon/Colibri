@@ -65,7 +65,9 @@ namespace HCIKonstanz.Colibri.E2E
         private readonly List<TcpClient> _open = new List<TcpClient>();
         private readonly List<(int Session, DecodedFrame Frame)> _received = new List<(int, DecodedFrame)>();
         private int _accepted;
+        private int _echoes;
         private volatile Behaviour _mode;
+        private readonly int _readBytesPerSecond;
 
         public int Port { get; }
 
@@ -91,6 +93,9 @@ namespace HCIKonstanz.Colibri.E2E
             }
         }
 
+        /// <summary>How many heartbeat echoes <see cref="Behaviour.Heartbeat"/> sessions have read.</summary>
+        public int Echoes => Volatile.Read(ref _echoes);
+
         /// <summary>
         /// Every message frame a client sent, with the 1-based number of the connection it came on.
         /// Only recorded by <see cref="Behaviour.Heartbeat"/> sessions; heartbeat echoes are left out.
@@ -104,19 +109,31 @@ namespace HCIKonstanz.Colibri.E2E
             }
         }
 
-        private FakeColibriServer(TcpListener listener, Behaviour mode)
+        private FakeColibriServer(TcpListener listener, Behaviour mode, int readBytesPerSecond)
         {
             _listener = listener;
             _mode = mode;
+            _readBytesPerSecond = readBytesPerSecond;
             Port = ((IPEndPoint)listener.LocalEndpoint).Port;
         }
 
-        public static FakeColibriServer Start(Behaviour mode)
+        /// <param name="readBytesPerSecond">
+        /// For a slow link: <see cref="Behaviour.Heartbeat"/> sessions read no faster than this, and
+        /// the operating system buffers only a little on the way in, so a client writing more than
+        /// that waits for the link. 0 reads as fast as the client writes.
+        /// </param>
+        public static FakeColibriServer Start(Behaviour mode, int readBytesPerSecond = 0)
         {
             var listener = new TcpListener(IPAddress.Loopback, 0);
+
+            // Before Start: the accepted connections inherit it, and the receive window is agreed
+            // when they open.
+            if (readBytesPerSecond > 0)
+                listener.Server.ReceiveBufferSize = 64 * 1024;
+
             listener.Start();
 
-            var server = new FakeColibriServer(listener, mode);
+            var server = new FakeColibriServer(listener, mode, readBytesPerSecond);
             _ = server.AcceptLoop();
             return server;
         }
@@ -312,16 +329,30 @@ namespace HCIKonstanz.Colibri.E2E
         {
             var reader = new FrameReader();
             var buffer = new byte[16 * 1024];
+            var clock = Stopwatch.StartNew();
+            long total = 0;
             while (true)
             {
                 var read = await stream.ReadAsync(buffer, 0, buffer.Length, token).ConfigureAwait(false);
                 if (read <= 0)
                     return;
 
+                // A slow link: no further read until this many bytes would have taken that long.
+                total += read;
+                if (_readBytesPerSecond > 0)
+                {
+                    var ahead = total * 1000.0 / _readBytesPerSecond - clock.Elapsed.TotalMilliseconds;
+                    if (ahead >= 1)
+                        await Task.Delay((int)ahead, token).ConfigureAwait(false);
+                }
+
                 foreach (var frame in Decode(reader, buffer, read))
                 {
                     if (frame.Type == FrameType.Handshake)
                         handshakeRead.TrySetResult(true);
+
+                    if (frame.Type == FrameType.Heartbeat)
+                        Interlocked.Increment(ref _echoes);
 
                     if (frame.Type != FrameType.Message)
                         continue;

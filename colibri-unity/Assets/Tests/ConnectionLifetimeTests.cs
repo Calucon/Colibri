@@ -192,6 +192,80 @@ namespace HCIKonstanz.Colibri.E2E
 
 
         /*
+         *  A write that takes longer than the heartbeat watchdog
+         *
+         *  The receive loop used to wait for the socket to echo each heartbeat, and a large message
+         *  on a slow link holds the socket for as long as it takes to write. Waiting, the loop read
+         *  nothing - the server's heartbeats included - so after 2 s the watchdog dropped a healthy
+         *  connection. The next session sent the same message first and was dropped the same way,
+         *  over and over, with nothing else getting through.
+         */
+
+        /// <summary>
+        /// The mechanism on its own: the socket is held, the way a long write holds it, for longer
+        /// than the watchdog's 2 s, while the server keeps heartbeating and Update keeps running.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator HoldingTheSocketPastTheWatchdogDoesNotDropAHealthyConnection()
+        {
+            _server = FakeColibriServer.Start(FakeColibriServer.Behaviour.Heartbeat);
+            var connection = ConnectionTo(_server.Port);
+            var events = Record(connection);
+            yield return E2EServer.WaitUntil(() => events.Count == 1, "The client never connected", 10f);
+
+            connection.SendLock.Wait();
+            try
+            {
+                yield return E2EServer.Settle(3f);
+            }
+            finally
+            {
+                connection.SendLock.Release();
+            }
+
+            // Echoing resumes once the socket is free.
+            var echoes = _server.Echoes;
+            yield return E2EServer.WaitUntil(() => _server.Echoes > echoes, "No heartbeat was echoed once the socket was free again", 2f);
+
+            Assert.That(events, Is.EqualTo(new[] { "connected" }),
+                "The connection was dropped while a write held the socket, though the server never stopped heartbeating");
+            Assert.That(_server.Accepted, Is.EqualTo(1));
+        }
+
+        /// <summary>
+        /// The same through a real slow link: a server that reads a quarter of a megabyte a second,
+        /// and a send buffer that holds little of what is written, so that writing 1 MiB takes some
+        /// 4 s. The message arrives whole, on the first connection, and so does the one queued
+        /// behind it.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator ALargeMessageOnASlowLinkArrivesWithoutTheConnectionBeingDropped()
+        {
+            _server = FakeColibriServer.Start(FakeColibriServer.Behaviour.Heartbeat, readBytesPerSecond: 256 * 1024);
+            var connection = ConnectionTo(_server.Port);
+            var events = Record(connection);
+            yield return E2EServer.WaitUntil(() => events.Count == 1, "The client never connected", 10f);
+
+            connection.CurrentSocket.SendBufferSize = 64 * 1024;
+
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            connection.SendCommand("slow-link", "broadcast::json", new JValue(new string('x', 1024 * 1024)));
+            connection.SendCommand("slow-link-after", "broadcast::int", 1);
+
+            yield return E2EServer.WaitUntil(
+                () => events.Count > 1 || _server.Received.Any(sent => sent.Frame.Channel == "slow-link-after"),
+                "Neither message arrived", 20f);
+
+            Assert.That(events, Is.EqualTo(new[] { "connected" }),
+                "The connection was dropped while it was writing a large message to a slow link");
+            Assert.That(_server.Received.Select(sent => $"{sent.Session} {sent.Frame.Channel} {sent.Frame.Payload.Length}"),
+                Is.EqualTo(new[] { $"1 slow-link {1024 * 1024 + 2}", "1 slow-link-after 1" }));
+            Assert.That(clock.Elapsed.TotalSeconds, Is.GreaterThan(2.5),
+                "Precondition: writing the message should have taken longer than the watchdog's 2 s");
+        }
+
+
+        /*
          *  OnConnected and OnDisconnected when the component goes away
          *
          *  Both are raised from Update, which a disabled or destroyed component no longer gets. So
