@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
     scripts: Record<string, string>;
     repository?: { directory?: string };
+    engines?: { node?: string };
 };
 
 // Every script `npm publish` runs on its own, by name. See
@@ -34,5 +35,18 @@ describe('package.json repository', () => {
 
         expect(directory).toBe(path.basename(packageDir));
         expect(existsSync(path.join(repositoryRoot, directory, 'README.md'))).toBe(true);
+    });
+});
+
+describe('package.json engines', () => {
+    // A consumer installs this package with whatever Node their toolchain has, mostly to bundle it
+    // for the browser, and yarn refuses the install outright when `engines` does not match. The
+    // built library needs ES2022 (Node 16.11) and, for the REST helpers under Node, the global fetch
+    // of Node 18. Asking for more only broke `yarn add` on machines that run it fine; what the
+    // repository's own tooling needs belongs in devEngines, which consumers never check.
+    it('asks consumers for no newer Node than the built library needs', () => {
+        const floor = /^>=\s*(\d+)/.exec(pkg.engines?.node ?? '>=0');
+        expect(floor).not.toBeNull();
+        expect(Number(floor?.[1])).toBeLessThanOrEqual(18);
     });
 });
