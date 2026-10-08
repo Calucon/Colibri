@@ -165,11 +165,13 @@ namespace HCIKonstanz.Colibri.Synchronization
         private static double _deletesSince = double.PositiveInfinity;
 
         /// <summary>
-        /// When this client last heard from the server, on SyncTicker's clock, and how many times
-        /// the connection had heard from it then (see <see cref="LastHeardAt"/>).
+        /// When this client last heard from the server, on SyncTicker's clock, how many times the
+        /// connection had heard from it then, and when this was last asked (see
+        /// <see cref="LastHeardAt"/>).
         /// </summary>
         private static double _heardAt = double.NegativeInfinity;
         private static long _heardStamps;
+        private static double _heardAskedAt = double.NegativeInfinity;
 
         /// <summary>
         /// When this client last heard from the server, on SyncTicker's clock, as of
@@ -179,12 +181,15 @@ namespace HCIKonstanz.Colibri.Synchronization
         /// negative infinity before this connection has heard from the server at all.
         /// </summary>
         /// <remarks>
-        /// The first <paramref name="now"/> at which the connection had heard from the server again,
-        /// which SyncTicker asks for once a frame. The connection times the heartbeats on the system
+        /// SyncTicker asks once a frame. When the connection has heard from the server since the
+        /// last time, its time since the last heartbeat is taken off <paramref name="now"/>, but no
+        /// further back than that last time. The connection times the heartbeats on the system
         /// clock, which Unity's clock need not keep pace with: the system clock is set now and then,
-        /// and may run on while a headset sleeps. Subtracted from <paramref name="now"/>, its time
-        /// since the last heartbeat could put the last-heard time minutes back, and the deletes made
-        /// in those minutes went out again.
+        /// and may run on while a headset sleeps. Taken off in full, its time could put the
+        /// last-heard time minutes back, and the deletes made in those minutes went out again. Nor
+        /// does <paramref name="now"/> alone do: after a frame that took seconds, such as a scene
+        /// loaded synchronously, it lay seconds after the last heartbeat, and a delete made just
+        /// before that frame, which the link may have died with, did not go out again.
         /// </remarks>
         internal static double LastHeardAt(double now)
         {
@@ -196,8 +201,10 @@ namespace HCIKonstanz.Colibri.Synchronization
             if (stamps != _heardStamps)
             {
                 _heardStamps = stamps;
-                _heardAt = now;
+                var heardAt = now - connection.MillisSinceLastHeartbeat() / 1000.0;
+                _heardAt = Math.Min(now, Math.Max(_heardAskedAt, heardAt));
             }
+            _heardAskedAt = now;
             return _heardAt;
         }
 
@@ -799,12 +806,13 @@ namespace HCIKonstanz.Colibri.Synchronization
 
             // The previous session's outage and the deletes it sent again, on a clock that has gone
             // on running since, its round of answers, which no object of this session is part of,
-            // and when its connection last heard from the server.
+            // and when its connection last heard from the server, and when that was last asked.
             _disconnectedAt = double.NegativeInfinity;
             _deletesSince = double.PositiveInfinity;
             _reconnectRound = null;
             _heardStamps = 0;
             _heardAt = double.NegativeInfinity;
+            _heardAskedAt = double.NegativeInfinity;
         }
 
         // `track` is off for the model channels: they are Colibri's own SyncBehaviour plumbing,

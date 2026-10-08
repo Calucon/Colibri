@@ -1583,10 +1583,13 @@ namespace HCIKonstanz.Colibri.Networking
             }
         }
 
-        /// <remarks>Internal for the EditMode tests, which stand in for hearing from the server with it.</remarks>
-        internal void StampLiveness()
+        /// <remarks>
+        /// Internal for the EditMode tests, which stand in for hearing from the server with it, and
+        /// for having heard from it <paramref name="millisAgo"/> ago on the system clock.
+        /// </remarks>
+        internal void StampLiveness(long millisAgo = 0)
         {
-            Interlocked.Exchange(ref _lastHeartbeatTime, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            Interlocked.Exchange(ref _lastHeartbeatTime, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - millisAgo);
             Interlocked.Increment(ref _livenessStamps);
         }
 

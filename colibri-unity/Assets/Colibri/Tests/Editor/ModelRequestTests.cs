@@ -176,6 +176,48 @@ namespace HCIKonstanz.Colibri.Tests
         }
 
         /// <summary>
+        /// Heard from during a frame that took seconds, the server was last heard from when the
+        /// system clock says, but no earlier than the frame before and no later than this one: the
+        /// system clock may have been set forward or back since.
+        /// </summary>
+        [Test]
+        public void TheServerWasLastHeardFromBetweenTheFrameBeforeAndThisOne()
+        {
+            Listen(NewChannel(), _ => { });
+            HeardFromTheServerAt(200);
+
+            WebServerConnection.Instance.StampLiveness(millisAgo: 2_000);
+            Assert.That(Sync.LastHeardAt(203), Is.EqualTo(201).Within(0.5));
+
+            WebServerConnection.Instance.StampLiveness(millisAgo: 600_000);
+            Assert.That(Sync.LastHeardAt(204), Is.EqualTo(203), "The system clock was set forward ten minutes");
+
+            WebServerConnection.Instance.StampLiveness(millisAgo: -600_000);
+            Assert.That(Sync.LastHeardAt(205), Is.EqualTo(205), "The system clock was set back ten minutes");
+        }
+
+        /// <summary>
+        /// A delete made just before a frame that took seconds, such as a scene loaded
+        /// synchronously, in which the link died: the server was heard from early in that frame, and
+        /// the delete goes out again. Taken to be heard from when the frame ran, it lay more than a
+        /// second before, and was not sent again.
+        /// </summary>
+        [Test]
+        public void ADeleteMadeJustBeforeALongFrameGoesOutAgain()
+        {
+            var channel = NewChannel();
+            Listen(channel, _ => { });
+            HeardFromTheServerAt(200);
+            LocallyDeletedModels.Remember(channel, "destroyed before the long frame", 200.01);
+
+            // Heard from 30 ms into a frame that ran 3 s later, and the link died soon after.
+            WebServerConnection.Instance.StampLiveness(millisAgo: 2_970);
+            Sync.OnDisconnected(now: 203);
+
+            Assert.That(Deletes(channel), Is.EqualTo(new[] { "destroyed before the long frame" }));
+        }
+
+        /// <summary>
         /// A delete made after this client last heard from the server may have gone into the dead
         /// link, and goes out again when the outage is noticed, counted on Unity's clock.
         /// </summary>
