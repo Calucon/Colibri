@@ -552,6 +552,13 @@ meantime arrives. For each object, the server's answer is one of:
 - **A delete**: another client deleted the object during the outage. It is deleted on this client
   too.
 
+An object that changed during the outage does not get its full state sent again. Its merged update
+goes out ahead of the request, so a server that had forgotten the object creates it from that
+update, with only the members that changed, and answers the request with those. The other members
+reach the server only when they change. Until then, a client that joins later builds the object
+with the template's values for them, shown even if it is hidden here; a placed object keeps its
+values from the scene.
+
 The server remembers a delete for `MODEL_TOMBSTONE_SECONDS`, 10 minutes by default. An object
 that another client deleted longer ago than that, while this client was away, is answered with
 nothing, so this client sends it again and it comes back for everyone. See
