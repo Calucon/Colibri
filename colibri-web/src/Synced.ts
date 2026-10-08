@@ -11,7 +11,7 @@ export function Synced<This extends SyncModel<unknown>, V>(syncedName: string = 
         context: ClassAccessorDecoratorContext<This, V>
     ): ClassAccessorDecoratorResult<This, V> {
         // TypeScript's decorator types make this look unreachable, since a
-        // correctly-typed usage site can only pass an accessor context here —
+        // correctly-typed usage site can only pass an accessor context here,
         // but plain-JS/Babel consumers get no such guarantee, so this guards
         // against misuse the type system can't observe for them.
         // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
