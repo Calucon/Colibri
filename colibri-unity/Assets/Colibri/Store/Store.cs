@@ -46,9 +46,25 @@ namespace HCIKonstanz.Colibri.Store
             Debug.LogError($"Colibri: could not {action} \"{objectName}\" at {url} - {request.error} (HTTP {request.responseCode}). Check the server address and app name in Window -> Colibri Configuration.");
         }
 
+        /// <summary>
+        /// The path of <paramref name="objectName"/> in the store of <paramref name="appName"/>.
+        /// Each is one path segment, escaped as colibri-web escapes them (encodeURIComponent), so
+        /// that both clients address the same entry. Pasted in as they were, a '/' in a key made a
+        /// path the server has no route for, a '#' cut the key off there, and a '?' turned the
+        /// rest into a query string: Store.Put("round#2", ...) wrote the key "round".
+        /// </summary>
+        /// <remarks>
+        /// Uri.EscapeDataString also escapes ! * ' ( ), which encodeURIComponent leaves as they
+        /// are. The server decodes both forms to the same key.
+        /// </remarks>
+        internal static string StorePath(string appName, string objectName)
+            => $"api/store/{System.Uri.EscapeDataString(appName ?? "")}/{System.Uri.EscapeDataString(objectName ?? "")}";
+
+        private static string Url(string objectName) => ColibriConfig.GetWebUrl(StorePath(ColibriConfig.Load().AppName, objectName));
+
         public static async Task<T> Get<T>(string objectName)
         {
-            var url = ColibriConfig.GetWebUrl($"api/store/{ColibriConfig.Load().AppName}/{objectName}");
+            var url = Url(objectName);
             using (UnityWebRequest request = UnityWebRequest.Get(url))
             {
                 request.method = UnityWebRequest.kHttpVerbGET;
@@ -69,7 +85,7 @@ namespace HCIKonstanz.Colibri.Store
             if (!TryToJson(objectName, putObject, out var jsonData))
                 return false;
 
-            var url = ColibriConfig.GetWebUrl($"api/store/{ColibriConfig.Load().AppName}/{objectName}");
+            var url = Url(objectName);
             using (UnityWebRequest request = UnityWebRequest.Put(url, jsonData))
             {
                 request.method = UnityWebRequest.kHttpVerbPUT;
@@ -88,7 +104,7 @@ namespace HCIKonstanz.Colibri.Store
 
         public static async Task<bool> Delete(string objectName)
         {
-            var url = ColibriConfig.GetWebUrl($"api/store/{ColibriConfig.Load().AppName}/{objectName}");
+            var url = Url(objectName);
             using (UnityWebRequest request = UnityWebRequest.Delete(url))
             {
                 request.method = UnityWebRequest.kHttpVerbDELETE;

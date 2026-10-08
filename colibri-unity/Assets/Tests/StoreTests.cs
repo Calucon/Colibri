@@ -1,9 +1,12 @@
 using System;
 using System.Collections;
+using System.Linq;
 using System.Text.RegularExpressions;
 using HCIKonstanz.Colibri.Setup;
+using Newtonsoft.Json.Linq;
 using NUnit.Framework;
 using UnityEngine;
+using UnityEngine.Networking;
 using UnityEngine.TestTools;
 using ColibriStore = HCIKonstanz.Colibri.Store.Store;
 
@@ -80,6 +83,47 @@ namespace HCIKonstanz.Colibri.E2E
 
             var delete = ColibriStore.Delete(key);
             yield return E2EServer.Await(delete, "Store.Delete never completed", 20f);
+        }
+
+        /// <summary>
+        /// A key is stored under its own name whatever characters it has, which is the entry
+        /// colibri-web addresses for it: the server decodes the key colibri-web escapes with
+        /// encodeURIComponent. Pasted into the path as it was, "scores/..." went to a path the
+        /// server has no route for, "round#..." was stored as "round", and "what?..." as "what".
+        /// </summary>
+        [UnityTest]
+        public IEnumerator AKeyIsStoredUnderItsOwnNameWhateverCharactersItHas()
+        {
+            var unique = Guid.NewGuid().ToString("N").Substring(0, 8);
+            var keys = new[] { $"scores/{unique}", $"round#{unique}", $"what?{unique}", $"100%{unique}", $"two words {unique}" };
+
+            foreach (var key in keys)
+            {
+                var put = ColibriStore.Put(key, new StoredThing { Name = key, Count = 1 });
+                yield return E2EServer.Await(put, "Store.Put never completed", 20f);
+                Assert.That(put.Result, Is.True, $"Store.Put(\"{key}\") reported failure");
+            }
+
+            // The names the server keeps the app's entries under.
+            using (var request = UnityWebRequest.Get($"http://{E2EServer.Host}:{E2EServer.WebPort}/api/store/{Uri.EscapeDataString(E2EServer.App)}"))
+            {
+                yield return request.SendWebRequest();
+                Assert.That(request.responseCode, Is.EqualTo(200), $"Listing the app's entries failed: {request.error}");
+
+                var names = JArray.Parse(request.downloadHandler.text).Select(name => (string)name).ToArray();
+                Assert.That(names, Is.SupersetOf(keys), $"The entries are named {string.Join(", ", names)}");
+            }
+
+            foreach (var key in keys)
+            {
+                var get = ColibriStore.Get<StoredThing>(key);
+                yield return E2EServer.Await(get, "Store.Get never completed", 20f);
+                Assert.That(get.Result?.Name, Is.EqualTo(key), $"Store.Get(\"{key}\") did not read what Store.Put wrote");
+
+                var delete = ColibriStore.Delete(key);
+                yield return E2EServer.Await(delete, "Store.Delete never completed", 20f);
+                Assert.That(delete.Result, Is.True, $"Store.Delete(\"{key}\") reported failure");
+            }
         }
 
         /// <summary>
