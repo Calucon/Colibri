@@ -98,6 +98,13 @@ namespace HCIKonstanz.Colibri.Synchronization
         public static event Action<SyncBehaviour<T>> ModelCreated;
         public static event Action<SyncBehaviour<T>> ModelDestroyed;
 
+        /// <summary>
+        /// The id of the model a <see cref="SyncBehaviourManager{T}"/> is building an object for,
+        /// from an update another client sent, while it does so; null otherwise. Read in Awake,
+        /// which runs during the build.
+        /// </summary>
+        internal static string RemoteModelBeingBuilt;
+
 
         private static readonly Dictionary<string, SyncedAttribute> _syncedAttributes = new Dictionary<string, SyncedAttribute>();
         private static readonly List<SyncedAttribute> _attributeList = new List<SyncedAttribute>();
@@ -377,7 +384,17 @@ namespace HCIKonstanz.Colibri.Synchronization
 
             SyncTicker.Register(this);
 
-            Sync.AddModelUpdateListener(Channel, OnModelUpdate, Id);
+            // A model::request { id } is a fresh request: it tells the server that this client has
+            // the object in its scene now, or is creating it, and the server lifts the tombstone of
+            // a model of that id deleted a moment ago. Right for an object placed in a scene or
+            // created here. Not for one a manager builds from another client's update, which
+            // carries the model's state already: the model may have been deleted since the server
+            // relayed that update. Asked for, it lost its tombstone, and an update another client
+            // had sent before the delete then created it afresh on the server and on every client.
+            if (RemoteModelBeingBuilt != null && RemoteModelBeingBuilt == Id)
+                Sync.AddModelUpdateListenerWithoutRequest(Channel, OnModelUpdate, Id);
+            else
+                Sync.AddModelUpdateListener(Channel, OnModelUpdate, Id);
             Sync.AddModelDeleteListener(Channel, OnModelDelete);
 
             ModelCreated?.Invoke(this);

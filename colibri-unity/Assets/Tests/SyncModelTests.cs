@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Linq;
 using System.Text.RegularExpressions;
+using System.Threading;
 using HCIKonstanz.Colibri.Core;
 using HCIKonstanz.Colibri.Synchronization;
 using Newtonsoft.Json.Linq;
@@ -390,6 +391,57 @@ namespace HCIKonstanz.Colibri.E2E
             }
         }
 
+        /// <summary>
+        /// A model this client has never seen is relayed to it, and a third client deletes it
+        /// before this client's manager has built it. The object built from that update used to
+        /// ask the server for its model, as an object created here does, which tells the server
+        /// that the id is in use again: it lifted the tombstone of the delete. The next update the
+        /// creating client had sent before it heard of the delete then created the model afresh,
+        /// on the server and on every client.
+        /// </summary>
+        /// <remarks>
+        /// Needs a server that treats a request for one id as bringing that id back into use;
+        /// against one that does not, there is no tombstone to lift and this passes either way.
+        /// </remarks>
+        [UnityTest]
+        public IEnumerator AModelDeletedBeforeTheManagerBuiltItStaysDeleted()
+        {
+            var template = SpawnConfigured<E2ESyncModel>("template", _ => { });
+            var manager = Spawn<E2ESyncModelManager>("manager");
+            manager.Template = template;
+            yield return null;
+            yield return LetInitialStateArrive();
+
+            var deleter = new TcpPeer();
+            var id = Guid.NewGuid().ToString();
+            try
+            {
+                yield return deleter.Connect("deleter");
+                yield return E2EServer.Settle(0.3f);
+
+                // No frame runs during the sleeps, so this client handles the relayed update only
+                // after the server has taken the delete.
+                Peer.Send(Channel, "model::update", new JObject { { "id", id }, { "label", "created" } });
+                Thread.Sleep(300);
+                deleter.Send(Channel, "model::delete", new JObject { { "id", id } });
+                Thread.Sleep(300);
+                yield return E2EServer.Settle(1f);
+
+                // The creating client moves the object before the delete reaches it.
+                Peer.Send(Channel, "model::update", new JObject { { "id", id }, { "where", new JArray(1f, 0f, 0f) } });
+                yield return E2EServer.Settle(1f);
+
+                Assert.That(Instances(id), Is.Empty, "The model deleted by the third client is back on this client");
+                yield return AssertTheServerHoldsNothingOf(id);
+            }
+            finally
+            {
+                deleter.Dispose();
+                foreach (var instance in Instances(id))
+                    UnityEngine.Object.Destroy(instance.gameObject);
+            }
+        }
+
 
         /*
          *  The send-rate limit (SyncSettings.MaxSendRate). Set low here, so that what it holds
@@ -614,6 +666,33 @@ namespace HCIKonstanz.Colibri.E2E
             {
                 Sync.RemoveModelDeleteListener(Channel, inTheSameFrame);
                 SyncSettings.ResetMaxSendRate();
+            }
+        }
+
+        /// <summary>
+        /// Fails if the server would hand the model to a client joining now, which asks for every
+        /// model on the channel.
+        /// </summary>
+        private static IEnumerator AssertTheServerHoldsNothingOf(string id)
+        {
+            var lateJoiner = new TcpPeer();
+            try
+            {
+                yield return lateJoiner.Connect("late-joiner");
+                yield return E2EServer.Settle(0.3f);
+
+                lateJoiner.Send(Channel, "model::request", (JToken)null);
+                yield return E2EServer.Settle(1f);
+
+                var held = lateJoiner.Received
+                    .Where(f => f.Channel == Channel && f.Command == "model::update" && (string)TcpPeer.Json(f)["id"] == id)
+                    .Select(TcpPeer.Text)
+                    .ToArray();
+                Assert.That(held, Is.Empty, "The server holds the deleted model again, and hands it to every client that joins");
+            }
+            finally
+            {
+                lateJoiner.Dispose();
             }
         }
 

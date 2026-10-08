@@ -94,6 +94,7 @@ namespace HCIKonstanz.Colibri.Synchronization
             }
 
             _isCreatingObject = true;
+            SyncBehaviour<T>.RemoteModelBeingBuilt = id;
             var prevEnabled = Template.enabled;
             var prevId = Template.Id;
             T go = null;
@@ -132,6 +133,7 @@ namespace HCIKonstanz.Colibri.Synchronization
                 Template.enabled = prevEnabled;
                 Template.Id = prevId;
                 _isCreatingObject = false;
+                SyncBehaviour<T>.RemoteModelBeingBuilt = null;
             }
         }
 

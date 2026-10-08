@@ -507,6 +507,59 @@ namespace HCIKonstanz.Colibri.E2E
         }
 
         /// <summary>
+        /// An object a manager builds from another client's update asks the server for nothing when
+        /// it registers. That update carries the model's state already, and a request for one id
+        /// says that this client has the object in its scene now, or is creating it: a server that
+        /// remembers deletes lifts the tombstone of a model deleted since it relayed the update, and
+        /// an update sent before the delete then creates the model afresh on every client. After a
+        /// reconnect the object is asked for again like every other one, which is how a delete made
+        /// while this client was offline reaches it.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator AModelBuiltFromAnotherClientsUpdateIsAskedForOnlyAfterAReconnect()
+        {
+            const string channel = "e2esyncmodel";
+            var spawned = new List<GameObject>();
+            var id = System.Guid.NewGuid().ToString();
+            try
+            {
+                var template = Spawn<E2ESyncModel>(spawned, "template");
+                var manager = Spawn<E2ESyncModelManager>(spawned, "manager");
+                manager.Template = template;
+                yield return null;
+                yield return E2EServer.Settle(1.5f);
+
+                var createdHere = Spawn<E2ESyncModel>(spawned, "created-here");
+                _peer.Send(channel, "model::update", new JObject { { "id", id }, { "label", "from the peer" } });
+                yield return E2EServer.WaitUntil(() => Instances(id).Length == 1,
+                    $"The manager never instantiated the model '{id}' it was told about");
+
+                // Long enough for a request made when the object registered to have gone out.
+                yield return E2EServer.Settle(1f);
+
+                Assert.That(RequestedIds(1, channel), Does.Contain(createdHere.Id),
+                    "Precondition: an object created on this client asks for its id when it registers");
+                Assert.That(RequestedIds(1, channel), Does.Not.Contain(id),
+                    "The object built from the peer's update asked the server for its model, as an object created here does");
+
+                yield return CutTheConnection();
+                yield return E2EServer.WaitUntil(() => RequestedIds(2, channel).Contains(id),
+                    "The object built from the peer's update was not asked for again after the reconnect", 20f);
+            }
+            finally
+            {
+                // Immediately, while this test's connection is still there: see the tests above.
+                foreach (var instance in Instances(id))
+                    Object.DestroyImmediate(instance.gameObject);
+                foreach (var gameObject in spawned)
+                {
+                    if (gameObject)
+                        Object.DestroyImmediate(gameObject);
+                }
+            }
+        }
+
+        /// <summary>
         /// RemoteLogging across an outage: every line reaches the server exactly once, in order.
         /// It used to retry a line whose send had failed, while the connection had also queued that
         /// same send for retry, so some lines arrived twice. Lines logged during the outage wait in
@@ -662,6 +715,18 @@ namespace HCIKonstanz.Colibri.E2E
         private static E2ESyncModel[] Instances(string id)
             => UnityCompat.FindAll<E2ESyncModel>(FindObjectsInactive.Include)
                 .Where(m => m.Id == id)
+                .ToArray();
+
+        /// <summary>
+        /// The ids the client asked for one at a time on <paramref name="channel"/>, on its
+        /// <paramref name="session"/>th connection. A request for the whole channel has no payload.
+        /// </summary>
+        private string[] RequestedIds(int session, string channel)
+            => _proxy.FromClient
+                .Where(sent => sent.Session == session && sent.Frame.Channel == channel && sent.Frame.Command == "model::request")
+                .Where(sent => TcpPeer.Text(sent.Frame).Length > 0)
+                .Select(sent => (string)(TcpPeer.Json(sent.Frame) as JObject)?["id"])
+                .Where(id => id != null)
                 .ToArray();
 
         /// <summary>The client's log lines with the given prefix, as the server received them, in order.</summary>

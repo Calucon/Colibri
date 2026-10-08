@@ -671,6 +671,17 @@ namespace HCIKonstanz.Colibri.Synchronization
             SendCommand(channel, "model::request", new JObject { { "id", fetchInitialStateId } });
         }
 
+        /// <summary>
+        /// Listens for one model's updates like the overload above, but asks the server for nothing
+        /// now. For an object a SyncBehaviourManager builds from another client's update, which
+        /// carries the model's state already: the request the overload above sends says that this
+        /// client has the object in its scene now, or is creating it, and the server lifts the
+        /// tombstone of a model of that id deleted a moment ago. After a reconnect the model is
+        /// asked for again like every other one (see <see cref="RequestModelsAgain"/>).
+        /// </summary>
+        internal static void AddModelUpdateListenerWithoutRequest(string channel, Action<JObject> listener, string id)
+            => AddListener(channel, _modelUpdateListeners, listener, track: false, fetchId: id);
+
         public static void RemoveModelUpdateListener(string channel, Action<JObject> listener) => RemoveListener(channel, _modelUpdateListeners, listener, track: false);
 
         public static void AddModelDeleteListener(string channel, Action<JObject> listener) => AddListener(channel, _modelDeleteListeners, listener, track: false);
