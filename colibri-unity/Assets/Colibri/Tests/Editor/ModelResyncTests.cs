@@ -39,6 +39,14 @@ namespace HCIKonstanz.Colibri.Tests
             public void Wake() => Awake();
         }
 
+        private class ResyncJsonModel : SyncBehaviour<ResyncJsonModel>
+        {
+            [Sync]
+            public JObject Data;
+
+            public void Wake() => Awake();
+        }
+
         private readonly List<GameObject> _gameObjects = new List<GameObject>();
 
         /// <summary>A round of answers an earlier test left open would count as one this test's reconnect follows.</summary>
@@ -718,6 +726,35 @@ namespace HCIKonstanz.Colibri.Tests
             var sent = SentAt(model, 104);
             Assert.That(sent, Is.Not.Null, "The value that was lost was not sent again");
             Assert.That((string)sent["label"], Is.EqualTo("lost at the drop"));
+        }
+
+        /// <summary>
+        /// A JObject member's value is the application's own object, which it may change in place.
+        /// The value taken from another client is kept as a copy, so an answer holding it still tells
+        /// that the change made after it was lost, whatever the application did to the object.
+        /// </summary>
+        [Test]
+        public void AJObjectTakenAndThenChangedInPlaceStillTellsTheChangeAfterItWasLost()
+        {
+            var model = Spawn<ResyncJsonModel>("resync-json");
+            model.Wake();
+            model.OnModelUpdate(Bare(model.Id));
+            model.OnModelUpdate(new JObject { { "id", model.Id }, { "data", new JObject { { "k", 1 } } } });
+            Assert.That((int)model.Data["k"], Is.EqualTo(1), "Precondition: the other client's value is applied");
+
+            // Changed in place, which the poll does not see, then replaced, which it does.
+            model.Data["k"] = 2;
+            model.Data = new JObject { { "k", 3 } };
+            Poll(model);
+            Assert.That(SentAt(model, 200), Is.Not.Null, "Precondition: the change goes out");
+
+            Sync.RequestModelsAgain(disconnectedAt: 202);
+            model.OnModelUpdate(new JObject { { "id", model.Id }, { "data", new JObject { { "k", 1 } } } });
+
+            Assert.That((int)model.Data["k"], Is.EqualTo(3), "The answer put the value taken from the other client back");
+            var sent = SentAt(model, 203);
+            Assert.That(sent, Is.Not.Null, "The value that was lost was not sent again");
+            Assert.That((int)sent["data"]["k"], Is.EqualTo(3));
         }
 
         /// <summary>

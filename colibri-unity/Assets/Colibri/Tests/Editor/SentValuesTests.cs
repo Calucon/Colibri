@@ -247,6 +247,23 @@ namespace HCIKonstanz.Colibri.Tests
             Assert.That(sent.Judge(Wire("false"), since: 202), Is.EqualTo(SentValues.Verdict.Arrived));
         }
 
+        /// <summary>
+        /// The newest value sent before the window is the one held when it began, not the value
+        /// the server showed before that: the member had moved on from it, so another client that
+        /// set it again during the outage made a change of its own, and wins.
+        /// </summary>
+        [Test]
+        public void AValueSentBeforeTheWindowComesBeforeTheOneTheServerShowedEarlier()
+        {
+            var sent = new SentValues();
+            sent.ServerShowed(Wire("\"theirs\""));
+            Send(sent, "a", 100);
+            Send(sent, "b", 200);
+
+            Assert.That(sent.Judge(Wire("\"theirs\""), since: 190), Is.EqualTo(SentValues.Verdict.ChangedElsewhere));
+            Assert.That(sent.Judge(Wire("\"a\""), since: 190), Is.EqualTo(SentValues.Verdict.Lost));
+        }
+
         /// <summary>A member that takes a value before it ever sends one has it all the same.</summary>
         [Test]
         public void AValueTakenBeforeTheFirstSendCounts()
