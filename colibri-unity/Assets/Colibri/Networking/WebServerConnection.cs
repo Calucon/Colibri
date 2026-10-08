@@ -177,7 +177,8 @@ namespace HCIKonstanz.Colibri.Networking
         // disabled and would leave a second play session talking to a dead socket.
         //
         // volatile: written by the connection loop off the main thread, read by Update()'s
-        // heartbeat watchdog and by OnDisable. The send path uses _outboxSocket instead.
+        // heartbeat watchdog and by OnDisable. Closing it is what ends a session. The send path
+        // uses _outboxSession instead.
         private volatile Socket _socket;
 
         /// <remarks>Internal for the tests, which shrink its send buffer to stand in for a slow link.</remarks>
@@ -195,14 +196,36 @@ namespace HCIKonstanz.Colibri.Networking
         /// <remarks>Internal for the tests, which hold it to stand in for a slow write.</remarks>
         internal SemaphoreSlim SendLock => _sendLock;
 
-        // The newest heartbeat echo not written yet, with the socket of the session it answers, or
-        // null. Set by the receive loop, taken by whoever holds _sendLock. See EchoHeartbeat.
+        // The newest heartbeat echo not written yet, with the session it answers, or null. Set by
+        // the receive loop, taken by whoever holds _sendLock. See EchoHeartbeat.
         private PendingEcho _pendingEcho;
 
         private sealed class PendingEcho
         {
-            public Socket Socket;
+            public Session Session;
             public byte[] Frame;
+        }
+
+        /// <summary>
+        /// One connection to the server: its socket, and the stream every frame is read from and
+        /// written to, the socket's own <see cref="NetworkStream"/>. Closing the socket is what
+        /// ends a session: it fails whatever is reading or writing at that moment.
+        /// </summary>
+        internal sealed class Session
+        {
+            public readonly Socket Socket;
+            public readonly Stream Stream;
+
+            public Session(Socket socket, Stream stream)
+            {
+                Socket = socket;
+                Stream = stream;
+            }
+
+            /// <summary>A session on a connected socket. For the EditMode tests.</summary>
+            internal static Session Plain(Socket socket) => new Session(socket, new NetworkStream(socket, false));
+
+            public void Close() => CloseSocket(Socket);
         }
 
         // Every outgoing message, in the order it was sent, until it has been written to a socket.
@@ -211,9 +234,9 @@ namespace HCIKonstanz.Colibri.Networking
         private readonly LinkedList<Outgoing> _outbox = new LinkedList<Outgoing>();
         private readonly object _outboxLock = new object();
 
-        // The socket of the session the outbox currently drains into, and that session's token.
-        // Null while not connected, which is what makes a send wait in the outbox.
-        private Socket _outboxSocket;
+        // The session the outbox currently drains into, and its token. Null while not connected,
+        // which is what makes a send wait in the outbox.
+        private Session _outboxSession;
         private CancellationToken _outboxToken;
 
         // True while a DrainOutbox() is running. There is never more than one, which is what keeps
@@ -921,6 +944,19 @@ namespace HCIKonstanz.Colibri.Networking
                 {
                     // Socket closed underneath us by OnDisable or the heartbeat watchdog.
                 }
+                catch (IOException e)
+                {
+                    // How a stream reports the socket failing under it: NetworkStream wraps what
+                    // the socket threw, which is told apart here as it was before the connection
+                    // went through a stream.
+                    if (FindCause<ObjectDisposedException>(e) == null)
+                    {
+                        var socketError = FindCause<SocketException>(e);
+                        Debug.Log(socketError != null
+                            ? $"Colibri: connection to {address} failed ({socketError.SocketErrorCode}), retrying..."
+                            : $"Colibri: connection to {address} failed ({e.Message}), retrying...");
+                    }
+                }
                 catch (Exception e)
                 {
                     Debug.LogException(e);
@@ -1030,8 +1066,8 @@ namespace HCIKonstanz.Colibri.Networking
             var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
             _socket = socket;
 
-            // Closing the socket is what unblocks an in-flight ReceiveAsync/SendAsync; there is
-            // no cancellation token overload for either on this API surface.
+            // Closing the socket is what unblocks an in-flight read or write; there is no
+            // cancellation token overload for either on this API surface.
             using (token.Register(() => CloseSocket(socket)))
             {
                 try
@@ -1052,19 +1088,35 @@ namespace HCIKonstanz.Colibri.Networking
                 token.ThrowIfCancellationRequested();
                 _lastConnectFailure = null;
 
+                // Not owning the socket: closing the socket stays the one way to end a session, and
+                // it is closed by whoever ends it.
+                var session = new Session(socket, new NetworkStream(socket, false));
+
                 // Accepted, but nothing is known about what accepted it yet. The watchdog gives
                 // it as long to say something as a connected server gets between heartbeats.
                 StampLiveness();
                 _isWatchdogArmed = true;
 
-                await SendFrame(socket, FrameCodec.EncodeHandshake(CLIENT_VERSION, app, _hostname), token)
+                await SendFrame(session, FrameCodec.EncodeHandshake(CLIENT_VERSION, app, _hostname), token)
                     .ConfigureAwait(false);
                 // Past this point the connection was accepted and this client has spoken, so a
                 // session that now ends without a frame is a statement about the server.
                 _reachedHandshake = true;
 
-                await ReceiveLoop(socket, host, port, app, token).ConfigureAwait(false);
+                await ReceiveLoop(session, host, port, app, token).ConfigureAwait(false);
             }
+        }
+
+        /// <summary>The first exception of type <typeparamref name="T"/> in <paramref name="e"/>'s chain of inner exceptions, itself included.</summary>
+        private static T FindCause<T>(Exception e) where T : Exception
+        {
+            for (var cause = e; cause != null; cause = cause.InnerException)
+            {
+                if (cause is T found)
+                    return found;
+            }
+
+            return null;
         }
 
         /// <summary>
@@ -1116,7 +1168,7 @@ namespace HCIKonstanz.Colibri.Networking
         /// dropped by the watchdog in <see cref="Update"/>; the server heartbeats every 100 ms, so
         /// a real one is never kept waiting.
         /// </summary>
-        private void BecomeConnected(Socket socket, string host, int port, string app, CancellationToken token)
+        private void BecomeConnected(Session session, string host, int port, string app, CancellationToken token)
         {
             StampLiveness();
 
@@ -1129,11 +1181,11 @@ namespace HCIKonstanz.Colibri.Networking
 
             // Starts sending whatever queued up during the outage, in order. Opened before Status
             // says Connected, so anything sent by code that reacts to Connected lines up behind it.
-            OpenOutbox(socket, token);
+            OpenOutbox(session, token);
             Status = ConnectionStatus.Connected;
         }
 
-        private async Task ReceiveLoop(Socket socket, string host, int port, string app, CancellationToken token)
+        private async Task ReceiveLoop(Session session, string host, int port, string app, CancellationToken token)
         {
             var reader = new FrameReader();
             var buffer = new byte[RECEIVE_BUFFER_SIZE];
@@ -1141,7 +1193,8 @@ namespace HCIKonstanz.Colibri.Networking
 
             while (!token.IsCancellationRequested)
             {
-                var received = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), SocketFlags.None)
+                // No token: closing the socket is what ends a read, as it ends a write.
+                var received = await session.Stream.ReadAsync(buffer, 0, buffer.Length)
                     .ConfigureAwait(false);
                 if (received <= 0)
                 {
@@ -1177,7 +1230,7 @@ namespace HCIKonstanz.Colibri.Networking
                     if (!isConnected)
                     {
                         isConnected = true;
-                        BecomeConnected(socket, host, port, app, token);
+                        BecomeConnected(session, host, port, app, token);
                     }
 
                     switch (frame.Type)
@@ -1188,7 +1241,7 @@ namespace HCIKonstanz.Colibri.Networking
                             // sole source of the server's TCP latency measurements; the old
                             // `colibri`/`latency` message echo is Socket.IO-only and nothing
                             // sends it to a TCP client any more. Not awaited: see EchoHeartbeat.
-                            EchoHeartbeat(socket, frame.PingTimestamp);
+                            EchoHeartbeat(session, frame.PingTimestamp);
                             break;
 
                         case FrameType.Message:
@@ -1359,7 +1412,7 @@ namespace HCIKonstanz.Colibri.Networking
         // All socket writes go under _sendLock so that a frame is never interleaved with another
         // frame's bytes. Messages come through here; heartbeat echoes through EchoHeartbeat, which
         // never waits for the lock, and are written between two frames.
-        private async Task SendFrame(Socket socket, byte[] frame, CancellationToken token)
+        private async Task SendFrame(Session session, byte[] frame, CancellationToken token)
         {
             await _sendLock.WaitAsync(token).ConfigureAwait(false);
             try
@@ -1367,9 +1420,9 @@ namespace HCIKonstanz.Colibri.Networking
                 // An echo that came in while someone else had the socket goes first, and one that
                 // came in while this frame was being written - a large one on a slow link takes
                 // seconds - goes straight after it.
-                await WritePendingEcho(socket).ConfigureAwait(false);
-                await WriteAll(socket, frame).ConfigureAwait(false);
-                await WritePendingEcho(socket).ConfigureAwait(false);
+                await WritePendingEcho(session).ConfigureAwait(false);
+                await WriteAll(session, frame).ConfigureAwait(false);
+                await WritePendingEcho(session).ConfigureAwait(false);
             }
             finally
             {
@@ -1377,21 +1430,10 @@ namespace HCIKonstanz.Colibri.Networking
             }
         }
 
-        // Under _sendLock. Completes a partial send rather than silently truncating the frame.
-        private static async Task WriteAll(Socket socket, byte[] frame)
-        {
-            var offset = 0;
-            while (offset < frame.Length)
-            {
-                var sent = await socket
-                    .SendAsync(new ArraySegment<byte>(frame, offset, frame.Length - offset), SocketFlags.None)
-                    .ConfigureAwait(false);
-                if (sent <= 0)
-                    throw new SocketException((int)SocketError.ConnectionReset);
-
-                offset += sent;
-            }
-        }
+        // Under _sendLock. A stream write completes only once the whole frame has been handed to
+        // the socket, so a frame is never cut short.
+        private static Task WriteAll(Session session, byte[] frame)
+            => session.Stream.WriteAsync(frame, 0, frame.Length);
 
         /// <summary>
         /// Answers a server heartbeat without waiting for the socket. The receive loop calls this,
@@ -1407,9 +1449,9 @@ namespace HCIKonstanz.Colibri.Networking
         /// the socket the server is still receiving its bytes, and that is what its idle timeout
         /// looks at; a skipped echo only costs it one latency sample.
         /// </summary>
-        private void EchoHeartbeat(Socket socket, ulong pingTimestamp)
+        private void EchoHeartbeat(Session session, ulong pingTimestamp)
         {
-            Volatile.Write(ref _pendingEcho, new PendingEcho { Socket = socket, Frame = FrameCodec.EncodeHeartbeat(pingTimestamp) });
+            Volatile.Write(ref _pendingEcho, new PendingEcho { Session = session, Frame = FrameCodec.EncodeHeartbeat(pingTimestamp) });
 
             if (_sendLock.Wait(0))
                 _ = WritePendingEchoAndRelease();
@@ -1430,25 +1472,25 @@ namespace HCIKonstanz.Colibri.Networking
 
         /// <summary>
         /// Under _sendLock: writes the pending echo, if there is one. With
-        /// <paramref name="session"/>, only an echo that belongs to that socket - an echo left over
-        /// from an earlier session answers nothing any more, and is dropped.
+        /// <paramref name="session"/>, only an echo that belongs to that session - an echo left
+        /// over from an earlier session answers nothing any more, and is dropped.
         /// </summary>
         /// <remarks>Never throws: a write that fails closes the socket, which ends the session.</remarks>
-        private async Task WritePendingEcho(Socket session)
+        private async Task WritePendingEcho(Session session)
         {
             var echo = Interlocked.Exchange(ref _pendingEcho, null);
-            if (echo == null || (session != null && !ReferenceEquals(echo.Socket, session)))
+            if (echo == null || (session != null && !ReferenceEquals(echo.Session, session)))
                 return;
 
             try
             {
-                await WriteAll(echo.Socket, echo.Frame).ConfigureAwait(false);
+                await WriteAll(echo.Session, echo.Frame).ConfigureAwait(false);
             }
             catch (Exception)
             {
                 // The connection is gone. Closing the socket makes the receive loop notice now,
                 // and a message written next fails and stays queued for the next session.
-                CloseSocket(echo.Socket);
+                echo.Session.Close();
             }
         }
 
@@ -1534,12 +1576,12 @@ namespace HCIKonstanz.Colibri.Networking
 
         /// <summary>Lets the outbox drain into this session. Called once it is Connected.</summary>
         /// <remarks>Internal for the EditMode tests, which open and close it around sessions they fake.</remarks>
-        internal void OpenOutbox(Socket socket, CancellationToken token)
+        internal void OpenOutbox(Session session, CancellationToken token)
         {
             bool startDraining;
             lock (_outboxLock)
             {
-                _outboxSocket = socket;
+                _outboxSession = session;
                 _outboxToken = token;
                 _hasWarnedAboutDrops = false;
                 _hasWarnedAboutOutboxLimit = false;
@@ -1566,7 +1608,7 @@ namespace HCIKonstanz.Colibri.Networking
         {
             lock (_outboxLock)
             {
-                _outboxSocket = null;
+                _outboxSession = null;
                 _outboxToken = CancellationToken.None;
 
                 // Nothing more will be written to that session: see WaitForOutboxToDrain.
@@ -1590,7 +1632,7 @@ namespace HCIKonstanz.Colibri.Networking
             lock (_outboxLock)
             {
                 // Woken by the drainer after each message it has written, and when the session ends.
-                while (_outbox.Count > 0 && _outboxSocket != null)
+                while (_outbox.Count > 0 && _outboxSession != null)
                 {
                     var remaining = timeoutMs - clock.ElapsedMilliseconds;
                     if (remaining <= 0)
@@ -1668,7 +1710,7 @@ namespace HCIKonstanz.Colibri.Networking
                     warnAboutRefusal = !_hasWarnedAboutRefusal;
                     _hasWarnedAboutRefusal = true;
                 }
-                else if (_outboxSocket == null)
+                else if (_outboxSession == null)
                 {
                     Queue(channel, command, payload, frame, sent);
 
@@ -1869,11 +1911,11 @@ namespace HCIKonstanz.Colibri.Networking
             {
                 LinkedListNode<Outgoing> node;
                 Outgoing next;
-                Socket socket;
+                Session session;
                 CancellationToken token;
                 lock (_outboxLock)
                 {
-                    if (_outboxSocket == null || _outbox.Count == 0)
+                    if (_outboxSession == null || _outbox.Count == 0)
                     {
                         _isDraining = false;
                         return;
@@ -1881,13 +1923,13 @@ namespace HCIKonstanz.Colibri.Networking
 
                     node = _outbox.First;
                     next = node.Value;
-                    socket = _outboxSocket;
+                    session = _outboxSession;
                     token = _outboxToken;
                 }
 
                 try
                 {
-                    await SendFrame(socket, next.Frame, token).ConfigureAwait(false);
+                    await SendFrame(session, next.Frame, token).ConfigureAwait(false);
                 }
                 catch (Exception e)
                 {
@@ -1896,9 +1938,9 @@ namespace HCIKonstanz.Colibri.Networking
                     // notices now rather than at the next heartbeat.
                     lock (_outboxLock)
                     {
-                        if (ReferenceEquals(_outboxSocket, socket))
+                        if (ReferenceEquals(_outboxSession, session))
                         {
-                            _outboxSocket = null;
+                            _outboxSession = null;
                             _outboxToken = CancellationToken.None;
                             Monitor.PulseAll(_outboxLock);
                         }
@@ -1907,7 +1949,7 @@ namespace HCIKonstanz.Colibri.Networking
                     if (!token.IsCancellationRequested)
                         Debug.Log($"Colibri: sending failed ({e.GetType().Name}: {e.Message}); queued messages will be sent after reconnecting");
 
-                    CloseSocket(socket);
+                    session.Close();
                     continue;
                 }
 

@@ -84,10 +84,13 @@ namespace HCIKonstanz.Colibri.Tests
             var goneSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
             _disposables.Add(goneSocket);
 
+            // Never connected, so it gets a stream that refuses every write.
+            var goneSession = new WebServerConnection.Session(goneSocket, new System.IO.MemoryStream(Array.Empty<byte>(), false));
+
             _connection.SendLock.Wait();
             try
             {
-                _connection.OpenOutbox(goneSocket, session.Token);
+                _connection.OpenOutbox(goneSession, session.Token);
                 _connection.SendCommand(Channel, "model::update", new JObject { { "id", "X" }, { "label", "b" } });
 
                 _connection.CloseOutbox();
@@ -306,7 +309,7 @@ namespace HCIKonstanz.Colibri.Tests
 
             var session = new CancellationTokenSource();
             _disposables.Add(session);
-            _connection.OpenOutbox(client, session.Token);
+            _connection.OpenOutbox(WebServerConnection.Session.Plain(client), session.Token);
             return server;
         }
 
