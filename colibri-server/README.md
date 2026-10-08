@@ -20,9 +20,10 @@ services:
     image: hcikn/colibri:2.0.0
     restart: unless-stopped
     container_name: colibri
-    tty: true
     # The server logs to stdout/stderr, client log lines included, and Docker's default
-    # json-file log never rotates: cap it rather than let a long study fill the disk.
+    # json-file log never rotates: cap it rather than let a long study fill the disk. And no
+    # `tty: true`: with a TTY, `docker logs` has no stderr, and the warnings and errors are
+    # mixed into stdout.
     logging:
       driver: json-file
       options:
@@ -46,9 +47,14 @@ To run the server from a checkout of this repository instead of a published imag
 the image from source and keeps the data in `./data`, or replace the `image:` line above with
 `build: <path to the checkout>/colibri-server`.
 
-`/srv/colibri/data` holds the REST store's `store.json` and any voice recordings. A named volume,
-like `colibri-data` above, needs no setup. To keep the data in a directory on the host instead,
-mount that directory:
+`/srv/colibri/data` holds the REST store's `store.json` and any voice recordings. Mount your
+volume there and leave `DATA_ROOT` unset: in the image, that path is the server's data directory,
+and the only one the container gives to the server's user (see below). A volume mounted anywhere
+else, with `DATA_ROOT` pointing at it, is left as it is, so unless it already belongs to uid 1000
+the server cannot save there.
+
+A named volume, like `colibri-data` above, needs no setup. To keep the data in a directory on the
+host instead, mount that directory:
 
 ```yaml
     volumes:
@@ -82,7 +88,8 @@ container as they are. If you do set `WEBSERVER_PORT`, publish that port instead
 they are set.
 
 The image sets `NODE_ENV=production` and runs the server as PID 1, so `docker stop` shuts it down
-cleanly and writes any pending store changes first.
+cleanly: it writes any pending store changes first, and saves the voice recordings still in
+progress.
 
 ### Node
 
@@ -114,13 +121,16 @@ in the environment wins. [`.env.example`](.env.example) lists every one with its
 | `CLIENT_MESSAGE_RATE_LIMIT`, `CLIENT_MESSAGE_RATE_BURST` | `1000`, `2000` | `model::update` and `broadcast::` messages a second that one client, Unity or web, may send, and how many at once after a quieter stretch; beyond that, the same happens to its messages. Catches a runaway send loop. `0` turns the limit off; the burst must be at least 1 |
 | `TCP_IDLE_TIMEOUT_SECONDS` | `10` | seconds a Unity client may send nothing at all, not even its heartbeat replies, before it is disconnected as gone, e.g. a headset that left the Wi-Fi; a connection that has not handshaked by then is closed too. `0`: never |
 | `APP_CLIENT_WARNING_THRESHOLD` | `8` | log a warning when one app has more clients than this, Unity and web together, the admin UI not counted; usually separate projects that kept the same app name. `0`: never |
+| `MODEL_TOMBSTONE_SECONDS` | `600` | seconds the server remembers that a synced object (model) was deleted. Meanwhile it ignores updates for it, so one another client sent before the delete reached it cannot create the object again, and it tells a client that asks for the object again after a reconnect to delete its copy. A client that has the object in its scene again, such as a scene with placed objects loaded again, ends this early. Forgotten with the app's models once its last client has left. `0`: not remembered. See [Deleted models](docs/protocol.md#deleted-models) |
 
 `DATA_ROOT` and `WEBSERVER_ROOT` may be absolute paths, e.g. `DATA_ROOT=/var/lib/colibri`. A
 relative path is taken from the compiled server's directory, `dist/server`, so the defaults are
-`dist/ui` and the `data` directory next to `dist`. A port that is not an integer from 1 to 65535,
-a sampling rate, stack trace limit or burst that is not a positive integer, a limit that is not a
-whole number of 0 or more, or an unknown log level stops the server at startup, with a message
-naming the variable. See [Load limits](#load-limits) for what the limits are for.
+`dist/ui` and the `data` directory next to `dist`. In the Docker image, leave `DATA_ROOT` alone and
+mount the data at `/srv/colibri/data` instead (see [Docker](#docker-recommended)). A port that is
+not an integer from 1 to 65535, a sampling rate, stack trace limit or burst that is not a positive
+integer, any other number that is not a whole number of 0 or more, or an unknown log level stops
+the server at startup, with a message naming the variable. See [Load limits](#load-limits) for what
+the limits are for.
 
 ## Features
 
@@ -163,12 +173,16 @@ messages behind what the Unity clients sent, or one client sends more than
 `CLIENT_MESSAGE_RATE_LIMIT` messages a second, `model::update` messages are held back and merged
 per object - the latest value of every field still arrives, only later - and `broadcast::`
 messages are dropped. Nothing else is ever held back or dropped. Synced objects then move less
-smoothly for the other clients.
+smoothly for the other clients. Updates are held for at most 1000 objects per client: an update
+for one more object is lost, and that object reaches the store and the other clients only when it
+changes again.
 
-Each such episode is logged as a warning when it starts, naming `TCP_INBOUND_BACKLOG_LIMIT`, or
-`CLIENT_MESSAGE_RATE_LIMIT` and the client, and again when it ends, with how many updates were
-held back and messages dropped. [Inbound limits](docs/protocol.md#inbound-limits) describes what
-the clients see.
+An episode that goes on for a second is logged as a warning then, naming
+`TCP_INBOUND_BACKLOG_LIMIT`, or `CLIENT_MESSAGE_RATE_LIMIT` and the client, and again when it
+ends, with how many updates were held back and messages dropped. A shorter one is summed up in a
+single debug line, unless it lost updates, which is a warning however short the episode was.
+[Inbound limits](docs/protocol.md#inbound-limits) quotes the warnings and describes what the
+clients see.
 
 The rate limit leaves ordinary clients alone: one syncing 10 objects 72 times a second sends 720
 updates a second. The backlog warning means the server as a whole is taking in more than it can
