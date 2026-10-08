@@ -66,10 +66,12 @@ const ownOnChannel = new Map<string, Set<(id: string) => boolean>>();
 const ASK_AGAIN_TIMEOUT_MS = 5000;
 
 // How much of what an own model's fields were is kept, to tell whether the last change this client
-// sent for one reached the server (see lostChanges): this many values per field at most, and of
-// those only the ones still the latest at most this long before the connection stopped working. A
-// change sent any earlier arrived for certain, so the server showing the value it replaced means
-// another client set that again.
+// sent for one reached the server (see lostChanges). Per field, the newest value, and of the ones
+// before it this many from each side of when this client last heard from the server: the latest
+// ones up to then, and the first ones after (see keepKnown). Of those, only the ones still the
+// latest at most KNOWN_VALUES_MS before the connection stopped working count. A change sent any
+// earlier arrived for certain, so the server showing the value it replaced means another client set
+// that again.
 const KNOWN_VALUES_KEPT = 8;
 const KNOWN_VALUES_MS = 10_000;
 
@@ -130,8 +132,9 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
     };
 
     // For each field of an own model, by the name it is sent under, the values it had, oldest first:
-    // the last one the server showed this client (see applyUpdate), then each one this client sent
-    // since (see sendUpdate) - as JSON, with when, and whether it was this client's. See lostChanges.
+    // the last one the server showed this client (see applyUpdate), then the ones this client sent
+    // since (see sendUpdate) that keepKnown keeps - as JSON, with when, and whether it was this
+    // client's. See lostChanges.
     interface KnownValue {
         json: string;
         at: number;
@@ -361,22 +364,41 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
     // Sends an update for an own model, and remembers the values it sent (see lostChanges).
     const sendUpdate = (colibri: Colibri, model: T, update: Partial<T>) => {
         colibri.sendMessage(name, 'model::update', update);
-        remember(model, update, true);
+        remember(model, update, lastHeardFrom(colibri) ?? Number.POSITIVE_INFINITY);
     };
 
-    // Remembers the values `fields` has for an own model (see knownValues): sent by this client,
-    // after what it knew of each field before; or shown by the server, in place of that. A field
-    // without a JSON value (undefined) is not sent at all, so there is nothing to remember for it.
-    const remember = (model: T, fields: Partial<T>, sent: boolean) => {
+    // Remembers the values `fields` has for an own model (see knownValues): sent by this client, after
+    // what it knew of each field before, when it last heard from the server at `heardAt` (see
+    // keepKnown); or, without `heardAt`, shown by the server, in place of that. A field without a JSON
+    // value (undefined) is not sent at all, so there is nothing to remember for it.
+    const remember = (model: T, fields: Partial<T>, heardAt?: number) => {
         let known = knownValues.get(model);
         if (!known) knownValues.set(model, (known = new Map<string, KnownValue[]>()));
         const at = Date.now();
-        for (const [key, value] of Object.entries(fields)) {
-            const json = JSON.stringify(value) as string | undefined;
+        for (const [key, field] of Object.entries(fields)) {
+            const json = JSON.stringify(field) as string | undefined;
             if (key === 'id' || json === undefined) continue;
-            const before = sent ? (known.get(key) ?? []) : [];
-            known.set(key, [...before, { json, at, sent }].slice(-KNOWN_VALUES_KEPT));
+            const value = { json, at, sent: heardAt !== undefined };
+            known.set(key, heardAt === undefined ? [value] : keepKnown([...(known.get(key) ?? []), value], heardAt));
         }
+    };
+
+    // What is kept of a field's values, oldest first, when this client last heard from the server at
+    // `heardAt`. The server's latency probe comes every 100 ms, so a connection that dies stops
+    // working at most about that long after `heardAt`, and the last value that reached the server,
+    // the one its answer after the reconnect has, was sent shortly before or after `heardAt`. Every
+    // value sent later went into the dead link, one for each key typed while Socket.IO takes up to
+    // most of a minute to notice, and only the newest of those counts: it is what the server should
+    // have. So what is kept is the latest KNOWN_VALUES_KEPT values up to `heardAt`, the first
+    // KNOWN_VALUES_KEPT after it, and the newest. While the connection works, this client hears from
+    // the server all the time, and a value dropped from in between was replaced by a later one that
+    // reached the server as well.
+    const keepKnown = (values: KnownValue[], heardAt: number): KnownValue[] => {
+        const split = values.findIndex(v => v.at > heardAt);
+        if (split < 0) return values.slice(-KNOWN_VALUES_KEPT);
+        const after = values.slice(split);
+        const newest = after.slice(KNOWN_VALUES_KEPT).slice(-1);
+        return [...values.slice(0, split).slice(-KNOWN_VALUES_KEPT), ...after.slice(0, KNOWN_VALUES_KEPT), ...newest];
     };
 
     // The fields of an own model that the answer to asking for it again after a reconnect shows with
@@ -427,7 +449,7 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
 
     const applyUpdate = (model: T | undefined, modelData: Partial<T>) => {
         if (model) {
-            if (ownModels.has(model)) remember(model, modelData, false);
+            if (ownModels.has(model)) remember(model, modelData);
 
             // Update existing model
             model.update(modelData);

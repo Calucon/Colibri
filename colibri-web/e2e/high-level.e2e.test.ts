@@ -552,6 +552,41 @@ describe('RegisterModelSync own models after a change lost in a dead link', () =
         expect(await storedOn(peer, channel, 'lost-1')).toEqual({ id: 'lost-1', value: 'C' });
     });
 
+    // Socket.IO may take most of a minute to notice, and every change made until then goes into the
+    // dead link: one for each key typed, say.
+    it('sends the last of many changes lost in the dead link', async () => {
+        const app = uniqueApp('modelsync-own-lost-typed');
+        const channel = uniqueApp('own');
+        const peer = await createClient(app);
+        const link = await startLinkProxy();
+        const singleton = await createClientThrough(app, link);
+
+        const [, registerModel] = RegisterModelSync<Item>({ name: channel, type: Item });
+        const model = new Item('lost-4');
+        model.value = 'A';
+        await registeredOn(singleton, peer, channel, model, registerModel);
+        const arrived = nextMessage(peer, { channel, command: 'model::update' });
+        model.value = 'B';
+        expect((await arrived).payload).toEqual({ id: 'lost-4', value: 'B' });
+
+        link.freeze();
+        const word = 'typed one key at a time';
+        for (let i = 1; i <= word.length; i++) {
+            model.value = word.slice(0, i);
+            await reported();
+        }
+        expect(await storedOn(peer, channel, 'lost-4')).toEqual({ id: 'lost-4', value: 'B' });
+
+        const peerSaw = await updatesDuring(peer, channel, async () => {
+            await cutAndCatchUp(singleton, link);
+            await roundTrip(peer);
+        });
+
+        expect(model.value).toBe(word);
+        expect(peerSaw).toEqual([{ id: 'lost-4', value: word }]);
+        expect(await storedOn(peer, channel, 'lost-4')).toEqual({ id: 'lost-4', value: word });
+    });
+
     // The server keeps an app's models for as long as one of its clients is connected - and that
     // includes this client's old connection, which the server has not noticed is dead either.
     it('does so when it is alone in its app, kept alive by its own old connection', async () => {

@@ -1926,6 +1926,69 @@ describe('sending again a change lost in a connection that died', () => {
             ['model::request', { id: 'p1', again: true }]
         ]);
     });
+
+    /** Changes `a` to each of `values` in turn, `apart` ms apart, hearing nothing from the server. */
+    const changeWithoutHearing = async (pair: Pair, values: string[], apart: number) => {
+        for (const a of values) {
+            clock += apart;
+            pair.a = a;
+            await settle();
+        }
+    };
+
+    /** Socket.IO noticing the dead connection, once its ping timeout has run out, and connecting again. */
+    const noticeAndReconnect = () => {
+        clock += 45_000;
+        disconnectSocket();
+        connectSocket();
+        fakeSocket.emit.mockClear();
+    };
+
+    /** What a field shows while `word` is typed into it, one key at a time. */
+    const typing = (word: string) => Array.from(word, (_, i) => word.slice(0, i + 1));
+    const WORD = 'typed one key at a time';
+
+    // Every change made until Socket.IO notices is sent into the dead link, each key typed included,
+    // so the value the server has may be many changes back by then.
+    it.each([
+        ['as fast as they come', 1],
+        ['one a second', 1_000]
+    ])('does so after many more changes went into the dead link, %s', async (_, apart) => {
+        const { pair } = await connectedWithOwnPair();
+        pair.a = 'A2';
+        await settle();
+        hearFromServer();
+        await changeWithoutHearing(pair, typing(WORD), apart);
+        noticeAndReconnect();
+
+        deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A2', b: 'B' } });
+        await settle();
+
+        expect(pair.a).toBe(WORD);
+        expect(sentInOrder()).toEqual([
+            ['model::update', { id: 'p1', a: WORD }],
+            ['model::request', { id: 'p1', again: true }]
+        ]);
+    });
+
+    // The latency probe comes every 100 ms, so a connection stops working at most about that long
+    // after the server was last heard from, and a change sent in between may still have reached it.
+    it('does so when the server got a change sent after it was last heard from', async () => {
+        const { pair } = await connectedWithOwnPair();
+        hearFromServer();
+        await changeWithoutHearing(pair, ['A2'], 50);
+        await changeWithoutHearing(pair, typing(WORD), 100);
+        noticeAndReconnect();
+
+        deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A2', b: 'B' } });
+        await settle();
+
+        expect(pair.a).toBe(WORD);
+        expect(sentInOrder()).toEqual([
+            ['model::update', { id: 'p1', a: WORD }],
+            ['model::request', { id: 'p1', again: true }]
+        ]);
+    });
 });
 
 // Socket.IO retries a connection that fails, for as long as it takes, and a wrong address or a
