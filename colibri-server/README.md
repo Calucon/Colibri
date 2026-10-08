@@ -82,10 +82,17 @@ started from: `colibri-server` for `npm start`, `/srv/colibri` in the Docker ima
 | With several apps on one server, you hear a voice from another app | The voice relay does not separate apps, and receivers pick voices by user id: give each app distinct voice user ids |
 | The admin UI's Log page is empty after a restart | It keeps the last 20,000 messages in memory only. They also go to stdout and stderr (`docker logs colibri`), filtered by `CONSOLE_LOG_LEVEL` |
 
+## Development
+
+`npm ci`, then `npm run watch` for a development server that compiles and reloads on file changes,
+`npm test` for the unit tests and `npm run lint`.
+
 ## Full guide
 
 [docs/guide.md](docs/guide.md) has everything else:
 
+- [What the server does](docs/guide.md#features): the admin UI's Log and Statistics pages, the
+  REST store at `/api/store`, the voice relay
 - [Docker in detail](docs/guide.md#docker-recommended): building from a checkout, host
   directories, `--user`, clean shutdown
 - [Configuration](docs/guide.md#configuration): every variable, and what stops the server at startup
@@ -96,9 +103,3 @@ started from: `colibri-server` for `npm start`, `/srv/colibri` in the Docker ima
 
 The wire protocol for both transports is in [docs/protocol.md](docs/protocol.md), and everything
 that changed since 1.x in [docs/v2-changelog.md](docs/v2-changelog.md).
-
-## Development
-
-`npm ci`, then `npm run watch` for a development server that compiles and reloads on file changes,
-`npm test` for the unit tests and `npm run lint`. The other scripts are in the
-[guide](docs/guide.md#development).
