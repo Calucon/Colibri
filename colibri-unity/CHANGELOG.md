@@ -515,8 +515,11 @@ otherwise spend on their prototype, so:
   configuration, and *Save Config* only saved it. So a value the window marked as an error, such
   as port 0 or a malformed *Server certificate SHA-256*, was used in Play mode all the same, though
   *Save Config* was disabled, and written to disk by the next save of the project's assets. The
-  fields now edit a copy: a valid change still takes effect at once, without saving, and one with
-  an error stays in the window while the configuration keeps its last valid settings.
+  fields now edit a copy: a valid change still takes effect at once, without saving, even while
+  another setting shows an error. A value with an error stays in the window, entering Play mode
+  included, until it is corrected or the window closes, and its setting keeps its last valid
+  value. Changes made elsewhere, such as in the asset's Inspector, still show in the window and
+  are kept.
 - **`Window → Colibri Status`**: connection state, server, app name, protocol version, time since
   the last server heartbeat (not a latency: the heartbeat carries the *server's* clock), the
   channels with listeners and the type each expects, and the last 20 messages in and out. It uses
@@ -703,7 +706,8 @@ otherwise spend on their prototype, so:
   showing and hiding, a server value replacing a held change, a delete from another client
   dropping it, and where the limit comes from. `ModelUpdateTests` cover an update reaching a model
   before any object of its type has woken; `AppNameCheckTests` the shared-app-name warning;
-  `SetupWindowTests` that a value the Setup window marks as an error stays out of the configuration;
+  `SetupWindowTests` that a value the Setup window marks as an error stays out of the configuration
+  without holding back a valid change or undoing one made elsewhere;
   `ConnectTimeoutTests` an attempt nothing answers, cancelling one, and a refusal reported at
   once; `VoicePacketQueueTests` voice packets from several receive threads at once; `OutboxTests`
   the 10 000-message cap, connected and not; `RemoteLoggingTests` the missing-lines note. In

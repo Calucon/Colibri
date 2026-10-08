@@ -111,7 +111,7 @@ Upon installation, a configuration window should show up:
 - Choose a unique *app name*. Though a server supports multiple clients, data is only synchronized between clients with identical *app names*!
 - Unique means that nobody else on the server uses it. Everyone with the same app name is in one app: they see each other's objects and messages, and since every update goes to every other client in the app, the server's work grows with the square of their number. The window warns about names many people use: `myAppName`, which the web client's samples use, and names such as `test`, `demo`, `app` or `colibri`.
 - To adjust the Colibri Configuration you can reopen the window in Unity under "Window" -> "Colibri Configuration" 
-- *Save Config* saves the configuration to `Resources/ColibriConfig`. A valid change takes effect at once, so Play mode uses it even before you save. A change the window marks as an error, such as port 0, is neither used nor saved: the configuration keeps its last valid settings until you correct it.
+- *Save Config* saves the configuration to `Resources/ColibriConfig`. A valid change takes effect at once, so Play mode uses it even before you save. A value the window marks as an error, such as port 0, is neither used nor saved: that setting keeps its last valid value, and the window shows what you typed until you correct it or close the window. Changes made elsewhere, such as in the asset's Inspector, show in the window and are kept.
 
 ### Advanced Configuration
 
