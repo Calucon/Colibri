@@ -518,6 +518,33 @@ namespace HCIKonstanz.Colibri.Tests
         }
 
         /// <summary>
+        /// The answers arrive, and the value lost at the drop goes out again, but into a link that
+        /// drops again soon after. The next round counts from the second outage, before which the
+        /// change was first made; what the first answer held is still the server's value, and tells
+        /// that the value sent again was lost too.
+        /// </summary>
+        [Test]
+        public void AChangeSentAgainIsKeptWhenTheLinkDropsAgainBeforeItArrives()
+        {
+            var model = SpawnModelThatSent("on");
+            Change(model, "off", 200);
+
+            Sync.RequestModelsAgain(disconnectedAt: 202);
+            model.OnModelUpdate(Answer(model, "on"));
+            Assert.That((string)SentAt(model, 210)["label"], Is.EqualTo("off"), "Precondition: the lost value goes out again");
+            EndOfAnswers();
+
+            Assert.That(200, Is.LessThan(212 - SentValues.WindowSeconds), "Precondition: the change was first made before the second outage's window");
+            Sync.RequestModelsAgain(disconnectedAt: 212);
+            model.OnModelUpdate(Answer(model, "on"));
+
+            Assert.That(model.Label, Is.EqualTo("off"), "The answer after the second reconnect put the value from before the first drop back");
+            var sent = SentAt(model, 213);
+            Assert.That(sent, Is.Not.Null, "The value sent again and lost at the second drop was not sent again");
+            Assert.That((string)sent["label"], Is.EqualTo("off"));
+        }
+
+        /// <summary>
         /// Once the answers to a reconnect are all in, the next outage has a window of its own: a
         /// value sent long before it arrived for certain, and another client set the one before it
         /// again.

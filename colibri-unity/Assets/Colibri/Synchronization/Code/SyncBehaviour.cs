@@ -602,9 +602,7 @@ namespace HCIKonstanz.Colibri.Synchronization
                 if (!_syncedAttributes.TryGetValue(property.Name, out var attribute))
                     continue;
 
-                // Every other value is made afresh for each update, but a JObject member's is the
-                // application's own object, which it may change in place later.
-                SentValuesOf(attribute).Remember(attribute.PropertyType == typeof(JObject) ? property.Value.DeepClone() : property.Value, now);
+                SentValuesOf(attribute).Remember(ToKeep(attribute, property.Value), now);
             }
         }
 
@@ -613,6 +611,13 @@ namespace HCIKonstanz.Colibri.Synchronization
             _sentValues ??= new SentValues[_attributeList.Count];
             return _sentValues[attribute.Index] ??= new SentValues();
         }
+
+        /// <summary>
+        /// A value as SentValues keeps it. Every other value is made afresh for each update, but a
+        /// JObject member's is the application's own object, which it may change in place later.
+        /// </summary>
+        private static JToken ToKeep(SyncedAttribute attribute, JToken value)
+            => attribute.PropertyType == typeof(JObject) ? value.DeepClone() : value;
 
 
         public void OnModelUpdate(JObject data)
@@ -717,7 +722,9 @@ namespace HCIKonstanz.Colibri.Synchronization
          *    local value stays and goes out again, as an ordinary update under the send-rate
          *    limit, and the member takes nothing more from the round: whatever else the round
          *    brings for it, the server had before it read the value sent again, which then
-         *    replaces it there and on every other client;
+         *    replaces it there and on every other client. The answer's value is kept as the one
+         *    held before the value sent again, so if that is lost as well, at a drop soon after,
+         *    the next round still tells;
          *  - any other value: another client set it while this one was away, and it is applied,
          *    as it always was. So is a member that was not sent recently at all.
          *
@@ -773,6 +780,10 @@ namespace HCIKonstanz.Colibri.Synchronization
                     return true;
 
                 case SentValues.Verdict.Lost:
+                    // The server holds this value, and the one sent again goes out after it. Should
+                    // that be lost too, in a link that drops again soon after, the next round tells
+                    // it by this value.
+                    sent.ServerShowed(ToKeep(attribute, serverValue));
                     KeepAndSendAgain(attribute);
                     return true;
 
@@ -896,8 +907,8 @@ namespace HCIKonstanz.Colibri.Synchronization
             // those values again was set back to it by someone else. The value it holds now does:
             // the server holds it too, so an answer holding it after this member's next change
             // says that change was lost. A JObject is the application's own object from here on,
-            // and is copied, as in RememberSent.
-            SentValuesOf(attribute).TookFromElsewhere(attribute.PropertyType == typeof(JObject) ? value.DeepClone() : value);
+            // and is copied.
+            SentValuesOf(attribute).ServerShowed(ToKeep(attribute, value));
 
             // A local change of the same member that is still waiting to be sent - polled earlier
             // this frame, or held by the send-rate limit - has just been overwritten here by the

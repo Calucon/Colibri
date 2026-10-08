@@ -32,8 +32,9 @@ namespace HCIKonstanz.Colibri.Synchronization
     /// switched on a minute ago and switched off at the drop sent only <c>false</c> in the window,
     /// and the answer's <c>true</c> is the change lost, not another client's. It is the newest
     /// value sent before the window if one is kept, and otherwise the value held before the oldest
-    /// one kept: one pushed out of the ring, or the one last taken from elsewhere, such as the
-    /// server's state when the object first came up.
+    /// one kept: one pushed out of the ring, or the one the server last showed. That is a value the
+    /// member took from elsewhere, such as the server's state when the object first came up, or
+    /// the one an answer held when it showed the member's last change lost.
     /// </para>
     /// </remarks>
     internal sealed class SentValues
@@ -98,7 +99,7 @@ namespace HCIKonstanz.Colibri.Synchronization
         private int _newest = -1;
 
         // The value the member held before the oldest one in the ring: the last one pushed out of
-        // it, or the one last taken from elsewhere. Null when there is neither.
+        // it, or the one the server last showed. Null when there is neither.
         private JToken _heldBefore;
 
         /// <param name="value">
@@ -126,14 +127,16 @@ namespace HCIKonstanz.Colibri.Synchronization
         }
 
         /// <summary>
-        /// For when the member takes <paramref name="value"/> from elsewhere. What this object sent
-        /// before says nothing about the server any more, and is forgotten. The value taken is
-        /// what the member holds until its next send, and is kept as the value before that send.
+        /// For when the server shows that it holds <paramref name="value"/>: in an update the member
+        /// takes from elsewhere, or in an answer that shows the member's last change lost. What
+        /// this object sent before says nothing about the server any more, and is forgotten. The
+        /// value shown is kept as the one before the next send: should that be lost as well, an
+        /// answer still holding this value tells it.
         /// </summary>
         /// <param name="value">
         /// The value as it arrived. It must not change afterwards; the caller copies one that may.
         /// </param>
-        internal void TookFromElsewhere(JToken value)
+        internal void ServerShowed(JToken value)
         {
             if (_values != null)
                 Array.Clear(_values, 0, _values.Length);

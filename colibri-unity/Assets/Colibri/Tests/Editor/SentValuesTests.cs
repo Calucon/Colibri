@@ -148,7 +148,7 @@ namespace HCIKonstanz.Colibri.Tests
         public void TakingAValueForgetsWhatWasSentAndKeepsTheValueTaken()
         {
             var sent = Sent("a", "b");
-            sent.TookFromElsewhere(Wire("\"theirs\""));
+            sent.ServerShowed(Wire("\"theirs\""));
 
             Assert.That(sent.Judge(Wire("\"theirs\""), Always), Is.EqualTo(SentValues.Verdict.NotSentRecently),
                 "Nothing was sent since the value was taken");
@@ -163,12 +163,32 @@ namespace HCIKonstanz.Colibri.Tests
             Assert.That(sent.Judge(Wire("\"b\""), Always), Is.EqualTo(SentValues.Verdict.ChangedElsewhere));
         }
 
+        /// <summary>
+        /// An answer showed the last change lost, and the change went out again, into a link that
+        /// dropped again soon after. The server still holds the value that answer held, and that
+        /// value tells the second loss, though the change it replaced was sent before the window.
+        /// </summary>
+        [Test]
+        public void TheValueAnAnswerShowedTellsAChangeSentAgainLostAsWell()
+        {
+            var sent = new SentValues();
+            sent.Remember(true, 100);
+            sent.Remember(false, 200);
+            Assert.That(sent.Judge(Wire("true"), since: 192), Is.EqualTo(SentValues.Verdict.Lost), "Precondition");
+
+            sent.ServerShowed(Wire("true"));
+            sent.Remember(false, 210);
+
+            Assert.That(sent.Judge(Wire("true"), since: 202), Is.EqualTo(SentValues.Verdict.Lost));
+            Assert.That(sent.Judge(Wire("false"), since: 202), Is.EqualTo(SentValues.Verdict.Arrived));
+        }
+
         /// <summary>A member that takes a value before it ever sends one has it all the same.</summary>
         [Test]
         public void AValueTakenBeforeTheFirstSendCounts()
         {
             var sent = new SentValues();
-            sent.TookFromElsewhere(Wire("[0,-3,0]"));
+            sent.ServerShowed(Wire("[0,-3,0]"));
             sent.Remember(new Vector3(7, 0, 7).ToJson(), 200);
 
             Assert.That(sent.Judge(Wire("[0,-3,0]"), since: 190), Is.EqualTo(SentValues.Verdict.Lost));
