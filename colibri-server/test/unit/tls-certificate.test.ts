@@ -35,7 +35,7 @@ describe('TlsCertificate', () => {
     beforeAll(async () => {
         fixtures = await mkdtemp(path.join(tmpdir(), 'colibri-tls-certificate-'));
         first = createTestCertificate(fixtures, 'first');
-        second = createTestCertificate(fixtures, 'second', 'second.localhost');
+        second = createTestCertificate(fixtures, 'second', { commonName: 'second.localhost' });
     });
 
     afterAll(async () => {

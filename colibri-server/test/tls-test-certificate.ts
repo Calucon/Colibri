@@ -29,12 +29,25 @@ const openssl = function (args: string[]): string {
     }
 };
 
+export interface TestCertificateOptions {
+    // The certificate's subject. Its alternative names are localhost and 127.0.0.1 whatever this is.
+    commonName?: string;
+    // An EC P-256 key unless said otherwise.
+    keyType?: 'ec' | 'rsa';
+}
+
+const KEY_OPTIONS = {
+    ec: [ '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:prime256v1' ],
+    rsa: [ '-newkey', 'rsa:2048' ],
+} as const;
+
 // Writes <name>.pem and <name>.key into `dir`.
-export const createTestCertificate = function (dir: string, name = 'server', commonName = 'localhost'): TestCertificate {
+export const createTestCertificate = function (dir: string, name = 'server', options: TestCertificateOptions = {}): TestCertificate {
+    const { commonName = 'localhost', keyType = 'ec' } = options;
     const certPath = path.join(dir, `${name}.pem`);
     const keyPath = path.join(dir, `${name}.key`);
     openssl([
-        'req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:prime256v1', '-nodes',
+        'req', '-x509', ...KEY_OPTIONS[keyType], '-nodes',
         '-keyout', keyPath, '-out', certPath, '-days', '2',
         '-subj', `/CN=${commonName}`, '-addext', 'subjectAltName=DNS:localhost,IP:127.0.0.1',
     ]);
