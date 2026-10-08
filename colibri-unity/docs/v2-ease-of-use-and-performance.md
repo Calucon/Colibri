@@ -1,8 +1,8 @@
-# colibri-unity 2.0.0 — ease of use and the sync loop
+# colibri-unity 2.0.0: ease of use and the sync loop
 
 Companion to [`CHANGELOG.md`](../CHANGELOG.md), covering the last pass over colibri-unity 2.0.0 in
 the depth a change log cannot carry: what changed, why, how the replacements work, and what the
-Editor verification showed — including the two numbers that were only ever argued before it.
+Editor verification showed, including the two numbers that were only ever argued before it.
 
 Two goals, and they turned out not to conflict:
 
@@ -42,7 +42,7 @@ grown to three packages, one of which (R3) ships in two halves and additionally 
 Miss half of it and Unity produces a wall of `The type or namespace name 'R3' could not be found`
 with nothing pointing at the cause.
 
-On top of that, four things failed in complete silence — and all four are things a new user hits in
+On top of that, four things failed in complete silence, and all four are things a new user hits in
 the first hour:
 
 | Situation | What happened before |
@@ -59,11 +59,11 @@ mistakes now name themselves.
 
 ## 1. Installation: three packages to one URL
 
-**Before** — `com.unity.nuget.newtonsoft-json`, UniTask via git URL, NuGetForUnity via git URL, R3
+**Before:** `com.unity.nuget.newtonsoft-json`, UniTask via git URL, NuGetForUnity via git URL, R3
 core via the NuGet window, R3's Unity layer via git URL, then Colibri. Six steps, four of which had
 to be done by hand because a UPM `dependencies` entry cannot express a NuGet package.
 
-**After** — one URL:
+**After:** one URL:
 
 ```
 https://github.com/hcigroupkonstanz/Colibri.git?path=colibri-unity/Assets/Colibri
@@ -81,7 +81,7 @@ What was removed along the way:
 - `com.cysharp.r3` and `com.cysharp.unitask` from `Packages/manifest.json` and `packages-lock.json`
 - `"R3.Unity"`, `"UniTask"` from `Colibri.asmdef` `references`, and `"R3.dll"` from
   `precompiledReferences`
-- `"Unity.TextMeshPro"` from `references` — nothing in Colibri used it. It resolved only because
+- `"Unity.TextMeshPro"` from `references`: nothing in Colibri used it. It resolved only because
   `com.unity.ugui` happens to ship that assembly, so it was a latent failure in any project without
   ugui, in exchange for nothing.
 - The R3 and UniTask entries in `THIRD_PARTY_NOTICES.txt`
@@ -92,16 +92,16 @@ Total call sites removed: eight. That is what the two dependencies were buying.
 
 ## What you actually write
 
-Everything below this section is internals. This is the surface — and the surface is the point, so
-it is worth seeing before the machinery.
+Everything below this section is internals. This is the surface, and the surface is the point, so it
+is worth seeing before the machinery.
 
-### Level 0 — no code at all
+### Level 0: no code at all
 
 Add `SyncTransform` to a GameObject and drop one `SyncTransformManager` in the scene. Position,
 rotation, scale and active state now follow every other client. Nothing to write, nothing to
 register, nothing to unregister.
 
-### Level 1 — send a value to everyone
+### Level 1: send a value to everyone
 
 ```csharp
 // Ping.cs
@@ -135,10 +135,10 @@ Without the cast, `Sync.Receive("ping", OnPing)` failed to compile against 17 ov
 error message that pointed at overload resolution rather than at anything in the calling code. It
 is the single most common wall people hit in the first ten minutes.
 
-### Level 2 — a shared object
+### Level 2: a shared object
 
 ```csharp
-// Player.cs — every client sees the same Players, with these two values kept in step.
+// Player.cs: every client sees the same Players, with these two values kept in step.
 using HCIKonstanz.Colibri.Synchronization;
 using UnityEngine;
 
@@ -150,17 +150,17 @@ public class Player : SyncBehaviour<Player>
 ```
 
 ```csharp
-// PlayerManager.cs — one in the scene, so clients can create Players for each other.
+// PlayerManager.cs: one in the scene, so clients can create Players for each other.
 using HCIKonstanz.Colibri.Synchronization;
 
 public class PlayerManager : SyncBehaviourManager<Player> { }
 ```
 
 Assign `Score` from anywhere and every other client's `Player` has the new value on its next frame.
-There is no `SendScore()` and nothing to call — §2 is the machinery that makes plain field
-assignment enough, and it is why that machinery has to be cheap.
+There is no `SendScore()` and nothing to call: §2 is the machinery that makes plain field assignment
+enough, and it is why that machinery has to be cheap.
 
-> Two `MonoBehaviour`s cannot share one `.cs` file in Unity — only the class matching the filename
+> Two `MonoBehaviour`s cannot share one `.cs` file in Unity: only the class matching the filename
 > can be added to a GameObject. Hence two files.
 
 ### What it looks like when you get it wrong
@@ -216,7 +216,7 @@ Observable.EveryValueChanged(this, _ => attribute.Value.Getter(this as T))
 with the getter typed as `Func<T, object>`, built from an expression tree that ends in
 `Expression.Convert(exBody, typeof(object))`.
 
-`GenericSyncTransform` declares five `[Sync]` members — `Active` (bool), `Position` (Vector3),
+`GenericSyncTransform` declares five `[Sync]` members: `Active` (bool), `Position` (Vector3),
 `Rotation` (Quaternion), `Scale` (Vector3), `PhysicsId` (string). So every `SyncTransform` in the
 scene meant:
 
@@ -228,8 +228,8 @@ scene meant:
 - one Unity `Update`/`LateUpdate` message dispatch per `WebServerConnection`, plus R3's own player
   loop injection.
 
-The garbage figure, as arithmetic rather than a measurement — 100 synced objects at 60 fps, nothing
-moving:
+The garbage figure, as arithmetic rather than a measurement, for 100 synced objects at 60 fps with
+nothing moving:
 
 ```
   100 objects x 4 boxed attributes x 60 fps  =  24,000 boxes / second
@@ -243,8 +243,8 @@ moving:
   104 B x 100 objects x 60 fps  =  ~610 KB / second
 ```
 
-That is the cost of an *idle* scene, before anything moves. It is not catastrophic — Unity's GC
-absorbs it — but it is a recurring collection pressure with nothing to show for it, and it scales
+That is the cost of an *idle* scene, before anything moves. It is not catastrophic (Unity's GC
+absorbs it), but it is a recurring collection pressure with nothing to show for it, and it scales
 linearly with the number of synced objects, which is precisely the axis a project grows along.
 
 ### What it looks like now
@@ -274,10 +274,10 @@ private void LateUpdate()
 ```
 
 An index loop over the raw `List<>`, so no enumerator and no defensive copy. (`now` and `interval`
-are for the send-rate limit described below.) Registration is `Awake`, deregistration `OnDestroy`
-— or a delete from another client, whichever comes first. Deregistration is **O(1)**: each tickable
+are for the send-rate limit described below.) Registration is `Awake`, deregistration `OnDestroy`,
+or a delete from another client, whichever comes first. Deregistration is **O(1)**: each tickable
 stores its own slot index, `Deregister` nulls that slot, and the list is compacted once per frame
-if anything was removed — removing entries during iteration would otherwise shift indices under the
+if anything was removed. Removing entries during iteration would otherwise shift indices under the
 running loop. Statics are reset from a `[RuntimeInitializeOnLoadMethod(SubsystemRegistration)]`
 hook, so entering Play mode with domain reload disabled does not inherit destroyed components from
 the last session.
@@ -286,12 +286,12 @@ the last session.
 scans **non-generic** types for `[RuntimeInitializeOnLoadMethod]`, so a hook written on the generic
 base would compile, look right, and never run. It kept a `_createdInstance` flag instead, latched
 `true` forever, which meant the second Play session was handed back the previous session's
-destroyed connection — a client with no socket and no console output, whose only symptom was the
+destroyed connection: a client with no socket and no console output, whose only symptom was the
 Status window reporting no connection in the scene. The flag is gone: liveness is read off the
 instance itself, where Unity's `==` already distinguishes "destroyed, rebuild it" from "alive". The
-one thing the flag was genuinely doing — refusing to resurrect a singleton during teardown — moved
-to a `SingletonLifetime.IsQuitting` guard in a non-generic helper, which *is* scanned for the
-reset hook and so starts each session false.
+one thing the flag was genuinely doing, refusing to resurrect a singleton during teardown, moved to
+a `SingletonLifetime.IsQuitting` guard in a non-generic helper, which *is* scanned for the reset
+hook and so starts each session false.
 
 **Typed change detection.** `SyncedAttribute` went from a struct holding `Func<T, object>` to an
 abstract class with a generic subclass, so the comparison happens on the concrete type:
@@ -315,7 +315,7 @@ private sealed class ChangeTracker<TValue> : IChangeTracker
 ```
 
 `EqualityComparer<Vector3>.Default` resolves to `GenericEqualityComparer<Vector3>`, because
-`Vector3` implements `IEquatable<Vector3>` — so the comparison calls `Vector3.Equals(Vector3)`
+`Vector3` implements `IEquatable<Vector3>`, so the comparison calls `Vector3.Equals(Vector3)`
 directly, with no boxing on either side. Same for `Quaternion`. A value is boxed only on the frame
 it actually changed, in order to hand it to `AddUpdate`.
 
@@ -323,7 +323,7 @@ it actually changed, in order to hand it to `AddUpdate`.
 > with `operator ==`. Unity's `Vector3 == Vector3` is an approximate comparison (`sqrMagnitude` of
 > the difference below `1e-10`), while `Vector3.Equals` is an exact field-by-field float
 > comparison. The old code boxed and called `object.Equals`, which dispatches to
-> `Vector3.Equals(object)` — the same exact comparison. So this change does not alter which frames
+> `Vector3.Equals(object)`, the same exact comparison. So this change does not alter which frames
 > count as "changed".
 
 **Poll and flush are separate phases.** `AddUpdate` now only fills `_nextUpdate`, and the ticker's
@@ -338,11 +338,11 @@ void SyncTicker.ITickable.FlushUpdate(double now, double interval)
 }
 ```
 
-This preserves the previous behaviour — all of one frame's attribute changes travel in a single
-message — while removing the `async void` state machine that used to implement it. It also makes
-the ordering explicit rather than a side effect of a player-loop timing constant: every
-`PollChanges` runs, then every `FlushUpdate`. `TakeDueUpdate` is where the send-rate limit decides
-whether that message leaves in this frame or waits.
+This preserves the previous behaviour (all of one frame's attribute changes travel in a single
+message) while removing the `async void` state machine that used to implement it. It also makes the
+ordering explicit rather than a side effect of a player-loop timing constant: every `PollChanges`
+runs, then every `FlushUpdate`. `TakeDueUpdate` is where the send-rate limit decides whether that
+message leaves in this frame or waits.
 
 ### Cost, before and after
 
@@ -351,14 +351,14 @@ Per `SyncTransform`, idle:
 | | Before | After |
 |---|---|---|
 | Reactive frame-provider work items | **5** (one per attribute) | 0 |
-| Unity per-frame messages | R3's player-loop injection | **1 `Update` + 1 `LateUpdate`, total** — not per object |
+| Unity per-frame messages | R3's player-loop injection | **1 `Update` + 1 `LateUpdate`, total**, not per object |
 | Boxes per frame | **4** | **0** |
 | Allocation per change | 1 `async void` state machine | 0 |
 | Allocation per message | 1 `JObject` | 1 `JObject` (unchanged) |
 
 **Free of garbage is not free of time.** The profiler run in §8 puts one `SyncTicker.Update()` at
 **0.335 ms for 100 idle `SyncTransform`s**, against a `PlayerLoop` total of 0.786 ms in the same
-frame — a little under half the player loop, spent establishing that nothing changed. The poll is
+frame: a little under half the player loop, spent establishing that nothing changed. The poll is
 O(objects × attributes) whether or not anything moves, because that is what change detection by
 polling *is*; what the rewrite removed is the allocation and the per-attribute machinery around it,
 not the comparison itself. At 100 objects × 5 attributes that is 500 typed comparisons a frame. It
@@ -410,8 +410,8 @@ internal JObject TakeDueUpdate(double now, double interval)
   interval. After a pause, or a send forced early, `late` is a whole interval or more, or negative,
   and the next slot starts afresh from `now`, so no backlog of sends builds up.
 - **Showing and hiding skip it.** `PollChanges` compares `activeSelf` with the previous poll, and
-  when it switched sets `_sendAtOnce`, which sends whatever is waiting in this frame — for a
-  `SyncTransform`, its `Active` member among it. Hiding is a one-off event rather than motion, and
+  when it switched sets `_sendAtOnce`, which sends whatever is waiting in this frame (for a
+  `SyncTransform`, its `Active` member among it). Hiding is a one-off event rather than motion, and
   often the last thing that happens to an object.
 - **Deletes are never overtaken.** `OnDestroy` deregisters first, which drops a held update, and
   sends `model::delete` at once. The server creates a model on its first update, so an update that
@@ -428,14 +428,14 @@ internal JObject TakeDueUpdate(double now, double interval)
 **When the app stops.** The limit can hold back up to one interval of an object's last motion,
 and on Android, and so on a Quest, no further frame may come to send it: taking the headset off or
 leaving the app pauses it, the system may end the paused process later, and Unity may never call
-`OnApplicationQuit`. So `SyncTicker` — always active, which the synced objects need not be, so it
-receives these messages for all of them — sends everything waiting, past the limit, from
+`OnApplicationQuit`. So `SyncTicker` (always active, which the synced objects need not be, so it
+receives these messages for all of them) sends everything waiting, past the limit, from
 `OnApplicationPause(true)`, `OnApplicationFocus(false)` and `OnApplicationQuit`. It polls every
 object first, so a change made in this frame after the ticker's own `Update` is included. While
 paused the process is still alive and socket writes complete on a worker thread, so those updates
 do go out. On quit it is best effort: the connection closes its socket in its own `OnDisable`
-during the same teardown. Losing focus while the app keeps running — a Quest's system menu,
-another window on a desktop — merely skips the limit once.
+during the same teardown. Losing focus while the app keeps running (a Quest's system menu, another
+window on a desktop) merely skips the limit once.
 
 **The setting.** `ColibriConfig.MaxSendRate` is a serialized field initialized to
 `DEFAULT_MAX_SEND_RATE` (30), so a configuration asset saved before it existed gets 30 without
@@ -456,7 +456,7 @@ clock of their own, including the rate an object changing in every frame reaches
 `SemaphoreSlim`, a lock-free queue and `FrameCodec`: receive → queue → drained on the main thread
 in `Update`; send → `SemaphoreSlim` → `Socket.SendAsync`. Not one R3 or UniTask call in the whole
 file. (The receive queue is a `ConcurrentQueue` today, and sends go through the outbox described
-at the end of this section.) Latency and throughput are therefore untouched by everything above —
+at the end of this section.) Latency and throughput are therefore untouched by everything above:
 this work moved per-frame CPU and allocation, not wire time.
 
 Which is not to say the network path was fine. It was not, and the next section is about that.
@@ -468,7 +468,7 @@ sample, both talking to a `colibri-server` in Docker on localhost. Moving the cu
 visibly long moment to reach the other, and the Status window showed missed heartbeats. Everything
 was local, so the wire was not the explanation.
 
-`RunConnectionLoop` is started from `OnEnable` — the main thread. The file contained **no
+`RunConnectionLoop` is started from `OnEnable`, on the main thread. The file contained **no
 `ConfigureAwait(false)` anywhere**, so the first `await` captured Unity's `SynchronizationContext`
 and every continuation in the chain inherited it. `UnitySynchronizationContext.Post` queues work
 that is executed once per frame by the player loop. Which means:
@@ -481,17 +481,17 @@ that is executed once per frame by the player loop. Which means:
 
 An Editor in the background is throttled by Unity, hard. One of two editors always is. So the
 unfocused one received late, echoed later, and then reported the heartbeat gap it had itself
-created — a client that looks like it is on a bad network while the network is a loopback socket
-with `NoDelay` set on both ends.
+created: a client that looks like it is on a bad network while the network is a loopback socket with
+`NoDelay` set on both ends.
 
 The fix is `.ConfigureAwait(false)` on every await from `RunConnectionLoop` down: `RunSession`,
-`ReceiveLoop`, `SendFrame`, `Delay`, and the send path — at the time `TrySendFrame`, `FlushQueue`
-and `SendCommandAsync`, today the outbox's `DrainOutbox`. Nothing about the design changed — this
-is the threading the file was already written for. The comment on `_msgQueue` said *"written from
-the send path, drained from the connect path — both off the main thread"*, and the `volatile`
-fields, the `Interlocked` stamp, the `LockFreeQueue` and the `SemaphoreSlim` were all there for
-concurrency the missing `ConfigureAwait` had been quietly preventing. The mechanism existed; only
-its precondition was absent.
+`ReceiveLoop`, `SendFrame`, `Delay`, and the send path (at the time `TrySendFrame`, `FlushQueue` and
+`SendCommandAsync`, today the outbox's `DrainOutbox`). Nothing about the design changed: this is the
+threading the file was already written for. The comment on `_msgQueue` said *"written from the send
+path, drained from the connect path, both off the main thread"*, and the `volatile` fields, the
+`Interlocked` stamp, the `LockFreeQueue` and the `SemaphoreSlim` were all there for concurrency the
+missing `ConfigureAwait` had been quietly preventing. The mechanism existed; only its precondition
+was absent.
 
 Because that precondition is now met, the remaining shared state had to be audited rather than
 assumed:
@@ -527,35 +527,35 @@ receive loop → `_queuedCommands` → drained in `Update()`, so handlers, `Sync
 anything touching `transform` still run on the main thread. No user code changes.
 
 **What is left after the fix is the frame rate, and it is now visible.** A message still reaches
-user code from `Update`, so a client running at 4 fps still applies it up to 250 ms late — a real
+user code from `Update`, so a client running at 4 fps still applies it up to 250 ms late: a real
 delay, but a local one, and nothing on the server can fix it. The Status window therefore reports
 the rate `Update` is running at and the delay that implies, and warns below 20 fps that a
 backgrounded Editor is the usual cause (§5). Distinguishing "the network is slow" from "this client
 is slow" is most of the diagnosis.
 
 Two tests pin it, in `ConnectionTests`. The first blocks the main thread with `Thread.Sleep(1000)`
-and then — before yielding, since yielding would flush anything queued on the main thread and
-destroy the evidence — asserts the last heartbeat is under 500 ms old. It fails on the old code and
-describes the reported symptom rather than the implementation, so it stays honest if the mechanism
-changes. The second asserts the receive loop's managed thread id is not the main thread's.
+and then (before yielding, since yielding would flush anything queued on the main thread and destroy
+the evidence) asserts the last heartbeat is under 500 ms old. It fails on the old code and describes
+the reported symptom rather than the implementation, so it stays honest if the mechanism changes.
+The second asserts the receive loop's managed thread id is not the main thread's.
 
 ### Connected, and sending while disconnected
 
 Later changes to the same file are worth knowing alongside the threading above.
 
 **`Connected` means the server has spoken.** A session becomes `Connected` on the first frame the
-server sends, not when the TCP connection opens — anything can accept a connection, a 1.x server
-and a port that is not Colibri included. Only then is the reconnect backoff reset, `OnConnected`
-raised and the queue flushed, and before then the 2 s watchdog in `Update` counts only a decoded
-frame as proof of life, so something that accepts and says nothing is dropped. `OnDisconnected` is
-raised exactly once per `OnConnected`. Both events are raised from `Update`, each handler in its own
+server sends, not when the TCP connection opens: anything can accept a connection, a 1.x server and
+a port that is not Colibri included. Only then is the reconnect backoff reset, `OnConnected` raised
+and the queue flushed, and before then the 2 s watchdog in `Update` counts only a decoded frame as
+proof of life, so something that accepts and says nothing is dropped. `OnDisconnected` is raised
+exactly once per `OnConnected`. Both events are raised from `Update`, each handler in its own
 `try`/`catch`, because `Sync`'s re-request of the models after a reconnect is one of those handlers
 and a handler in application code that throws must not skip it.
 
 They are raised in the order the transitions happened. The `Status` setter queues each one, under
 its lock, in `_connectionEvents`, and `Update` raises them one by one. They used to be two flags,
 `_fireOnConnected` and `_fireOnDisconnected`, checked connected-first: a connection that dropped and
-came back between two frames — a long frame during a Wi-Fi blip — raised `OnConnected` and then
+came back between two frames (a long frame during a Wi-Fi blip) raised `OnConnected` and then
 `OnDisconnected`, and code that follows the events believed it was offline while it was connected.
 
 **A connect that nothing answers is given up.** The socket has no connect timeout of its own, so an
@@ -565,11 +565,11 @@ timeout, about two minutes on Android. `RunSession` now opens the connection thr
 against a 5 s delay. Closing the socket is the only way to abandon a pending connect on this API
 surface, so that is what giving up does; the abandoned task's exception is observed there, so it
 never surfaces later as unobserved, and a `TimeoutException` goes to the reconnect loop, which logs
-it with advice — check the address, and that the device is on the server's network — and backs off
-as after any other failure. A refusal still fails at once with a `SocketException`. Either one is
-kept in `LastConnectFailure` until a connection opens, because the two want different fixes: the
-address or the network for a timeout, the server or its port for a refusal. On a local network a
-connection opens in milliseconds, and 5 s still leaves room for two lost SYNs on bad Wi-Fi.
+it with advice (check the address, and that the device is on the server's network) and backs off as
+after any other failure. A refusal still fails at once with a `SocketException`. Either one is kept
+in `LastConnectFailure` until a connection opens, because the two want different fixes: the address
+or the network for a timeout, the server or its port for a refusal. On a local network a connection
+opens in milliseconds, and 5 s still leaves room for two lost SYNs on bad Wi-Fi.
 
 **The outbox.** Sends used to wait on the `Connected` gate: each one issued during an outage parked
 a task, and on reconnect the parked continuations resumed together on the thread pool and raced for
@@ -583,7 +583,7 @@ messages that are not model state are capped at 256 (`MAX_QUEUED_MESSAGES`), old
 rarely count towards that: `RemoteLogging` sends nothing while disconnected and keeps up to 1000
 lines itself (§3), so only lines it handed over before the connection dropped are in the outbox.
 Model messages are not dropped by that cap, and the un-awaited `model::update`s for one object are
-folded into one copied `JObject` — newer members winning, the result moving to the back — unless
+folded into one copied `JObject` (newer members winning, the result moving to the back) unless
 something else about that object (an awaited update, a request for it or for its channel, a delete)
 is queued in between. Reconnecting ends every fold. Nothing in the send path awaits the `Connected`
 gate any more; only user code does.
@@ -592,8 +592,8 @@ Folding bounds model updates by the number of objects, but requests, deletes and
 cannot be folded were still unbounded, and so was the outbox of a connection whose writes fall
 behind what is sent. Behind both bounds sits `MAX_OUTBOX_MESSAGES`: 10 000 messages in the whole
 outbox, connected or not. Past it, `EnforceOutboxLimit` drops the oldest droppable message first
-and only then the oldest model message — never the one `DrainOutbox` is writing, which may well
-arrive — completes an awaited send it dropped with `false`, and warns once per connection. Losing
+and only then the oldest model message (never the one `DrainOutbox` is writing, which may well
+arrive), completes an awaited send it dropped with `false`, and warns once per connection. Losing
 model state is a real loss, but a bounded one.
 
 ---
@@ -602,7 +602,7 @@ model state is a real loss, but a bounded one.
 
 Three call sites, none of them on the sync hot path.
 
-**`SyncBehaviour._isReady`** — `UniTaskCompletionSource<bool>` → `TaskCompletionSource<bool>`.
+**`SyncBehaviour._isReady`:** `UniTaskCompletionSource<bool>` → `TaskCompletionSource<bool>`.
 `UniTaskCompletionSource` is pooled where `TaskCompletionSource` allocates, but this happens once
 per synced object for its entire lifetime. In exchange it removes a real hazard:
 `UniTaskCompletionSource` throws *"can not await twice"* on a second **pending** awaiter, and
@@ -610,7 +610,7 @@ per synced object for its entire lifetime. In exchange it removes a real hazard:
 handler. `TriggerSync` also now catches the cancellation raised when an object is destroyed before
 the server ever sent its state, instead of letting it escape an `async void`.
 
-**`Store`** — `await request.SendWebRequest()` is a UniTask extension method. Replaced with:
+**`Store`:** `await request.SendWebRequest()` is a UniTask extension method. Replaced with:
 
 ```csharp
 private static Task SendAsync(UnityWebRequest request)
@@ -627,26 +627,26 @@ inline is what keeps the caller's code after `await` on the main thread too. (`A
 invokes a handler immediately if the operation has already finished, so there is no lost-race
 window.)
 
-The plain awaiter never throws, so `catch (UnityWebRequestException)` — a UniTask type — is gone,
+The plain awaiter never throws, so `catch (UnityWebRequestException)`, a UniTask type, is gone,
 replaced by an explicit result check. This is strictly better for someone new to Colibri: instead
 of an exception message, the log shows the operation, the object name, the URL, the transport
 error, the HTTP status, and a pointer at the configuration window. That covers failed requests
 only: the Newtonsoft calls around them are not caught, so a value that cannot be converted still
 throws (§6).
 
-**`RemoteLogging`** — `Subject<int>` + `.Where(!_isSending)` + `.ThrottleLast(1s)` became a queue
+**`RemoteLogging`:** `Subject<int>` + `.Where(!_isSending)` + `.ThrottleLast(1s)` became a queue
 filled from Unity's threaded log callback (which fires on arbitrary threads) and drained by a
 one-second timer in `Update`. It has since been simplified further. The queue is a
 `ConcurrentQueue`, since several threads may log at once, with an `Interlocked` count beside it.
 It keeps at most the newest 1000 lines between two sends, connected or not: a second's worth while
 connected, which is also all a runaway log loop can cost the server, and the whole outage while
 not. It counts the lines it drops, and the next send starts with one line saying how many are
-missing, handed straight to the connection — through `Debug.Log` it would come back into the
-buffer. After a protocol refusal it discards the lines and the count. While connected it hands
-each line to `SendCommand` exactly once and never retries: the connection's outbox keeps a line
-across an outage, and the old in-flight gate and retry re-arm were what had sent some lines twice.
-`UniTask.Yield`'s allocation-free await does not apply anywhere here, because §2 removed the await
-rather than swapping it for `Task.Yield`.
+missing, handed straight to the connection; through `Debug.Log` it would come back into the buffer.
+After a protocol refusal it discards the lines and the count. While connected it hands each line to
+`SendCommand` exactly once and never retries: the connection's outbox keeps a line across an outage,
+and the old in-flight gate and retry re-arm were what had sent some lines twice. `UniTask.Yield`'s
+allocation-free await does not apply anywhere here, because §2 removed the await rather than
+swapping it for `Task.Yield`.
 
 ---
 
@@ -666,7 +666,7 @@ Either send it as string, or listen for it with Sync.Receive<float>("chat", MyHa
 
 Three deliberate restrictions on when it speaks:
 
-- **Only on a mismatch.** A channel with *no* listeners is normal — every client sees every channel
+- **Only on a mismatch.** A channel with *no* listeners is normal: every client sees every channel
   its app uses, including ones it does not care about. Warning there would train people to ignore
   the console.
 - **Once per `(channel, receivedType)`.** A mismatch on a channel receiving at 60 Hz would otherwise
@@ -680,7 +680,7 @@ the channels the application actually uses.
 
 The registry has **no `UnityEngine` dependency**, which is the reason it is a separate file:
 registering a listener with `Sync` reaches `WebServerConnection.Instance`, which spawns a
-GameObject. Splitting the registry out made the interesting part testable without one — see
+GameObject. Splitting the registry out made the interesting part testable without one. See
 `Tests/Editor/ChannelListenerRegistryTests.cs`. (`Sync`'s own dispatch is tested too now, in
 `MessageDispatchTests`, which accepts the inert connection object that registering creates in edit
 mode.)
@@ -695,7 +695,7 @@ Sync.Unregister<float>("MyChannel", MyHandler);
 ```
 
 Supplying type arguments rules the non-generic overloads out of consideration entirely. Dispatch is
-a pattern match on the delegate — no reflection — and forwards to the existing typed overload, which
+a pattern match on the delegate (no reflection) and forwards to the existing typed overload, which
 still wins overload resolution inside the switch because a non-generic method is preferred over a
 generic one:
 
@@ -721,7 +721,7 @@ Every existing call site keeps compiling. An unsupported `T` names the supported
 Forgetting the matching `Sync.Unregister` in `OnDestroy` was the most expensive mistake the API
 allowed. The delegate keeps the destroyed `MonoBehaviour` reachable, so calling it *works* right up
 until the first line that touches `transform` or `gameObject`, which throws
-`MissingReferenceException` — out of `WebServerConnection.Update`, taking every message still queued
+`MissingReferenceException`, out of `WebServerConnection.Update`, taking every message still queued
 behind it that frame with it. The symptom is not "my handler misbehaves after I destroy the object";
 it is "the connection drops messages at random", on a channel that has nothing to do with the object
 that was destroyed.
@@ -735,7 +735,7 @@ Sync.Receive<float>("Temperature", v => label.text = ...); // Target is a closur
 
 A method group hands over the instance directly, so `listener.Target is UnityEngine.Object` settles
 it. A lambda does not: the compiler hoists what it captured into a generated class, and the
-enclosing component sits in its `<>4__this` field — or one closure further out, if the lambda is
+enclosing component sits in its `<>4__this` field, or one closure further out, if the lambda is
 nested. `ListenerOwner` walks that, with the captured `this` preferred over anything else the lambda
 happens to hold, and the result is stored next to the delegate at registration time. Per message the
 check is one `UnityEngine.Object` null comparison.
@@ -748,7 +748,7 @@ mismatch against a component that has been gone for minutes.
 
 What is deliberately *not* automatic: a `static` listener, and one belonging to a plain C# object.
 Neither has a Unity lifetime to follow, so `Unregister` remains the only thing that could be meant.
-It also stays the way to stop listening while the object is alive — the `OnEnable`/`OnDisable` pair
+It also stays the way to stop listening while the object is alive; the `OnEnable`/`OnDisable` pair
 in the samples is unaffected by any of this, since a disabled component has not been destroyed.
 
 A listener that throws for any other reason no longer takes the frame down either. `Sync` calls
@@ -769,7 +769,7 @@ and press Save Config. (Every client that should see each other has to use the s
 ```
 
 The defaults object is created **once** and cached separately from `_instance`. The obvious
-implementation — `return CreateInstance<ColibriConfig>()` on every call — leaks, because
+implementation (`return CreateInstance<ColibriConfig>()` on every call) leaks, because
 `WebServerConnection.Update` calls `Load()` every frame and a `ScriptableObject` created that way is
 not garbage collected. `_instance` itself is still left unset, so the real asset is picked up the
 moment it appears, which in the editor is as soon as the setup window saves it.
@@ -777,7 +777,7 @@ moment it appears, which in the editor is as soon as the setup window saves it.
 ### "Which app am I?"
 
 The connect log used to read `Colibri: connection to web server established`. A typo in the app name
-produces a perfectly healthy connection on which no other client is ever seen — indistinguishable
+produces a perfectly healthy connection on which no other client is ever seen, indistinguishable
 from a working setup. It now reads:
 
 ```
@@ -789,7 +789,7 @@ Only clients using the same App Name can see each other.
 
 A typo in the app name isolates a client; the opposite mistake joins it to strangers. The server
 puts every client with the same app name into one app, whoever they are, so projects that keep a
-name everybody picks — `myAppName` from the web client's samples, `test`, `demo` — end up in one
+name everybody picks (`myAppName` from the web client's samples, `test`, `demo`) end up in one
 shared app. Each project sees every other project's objects and messages, and since every update
 goes to every other client in the app, the server's work grows with the square of the number of
 clients. Nothing fails at runtime: it just works, for everyone at once.
@@ -815,15 +815,15 @@ members whose lowercased names collide are each reported by name with the fix.
 `Window → Colibri Configuration`. It shows:
 
 - connection state, colour-coded; server `host:port`; the app name actually in use; protocol version
-- a protocol refusal in red, with the server's version and reason — not retried, so the usual
-  "check that colibri-server is running" advice would be wrong — and a *suspected* mismatch
+- a protocol refusal in red, with the server's version and reason (not retried, so the usual "check
+  that colibri-server is running" advice would be wrong), and a *suspected* mismatch
   (`SuspectedProtocolMismatch`, several connections in a row that ended before a single frame) as a
   yellow warning while the client keeps retrying
-- **time since the last server heartbeat** — deliberately not called latency. The server's heartbeat
+- **time since the last server heartbeat**: deliberately not called latency. The server's heartbeat
   carries the *server's* clock, so the client genuinely cannot derive a round trip from it; real
   latency figures live on the server's admin UI. What it does tell you is whether the server is
   still talking to you.
-- **the delivery rate** — how fast `Update` is running, and therefore the longest a received message
+- **the delivery rate**: how fast `Update` is running, and therefore the longest a received message
   can wait before user code sees it. Below 20 fps it warns, and names the usual cause: an Editor in
   the background, which Unity throttles. This is the number that separates "the network is slow"
   from "this client is slow", and until it existed the two were indistinguishable from here (§2).
@@ -832,8 +832,9 @@ members whose lowercased names collide are each reported by name with the fix.
 - every channel with listeners, and the type each one expects, from the registry above
 - the last 20 messages in and out, dropping anything older than ten seconds. The list is meant to
   answer "what is happening right now"; entries had no expiry at first, so a burst from a minute ago
-  sat there with its ages counting up, and — because the buffer is a static and `realtimeSinceStartup`
-  keeps running after Play stops — the next session opened showing the previous one's messages.
+  sat there with its ages counting up, and, because the buffer is a static and
+  `realtimeSinceStartup` keeps running after Play stops, the next session opened showing the
+  previous one's messages.
 - buttons for the configuration window and the server's web UI
 
 Two constraints shaped the implementation:
@@ -851,7 +852,7 @@ Repaints are throttled to 10 Hz and only while playing.
 
 ### The question Status cannot answer: the `Network Stress` sample
 
-Status tells you whether messages are flowing. It says nothing about *how many* — and "how many
+Status tells you whether messages are flowing. It says nothing about *how many*, and "how many
 synchronized objects can this carry before it stops keeping up" is the question that decides whether
 a prototype works in the room it was built for. Before this sample there was no way to ask it. The
 main-thread bug in §2 was found by eye, from a cube that looked late; the numbers that would have
@@ -859,8 +860,8 @@ settled it in a minute did not exist anywhere.
 
 The sample spawns up to 500 synchronized objects, moves as many of them per frame as you ask, and
 puts throughput, round-trip latency percentiles, dropped messages, frame cost and reconnects on
-screen behind sliders. Run it in two editors side by side — that is the configuration it exists for
-— and turn the count up until the numbers stop being acceptable.
+screen behind sliders. Run it in two editors side by side (that is the configuration it exists for)
+and turn the count up until the numbers stop being acceptable.
 
 **Two instruments, deliberately separate.** The *load* is synchronized objects, because that is how
 a real scene generates traffic. But state sync is last-write-wins and coalesces per frame: if a
@@ -873,7 +874,7 @@ to measure the raw per-frame load.
 
 *Latency and loss* therefore ride on a separate low-rate probe channel, where every message is meant
 to arrive exactly once. It is a round trip, so no clock is shared between the two ends and the
-figure stays honest across machines, and it is kept at a low rate on purpose — it measures the delay
+figure stays honest across machines, and it is kept at a low rate on purpose: it measures the delay
 *under* the load rather than adding to it. That channel is the only thing in the sample that can
 report a genuinely dropped message, and it is what makes the server's own backpressure visible from
 inside Unity: `tcp-server-worker.ts` discards writes to a client whose socket has fallen more than
@@ -885,11 +886,11 @@ Two things that follow from the design rather than from the harness:
   probes. The server excludes a sender from its own broadcasts, so one editor alone can never
   measure a round trip; this closes the loop without starting a second Unity. Measured against it
   through a local Docker server, the wire itself round-trips in **3.5 ms p50, 4.2 ms p95, 5.1 ms
-  p99** at 20 Hz with nothing lost — the floor everything else is read against.
+  p99** at 20 Hz with nothing lost: the floor everything else is read against.
 - **Inbound model dispatch is O(N) per message**, so the object-count slider is walking into an
   O(N²) frame cost. Every `SyncBehaviour<T>` registers its own listener on one channel per *type*
   (in `SyncBehaviour.Awake`) and each instance compares `id == Id` and returns on a miss
-  (in `SyncBehaviour.OnModelUpdate`) — one inbound update is offered to all N models, and
+  (in `SyncBehaviour.OnModelUpdate`): one inbound update is offered to all N models, and
   `SyncBehaviourManager` adds a second linear scan. At 100 objects each sending once a frame that
   is 10,000 comparisons a frame; at 500 it is 250,000. Nothing here fixes that. The point of the
   sample is that it can now be measured rather than argued about, and an index from `Id` to model is
@@ -912,7 +913,7 @@ Two things that follow from the design rather than from the harness:
 | `WebServerConnection.MillisSinceLastHeartbeat()` | Was private |
 | `WebServerConnection.ServerAddress` / `.TcpPort` / `.AppName` | Read-only, snapshot of the live config |
 | `WebServerConnection.ClientVersion` | Static; the handshake's protocol version |
-| `WebServerConnection.DeliveryFramesPerSecond` | Smoothed rate `Update` runs at — how fast messages reach user code |
+| `WebServerConnection.DeliveryFramesPerSecond` | Smoothed rate `Update` runs at: how fast messages reach user code |
 | `ConnectionStatus.ProtocolMismatch` | Terminal: the server refused this client's protocol version |
 | `WebServerConnection.ServerVersion` / `.ProtocolMismatchReason` | Set only with a refusal |
 | `WebServerConnection.SuspectedProtocolMismatch` | Set after several sessions in a row end before a frame; a guess, retried |
@@ -967,8 +968,8 @@ the v3 wire protocol.
    private void OnDestroy() => SyncBehaviour<MyModel>.ModelCreated -= OnCreated;   // required
    ```
 
-   > ⚠ A static event does **not** unsubscribe itself. Forgetting the `-=` leaks the handler — and
-   > the destroyed component it belongs to — into the next Play session whenever *Enter Play Mode
+   > ⚠ A static event does **not** unsubscribe itself. Forgetting the `-=` leaks the handler, and
+   > the destroyed component it belongs to, into the next Play session whenever *Enter Play Mode
    > Options* has domain reload disabled. `Where(…)` predicates become early-return guards.
 
 3. **If you override `Awake` or `OnDestroy` in a `SyncBehaviour` subclass, call `base`.** That was
@@ -978,7 +979,7 @@ the v3 wire protocol.
 4. **`Sync.Receive` casts still compile.** Migrate at your own pace; the generic form is what the
    samples and README now use.
 
-5. **`if (ColibriConfig.Load() == null)` is dead code** — use `.IsConfigured` if you want to know
+5. **`if (ColibriConfig.Load() == null)` is dead code**; use `.IsConfigured` if you want to know
    whether an app name has been set.
 
 6. **`try { await Store.Get… } catch (UnityWebRequestException)`** can be deleted; check the return
@@ -1029,8 +1030,8 @@ environment was Unity **6000.5.7f1** with a URP-template project (`ColibriTest`)
 added as a `file:` UPM package, against `colibri-server` 2.0.0 built and run locally on Node 26.5.1
 (ports 9011 web/REST/Socket.IO, 9012 TCP v3). Two of the criteria ask for a *second Unity instance*,
 and they were answered in two stages. The message-level checks were run against three non-Unity
-endpoints — a non-interactive Socket.IO peer written against colibri-web, a raw v3 TCP client, and a
-pass-through proxy in front of the TCP port that decodes every frame in both directions — because
+endpoints (a non-interactive Socket.IO peer written against colibri-web, a raw v3 TCP client, and a
+pass-through proxy in front of the TCP port that decodes every frame in both directions) because
 those are what make the wire observable; the proxy is why several claims below can be quoted at the
 byte level rather than inferred from behaviour. Separately, a standalone player *was* built and run
 alongside the Editor, so the two-Unity-clients configuration itself is covered too. What that does
@@ -1049,7 +1050,7 @@ diagnoses rather than defects, and both are worth knowing before building on Col
   instance goes silent while looking connected.
 
   This entry originally went on to say that the socket stays up and heartbeats keep being echoed
-  *because that happens off the main thread*. That was an assumption, and it was wrong — nothing in
+  *because that happens off the main thread*. That was an assumption, and it was wrong: nothing in
   `WebServerConnection` was off the main thread, because no await on the connection path carried
   `ConfigureAwait(false)`. The correction and the fix are in §2; the sentence is left here, marked,
   because the assumption is exactly what let the bug hide through a full verification pass.
@@ -1063,16 +1064,16 @@ diagnoses rather than defects, and both are worth knowing before building on Col
    through the git URL the README documents, so the URL itself was not exercised.
 2. **Covered, though not by this pass.** The pass itself happened inside `ColibriTest`, and after
    the samples moved to `Samples~` (see the change log) the `colibri-unity` project can no longer
-   open the sample scenes in place — `ColibriTest` is where they are opened now. But
-   `run-tests.mjs` opens the `colibri-unity` project itself, pinned to Unity 6000.5.7f1, and runs
-   both test suites there, so the project is opened and compiled on every test run. That the
-   package compiles with R3 and UniTask out of the manifest is covered by item 1 as well.
+   open the sample scenes in place; `ColibriTest` is where they are opened now. But `run-tests.mjs`
+   opens the `colibri-unity` project itself, pinned to Unity 6000.5.7f1, and runs both test suites
+   there, so the project is opened and compiled on every test run. That the package compiles with R3
+   and UniTask out of the manifest is covered by item 1 as well.
 3. **Done. 52 passed, 0 failed.** `FrameCodecTests`, `FrameReaderTests`, `ProtocolVectorTests` and
    `ChannelListenerRegistryTests`, run through `TestRunnerApi` against the package's
-   `HCIKonstanz.Colibri.Tests` assembly. `colibri-server`'s own suite was green at the same time —
-   102 passed — which matters for `ProtocolVectorTests`, since those vectors are only meaningful
+   `HCIKonstanz.Colibri.Tests` assembly. `colibri-server`'s own suite was green at the same time
+   (102 passed), which matters for `ProtocolVectorTests`, since those vectors are only meaningful
    against a server encoder that is itself behaving.
-4. **Done — the headline claim, measured.** 100 `SyncTransform`s in an otherwise empty scene, all
+4. **Done: the headline claim, measured.** 100 `SyncTransform`s in an otherwise empty scene, all
    idle, Deep Profile off, Editor Play mode, sampled through `ProfilerDriver`. Over a 231-frame
    window the **median frame allocated 0 bytes**:
 
@@ -1101,17 +1102,17 @@ diagnoses rather than defects, and both are worth knowing before building on Col
    keep with the number, though. It only means anything **because item 9's leak was fixed first**:
    before that, the n-th Play session had n ticker objects and this frame would have shown n
    `SyncTicker.Update` entries, which is how the leak and the claim contradicted each other. And
-   polling costs time even when it allocates nothing — 0.335 ms for 100 idle objects against a
+   polling costs time even when it allocates nothing: 0.335 ms for 100 idle objects against a
    `PlayerLoop` total of 0.786 ms in the same frame, a little under half the player loop spent
    discovering that nothing changed. §2 now says so.
-5. **Done, against a web peer rather than a second Editor** — deliberately, since a web peer is what
+5. **Done, against a web peer rather than a second Editor**, deliberately, since a web peer is what
    makes the payload bytes readable. Every supported type crossed Unity → web and web → Unity: bool,
    int, float, string, Vector3, Quaternion, Color, the
    bool/int/float/string/Vector3 arrays, and `JToken`. All 17 payload shapes, both directions. The
    string fix from the protocol pass is directly visible in the frame bytes: a `broadcast::string`
    payload goes out as `"hello from unity round 1"`, 26 bytes for 24 characters, i.e. quoted. The
-   run also found the `SendData` sample itself broken — it sent its `JObject` on `"myJson"` while
-   listening on `Channel` — and that is fixed.
+   run also found the `SendData` sample itself broken (it sent its `JObject` on `"myJson"` while
+   listening on `Channel`), and that is fixed.
 6. **Done.** A second client sent **60** `broadcast::float` messages on `verification`, a channel
    where Unity had registered only a `string` listener. The console got **exactly one** warning:
 
@@ -1122,19 +1123,19 @@ diagnoses rather than defects, and both are worth knowing before building on Col
    Sync.Receive<float>("verification", MyHandler).
    ```
 
-   Channel, both types, and both routes out of the mistake — and the once-per-`(channel,
-   receivedType)` suppression from §4 holding against 60 messages rather than against the unit
-   tests' synthetic ones.
+   Channel, both types, and both routes out of the mistake, and the
+   once-per-`(channel, receivedType)` suppression from §4 holding against 60 messages rather than
+   against the unit tests' synthetic ones.
 7. **Done for the message; the `Store` half found a bug instead.** With no `ColibriConfig.asset` in
    the project at all, a ~60 s Play session logged `NOT_CONFIGURED_MESSAGE` **exactly once**, not
-   once per frame — the fallback in §4 behaves. `Store.Get`, however, neither threw *nor* logged:
-   the default `ServerAddress` points at the public `colibri.hci.uni-konstanz.de`, and the request
-   was still outstanding after ~60 s, because `UnityWebRequest.timeout` defaults to no timeout at
-   all. §3's promise that a `Store` failure surfaces as a detailed log only holds if the request
-   ever finishes, so the requests now carry a ten-second timeout.
+   once per frame: the fallback in §4 behaves. `Store.Get`, however, neither threw *nor* logged: the
+   default `ServerAddress` points at the public `colibri.hci.uni-konstanz.de`, and the request was
+   still outstanding after ~60 s, because `UnityWebRequest.timeout` defaults to no timeout at all.
+   §3's promise that a `Store` failure surfaces as a detailed log only holds if the request ever
+   finishes, so the requests now carry a ten-second timeout.
 8. **Done for both halves, and the live half produced a fix.** Opening *Window → Colibri Status* in
    edit mode rendered the "press Play" hint and created **no** `[WebServerConnection]` and **no**
-   `[Colibri SyncTicker]` GameObject — the scene still contained only what was already in it, which
+   `[Colibri SyncTicker]` GameObject: the scene still contained only what was already in it, which
    is what the `FindFirstObjectByType` constraint in §5 is for. During Play the readout tracked the
    connection over many minutes and stayed in the 7-99 ms band, and the 2 s watchdog never fired.
    Watching it is also what exposed the readout itself: sampling `MillisSinceLastHeartbeat()` raw at
@@ -1156,14 +1157,14 @@ diagnoses rather than defects, and both are worth knowing before building on Col
    report an untouched scene while these were sitting in the Editor.
 
    The cause is one flag. `HideFlags.DontSave` does not only keep an object out of the saved scene,
-   it also exempts it from being destroyed when Play mode ends — and `DontDestroyOnLoad` was already
+   it also exempts it from being destroyed when Play mode ends. And `DontDestroyOnLoad` was already
    covering the "not saved" half on its own, so the flag was buying nothing and costing this. The
    consequence is worse than a stale object in the hierarchy: every ticker drives the same *static*
    `_tickables` list, so the n-th Play session ran `PollChanges` and `FlushUpdate` **n times per
-   frame** — duplicate `model::update` messages on the wire, and a sync cost that grew every time
-   someone pressed Play. The flag is removed, and `ResetState` now destroys strays first, so an
+   frame** (duplicate `model::update` messages on the wire, and a sync cost that grew every time
+   someone pressed Play). The flag is removed, and `ResetState` now destroys strays first, so an
    Editor that already collected a pile of them recovers on the next Play. After the fix: zero
-   tickers alive outside Play mode, and three cycles that hold steady —
+   tickers alive outside Play mode, and three cycles that hold steady:
 
    ```
    LEAK syncedBehaviours=4 connections=1 tickerObjects=1 tickables=4
@@ -1171,8 +1172,8 @@ diagnoses rather than defects, and both are worth knowing before building on Col
    LEAK syncedBehaviours=3 connections=0 tickerObjects=1 tickables=3
    ```
 
-   — the first cycle counting four only because the late-joined remote model had already arrived by
-   the time the probe ran. The 52 EditMode tests still pass afterwards, and item 4's profiler run was
+   The first cycle counts four only because the late-joined remote model had already arrived by the
+   time the probe ran. The 52 EditMode tests still pass afterwards, and item 4's profiler run was
    taken after this fix, which is why it sees the one ticker entry the design intends rather than one
    per Play session so far. Note that `ColibriTest` was
    left with *Enter Play Mode Options → Disable Domain Reload* enabled, since that is the
@@ -1181,15 +1182,15 @@ diagnoses rather than defects, and both are worth knowing before building on Col
     `SyncTransform` broadcast its full state on `synctransform` (`active`, `position`, `rotation`,
     `scale`, `physicsid`). Selective sync holds: with position *and* rotation *and* scale changed on
     both objects, `CubePosOnly` sent `{"id":...,"position":[5,1,2]}` and `CubeRotOnly` sent
-    `{"id":...,"rotation":[...]}` — each only its own axis. Injecting a `model::update` for an
+    `{"id":...,"rotation":[...]}`, each only its own axis. Injecting a `model::update` for an
     unknown id on `synctransform_cube` made `[SyncTransformManager] (Cube)` instantiate
     `CubeModelTemplate(Clone)` at exactly the injected `[3,4,5]`. Idle objects sent nothing at all,
     which is what the sync-loop rewrite intends. `[RemoteLogger]`, dragged in from
     `Packages/de.uni.kn.colibri/Prefabs/[RemoteLogger].prefab`, put one line per second on the wire
     for 25+ seconds with no storm and no stuck in-flight gate, so the `Subject` + `ThrottleLast` →
-    1 s timer rewrite in §3 behaves. Its payload is **unquoted** —
-    `payload(23B)="verification log line 1"`, 23 bytes for 23 characters, against the quoted
-    `broadcast::string` in item 5 — which is exactly the `log`-channel exception the protocol pass
+    1 s timer rewrite in §3 behaves. Its payload is **unquoted**
+    (`payload(23B)="verification log line 1"`, 23 bytes for 23 characters, against the quoted
+    `broadcast::string` in item 5), which is exactly the `log`-channel exception the protocol pass
     documented. What this does not cover is how two Unity clients *look* while syncing: the next
     subsection has two of them connected at once, but nobody watched a cube in one follow a cube in
     the other.
@@ -1230,33 +1231,33 @@ two-client recipe:
   project has no TMP Essentials imported. Not a Colibri fault, but it is the first thing anyone
   building this recipe will hit.
 - **One orphaned socket, unexplained.** A single Editor connection created at 21:14 was still
-  `Established` nearly an hour later with **zero** `WebServerConnection` components alive — a socket
+  `Established` nearly an hour later with **zero** `WebServerConnection` components alive: a socket
   whose owner was gone. It did not reproduce: a clean enter/exit Play cycle afterwards added no new
   connection and left that one alone. It also appeared during a stretch where the configured TCP port
   was being edited while Play mode ran and proxies were being killed underneath the connection, so
-  this is recorded as an observation and not as a diagnosed defect — nothing was changed in response
+  this is recorded as an observation and not as a diagnosed defect; nothing was changed in response
   to it. It is worth a deliberate look, because a phantom client stays in the server's client list.
 
 ### Beyond the ten: the `SyncBehaviour` sample
 
-The ten items are silent about `SyncBehaviour` itself — they cover `SyncTransform`, which is one
-particular subclass — so the sample was run as well, and it is the thing that exercises §2's typed
+The ten items are silent about `SyncBehaviour` itself (they cover `SyncTransform`, which is one
+particular subclass), so the sample was run as well, and it is the thing that exercises §2's typed
 change tracking on members a project actually declares. On connect, each of the three scene models
 broadcast its full `[Sync]` state on `samplesyncedbehaviour` (the channel is the type name passed
 through `ToLowerInvariant()`), e.g.
 `{"id":"nonrandom_id","position":[...],"scale":[...],"rotation":[...],"color":"#00000000","randomvalue":0,"editorteststring":"1234"}`.
 All three member kinds propagate: `randomvalue` is a `[Sync, SerializeField]` *private field*,
-`editorteststring` a public field, and `position` / `scale` / `rotation` / `color` are properties —
+`editorteststring` a public field, and `position` / `scale` / `rotation` / `color` are properties,
 so the `Expression.Compile()` accessors reach non-public state as intended. (That is the Mono path
 the Editor runs; IL2CPP builds use the reflection-bound accessors described in §9.) Injecting a
 `model::update` for `remote-model-1` produced a `SampleSyncedBehaviourTemplate(Clone)` whose
 component read back `RandomValue: 99`, `EditorTestString: "from the injector"`, `Scale: (2,2,2)`,
-`Color: RGBA(1,0,0,1)` (parsed from `#FF0000FF`) and `Id: remote-model-1` — every synced member
+`Color: RGBA(1,0,0,1)` (parsed from `#FF0000FF`) and `Id: remote-model-1`: every synced member
 applied, colour included. Finally, after a full exit and re-enter of Play with no other client
 running, Unity re-created that model from the server's stored state via `model::request`, at the
 injected position `[7,1,3]` and scale `[2,2,2]`, as exactly **one** instance rather than a
-duplicate — which is the late-joiner path, and the one where a double-registration bug would show
-up as a second copy.
+duplicate, which is the late-joiner path, and the one where a double-registration bug would show up
+as a second copy.
 
 ### Still not covered
 
@@ -1278,7 +1279,7 @@ touch:
 ## 9. Decisions, and what was deliberately not done
 
 **No `Sync.Send<T>`.** `Sync.Send("ch", value)` already resolves without a cast, because the
-argument is a value rather than a method group — there is no ambiguity to fix. Adding a generic
+argument is a value rather than a method group; there is no ambiguity to fix. Adding a generic
 version would turn today's *compile error* on an unsupported type into a runtime `Debug.LogError`,
 trading a mistake caught instantly for one caught at 2am.
 
@@ -1294,8 +1295,8 @@ can report that a `[Sync]` member has a type Colibri cannot put on the wire.
 for properties and fields alike, so nothing boxes. IL2CPP has no JIT: `Expression.Compile()` does
 not fail there but falls back to an interpreter that is slow on every call and, for value types,
 depends on generic code IL2CPP may not have generated. So under `ENABLE_IL2CPP` a property gets
-open-instance delegates bound straight to its get and set methods — the same typed call, still
-allocation-free — and a field goes through `FieldInfo.GetValue`/`SetValue`, which boxes a value-type
+open-instance delegates bound straight to its get and set methods (the same typed call, still
+allocation-free), and a field goes through `FieldInfo.GetValue`/`SetValue`, which boxes a value-type
 field on every poll. There is no allocation-free way to read a field through reflection without a
 JIT, so on a Quest a hot value-type member is cheaper as a property; every `SyncTransform` member
 already is one. The IL2CPP path is compiled on every backend, so the EditMode tests run it in the
@@ -1310,7 +1311,7 @@ it keeps the getter and setter too.
 `Awake` and `OnDestroy` as `protected virtual`, so subclasses that shadow them get a compiler
 warning. Introducing `OnEnable`/`OnDisable` as *new* virtuals would create a fresh trap: a subclass
 writing `private void OnEnable()` would silently take over the Unity message and the object would
-never register. Polling is instead gated inside the tick, on the component's own `enabled` — not on
+never register. Polling is instead gated inside the tick, on the component's own `enabled`, not on
 `isActiveAndEnabled`. An inactive GameObject is still polled, because being inactive is itself
 synced state: `SyncTransform`'s `Active` reads `activeSelf`, and gated on `isActiveAndEnabled` the
 poll stopped the moment the object was switched off, so `false` was never sent and other clients'
@@ -1325,18 +1326,18 @@ which covers the inactive ones. All that goes out on the way is what the send-ra
 
 **A copy of a disabled `Template` is switched on before it gets its state.** `Instantiate` gives a
 copy its template's active state, and a manager's template is often kept switched off in the scene
-so that it does not sync as an object of its own. A copy that is off never runs `Awake`, so — with
-registration where it is — it never registered for its own updates or with the ticker, and stayed
-as its first update left it. `SyncBehaviourManager.OnModelUpdate` therefore switches the copy on
-first: `Awake` latches the template's values, the state applied next is latched as well, so none
-of it is echoed back, and a `SyncTransform`'s synced `Active` then decides whether it ends up
-visible. Since it stays registered while inactive, a later `active: true` shows it again.
+so that it does not sync as an object of its own. A copy that is off never runs `Awake`, so, with
+registration where it is, it never registered for its own updates or with the ticker, and stayed as
+its first update left it. `SyncBehaviourManager.OnModelUpdate` therefore switches the copy on first:
+`Awake` latches the template's values, the state applied next is latched as well, so none of it is
+echoed back, and a `SyncTransform`'s synced `Active` then decides whether it ends up visible. Since
+it stays registered while inactive, a later `active: true` shows it again.
 
 **Only the traffic log is reset at `SubsystemRegistration`, not `Sync`'s listener dictionaries.**
 Those are statics too, and they survive Play mode with domain reload disabled just as readily. A
-listener belonging to a Unity object is dropped once that object is destroyed — lazily, the next
-time its channel delivers a message or gets a new registration — and ending a Play session destroys
-every one of them, so they never reach the next session's code. A channel's entry can outlive its
+listener belonging to a Unity object is dropped once that object is destroyed (lazily, the next time
+its channel delivers a message or gets a new registration), and ending a Play session destroys every
+one of them, so they never reach the next session's code. A channel's entry can outlive its
 listeners that way, which is why every registration asks for the connection again: a client that
 only listens would otherwise never rebuild it in the next session. What does leak into the next
 session is a `static` listener, or one owned by a plain C# object, since neither has a Unity
