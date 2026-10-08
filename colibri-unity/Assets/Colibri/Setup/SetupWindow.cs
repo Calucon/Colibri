@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using HCIKonstanz.Colibri.Networking;
 using UnityEditor;
 using UnityEditor.Callbacks;
 using UnityEngine;
@@ -143,7 +144,21 @@ namespace HCIKonstanz.Colibri.Setup
                 x.position = new Vector2(5, 5);
                 EditorGUILayout.HelpBox("The ports, SSL/TLS and the voice sampling rate must match the server. Change them only "
                     + "if the server does not use the defaults.", MessageType.Warning);
-                Config.IsSSL = EditorGUILayout.Toggle("Server supports SSL/TLS?", Config.IsSSL);
+                Config.IsSSL = EditorGUILayout.Toggle(new GUIContent("Server supports SSL/TLS?",
+                    "The server has TLS turned on (TLS_CERT and TLS_KEY): the TCP connection is encrypted, and the Store uses https."), Config.IsSSL);
+                if (Config.IsSSL)
+                {
+                    // Only meaningful with TLS, so only shown with it.
+                    EditorGUI.indentLevel++;
+                    Config.AllowSelfSignedCertificate = EditorGUILayout.Toggle(new GUIContent("Allow self-signed certificate",
+                        "Also accept a server certificate this device does not trust, such as a self-signed one. The connection "
+                        + "is still encrypted, but nothing checks that it goes to your server."), Config.AllowSelfSignedCertificate);
+                    Config.ServerCertificateSha256 = EditorGUILayout.TextField(new GUIContent("Server certificate SHA-256",
+                        "Optional. The fingerprint of the one certificate to accept, trusted or not, as colibri-server logs it "
+                        + "when it starts; every other certificate is rejected. Leave it empty for a certificate from Let's Encrypt, "
+                        + "which changes with every renewal."), Config.ServerCertificateSha256);
+                    EditorGUI.indentLevel--;
+                }
                 Config.WebServerPort = EditorGUILayout.IntField("Web server Port: ", Config.WebServerPort);
                 Config.TcpServerPort = EditorGUILayout.IntField("TCP server Port: ", Config.TcpServerPort);
                 Config.VoiceServerPort = EditorGUILayout.IntField("Voice server Port: ", Config.VoiceServerPort);
@@ -176,6 +191,9 @@ namespace HCIKonstanz.Colibri.Setup
                 errors.Add("Voice server sampling rate invalid (must be a number between 16000 - 48000, default 48000)");
             if (Config.MaxSendRate < 0)
                 errors.Add($"Max send rate invalid (updates per second per synced object; 0 = no limit, default {ColibriConfig.DEFAULT_MAX_SEND_RATE})");
+            var certificateError = CertificateSettingsError(Config);
+            if (certificateError != null)
+                errors.Add(certificateError);
 
             GUILayout.Space(15f);
 
@@ -203,6 +221,20 @@ namespace HCIKonstanz.Colibri.Setup
             DrawAndroidIssues();
 
             EditorGUILayout.EndScrollView();
+        }
+
+        /// <summary>
+        /// What is wrong with the certificate settings, or null. A pinned fingerprint that cannot
+        /// match any certificate would have every connection rejected, so it is not saved; without
+        /// TLS the settings are not used, and not checked.
+        /// </summary>
+        /// <remarks>Internal for the EditMode tests.</remarks>
+        internal static string CertificateSettingsError(ColibriConfig config)
+        {
+            if (!config.IsSSL || ServerCertificatePolicy.TryNormalizeFingerprint(config.ServerCertificateSha256, out _))
+                return null;
+
+            return "Server certificate SHA-256 invalid (64 hexadecimal digits, with or without colons, as colibri-server logs it; or empty)";
         }
 
         /// <summary>
