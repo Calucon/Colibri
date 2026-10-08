@@ -90,7 +90,42 @@ namespace HCIKonstanz.Colibri.Setup
         public int WebServerPort = 9011;
         public int TcpServerPort = 9012;
         public int VoiceServerPort = 9013;
+
+        /// <summary>
+        /// The server has TLS turned on (<c>TLS_CERT</c> and <c>TLS_KEY</c> at colibri-server): the
+        /// TCP connection is encrypted, and the Store uses https. By default the server's certificate
+        /// has to be one this device trusts, issued for <see cref="ServerAddress"/>; see
+        /// <see cref="AllowSelfSignedCertificate"/> and <see cref="ServerCertificateSha256"/> for a
+        /// self-signed one.
+        /// </summary>
         public bool IsSSL = false;
+
+        /// <summary>
+        /// With <see cref="IsSSL"/>: also accept a server certificate this device does not trust,
+        /// such as a self-signed one, or one issued for another name. The connection is still
+        /// encrypted, but nothing checks that it goes to the right server; the first connection
+        /// says so once in the log, with the certificate's fingerprint for
+        /// <see cref="ServerCertificateSha256"/>.
+        /// </summary>
+        /// <remarks>
+        /// Off in a configuration saved before this field existed: Unity leaves a field the asset
+        /// has no value for at its initializer.
+        /// </remarks>
+        public bool AllowSelfSignedCertificate = false;
+
+        /// <summary>
+        /// With <see cref="IsSSL"/>: the SHA-256 fingerprint of the one server certificate to
+        /// accept, as colibri-server logs it when it starts. When set, that certificate is accepted
+        /// whether this device trusts it or not, and every other certificate is rejected, trusted or
+        /// not. Upper or lower case, with or without colons. Empty for no pin, which is the default.
+        /// </summary>
+        /// <remarks>
+        /// Meant for a self-signed certificate, which stays the same until it is replaced. A
+        /// certificate from Let's Encrypt changes with every renewal, so pinning one rejects the
+        /// server after its next renewal; leave this empty for those.
+        /// </remarks>
+        public string ServerCertificateSha256 = "";
+
         public int VoiceServerSamplingRate = 48000;
 
         /// <summary>The value <see cref="MaxSendRate"/> starts out with.</summary>
