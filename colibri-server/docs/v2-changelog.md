@@ -1,4 +1,4 @@
-# colibri-server v2.0.0 — Change Log
+# colibri-server v2.0.0: Change Log
 
 Everything that changed in colibri-server from `1.3.1` to `2.0.0`. To upgrade a project built on
 Colibri 1.x, start with [MIGRATION.md](../../MIGRATION.md), which covers all three components;
@@ -6,7 +6,7 @@ this is the server's full detail.
 
 ---
 
-## 2.0.0 — unreleased
+## 2.0.0 (unreleased)
 
 **Breaking changes**
 
@@ -60,16 +60,16 @@ this is the server's full detail.
   check runs on the server, so it can only ever catch a stale *client*; this is what lets a client
   catch a stale *server*, which otherwise neither refuses it nor says what it speaks.
 
-  It has to be an explicit message. The obvious alternative — inferring from the 100 ms `latency`
-  broadcast, which only a "current" server sends — is wrong: that broadcast was added in
+  It has to be an explicit message. The obvious alternative (inferring from the 100 ms `latency`
+  broadcast, which only a "current" server sends) is wrong: that broadcast was added in
   colibri-server **1.2.0**, so every 1.2.x and 1.3.x server sends it while still speaking the old
   protocol. Checked against the published `hcikn/colibri:1.1.1` and `hcikn/colibri:1.3.1` images
   rather than assumed, after the repo's own `v1.1.2` tag turned out to predate both. Nothing else a
   web client can observe separates them. Written up under
   [Detecting an out-of-date server](./protocol.md#detecting-an-out-of-date-server).
 
-  TCP clients are sent no announcement and need none — the framing changed incompatibly in 2.0.0,
-  so an old server is already unmistakable to them.
+  TCP clients are sent no announcement and need none: the framing changed incompatibly in 2.0.0, so
+  an old server is already unmistakable to them.
 
 - **Nothing is sent to a TCP client before its handshake is accepted.** The 100 ms heartbeat
   went to every connection, so a client the server was about to refuse could get a heartbeat
@@ -211,15 +211,15 @@ this is the server's full detail.
   `u8` type + body), removing per-packet `toString('utf8')` and `indexOf('\0', …)` scanning and
   replacing the loose `Number.isFinite` length check with a real bounds check.
 - Replaced per-`data`-event `Buffer.concat` with a persistent, growable read buffer with read/write
-  cursors — removes the O(n²) copy cost on fragmented streams. A frame over 5 MiB still ends the
-  connection. See [Known limits](#known-limits) for what the buffer does not do.
+  cursors, which removes the O(n²) copy cost on fragmented streams. A frame over 5 MiB still ends
+  the connection. See [Known limits](#known-limits) for what the buffer does not do.
 - TCP payloads relay as raw bytes; `toString('utf8')` only happens where a hook actually needs the
   string, so TCP→TCP `broadcast::` traffic never becomes a JS string.
 - A payload crosses between the TCP thread and the main thread, in either direction, in a buffer
   of exactly its own size. A small `Buffer` is usually a view into Node's shared 64 KiB pool, and
   `postMessage` copies the whole pool behind a view, so without this a 30-byte update would cross,
   and be kept alive on the other side, as 64 KiB.
-- Egress now writes the header in place into one pre-sized `Buffer` — no separate `TextEncoder`, no
+- Egress now writes the header in place into one pre-sized `Buffer`: no separate `TextEncoder`, no
   merged `Uint8Array`, no FlatBuffer builder. The `flatbuffers` dependency and
   `modules/networking/message.ts` were deleted. Egress is bounds-checked like ingress: a message
   whose channel or command exceeds 64 KiB, or whose frame would exceed 5 MiB, is dropped and logged
@@ -385,17 +385,17 @@ The endpoints are documented under [REST store](./protocol.md#rest-store).
 - Replaced `RootComponent`'s direct `location.pathname` read with the Angular `Router`, fixing the
   tab-underline indicator not updating on browser back/forward navigation.
 - Self-hosted fonts via `@fontsource/roboto` and `@fontsource/fira-mono`, and dropped the Material
-  Icons webfont in favor of the already-loaded `primeicons` — the UI no longer loads anything from
+  Icons webfont in favor of the already-loaded `primeicons`; the UI no longer loads anything from
   `fonts.googleapis.com`/`fonts.gstatic.com` at runtime.
 - Migrated `LogService`/`ClientService`'s materialized state (message list, client list, filter,
   broadcast-traffic toggle) from `BehaviorSubject` to Angular signals/`computed()`, and converted
   `@Input()`/`@ViewChild` to `input()`/`viewChild()` across the log and latency-chart components,
   applying `OnPush` app-wide. Socket.IO's streaming ingestion layer (`SocketIOService`) stayed RxJS
-  deliberately — it's a better fit for multiplexed async event streams than for synchronous
-  snapshot state. Zoneless change detection was evaluated and deliberately deferred (the D3 latency
-  chart renders entirely outside Angular's template bindings, and the zone-throttle mechanism above
-  only exists because zone.js CD is expensive on this app's bursty socket traffic) — this makes
-  a future zoneless flip cheaper and safer, but doesn't attempt it.
+  deliberately: it's a better fit for multiplexed async event streams than for synchronous snapshot
+  state. Zoneless change detection was evaluated and deliberately deferred (the D3 latency chart
+  renders entirely outside Angular's template bindings, and the zone-throttle mechanism above only
+  exists because zone.js CD is expensive on this app's bursty socket traffic). This makes a future
+  zoneless flip cheaper and safer, but doesn't attempt it.
 
 ### Deprecations (kept, not deleted)
 
