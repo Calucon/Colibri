@@ -264,6 +264,14 @@ Same app name, channel names and rules, with two differences:
 - **JavaScript has one number type.** A `5` from a web client reaches Unity as a `float`: listen
   with `Sync.Receive<float>`, not `int`.
 
+## Encrypting the connection
+
+If the network blocks unencrypted TCP, turn TLS on at the server (`TLS_CERT` and `TLS_KEY`, see
+[TLS](../colibri-server/docs/guide.md#tls)) and tick *Server supports SSL/TLS?* under *Optional
+Config* in *Window → Colibri Configuration*. With a self-signed certificate, also paste the
+fingerprint from the server's log into *Server certificate SHA-256*. Both certificate fields appear
+only when the setting is ticked. Browser clients then use `https://<your-server>:9011`.
+
 ## When nothing happens
 
 **Open *Window → Colibri Status* while the game runs.** It shows the connection, the server, **the
