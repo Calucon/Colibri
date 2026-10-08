@@ -1,16 +1,19 @@
 # Colibri Web
 
-TypeScript client for [Colibri](../README.md): messaging and object synchronization with web and Unity clients, a
-[key-value store](docs/guide.md#remote-store) and [remote logging](docs/guide.md#web-interface-for-logging). Requires a
-[colibri-server](../colibri-server/README.md).
+TypeScript client for [Colibri](../README.md) with pub/sub messages, synchronized models, a
+[key-value store](docs/guide.md#remote-store) and [remote logging](docs/guide.md#web-interface-for-logging). Exchanges
+data with web and [colibri-unity](../colibri-unity/README.md) clients through a [colibri-server](../colibri-server/README.md) 2.x.
 
-Full documentation: [docs/guide.md](docs/guide.md)
+Full documentation: [docs/guide.md](docs/guide.md). Upgrading from 1.x: [MIGRATION.md](../MIGRATION.md).
+Release notes: [CHANGELOG.md](CHANGELOG.md).
 
 ## Requirements
 
-- colibri-server 2.x. A 2.x server refuses 1.x web clients, and this client warns about a 1.x server.
-- TypeScript 5.0 or newer with standard decorators. Leave `experimentalDecorators` unset or `false`.
-- rxjs 7.8.1 or a newer 7.x as a peer dependency. npm 7 and newer install it automatically.
+- A browser, or Node.js 18 or newer. In Node.js, pass the server address to `new Colibri()`.
+- colibri-server 2.x. 1.x and 2.x [do not interoperate](docs/guide.md#protocol-version).
+- TypeScript 5.0 or newer with standard decorators. Leave `experimentalDecorators` unset or `false`. Plain
+  JavaScript: [unsupported workaround](docs/js-workaround/README.md).
+- Peer dependency rxjs `^7.8.1`, installed by npm 7 and newer.
 
 ## Installation
 
@@ -29,12 +32,11 @@ import { Colibri, Sync } from '@hcikn/colibri';
 new Colibri('your-app-name', 'http://<your-server>:9011'); // 9011 is the default port
 
 Sync.receiveNumber('temperature', value => console.log('temperature', value));
-Sync.sendNumber('temperature', 21.5);
+Sync.sendNumber('temperature', 21.5); // reaches other clients only, e.g. a second browser tab
 ```
 
-- Only clients with the same app name exchange data, web and Unity alike. Use a name no other project on the server
-  uses. The admin UI uses the app name `colibri`.
-- The sender does not receive its own messages. Test with two clients, such as two browser tabs.
+Web and Unity clients exchange data only if their app names match. Use a name no other project on the server uses.
+Do not use `colibri`, which the admin UI uses.
 
 ## Usage
 
@@ -56,16 +58,20 @@ registerPlayer(me);
 me.score = 10; // sent to the other clients
 ```
 
-- Requires the `new Colibri()` call from the quick start. With the page open in two tabs, each tab lists both players.
+- Create the `Colibri` instance first, as in the quick start.
 - Always pass `name`. Without it, the channel is the class name in lower case, which minification changes.
 - To sync with a Unity `SyncBehaviour<T>`, set `name` to the Unity class name in lower case, followed by `_<ModelId>`
   if the component's `ModelId` is set ([details](docs/guide.md#syncmodel)).
 
 ## Configuration
 
-`new Colibri(app, server, port)` takes the server as a host name or IP address, optionally with `http://`, `https://`,
-`ws://` or `wss://` and a port. The port defaults to `9011`. Without `server`, a browser connects to the page's host.
-Only one instance may exist. `Colibri.getInstance()` returns it. Details: [Configuration](docs/guide.md#configuration).
+| Argument | Default                         | Value                                                                                                                        |
+| -------- | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `app`    | required                        | App name. Must match on all clients that exchange data.                                                                      |
+| `server` | Host of the page (browser only) | Host name or IP address, optionally with `http://`, `https://`, `ws://` or `wss://` and `:port`. No path, query or fragment. |
+| `port`   | `9011`                          | Used when `server` has no port. If both have one, they must match.                                                           |
+
+A second `new Colibri()` throws. Use `Colibri.getInstance()`. All options: [guide](docs/guide.md#configuration).
 
 ## Troubleshooting
 
@@ -75,21 +81,20 @@ Only one instance may exist. `Colibri.getInstance()` returns it. Details: [Confi
 | Clients do not see each other                                          | Different app names or servers, or the listener was not registered and connected at send time                                              | Use the same app name and server. Register listeners first.                |
 | Nothing connects from an `https://` page                               | The browser blocks `ws://` and `http://` (mixed content)                                                                                   | Use `https://` or `wss://` with [TLS](docs/guide.md#tls) or a TLS proxy    |
 | `colibri.protocolMismatch` emits with `fatal: true`                    | The server refused this client and closed the connection                                                                                   | Use 2.x on both sides ([Protocol version](docs/guide.md#protocol-version)) |
-| `colibri.protocolMismatch` emits with `fatal: false`                   | The server is probably older than 2.0.0. The connection keeps working.                                                                     | Upgrade the server to 2.x                                                  |
+| `colibri.protocolMismatch` emits with `fatal: false`                   | No version announcement within 5 s, typical of a pre-2.0.0 server. The connection stays up.                                                | Upgrade the server to 2.x                                                  |
 | `@Synced()` fails to compile or does not sync                          | `experimentalDecorators` is on, or a member lacks `accessor`                                                                               | Remove `experimentalDecorators`. Declare synced members with `accessor`.   |
 | Models sync in development but not in a production build or with Unity | No `name` in `RegisterModelSync`                                                                                                           | Pass `name`                                                                |
 | Unity never receives numbers from the web                              | colibri-web sends every number as `float`                                                                                                  | Receive with `Sync.Receive<float>` in Unity, not `Sync.Receive<int>`       |
-| A colour is sometimes a string, sometimes an array                     | Unity sends `"#RRGGBBAA"`, colibri-web `[r, g, b, a]`                                                                                      | Normalize with `toHexColor()` or `toRgbaColor()`                           |
+| Colors arrive as strings or arrays                                     | Unity sends `"#RRGGBBAA"`, colibri-web `[r, g, b, a]`                                                                                      | Normalize with `toHexColor()` or `toRgbaColor()`                           |
 | `Sync.send*` does nothing                                              | Called before `new Colibri()`, dropped with a console warning                                                                              | Create the `Colibri` instance first                                        |
-
-## Documentation
-
-- [Guide](docs/guide.md), including [message types](docs/guide.md#sending-data-between-clients) and
-  [samples](docs/guide.md#samples)
-- [CHANGELOG](CHANGELOG.md), [upgrading from 1.x](../MIGRATION.md), [protocol](../colibri-server/docs/protocol.md)
-- [Plain JavaScript workaround](docs/js-workaround/README.md), unsupported
 
 ## Testing
 
-`npm test` runs the unit tests. `npm run test:e2e` runs the end-to-end tests and starts a colibri-server with Docker
-Compose unless `COLIBRI_E2E_SERVER` is set ([details](docs/guide.md#for-maintainers)).
+```sh
+npm test          # unit tests
+npm run test:e2e  # end-to-end, starts a colibri-server with Docker Compose unless COLIBRI_E2E_SERVER is set
+```
+
+## License
+
+[MIT](LICENSE)
