@@ -23,8 +23,8 @@ this is the server's full detail.
   `node --enable-source-maps dist/server/main.js` instead of `npm start`. See
   [Docker](#docker).
 
-**Not in this release:** batched `model::request` replies, and any security hardening - see
-[Deferred work](#deferred-work).
+**Not in this release:** batched `model::request` replies, and security hardening beyond optional
+[TLS](#tls); see [Deferred work](#deferred-work).
 
 ### Protocol version checking
 
@@ -88,6 +88,27 @@ this is the server's full detail.
 - `npm run test:vectors`, which CI runs, fails when colibri-web, the Unity package or the admin UI
   announce a protocol version different from the server's.
 
+### TLS
+
+- **Optional TLS.** With `TLS_CERT` and `TLS_KEY` set to PEM files, the Unity TCP port accepts only
+  TLS, and the web port serves only HTTPS and WSS, both with the same certificate. RSA and EC
+  certificates both work. The v3 framing inside TLS is unchanged, so the protocol version stays the
+  same. With both unset, nothing changes. See [TLS](./guide.md#tls) in the guide.
+- **The certificate's SHA-256 fingerprint is logged at startup**, for pinning in Unity, and for a
+  self-signed certificate the line says how a Unity app and a browser come to accept it. A renewed
+  certificate in the same files is used within about 20 s, without a restart; open connections
+  keep the certificate they started with. The server warns when the certificate is not valid yet,
+  expires soon, or has expired.
+- **TLS mismatches are named in the log**, each at most once a minute per address. A Unity client
+  without TLS on a TLS port is named with its app, and is sent nothing. A TLS client on an
+  unencrypted port is named too; it used to hang silently until the idle timeout. A failed TLS
+  handshake is logged at info level, with a hint about the certificate.
+- **TLS files the server cannot use stop it at startup**, with a message naming the variable, the
+  file and the fix: only one of the two set, a file missing or unreadable, certificate and key
+  swapped, a key with a passphrase, or a key that is not the certificate's, including an RSA key
+  with an EC certificate or the other way round. A renewal with the same problems is not used: the
+  server warns once and keeps the old certificate.
+
 ### Docker
 
 - The Dockerfile is multi-stage: the builder runs `npm ci` and the full build (admin UI and
@@ -122,6 +143,9 @@ this is the server's full detail.
 - New `npm run test:docker` runs the image against a fresh bind mount, a root-owned 1.x data
   directory, a named volume, as `--user 1000:1000`, with the 1.x data mounted read-only, without
   `CAP_CHOWN`, and with a changed `WEBSERVER_PORT` or `WEBSERVER_HOST`.
+- With [TLS](#tls) on, the health check asks over HTTPS without checking the certificate, so a
+  container with a self-signed certificate is still reported healthy. `docker-compose.yml` has the
+  TLS lines, commented out.
 
 ### Logging
 
@@ -470,6 +494,9 @@ The endpoints are documented under [REST store](./protocol.md#rest-store).
   probes for end-to-end runs: `test/tcp-wire-tap.ts` (a proxy that decodes every frame in both
   directions), `test/tcp-crosstalk-check.ts`, `test/model-inject.ts`, `test/broadcast-inject.ts`
   and `test/stress-echo-peer.ts` (`npm run test:stressecho`).
+- `npm run test:tcpclient` and `test/tcp-crosstalk-check.ts` take `--tls`, `--insecure` and
+  `--host`, and print the fingerprint of the server's certificate. `npm run test:docker` has a TLS
+  deployment. The TLS tests make their certificates with `openssl`, which has to be on `PATH`.
 
 ### Documentation
 
@@ -513,9 +540,9 @@ Not part of this release:
   `model::request` with every synced member applied, as exactly one instance.
 - **Security hardening**, by design: Colibri is meant for local networks you trust and
   authenticates nobody. There is no handshake token, the app name `colibri` is what makes a client
-  the admin UI, CORS allows any origin, and there are no connection caps or TLS; the per-client
-  message rate limit is there to catch a runaway send loop, not a hostile client, which can open
-  as many connections as it likes. Model objects are plain objects, not null-prototype ones. The
+  the admin UI, CORS allows any origin, there are no connection caps, and [TLS](#tls) is off
+  unless `TLS_CERT` and `TLS_KEY` are set; the per-client message rate limit is there to catch a
+  runaway send loop, not a hostile client, which can open as many connections as it likes. Model objects are plain objects, not null-prototype ones. The
   voice relay forwards every voice packet to every other voice client, whatever its app. The
   structural changes that would have come first (Socket.IO rooms, `Map` keying in `DataStore` and
   the REST store, bounds checks on TCP ingress and egress) landed anyway, on performance and
