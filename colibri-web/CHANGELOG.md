@@ -130,9 +130,13 @@ Colibri component from 1.x.
   sent until then is lost. The answer after the reconnect had the value from before, and applying
   it reverted the change here while no other client ever saw it. The field now keeps its value and
   sends it again; a value another client set meanwhile is still applied. That also holds when the
-  connection dies again before the answer comes, or before the value sent again arrives. A field
-  changed more than about 8 times right at the moment the connection died may still not be
-  recognised. See [docs/guide.md](docs/guide.md#syncmodel).
+  connection dies again before the answer comes, or before the value sent again arrives, and when
+  an update another client sends right after the reconnect arrives ahead of the answer: every
+  update for the model is checked until the answers are over. To tell when they are,
+  `RegisterModelSync` sends one more `model::request` after them, on the channel
+  `colibri::reconnect`; the server needs no change. A field changed more than about 8 times right
+  at the moment the connection died may still not be recognised. See
+  [docs/guide.md](docs/guide.md#syncmodel).
 - `registerModel` with an id that `models$` already lists replaces that entry instead of listing
   the id twice. The replaced instance stops syncing (with a console warning if it was registered
   on this client), and registering the same instance again does nothing.

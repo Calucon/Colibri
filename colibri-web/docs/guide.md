@@ -292,11 +292,12 @@ list, if the delete is no more than `MODEL_TOMBSTONE_SECONDS` (10 minutes by def
 
 A change to a registered instance made just before the connection dies without closing (Wi-Fi dropping out, say) may
 never reach the server: Socket.IO notices such a connection only after its ping timeout, up to about 45 s with the
-server's defaults, and what is sent until then is lost. When the server's answer after the reconnect shows a field with
-an earlier value it had here, one it still had in the 10 s before the connection stopped working, Colibri keeps the
-local value and sends it again, however many changes were made in the meantime. A value this client never had is
-another client's and is applied. This holds when the connection dies again before that answer comes, too, or before the
-value sent again arrives.
+server's defaults, and what is sent until then is lost. When the server's answer after the reconnect, or an update from
+another client that arrives before the answers are over, shows a field with an earlier value it had here, one it still
+had in the 10 s before the connection stopped working, Colibri keeps the local value and sends it again once the answers
+are over, however many changes were made in the meantime. A value this client never had is another client's and is
+applied. This holds when the connection dies again before that answer comes, too, or before the value sent again
+arrives.
 
 See also [the model-sync sample](../samples/model-sync.ts) (run sample with `npm run samples/model-sync`).
 
@@ -313,8 +314,8 @@ Limitations:
   from the server, the server's value replaces it after the reconnect.
 - A field changed more than about 8 times within roughly 100 ms of the last message from the server before the
   connection died (a fast drag on a slow link, say) may not be recognised; the server's value is then applied.
-- Another client that sets a field back during the outage, to a value the field had here in the 10 s before the
-  connection died, looks like a lost change: this client's value replaces it.
+- Another client that sets a field back during the outage, or just after the reconnect, to a value the field had here in
+  the 10 s before the connection died, looks like a lost change: this client's value replaces it.
 
 ### Remote Store
 
