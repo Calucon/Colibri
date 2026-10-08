@@ -75,11 +75,11 @@ started from: `colibri-server` for `npm start`, `/srv/colibri` in the Docker ima
 | What you see | What to do |
 | --- | --- |
 | At startup, on stderr: the server cannot write to its data directory | It keeps running but saves nothing. The message names the path, the uid and the fix; see [When the server cannot save](docs/guide.md#when-the-server-cannot-save) |
-| A client never appears in the admin UI, and the server log has a line starting `Refusing` | Its protocol version does not match: 1.x clients cannot use a 2.x server. Update colibri-unity or colibri-web to 2.x |
+| A client never appears in the admin UI, and the server log has a `Refusing ...` warning or error | Its protocol version does not match: 1.x clients cannot use a 2.x server. Update colibri-unity or colibri-web to 2.x |
 | A Unity client is disconnected while you are stopped at a breakpoint | A debugger usually pauses the thread that answers heartbeats too. On your own server, raise `TCP_IDLE_TIMEOUT_SECONDS` (10 s) or set it to `0` |
 | `App 'MyApp' now has 9 clients, more than 8 ...` | Usually separate projects that kept the same app name. Give each project its own |
-| Warnings naming `TCP_INBOUND_BACKLOG_LIMIT` or `CLIENT_MESSAGE_RATE_LIMIT`; synced objects move less smoothly | The server holds back updates and drops broadcasts to keep up. Backlog: sync fewer objects, at a lower rate, or with fewer clients per app. Rate: the named client sends far more than the others, usually every frame without a rate cap. See [Load limits](docs/guide.md#load-limits) |
-| Several apps share a server and use voice | The voice relay does not separate apps, and receivers pick voices by user id: give each app distinct voice user ids |
+| Warnings naming `TCP_INBOUND_BACKLOG_LIMIT` or `CLIENT_MESSAGE_RATE_LIMIT`; synced objects lag and broadcasts go missing | Backlog: sync fewer objects, less often, or with fewer clients per app. Rate: the named client sends too much, usually every frame with no rate cap. See [Load limits](docs/guide.md#load-limits) |
+| With several apps on one server, you hear a voice from another app | The voice relay does not separate apps, and receivers pick voices by user id: give each app distinct voice user ids |
 | The admin UI's Log page is empty after a restart | It keeps the last 20,000 messages in memory only. They also go to stdout and stderr (`docker logs colibri`), filtered by `CONSOLE_LOG_LEVEL` |
 
 ## Full guide
