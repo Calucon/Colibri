@@ -759,11 +759,15 @@ namespace HCIKonstanz.Colibri.Networking
             if (_consecutiveEarlyFrameFailures != EARLY_FRAME_FAILURES_BEFORE_HINT)
                 return;
 
-            _suspectedProtocolMismatch =
+            var suspicion =
                 $"{_consecutiveEarlyFrameFailures} connections in a row were accepted but ended before a single frame could be read. " +
                 $"This usually means a protocol mismatch: this client speaks v{CLIENT_VERSION} and needs colibri-server >= 2.0.0.";
 
-            Debug.LogError($"Colibri: {_suspectedProtocolMismatch} Check the server's version.");
+            // Logged before it is published. This runs on the session loop's thread, so whatever
+            // polls SuspectedProtocolMismatch on the main thread - the Status window, a test
+            // waiting for it - could otherwise act on the value before the line exists.
+            Debug.LogError($"Colibri: {suspicion} Check the server's version.");
+            _suspectedProtocolMismatch = suspicion;
         }
 
         /// <summary>

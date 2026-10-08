@@ -268,6 +268,43 @@ namespace HCIKonstanz.Colibri.E2E
                 "A guess must not settle into the status reserved for a refusal the server actually sent");
         }
 
+        /// <summary>
+        /// The suspicion is raised on the session loop's thread, and the console line has to exist
+        /// by the time the main thread can see <see cref="WebServerConnection.SuspectedProtocolMismatch"/>.
+        /// It used to be published first and logged after: a test that ended as soon as the value
+        /// appeared had the error arrive in its TearDown, outside the scope that ignored it.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator TheSuspicionIsLoggedBeforeItIsReported()
+        {
+            IgnoreTheExpectedFailures();
+
+            _scriptedServer = FakeColibriServer.Start(FakeColibriServer.Behaviour.HangUpAfterHandshake);
+            var connection = ConnectionTo(_scriptedServer.Port);
+
+            // Read on the logging thread, at the moment the line is logged.
+            var reportedWhenLogged = "(never logged)";
+            void OnLog(string message, string stackTrace, LogType type)
+            {
+                if (message.Contains("connections in a row were accepted"))
+                    reportedWhenLogged = connection.SuspectedProtocolMismatch;
+            }
+
+            Application.logMessageReceivedThreaded += OnLog;
+            try
+            {
+                yield return E2EServer.WaitUntil(() => connection.SuspectedProtocolMismatch != null,
+                    "Three sessions that ended without a frame were not enough to suspect a mismatch", 20f);
+            }
+            finally
+            {
+                Application.logMessageReceivedThreaded -= OnLog;
+            }
+
+            Assert.That(reportedWhenLogged, Is.Null,
+                "The suspicion was visible before its console line was logged, or the line came after it was seen");
+        }
+
         /*
          *  An address nothing answers on.
          */
