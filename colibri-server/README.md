@@ -45,6 +45,9 @@ volumes:
 ```
 
 The admin UI is then at `http://<your-server-ip>:9011`, and `docker logs colibri` shows the log.
+Next, connect a client: [Getting started](../docs/getting-started.md) walks through Unity, and
+[colibri-web](../colibri-web/README.md) covers the browser. Each needs this server's address and
+an app name you choose.
 
 - **Data:** `/srv/colibri/data` holds the REST store's `store.json` and any voice recordings.
   Mount a volume or a host directory there, e.g. `./data:/srv/colibri/data`, and leave
@@ -58,6 +61,7 @@ The admin UI is then at `http://<your-server-ip>:9011`, and `docker logs colibri
 ### Node
 
 Clone this repository, then in `colibri-server` run `npm ci`, `npm run build` and `npm start`.
+The ports and the admin UI are the same as with Docker; the data goes to `colibri-server/data`.
 
 ## Configuration
 
