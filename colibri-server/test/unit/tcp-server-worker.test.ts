@@ -1566,6 +1566,59 @@ describe('TCPServerWorker', () => {
             });
         });
 
+        // A client whose own updates keep it connected but that reads nothing: a send-only script,
+        // or one whose receive loop has died while its sender goes on. Every tick's heartbeat used
+        // to be queued for it, ten writes a second without limit for as long as it stayed.
+        describe('a client that sends but never reads', () => {
+            const heartbeatsWritten = (socket: FakeSocket): number => socket.written.filter(chunk => chunk[4] === FrameType.Heartbeat).length;
+
+            it('is kept, with no more than one tick heartbeat queued for it at a time', () => {
+                const sender = handshaked('send-only');
+                sender.socket.holdWrites = true;
+                sender.socket.written.length = 0;
+
+                // Ten minutes, with one update of its own a second.
+                let t = 0;
+                run(600_000, () => {
+                    if (t++ % 10 === 0) {
+                        sender.socket.emit('data', encodeMessageFrame(wireMessage('objects', 'model::update', `{"id":"a","t":${t}}`)));
+                    }
+                });
+
+                expect(disconnected()).toEqual([]);
+                expect(heartbeatsWritten(sender.socket)).toBe(1);
+                expect(sender.socket.writableLength).toBe(sender.socket.written[0]!.length);
+
+                // Once it reads again, it is sent the next heartbeat.
+                sender.socket.flush();
+                run(100);
+                expect(heartbeatsWritten(sender.socket)).toBe(2);
+            });
+
+            it('in a busy app, is queued no more heartbeats than fit between the relayed traffic it is still sent', () => {
+                const sender = handshaked('send-only');
+                sender.socket.holdWrites = true;
+                sender.socket.written.length = 0;
+
+                // Ten minutes: ten relayed updates of 2 KB a second from other clients, one of its own.
+                let t = 0;
+                run(600_000, () => {
+                    internals.handleParentMessage({
+                        channel: 'm:broadcastToApp',
+                        content: { msg: wireMessage('objects', 'model::update', `{"id":"b","data":"${'x'.repeat(2000)}"}`), app: 'appA' },
+                    });
+                    if (t++ % 10 === 0) {
+                        sender.socket.emit('data', encodeMessageFrame(wireMessage('objects', 'model::update', `{"id":"a","t":${t}}`)));
+                    }
+                });
+
+                expect(disconnected()).toEqual([]);
+                // The relayed traffic stops at the high-water mark; with it the heartbeats between it.
+                expect(sender.socket.writableLength).toBeLessThan(1024 * 1024 + 3 * 2048);
+                expect(heartbeatsWritten(sender.socket)).toBeLessThanOrEqual(1024 * 1024 / HEARTBEAT_EVERY_BYTES + 2);
+            });
+        });
+
         it('ends a connection that never handshakes', () => {
             const silent = connect();
 

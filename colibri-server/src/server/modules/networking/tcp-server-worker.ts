@@ -201,6 +201,8 @@ interface TcpClient {
     droppedSinceWarning: number;
     // Bytes of messages written to this client since its last heartbeat; see HEARTBEAT_EVERY_BYTES.
     bytesSinceHeartbeat: number;
+    // Heartbeats handed to the socket that it has not flushed to the kernel yet; see handleHeartbeat.
+    heartbeatsQueued: number;
     // Bytes of replies handed to the socket that it has not flushed to the kernel yet; see
     // MAX_REPLY_BACKLOG_BYTES. Taken off writableLength before it is compared with highWaterMark.
     replyBytesQueued: number;
@@ -455,28 +457,32 @@ export class TCPServerWorker extends WorkerService {
             this.writeHeartbeat(client, encodeHeartbeatFrame(process.hrtime.bigint()));
         }
         client.bytesSinceHeartbeat += packet.length;
-        this.write(client, packet, reply);
+        this.write(client, packet, reply ? 'reply' : 'relayed');
     }
 
     // A heartbeat is never dropped for a client that is behind, as relayed traffic is past
     // highWaterMark: a client that sends nothing of its own is kept connected only by echoing
     // heartbeats (see endIdleClients), so one dropped from what a live client is still reading made
-    // it look gone. Heartbeats come ten a second at 13 bytes each, which bounds what they can add.
+    // it look gone. What bounds them instead: the ones between messages come one per
+    // HEARTBEAT_EVERY_BYTES of messages admitted, and the tick's own are not queued behind one
+    // still waiting (handleHeartbeat).
     private writeHeartbeat(client: TcpClient, packet: Buffer): void {
         if (client.socket.writableEnded || client.socket.destroyed) {
             return;
         }
 
         client.bytesSinceHeartbeat = 0;
-        this.write(client, packet, false);
+        this.write(client, packet, 'heartbeat');
     }
 
-    private write(client: TcpClient, packet: Buffer, reply: boolean): void {
-        if (reply) client.replyBytesQueued += packet.length;
+    private write(client: TcpClient, packet: Buffer, kind: 'relayed' | 'reply' | 'heartbeat'): void {
+        if (kind === 'reply') client.replyBytesQueued += packet.length;
+        else if (kind === 'heartbeat') client.heartbeatsQueued += 1;
         client.socket.write(packet, (err) => {
             // Called once the kernel has taken the packet, or the write failed: either way it is
             // no longer waiting.
-            if (reply) client.replyBytesQueued -= packet.length;
+            if (kind === 'reply') client.replyBytesQueued -= packet.length;
+            else if (kind === 'heartbeat') client.heartbeatsQueued -= 1;
             if (!err) return;
 
             // A peer that is gone fails every write still queued for it, each with a callback of
@@ -570,6 +576,7 @@ export class TCPServerWorker extends WorkerService {
             dropping: false,
             droppedSinceWarning: 0,
             bytesSinceHeartbeat: 0,
+            heartbeatsQueued: 0,
             replyBytesQueued: 0,
             droppingReplies: false,
             droppedRepliesSinceWarning: 0,
@@ -1017,9 +1024,17 @@ export class TCPServerWorker extends WorkerService {
     // - the next heartbeat, within 100 ms.
     // Answers to its own model::request or client::request come after client::connected, since the
     // main thread handles its clientConnected$ before anything it sends.
+    //
+    // A client with an earlier heartbeat still waiting in its socket is skipped. A client that keeps
+    // sending but never reads (a send-only script, or one whose receive loop has died) is kept
+    // connected by what it sends, and used to be queued every tick's heartbeat on top: ten writes a
+    // second, a few hundred bytes of memory each, for as long as it stayed. A client that is reading
+    // loses nothing by the skip: it finds the heartbeat already waiting, and is sent the next one on
+    // the first tick after that has gone to the kernel.
     private handleHeartbeat(): void {
         const packet = encodeHeartbeatFrame(process.hrtime.bigint());
         for (const client of this.clients.values()) {
+            if (client.heartbeatsQueued > 0) continue;
             this.writeHeartbeat(client, packet);
         }
     }
