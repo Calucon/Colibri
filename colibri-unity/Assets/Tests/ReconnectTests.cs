@@ -1107,6 +1107,66 @@ namespace HCIKonstanz.Colibri.E2E
         }
 
         /// <summary>
+        /// An object destroyed in the frame the link dies writes its delete into the dead
+        /// connection, and it is lost. After the reconnect nothing asked for the object again, as
+        /// this client no longer has it, so the server and every other client kept it. The delete
+        /// goes out again when the outage is noticed, ahead of the requests made again.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator AnObjectDestroyedAtTheDropIsDeletedElsewhereAfterTheReconnect()
+        {
+            const string channel = "e2esyncmodel";
+            var spawned = new List<GameObject>();
+            var checker = new TcpPeer();
+            try
+            {
+                var model = Spawn<E2ESyncModel>(spawned, "destroyed-at-the-drop");
+                var id = model.Id;
+                yield return E2EServer.Settle(1.5f);
+
+                model.Label = "before the outage";
+                yield return _peer.Expect(channel, "model::update",
+                    frame => Assert.That((string)TcpPeer.Json(frame)["id"], Is.EqualTo(id)));
+
+                // The link dies in the frame the object is destroyed.
+                _proxy.Unplug();
+                Object.Destroy(model.gameObject);
+
+                yield return E2EServer.WaitUntil(
+                    () => _proxy.Swallowed.Any(s => s.Frame.Channel == channel && s.Frame.Command == "model::delete"),
+                    "The delete was never written into the dead connection");
+                yield return E2EServer.WaitUntil(() => Connection.Status != ConnectionStatus.Connected,
+                    "The client never noticed that its connection had died", 10f);
+
+                yield return _peer.Expect(channel, "model::delete",
+                    frame => Assert.That((string)TcpPeer.Json(frame)["id"], Is.EqualTo(id)), 20f);
+
+                var sent = SecondSession().Where(f => f.Channel == channel).ToList();
+                var delete = sent.FindIndex(f => f.Command == "model::delete" && (string)TcpPeer.Json(f)["id"] == id);
+                var request = sent.FindIndex(f => f.Command == "model::request");
+                Assert.That(delete, Is.GreaterThanOrEqualTo(0), "The delete lost at the drop was not sent again");
+                Assert.That(request < 0 || delete < request, Is.True, "The delete should go ahead of the requests made again");
+
+                yield return checker.Connect("destroyed-at-the-drop-checker");
+                yield return E2EServer.Settle(0.3f);
+                checker.Send(channel, "model::request", new JObject { { "id", id }, { "again", true } });
+                yield return checker.Expect(channel, null, frame =>
+                    Assert.That(frame.Command, Is.EqualTo("model::delete"),
+                        $"The server still holds the object destroyed at the drop: {frame.Command} {TcpPeer.Text(frame)}"));
+            }
+            finally
+            {
+                checker.Dispose();
+
+                foreach (var gameObject in spawned)
+                {
+                    if (gameObject)
+                        Object.DestroyImmediate(gameObject);
+                }
+            }
+        }
+
+        /// <summary>
         /// An object a manager builds from another client's update asks the server for nothing when
         /// it registers. That update carries the model's state already, and a request for one id
         /// says that this client has the object in its scene now, or is creating it: a server that
