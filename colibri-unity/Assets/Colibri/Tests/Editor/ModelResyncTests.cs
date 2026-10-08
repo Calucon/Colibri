@@ -589,6 +589,34 @@ namespace HCIKonstanz.Colibri.Tests
         }
 
         /// <summary>
+        /// The link drops again before the answers, and comes back when no synced object is left to
+        /// ask for again. The round left open by that drop ends there: the round after an outage
+        /// much later counts from its own, and a value another client set during it is applied,
+        /// although the object held it long before.
+        /// </summary>
+        [Test]
+        public void ARoundLeftOpenWhenNoObjectIsLeftToAskForEndsAtTheReconnect()
+        {
+            var destroyed = SpawnModelThatSent("before");
+            Sync.RequestModelsAgain(disconnectedAt: 103);
+            var lostWithTheLink = Sync.ReconnectRoundEndMarker;
+            Sync.RemoveModelUpdateListener(destroyed.Channel, destroyed.OnModelUpdate);
+
+            Sync.RequestModelsAgain(disconnectedAt: 110);
+            Assert.That(Sync.ReconnectRoundEndMarker, Is.Not.EqualTo(lostWithTheLink), "The round whose answers were lost with the link is still open");
+
+            var model = SpawnModel();
+            model.OnModelUpdate(Bare(model.Id));
+            Change(model, "first", 400);
+            Change(model, "second", 450);
+            Sync.RequestModelsAgain(disconnectedAt: 500);
+            model.OnModelUpdate(Answer(model, "first"));
+
+            Assert.That(model.Label, Is.EqualTo("first"), "Another client's change during the later outage was undone");
+            Assert.That(SentAt(model, 501), Is.Null);
+        }
+
+        /// <summary>
         /// Once the answers to a reconnect are all in, the next outage has a window of its own: a
         /// value sent long before it arrived for certain, and another client set the one before it
         /// again.

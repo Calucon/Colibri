@@ -327,14 +327,24 @@ namespace HCIKonstanz.Colibri.Synchronization
                 }
             }
 
-            if (toTell == null)
-                return;
-
             // A round still open lost its answers to this outage: the link dropped again soon after
-            // the last reconnect. A change lost at the drop before that is still in question, so
-            // the new round counts from that earlier outage. Counted from this one, the lost
-            // change could lie before the window, and the answer, which still holds the value from
-            // before it, would be applied after all.
+            // the last reconnect. Its objects are gone if none was asked for again, and it ends here:
+            // left open, it would outlive this reconnect, and a round much later would count from
+            // its outage, judging changes other clients made since as lost ones.
+            if (toTell == null)
+            {
+                if (_reconnectRound != null)
+                {
+                    _reconnectRound.IsOver = true;
+                    _reconnectRound = null;
+                }
+                return;
+            }
+
+            // Otherwise a change lost at the drop before that is still in question, so the new
+            // round counts from that earlier outage. Counted from this one, the lost change could
+            // lie before the window, and the answer, which still holds the value from before it,
+            // would be applied after all.
             if (_reconnectRound != null)
             {
                 disconnectedAt = Math.Min(disconnectedAt, _reconnectRound.DisconnectedAt);
