@@ -12,6 +12,10 @@ is in [protocol.md](protocol.md), and everything that changed since 1.x in
     [settings and ports](#settings-and-ports)
   - [Node](#node)
   - [Configuration](#configuration)
+- [TLS](#tls): [turning it on](#turning-it-on),
+  [a self-signed certificate](#a-self-signed-certificate), [Docker](#tls-with-docker),
+  [renewal](#renewal), [what stops the server](#what-stops-the-server-at-startup),
+  [the log](#tls-in-the-log), [a reverse proxy instead](#a-reverse-proxy-instead)
 - [Features](#features)
   - [Logs](#logs)
   - [Load limits](#load-limits)
@@ -150,6 +154,7 @@ short:
 | `TCP_IDLE_TIMEOUT_SECONDS` | `10` | seconds a Unity client may send nothing at all, not even its heartbeat replies, before it is disconnected as gone, e.g. a headset that left the Wi-Fi; a connection that has not handshaked by then is closed too. `0`: never |
 | `APP_CLIENT_WARNING_THRESHOLD` | `8` | log a warning when one app has more clients than this, Unity and web together, the admin UI not counted; usually separate projects that kept the same app name. `0`: never |
 | `MODEL_TOMBSTONE_SECONDS` | `600` | seconds the server remembers that a synced object (model) was deleted. Meanwhile it ignores updates for it, so one another client sent before the delete reached it cannot create the object again, and it tells a client that asks for the object again after a reconnect to delete its copy. A client that has the object in its scene again, such as a scene with placed objects loaded again, ends this early. Forgotten with the app's models once its last client has left. `0`: not remembered. See [Deleted models](protocol.md#deleted-models) |
+| `TLS_CERT`, `TLS_KEY` | empty | PEM files of the certificate (with its chain) and of its private key. Set both, and the TCP port and the web port serve TLS only; see [TLS](#tls) |
 
 `DATA_ROOT` and `WEBSERVER_ROOT` may be absolute paths, e.g. `DATA_ROOT=/var/lib/colibri`. A
 relative path is taken from the compiled server's directory, `dist/server`, so the defaults are
@@ -158,15 +163,149 @@ mount the data at `/srv/colibri/data` instead (see [Data directory](#data-direct
 
 A port that is not an integer from 1 to 65535, a sampling rate, stack trace limit or burst that is
 not a positive integer, any other number that is not a whole number of 0 or more, or an unknown
-log level stops the server at startup, with a message naming the variable. See
-[Load limits](#load-limits) for what the limits are for.
+log level stops the server at startup, with a message naming the variable. So does a `TLS_CERT`
+or `TLS_KEY` it cannot use (see [What stops the server at startup](#what-stops-the-server-at-startup)).
+See [Load limits](#load-limits) for what the limits are for.
+
+## TLS
+
+With `TLS_CERT` and `TLS_KEY` set, the server encrypts both client ports with one certificate: the
+TCP port (9012) accepts only TLS, and the web port (9011) serves only HTTPS and WSS, the admin UI
+included. With neither set, nothing changes. There is no mixed mode, so once TLS is on, every
+client has to use it:
+
+- **Unity:** tick *Server supports SSL/TLS?* in the Colibri configuration; see
+  [TLS](../../colibri-unity/docs/guide.md#tls) in the Unity guide.
+- **Web clients and the admin UI:** use `https://<host>:9011` or `wss://<host>:9011`; see
+  [TLS](../../colibri-web/docs/guide.md#tls) in the web guide. `http://<host>:9011` then gets no
+  answer: the connection is closed, not redirected.
+
+Inside TLS the frames are the same, and the protocol version does not change (see
+[TLS](protocol.md#tls) in the protocol docs). TLS encrypts the connections, but does not
+authenticate clients: anyone who can reach the ports can still join any app. The voice relay (UDP)
+stays unencrypted.
+
+### Turning it on
+
+| variable | |
+| --- | --- |
+| `TLS_CERT` | PEM file of the certificate, followed by its chain (Let's Encrypt: `fullchain.pem`) |
+| `TLS_KEY` | PEM file of its private key, without a passphrase (Let's Encrypt: `privkey.pem`) |
+
+Set both or neither. Use absolute paths: a relative one is resolved like `DATA_ROOT`, from
+`dist/server`. RSA and EC certificates both work. The server never makes a certificate itself: use
+one from a certificate authority, such as Let's Encrypt or your institution, or a
+[self-signed one](#a-self-signed-certificate).
+
+At startup the log then says `Web server listening on 0.0.0.0:9011, HTTPS and WSS only` and
+`Starting Colibri TCP server on 0.0.0.0:9012, TLS only`, and names the certificate:
+
+```
+TLS is on, with the certificate in /srv/colibri/certs/fullchain.pem and the key in /srv/colibri/certs/privkey.pem: for DNS:colibri.example.org, IP Address:192.0.2.10, self-signed, valid until 2036-10-05T12:00:00.000Z; SHA-256 fingerprint 83:88:B1:CD:...
+```
+
+The fingerprint is what a Unity app can pin as its *Server certificate SHA-256*; case and colons do
+not matter there. A certificate issued by itself is called `self-signed`: openssl's default
+self-signed certificate, a server-only one such as PowerShell's `New-SelfSignedCertificate` makes,
+or colibri-unity's test certificate. For those the line goes on to say how a Unity app and a
+browser come to accept it. A certificate from an authority says `issued by <issuer>` instead.
+
+### A self-signed certificate
+
+```sh
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -keyout privkey.pem -out fullchain.pem -days 3650 -subj "/CN=colibri.example.org" -addext "subjectAltName=DNS:colibri.example.org,IP:192.0.2.10"
+```
+
+Replace `colibri.example.org` and `192.0.2.10` with the name and the IP address clients connect
+to. For RSA, replace `-newkey ec -pkeyopt ec_paramgen_curve:prime256v1` with `-newkey rsa:2048`. On
+Windows, Git for Windows ships openssl (in `usr/bin`). The certificate is valid for 10 years.
+
+Unity apps accept it by its fingerprint (see [TLS](../../colibri-unity/docs/guide.md#tls) in the
+Unity guide). A browser has to be told once to trust it: open `https://<host>:9011` and accept it,
+or install it.
+
+### TLS with Docker
+
+```yaml
+    environment:
+      TLS_CERT: /srv/colibri/certs/fullchain.pem
+      TLS_KEY: /srv/colibri/certs/privkey.pem
+    volumes:
+      - colibri-data:/srv/colibri/data
+      - ./certs:/srv/colibri/certs:ro
+```
+
+- **Mount the directory, not the two files.** A bind mount of a single file stays on the file it
+  found at start, so a renewal that replaces the file is never seen.
+- **uid 1000 has to be able to read the key**: the server runs as the image's `node` user. openssl
+  writes `privkey.pem` readable for its owner only, so give it to uid 1000
+  (`sudo chown 1000 certs/privkey.pem`) if that is not you.
+- **Let's Encrypt** needs one more step. Its `live/` entries are symbolic links into
+  `../../archive`, which resolve only with the whole `/etc/letsencrypt` mounted, and it keeps
+  `privkey.pem` readable for root only. Copy both files instead, with a certbot deploy hook, which
+  certbot runs again after every renewal. For example, as
+  `/etc/letsencrypt/renewal-hooks/deploy/colibri.sh` (executable), with `/opt/colibri/certs`
+  mounted at `/srv/colibri/certs`:
+
+  ```sh
+  #!/bin/sh
+  install -o 1000 -g 1000 -m 600 "$RENEWED_LINEAGE/fullchain.pem" "$RENEWED_LINEAGE/privkey.pem" /opt/colibri/certs/
+  ```
+
+  Run it once by hand for the certificate you have now, with
+  `RENEWED_LINEAGE=/etc/letsencrypt/live/<your domain>`.
+- The `docker-compose.yml` in `colibri-server` has these lines, commented out.
+- With TLS on, the image's health check uses HTTPS without checking the certificate, so a container
+  with a self-signed certificate is healthy too.
+
+### Renewal
+
+The server reads both files every 10 s, and uses new contents once two reads in a row agree, so a
+renewed certificate is in use within about 20 s, without a restart. Open connections keep the
+certificate they started with.
+
+New contents it cannot use (for example, the certificate renewed but the key not replaced yet), or
+files it cannot read, get one warning, and the old certificate stays in use. The server also warns
+once when the certificate is not valid yet, expires within 7 days (a short-lived certificate: in the
+last fifth of its lifetime), or has expired.
+
+### What stops the server at startup
+
+With TLS configured, the server refuses to start, with a message that names the variable, the file
+and the fix, when:
+
+- only one of `TLS_CERT` and `TLS_KEY` is set;
+- a file is missing, or is a directory;
+- the server's uid cannot read it;
+- the certificate and the key are swapped;
+- the key belongs to another certificate, including an RSA key with an EC certificate or the other
+  way round, which OpenSSL alone would accept and then fail every handshake;
+- the key has a passphrase.
+
+### TLS in the log
+
+| message | what it means |
+| --- | --- |
+| WARN `Refusing a connection from <address> (Unity client '<name>', app '<app>'): it does not use TLS, and this server's TCP port accepts only TLS connections ...` | A Unity app without *Server supports SSL/TLS?* ticked. A Colibri 1.x client, which cannot use TLS, gets its own variant |
+| WARN `Refusing a connection from <address>: it starts a TLS handshake, but this server's TCP port does not use TLS ...` | A Unity app with the setting ticked, on a server without TLS: untick it, or set `TLS_CERT` and `TLS_KEY` |
+| INFO `TLS handshake with <address> failed: ...` | Says why. When the client refused the certificate, or hung up during the handshake (which is how many clients refuse one), it adds what to check about the certificate |
+| WARN `TLS_CERT or TLS_KEY has changed, but cannot be used: ... Still serving the certificate with SHA-256 fingerprint ...` | A renewal is incomplete or broken; see [Renewal](#renewal) |
+
+The first three are logged at most once a minute per address, the repeats at debug level.
+
+### A reverse proxy instead
+
+TLS can also end in a reverse proxy you already run, in front of a server with `TLS_CERT` and
+`TLS_KEY` unset: for the TCP port, nginx's `stream` module with `listen 9012 ssl`, or a Traefik TCP
+router with TLS. Colibri needs no change for that. The drawback: the server then sees every client
+at the proxy's address, in the log and in the warnings it limits per address.
 
 ## Features
 
-- **Admin UI** at `http://<your-server-ip>:9011`. The *Log* page shows what the server and every
-  connected client log, filtered by app and level, with a separate *Sync traffic* switch for the
-  continuous `broadcast::` messages. The *Statistics* page shows the connected clients and their
-  latency.
+- **Admin UI** at `http://<your-server-ip>:9011` (`https://` with [TLS](#tls)). The *Log* page
+  shows what the server and every connected client log, filtered by app and level, with a separate
+  *Sync traffic* switch for the continuous `broadcast::` messages. The *Statistics* page shows the
+  connected clients and their latency.
 - **Model synchronization** and **broadcasts** between the Unity and web clients of an app, see
   [protocol.md](protocol.md). Only `broadcast::` messages and model changes are passed on to other
   clients; see [What the server relays](protocol.md#what-the-server-relays).
