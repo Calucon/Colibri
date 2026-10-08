@@ -86,6 +86,12 @@ namespace HCIKonstanz.Colibri.Networking
         private const int CONNECT_TIMEOUT_MS = 5000;
 
         /// <summary>
+        /// How often a connect in progress looks whether its socket has been closed, which on Mono
+        /// it does not notice by itself. See <see cref="WaitForConnectAsync"/>.
+        /// </summary>
+        private const int CLOSED_SOCKET_CHECK_MS = 100;
+
+        /// <summary>
         /// How many broadcasts and other messages that are not model state may wait for the
         /// connection while it is down. This is a last-write-wins sync client: growing the queue
         /// without limit during a long outage would only buffer updates that are already
@@ -1254,6 +1260,7 @@ namespace HCIKonstanz.Colibri.Networking
         /// <exception cref="TimeoutException">Nothing answered the connection in time.</exception>
         /// <exception cref="TlsHandshakeException">The TLS handshake failed or did not finish in time.</exception>
         /// <exception cref="OperationCanceledException"><paramref name="token"/> was cancelled first.</exception>
+        /// <exception cref="ObjectDisposedException">The socket was closed while connecting.</exception>
         /// <exception cref="SocketException">The connection failed before the time was up - refused, say.</exception>
         /// <remarks>Internal for the EditMode tests.</remarks>
         internal static async Task<Stream> OpenStreamAsync(Socket socket, string host, int port, ServerCertificateCheck tls, int timeoutMs, CancellationToken token)
@@ -1434,32 +1441,75 @@ namespace HCIKonstanz.Colibri.Networking
         /// </summary>
         /// <exception cref="TimeoutException">Nothing answered in time.</exception>
         /// <exception cref="OperationCanceledException"><paramref name="token"/> was cancelled first.</exception>
+        /// <exception cref="ObjectDisposedException">The socket was closed first.</exception>
         /// <exception cref="SocketException">The attempt failed before the time was up - refused, say.</exception>
         /// <remarks>Internal for the EditMode tests, which time it against a port that never answers.</remarks>
         internal static async Task ConnectAsync(Socket socket, string host, int port, int timeoutMs, CancellationToken token)
         {
             var connecting = socket.ConnectAsync(host, port);
+            await WaitForConnectAsync(socket, connecting, host, port, timeoutMs, token).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// The rest of <see cref="ConnectAsync"/>: waits for <paramref name="connecting"/>, the
+        /// connect in progress on <paramref name="socket"/>, until it completes, the time is up,
+        /// <paramref name="token"/> is cancelled or the socket is closed.
+        /// </summary>
+        /// <remarks>
+        /// The socket is looked at every <see cref="CLOSED_SOCKET_CHECK_MS"/> rather than left to
+        /// the connect to notice: on Mono a connect whose socket is closed neither completes nor
+        /// fails, so an attempt whose socket was closed under it waited out the whole timeout and
+        /// then reported a server that may well have answered as not answering. Internal for the
+        /// EditMode tests, which stand in for that with a connect that never completes.
+        /// </remarks>
+        internal static async Task WaitForConnectAsync(Socket socket, Task connecting, string host, int port, int timeoutMs, CancellationToken token)
+        {
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            var closed = false;
 
             using (var timer = CancellationTokenSource.CreateLinkedTokenSource(token))
             {
-                if (await Task.WhenAny(connecting, Task.Delay(timeoutMs, timer.Token)).ConfigureAwait(false) == connecting)
+                while (true)
                 {
-                    timer.Cancel();
+                    var remaining = timeoutMs - clock.ElapsedMilliseconds;
+                    if (remaining <= 0)
+                        break;
 
-                    // Rethrows a connect that failed by itself.
-                    await connecting.ConfigureAwait(false);
-                    return;
+                    await Task.WhenAny(connecting, Task.Delay((int)Math.Min(remaining, CLOSED_SOCKET_CHECK_MS), timer.Token))
+                        .ConfigureAwait(false);
+
+                    if (token.IsCancellationRequested)
+                        break;
+
+                    if (IsClosed(socket))
+                    {
+                        closed = true;
+                        break;
+                    }
+
+                    if (connecting.IsCompleted)
+                    {
+                        timer.Cancel();
+
+                        // Rethrows a connect that failed by itself.
+                        await connecting.ConfigureAwait(false);
+                        return;
+                    }
                 }
             }
 
             CloseSocket(socket);
 
-            // The abandoned connect now fails with the closed socket. Nothing is waiting for it any
-            // more, so its exception is observed here rather than surfacing as unobserved later.
+            // Nothing waits for the abandoned connect any more. On .NET it now fails with the closed
+            // socket, and its exception is observed here rather than surfacing as unobserved later;
+            // on Mono it may never complete at all.
             _ = connecting.ContinueWith(attempt => { _ = attempt.Exception; }, CancellationToken.None,
                 TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
 
             token.ThrowIfCancellationRequested();
+            if (closed)
+                throw new ObjectDisposedException(typeof(Socket).FullName, $"The socket was closed while connecting to {host}:{port}.");
+
             // Invariant: this ends up in the log and on screen, and "0,5 s" in one locale and
             // "0.5 s" in another is one more thing to puzzle over.
             throw new TimeoutException(
@@ -1641,6 +1691,27 @@ namespace HCIKonstanz.Colibri.Networking
             }
             catch (OperationCanceledException)
             {
+                return false;
+            }
+        }
+
+        /// <summary>Whether <paramref name="socket"/> has been closed, by whoever closed it.</summary>
+        private static bool IsClosed(Socket socket)
+        {
+            try
+            {
+                // Looks without waiting, and throws ObjectDisposedException on a closed socket, on
+                // .NET, Mono and IL2CPP alike.
+                socket.Poll(0, SelectMode.SelectError);
+                return false;
+            }
+            catch (ObjectDisposedException)
+            {
+                return true;
+            }
+            catch (SocketException)
+            {
+                // Open, but in a state the connect will report itself.
                 return false;
             }
         }
