@@ -392,9 +392,16 @@ namespace HCIKonstanz.Colibri.Synchronization
             // relayed that update. Asked for, it lost its tombstone, and an update another client
             // had sent before the delete then created it afresh on the server and on every client.
             if (RemoteModelBeingBuilt != null && RemoteModelBeingBuilt == Id)
+            {
                 Sync.AddModelUpdateListenerWithoutRequest(Channel, OnModelUpdate, Id);
+            }
             else
+            {
+                // In this client's scene again, so updates for it are no longer ones that were on
+                // their way when this client deleted it.
+                LocallyDeletedModels.Forget(Channel, Id);
                 Sync.AddModelUpdateListener(Channel, OnModelUpdate, Id);
+            }
             Sync.AddModelDeleteListener(Channel, OnModelDelete);
 
             ModelCreated?.Invoke(this);
@@ -439,6 +446,9 @@ namespace HCIKonstanz.Colibri.Synchronization
             if (_isQuitting || SingletonLifetime.IsQuitting || _hasReceivedDestroyCommand)
                 return;
 
+            // So that an update another client sent before the server had this delete does not
+            // make a manager build the object again - see LocallyDeletedModels.
+            LocallyDeletedModels.Remember(Channel, Id);
             Sync.SendModelDelete(Channel, Id);
             _isReady.TrySetCanceled();
         }

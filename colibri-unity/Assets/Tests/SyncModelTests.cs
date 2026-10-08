@@ -442,6 +442,97 @@ namespace HCIKonstanz.Colibri.E2E
             }
         }
 
+        /// <summary>
+        /// While this client deletes an object, another client is still moving it. The update that
+        /// client sent before the server had the delete is relayed here too, and arrives after the
+        /// object is gone. The manager no longer knew the id and built the object again from it,
+        /// with the template's values for every member the update did not carry, and nothing was
+        /// going to delete it again.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator AnObjectDeletedHereIsNotBuiltAgainFromAnUpdateSentBeforeTheDelete()
+        {
+            var template = SpawnConfigured<E2ESyncModel>("template", _ => { });
+            var manager = Spawn<E2ESyncModelManager>("manager");
+            manager.Template = template;
+            yield return null;
+            yield return LetInitialStateArrive();
+
+            var id = Guid.NewGuid().ToString();
+            try
+            {
+                Peer.Send(Channel, "model::update", new JObject { { "id", id }, { "label", "created" }, { "where", new JArray(0f, 0f, 0f) } });
+                yield return E2EServer.WaitUntil(() => Instances(id).Length == 1,
+                    $"The manager never instantiated the model '{id}' it was told about");
+                yield return E2EServer.Settle(0.5f);
+                var seen = Peer.Received.Count;
+
+                // The peer moves the object, and the server relays that here before this client
+                // deletes it. No frame runs during the sleep, so the update is handled only after
+                // the delete.
+                Peer.Send(Channel, "model::update", new JObject { { "id", id }, { "where", new JArray(1f, 0f, 0f) } });
+                Thread.Sleep(300);
+                UnityEngine.Object.DestroyImmediate(Instances(id).Single().gameObject);
+
+                yield return E2EServer.Settle(1.5f);
+
+                Assert.That(Instances(id), Is.Empty, "The object deleted here was built again from an update sent before the delete");
+
+                var toThePeer = Peer.Received.Skip(seen)
+                    .Where(f => f.Channel == Channel && (string)TcpPeer.Json(f)["id"] == id)
+                    .ToArray();
+                Assert.That(toThePeer.Select(f => f.Command).ToArray(), Is.EqualTo(new[] { "model::delete" }),
+                    "The peer should hear of the delete and nothing else: " + string.Join(", ", toThePeer.Select(f => $"{f.Command} {TcpPeer.Text(f)}")));
+
+                yield return AssertTheServerHoldsNothingOf(id);
+            }
+            finally
+            {
+                foreach (var instance in Instances(id))
+                    UnityEngine.Object.Destroy(instance.gameObject);
+            }
+        }
+
+        /// <summary>
+        /// Only the deletes this client sent itself keep a manager from building a model. One
+        /// another client deleted and then created again under the same id is built again here.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator AModelDeletedByAnotherClientIsBuiltAgainWhenItIsCreatedAgain()
+        {
+            var template = SpawnConfigured<E2ESyncModel>("template", _ => { });
+            var manager = Spawn<E2ESyncModelManager>("manager");
+            manager.Template = template;
+            yield return null;
+            yield return LetInitialStateArrive();
+
+            var id = Guid.NewGuid().ToString();
+            try
+            {
+                Peer.Send(Channel, "model::update", new JObject { { "id", id }, { "label", "first" } });
+                yield return E2EServer.WaitUntil(() => Instances(id).Length == 1,
+                    $"The manager never instantiated the model '{id}' it was told about");
+
+                Peer.Send(Channel, "model::delete", new JObject { { "id", id } });
+                yield return E2EServer.WaitUntil(() => Instances(id).Length == 0, "The model the peer deleted was never destroyed");
+
+                // Created again as a client creates an object: a request for its id, which brings
+                // the id back into use, and then its state.
+                Peer.Send(Channel, "model::request", new JObject { { "id", id } });
+                Peer.Send(Channel, "model::update", new JObject { { "id", id }, { "label", "second" } });
+                yield return E2EServer.WaitUntil(() => Instances(id).Any(m => m.Label == "second"),
+                    "The model created again under the id of one the peer had deleted was never built");
+
+                yield return E2EServer.Settle(0.5f);
+                Assert.That(Instances(id).Length, Is.EqualTo(1));
+            }
+            finally
+            {
+                foreach (var instance in Instances(id))
+                    UnityEngine.Object.Destroy(instance.gameObject);
+            }
+        }
+
 
         /*
          *  The send-rate limit (SyncSettings.MaxSendRate). Set low here, so that what it holds

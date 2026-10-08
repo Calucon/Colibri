@@ -78,6 +78,13 @@ namespace HCIKonstanz.Colibri.Synchronization
             if (_existingObjects.Any(t => t.Id == id))
                 return;
 
+            // This client deleted the object a moment ago, and the update is one another client
+            // sent before the server had the delete. Built from it, the deleted object was back on
+            // this client, with the template's values for every member the update did not carry,
+            // and nothing was going to delete it again.
+            if (LocallyDeletedModels.Contains(Channel, id))
+                return;
+
             // A manager without a template is how objects placed in the scene are synced, so it is
             // only worth a word once a model arrives that it would have to build - and then once,
             // not for every update of every such model.
