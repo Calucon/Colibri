@@ -32,7 +32,7 @@ describe('model sync relay (transport level)', () => {
         const witness = await createClient(app);
 
         // Wait for the witness to see the update relayed before asking a late
-        // client to request state — the server applies the update to its
+        // client to request state: the server applies the update to its
         // store before broadcasting, so this guarantees persistence has
         // already happened by the time we ask for it below.
         const witnessPromise = nextMessage(witness, {
