@@ -15,7 +15,8 @@ is in [protocol.md](protocol.md), and everything that changed since 1.x in
 - [TLS](#tls): [turning it on](#turning-it-on),
   [a self-signed certificate](#a-self-signed-certificate), [Docker](#tls-with-docker),
   [renewal](#renewal), [what stops the server](#what-stops-the-server-at-startup),
-  [the log](#tls-in-the-log), [a reverse proxy instead](#a-reverse-proxy-instead)
+  [the log](#tls-in-the-log), [a reverse proxy instead](#a-reverse-proxy-instead),
+  [performance](#performance)
 - [Features](#features)
   - [Logs](#logs)
   - [Load limits](#load-limits)
@@ -299,6 +300,23 @@ TLS can also end in a reverse proxy you already run, in front of a server with `
 `TLS_KEY` unset: for the TCP port, nginx's `stream` module with `listen 9012 ssl`, or a Traefik TCP
 router with TLS. Colibri needs no change for that. The drawback: the server then sees every client
 at the proxy's address, in the log and in the warnings it limits per address.
+
+### Performance
+
+Measured on a shared 4-core Linux host with Node 24, TLS against plain, with 30 to 60 Unity-like
+clients sending 10 objects each at 20 to 30 Hz, and as many web clients:
+
+- **Bytes:** about 15% more from Unity to the server (29 bytes per TLS 1.2 record, on frames of
+  about 190 bytes), 11% more from the server to Unity, and 3 to 4% more on WSS.
+- **CPU:** the TCP worker thread, which encrypts and decrypts the Unity traffic, uses 4 to 5
+  percentage points more (about +10%). The main thread uses 11 to 17 points less, because Node packs
+  many small WSS frames into fewer TLS records and send calls; behind a TLS-terminating proxy, that
+  saving does not happen.
+- **Latency:** the median is unchanged, within noise.
+- **Connecting:** about 1 ms more for the TCP connect, and a median TLS handshake of 4 to 5 ms
+  while 120 clients connect at once.
+
+The cost of TLS on a headset itself was not measured.
 
 ## Features
 
