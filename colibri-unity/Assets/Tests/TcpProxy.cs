@@ -30,7 +30,9 @@ namespace HCIKonstanz.Colibri.E2E
         private readonly CancellationTokenSource _lifetime = new CancellationTokenSource();
         private readonly List<TcpClient> _open = new List<TcpClient>();
         private readonly List<(int Session, DecodedFrame Frame)> _fromClient = new List<(int, DecodedFrame)>();
+        private readonly List<(int Session, DecodedFrame Frame)> _swallowed = new List<(int, DecodedFrame)>();
         private int _sessions;
+        private int _unpluggedUpTo;
         private volatile bool _isHolding;
 
         public int Port { get; }
@@ -50,13 +52,26 @@ namespace HCIKonstanz.Colibri.E2E
         /// <summary>How many connections the client has made through the proxy.</summary>
         public int Sessions => Volatile.Read(ref _sessions);
 
-        /// <summary>Every message frame the client sent, with the 1-based connection it came on.</summary>
+        /// <summary>
+        /// Every message frame the client sent that was passed on to the server, with the 1-based
+        /// connection it came on.
+        /// </summary>
         public (int Session, DecodedFrame Frame)[] FromClient
         {
             get
             {
                 lock (_fromClient)
                     return _fromClient.ToArray();
+            }
+        }
+
+        /// <summary>The message frames the client wrote into a connection after <see cref="Unplug"/>, which never reached the server.</summary>
+        public (int Session, DecodedFrame Frame)[] Swallowed
+        {
+            get
+            {
+                lock (_fromClient)
+                    return _swallowed.ToArray();
             }
         }
 
@@ -110,6 +125,20 @@ namespace HCIKonstanz.Colibri.E2E
             foreach (var client in open)
                 Reset(client);
         }
+
+        /// <summary>
+        /// The link goes dead without either end being told, as when a headset's Wi-Fi drops: from
+        /// now on what the client writes into the open connection is swallowed, and nothing more
+        /// reaches it. Its writes still succeed, so it only finds out once its heartbeat watchdog
+        /// gives up on the silent server, about 2 s later. The server keeps the session until the
+        /// client closes it; the connection the client makes next is passed on as usual.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="Cut"/> resets the connection instead, which the client notices at once: a
+        /// write after that fails, and the client sends it again on the next connection. Only a link
+        /// that dies silently loses what is written into it.
+        /// </remarks>
+        public void Unplug() => Volatile.Write(ref _unpluggedUpTo, Sessions);
 
         public void Dispose()
         {
@@ -167,8 +196,8 @@ namespace HCIKonstanz.Colibri.E2E
                 if (_terminateTls)
                     server = await TestTls.ConnectAsync(server, _upstreamHost).ConfigureAwait(false);
 
-                var toServer = Pump(client, server, _recordMessages ? session : 0);
-                var toClient = Pump(server, client, 0);
+                var toServer = Pump(client, server, session, fromClient: true);
+                var toClient = Pump(server, client, session, fromClient: false);
 
                 // Either direction ending ends the session, as a broken link would.
                 await Task.WhenAny(toServer, toClient).ConfigureAwait(false);
@@ -192,10 +221,10 @@ namespace HCIKonstanz.Colibri.E2E
             }
         }
 
-        /// <param name="recordAs">The session to record decoded messages under, or 0 not to.</param>
-        private async Task Pump(Stream from, Stream to, int recordAs)
+        /// <param name="fromClient">Whether this is the client's direction, whose messages are recorded.</param>
+        private async Task Pump(Stream from, Stream to, int session, bool fromClient)
         {
-            var reader = recordAs > 0 ? new FrameReader() : null;
+            var reader = fromClient && _recordMessages ? new FrameReader() : null;
             var buffer = new byte[16 * 1024];
 
             while (true)
@@ -204,15 +233,20 @@ namespace HCIKonstanz.Colibri.E2E
                 if (read <= 0)
                     return;
 
-                if (reader != null)
-                    Record(reader, buffer, read, recordAs);
+                // Still read after Unplug, in both directions, so the session ends as soon as
+                // either end closes it.
+                var unplugged = session <= Volatile.Read(ref _unpluggedUpTo);
 
-                await to.WriteAsync(buffer, 0, read, _lifetime.Token).ConfigureAwait(false);
+                if (reader != null)
+                    Record(reader, buffer, read, session, unplugged);
+
+                if (!unplugged)
+                    await to.WriteAsync(buffer, 0, read, _lifetime.Token).ConfigureAwait(false);
             }
         }
 
         /// <summary>Out of the async method because a ReadOnlySpan cannot live in one.</summary>
-        private void Record(FrameReader reader, byte[] buffer, int count, int session)
+        private void Record(FrameReader reader, byte[] buffer, int count, int session, bool swallowed)
         {
             foreach (var frame in reader.Append(new ReadOnlySpan<byte>(buffer, 0, count)))
             {
@@ -220,7 +254,7 @@ namespace HCIKonstanz.Colibri.E2E
                     continue;
 
                 lock (_fromClient)
-                    _fromClient.Add((session, frame));
+                    (swallowed ? _swallowed : _fromClient).Add((session, frame));
             }
         }
 
