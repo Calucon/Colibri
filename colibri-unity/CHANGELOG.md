@@ -61,6 +61,10 @@ rationale, migration steps, and what the Editor verification did and did not cov
   another client that counts or reacts to every value now sees gaps. A *Max Send Rate* of `0`
   sends every frame's change as before; see [SyncBehaviour and
   SyncTransform](#syncbehaviour-and-synctransform).
+- **'Server supports SSL/TLS?' now switches the TCP connection to TLS too**, not only the Store's
+  requests. A server whose web port is behind a TLS proxy but whose TCP port is plain needs TLS on
+  the TCP port as well: `TLS_CERT` and `TLS_KEY`, or TLS termination for 9012 in the proxy. See
+  [TLS](#tls).
 
 ## v3 wire protocol
 
@@ -123,6 +127,31 @@ rationale, migration steps, and what the Editor verification did and did not cov
   refusal actually received, and the first frame a later session decodes clears it at once. A
   session that never got as far as sending the handshake ("connection refused" from a server that is
   simply not running) does not count, so that is still reported as what it is.
+
+## TLS
+
+- **TLS on the TCP connection.** With *Server supports SSL/TLS?* (`ColibriConfig.IsSSL`) ticked,
+  the connection to colibri-server is now encrypted too, not only the Store's `https`; the server
+  needs `TLS_CERT` and `TLS_KEY`. The frames inside are the same v3 frames. The handshake has to
+  finish within the 5 s connect timeout, the client sends the server address as SNI and checks the
+  certificate against it, and Unity's TLS backend uses TLS 1.2. See [TLS](docs/guide.md#tls) in
+  the guide.
+- **`ColibriConfig.AllowSelfSignedCertificate`** (*Allow self-signed certificate*) **and
+  `ColibriConfig.ServerCertificateSha256`** (*Server certificate SHA-256*, which pins one
+  certificate by its fingerprint), shown in the Setup window when TLS is on. By default only
+  certificates the device trusts are accepted, and existing configuration assets load with both
+  off.
+- **The Store's `https` requests honour the same two settings**, so a server with a self-signed
+  certificate works for the Store as well as for the TCP connection.
+- **Clear TLS errors**, each logged as an error once and then retried with backoff. A server that
+  does not answer the TLS handshake gets a message naming both fixes. A rejected certificate gets
+  its reason (self-signed, expired, not issued for the address, another fingerprint) and the
+  fingerprint to pin. A certificate accepted only because self-signed ones are allowed is a warning,
+  once per session.
+- **The Status window shows TLS** next to the server address, how the certificate was accepted,
+  and its SHA-256 fingerprint, selectable for copying.
+- For a client without TLS, the suspected-protocol-mismatch error also suggests ticking 'Server
+  supports SSL/TLS', since a server with TLS on hangs up on such a client before a frame.
 
 ## Correctness
 
@@ -659,6 +688,10 @@ otherwise spend on their prototype, so:
 - `run-tests.mjs --stripping` builds a Release IL2CPP player with *Managed Stripping Level* High and
   checks inside it that every `[Sync]` member survived with its `[Sync]` and still syncs. Off by
   default; skipped with a notice without the platform's IL2CPP module.
+- `TlsTests` and `StoreOverTlsTests` run against a second colibri-server with TLS on, which
+  `run-tests.mjs` starts from `tls-test-server/compose.yml` (ports 9111 and 9112, with a test-only
+  self-signed certificate). `run-tests.mjs --tls` runs the whole PlayMode suite a second time with
+  every connection over TLS, the tests' own fake server and proxy included.
 
 ## End-to-end verification, and what it fixed
 
