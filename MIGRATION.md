@@ -420,14 +420,17 @@ next change. Unity and web clients now ask again every time they reconnect, and 
 they have rather than creating duplicates. The server still forgets an app's models once its last
 client disconnects, which is what a lone client's outage looks like to it, and when it restarts; a
 client that finds its objects gone sends them again in full (colibri-web: the models it registered
-itself). An object another client deleted during the outage is deleted on the reconnecting client
-too, if the delete is no more than `MODEL_TOMBSTONE_SECONDS` (ten minutes) old (colibri-web: again
-only for the models it registered; one it got from another client stays). While a Unity client is
-disconnected, what it sends waits in one queue and goes out in order when the connection is back;
-past 256 broadcasts and log lines the oldest are dropped, with one warning per outage, while the
-model updates for one object are merged into one instead. Behind that, the whole queue is capped
-at 10,000 messages, connected or not: past it the oldest broadcasts and log lines go first, then
-the oldest model messages, with a warning.
+itself). A Unity object that changed during the outage is the exception: its changes reach the
+server first, and until its other members change, the server and every client that joins later have
+only those (see [Known limits](colibri-server/docs/protocol.md#known-limits)). An object another
+client deleted during the outage is deleted on the reconnecting client too, if the delete is no more
+than `MODEL_TOMBSTONE_SECONDS` (ten minutes) old (colibri-web: again only for the models it
+registered; one it got from another client stays). While a Unity client is disconnected, what it
+sends waits in one queue and goes out in order when the connection is back; past 256 broadcasts and
+log lines the oldest are dropped, with one warning per outage, while the model updates for one
+object are merged into one instead. Behind that, the whole queue is capped at 10,000 messages,
+connected or not: past it the oldest broadcasts and log lines go first, then the oldest model
+messages, with a warning.
 
 **colibri-web's `registerModel` takes what the server has.** It used to send the new instance in
 full at once. When the server already held that id (a fixed id such as `'session'`, kept while
