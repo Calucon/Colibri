@@ -45,7 +45,8 @@ receive its own data, so try it with two clients, such as two browser tabs, or a
 
 ### SyncModel
 
-Synchronized objects extend `SyncModel` and mark their fields with `@Synced()`:
+Synchronized objects extend `SyncModel` and mark their fields with `@Synced()`. This example needs the
+`new Colibri()` from the one above:
 
 ```ts
 import { RegisterModelSync, SyncModel, Synced } from '@hcikn/colibri';
@@ -56,12 +57,15 @@ class Player extends SyncModel<Player> {
 }
 
 const [players$, registerPlayer] = RegisterModelSync<Player>({ name: 'player', type: Player });
-players$.subscribe(players => console.log(`${players.length} players`));
+players$.subscribe(players => console.log(players.map(p => `${p.id}: ${p.score}`)));
 
-const me = new Player('player-1'); // the id is the same on every client, so it has to be unique
+// the id names this object on every client, so give each object its own
+const me = new Player(`player-${Date.now()}`);
 registerPlayer(me);
 me.score = 10; // sent to the other clients
 ```
+
+Open the page in a second tab, and each tab lists both players.
 
 Always pass `name`. To sync with a Unity `SyncBehaviour<T>`, use the Unity class name in lower case, followed by
 `_<ModelId>` if that component's `ModelId` is set. More in [SyncModel](docs/guide.md#syncmodel).
