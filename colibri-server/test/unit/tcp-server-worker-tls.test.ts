@@ -368,6 +368,67 @@ describe('TCPServerWorker with TLS', () => {
         });
     });
 
+    // A message larger than HEARTBEAT_EVERY_BYTES has no heartbeat inside it, so a client reading one
+    // echoes nothing until it is through. On a real socket the kernel takes all of this one at once,
+    // so the server cannot see it being read either.
+    describe('a client reading a large message over a slow link', () => {
+        // Reads no faster than `bytesPerSecond`, and echoes every heartbeat it reads, as colibri-unity
+        // does. Returns a function that stops the clock it reads by.
+        const slowLink = function (peer: Peer, bytesPerSecond: number): () => void {
+            const step = bytesPerSecond / 20;
+            let budget = step;
+            let echoed = 0;
+            peer.socket.pause();
+            peer.socket.on('data', (data: Buffer) => {
+                // Peer's own listener has decoded the frames in it already.
+                for (const frame of peer.frames.slice(echoed)) {
+                    if (frame.type === FrameType.Heartbeat) peer.send(encodeHeartbeatFrame(frame.pingTimestamp));
+                }
+                echoed = peer.frames.length;
+                budget -= data.length;
+                if (budget <= 0) peer.socket.pause();
+            });
+            const clock = setInterval(() => {
+                budget = Math.min(budget + step, step);
+                if (budget > 0) peer.socket.resume();
+            }, 50);
+            peer.socket.resume();
+            return () => clearInterval(clock);
+        };
+
+        const largeMessageArrives = async function (peer: Peer): Promise<void> {
+            peer.handshake('slow-app', 'downloader');
+            await eventually(() => peer.count(FrameType.Heartbeat) > 0);
+            const stop = slowLink(peer, 512 * 1024);
+            try {
+                // 1 MiB: 2 s at 512 KiB/s, four times the idle timeout.
+                internals.handleParentMessage({
+                    channel: 'm:broadcastToApp',
+                    content: { msg: { channel: 'big', command: 'broadcast::json', payload: Buffer.alloc(1024 * 1024, 0x31) }, app: 'slow-app' },
+                });
+                await eventually(() => peer.frames.some(frame => frame.type === FrameType.Message && frame.channel === 'big'), 10_000);
+
+                // And it is still connected, echoing the heartbeats after it.
+                const heartbeats = peer.count(FrameType.Heartbeat);
+                await eventually(() => peer.count(FrameType.Heartbeat) > heartbeats + 5);
+                expect(posted.filter(p => p.channel === 'clientDisconnected$')).toEqual([]);
+                expect(peer.socket.destroyed).toBe(false);
+            } finally {
+                stop();
+            }
+        };
+
+        it('is not disconnected while it reads it', async () => {
+            await start({ idleTimeoutMillis: 500 });
+            await largeMessageArrives(await connectPlain());
+        }, 15_000);
+
+        it('is not disconnected while it reads it through TLS', async () => {
+            await start({ idleTimeoutMillis: 500, tls: { cert: first.cert, key: first.key } });
+            await largeMessageArrives(await connectTls());
+        }, 15_000);
+    });
+
     describe('without TLS', () => {
         it('serves unencrypted clients as before', async () => {
             await start({});
