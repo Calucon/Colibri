@@ -674,11 +674,12 @@ client's update or in an answer. Until all the answers are in, everything that a
 object, other clients' updates included, is compared with the values the member held from 10 s
 before the outage was noticed: those it sent since, and the one it held at that point, such as
 `true` for an object switched on a minute ago. The value sent last means it arrived. An earlier one
-means the change after it was lost: the member keeps its value and sends it again, once. A value the
-member did not hold is another client's change during the outage and is applied, as is everything
-for a member that sent nothing in those 10 s and for an object that has never sent anything. If the
-connection drops again before all the answers are in, the next reconnect still counts from the first
-outage. This goes by values, so some cases come out wrong:
+means the change after it was lost: the member keeps its value and sends it again, once. So does a
+member changed after Colibri has asked again, whatever arrives: the server reads that change after
+all of it. Otherwise a value the member did not hold is another client's change during the outage
+and is applied, as is everything for a member that sent nothing in those 10 s and for an object that
+has never sent anything. If the connection drops again before all the answers are in, the next
+reconnect still counts from the first outage. This goes by values, so some cases come out wrong:
 
 - Another client that sets a member back during the outage, to a value this client held in those
   10 s, is undone: this client's value replaces it.
@@ -691,11 +692,12 @@ outage. This goes by values, so some cases come out wrong:
 
 An object destroyed as the Wi-Fi drops loses its delete the same way. When the outage is noticed,
 the deletes made since the client last heard from the server, or in the second before, are sent
-again, so the object is deleted on the server and the other clients after the reconnect. If the
-connection drops again before all the answers are in, they go out once more, counted from the first
-outage. A delete made 60 s or more before the outage was noticed is not sent again. Like a delete
-made during the outage, one sent again also removes an object another client has created under the
-same id in the meantime.
+again, so the object is deleted on the server and the other clients after the reconnect. A delete
+made 60 s or more before the outage was noticed is not sent again. If the connection drops again
+before all the answers are in, the deletes sent again go out once more, however old, and so do those
+made since the outage was noticed, unless the object has been created on this client again. Like a
+delete made during the outage, one sent again also removes an object another client has created
+under the same id in the meantime.
 
 The server remembers a delete for `MODEL_TOMBSTONE_SECONDS`, 10 minutes by default. An object
 that another client deleted longer ago than that, while this client was away, is answered with
