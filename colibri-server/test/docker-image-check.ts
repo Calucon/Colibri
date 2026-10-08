@@ -15,16 +15,19 @@
  * (default `colibri-image-check`) and removed again at the end. The web and TCP ports are
  * published on 127.0.0.1, on COLIBRI_DOCKER_PORT and the port after it when that is set, and
  * on ports Docker picks otherwise. Bind-mount sources go under COLIBRI_DOCKER_TMPDIR, or the
- * system temp directory.
+ * system temp directory. The TLS deployment's certificates are made with the openssl command line
+ * tool.
  */
 import { execFile } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import * as net from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import * as tls from 'node:tls';
 import { fileURLToPath } from 'node:url';
 import { io } from 'socket.io-client';
 import { PROTOCOL_VERSION, encodeHandshakeFrame } from '../src/server/modules/networking/protocol.js';
+import { TestCertificate, createTestCertificate } from './tls-test-certificate.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SERVER_DIR = path.resolve(__dirname, '..');
@@ -101,16 +104,17 @@ const publish = function (offset: number, containerPort: number): string[] {
 };
 
 // Answers once the TCP worker sends anything back to a client that handshook - a published
-// port alone proves nothing, since docker-proxy accepts the connection either way.
-const tcpAnswers = function (port: number): Promise<boolean> {
+// port alone proves nothing, since docker-proxy accepts the connection either way. Over TLS, the
+// certificate is checked against the default CA certificates, which main() extends.
+const tcpAnswers = function (port: number, useTls = false): Promise<boolean> {
     return new Promise(resolve => {
-        const socket = net.connect(port, '127.0.0.1');
+        const handshake = () => socket.write(encodeHandshakeFrame(PROTOCOL_VERSION, 'image-check', 'image-check'));
+        const socket = useTls ? tls.connect({ port, host: '127.0.0.1' }, handshake) : net.connect(port, '127.0.0.1', handshake);
         const done = (ok: boolean) => {
             socket.destroy();
             resolve(ok);
         };
         const timer = setTimeout(() => done(false), 5000);
-        socket.on('connect', () => socket.write(encodeHandshakeFrame(PROTOCOL_VERSION, 'image-check', 'image-check')));
         socket.on('data', () => {
             clearTimeout(timer);
             done(true);
@@ -119,6 +123,35 @@ const tcpAnswers = function (port: number): Promise<boolean> {
             clearTimeout(timer);
             done(false);
         });
+    });
+};
+
+// Whether the TCP port closes on a client that handshakes without TLS, without sending it anything.
+const tcpRefusesWithoutTls = function (port: number): Promise<boolean> {
+    return new Promise(resolve => {
+        let received = 0;
+        const socket = net.connect(port, '127.0.0.1', () => socket.write(encodeHandshakeFrame(PROTOCOL_VERSION, 'image-check', 'no-tls')));
+        const timer = setTimeout(() => {
+            socket.destroy();
+            resolve(false);
+        }, 5000);
+        socket.on('data', data => (received += data.length));
+        socket.on('error', () => undefined);
+        socket.on('close', () => {
+            clearTimeout(timer);
+            resolve(received === 0);
+        });
+    });
+};
+
+// The SHA-256 fingerprint of the certificate a new TLS connection to the port is served.
+const servedFingerprint = function (port: number): Promise<string | undefined> {
+    return new Promise(resolve => {
+        const socket = tls.connect({ port, host: '127.0.0.1', rejectUnauthorized: false }, () => {
+            resolve(socket.getPeerX509Certificate()?.fingerprint256);
+            socket.destroy();
+        });
+        socket.on('error', () => resolve(undefined));
     });
 };
 
@@ -190,7 +223,52 @@ interface Deployment {
     failure?: { code: string; advice: string };
     // Whether the entrypoint cannot give the data directory to node, and must say so.
     chownFails?: boolean;
+    // Serves TLS with `first`, from `dir` mounted read-only, and is then renewed to `second`.
+    tls?: TlsSetup;
 }
+
+interface TlsSetup {
+    dir: string;
+    first: TestCertificate;
+    second: TestCertificate;
+}
+
+// Puts a certificate where the container reads it from: what a renewal does.
+const installCertificate = async function (setup: TlsSetup, certificate: TestCertificate): Promise<void> {
+    await copyFile(certificate.certPath, path.join(setup.dir, 'fullchain.pem'));
+    await copyFile(certificate.keyPath, path.join(setup.dir, 'privkey.pem'));
+    // The server runs as uid 1000, which need not be the uid that made the key.
+    await chmod(path.join(setup.dir, 'privkey.pem'), 0o644);
+};
+
+// TLS on both ports: the certificate, a client without TLS, and a renewal without a restart.
+const checkTls = async function (container: string, webPort: number, setup: TlsSetup): Promise<void> {
+    const web = await hostPort(container, webPort);
+    const tcp = await hostPort(container, 9012);
+    const logs = await logsOf(container);
+
+    check('logs the certificate\'s SHA-256 fingerprint', logs.includes(`SHA-256 fingerprint ${setup.first.fingerprint256}`), logs.slice(0, 1500));
+    check('serves the certificate on the web port', await servedFingerprint(web) === setup.first.fingerprint256);
+    check('serves the certificate on the TCP port', await servedFingerprint(tcp) === setup.first.fingerprint256);
+    check('serves no unencrypted HTTP', await fetch(`http://127.0.0.1:${web}/api/store`).then(() => false, () => true));
+    check('refuses a TCP client without TLS, and sends it nothing', await tcpRefusesWithoutTls(tcp));
+    check('says why it refused that client', (await logsOf(container)).includes('it does not use TLS'));
+
+    await installCertificate(setup, setup.second);
+    // Taken up once two reads 10 s apart have found it.
+    let webRenewed = false;
+    let tcpRenewed = false;
+    for (let i = 0; i < 40 && !(webRenewed && tcpRenewed); i++) {
+        await sleep(1000);
+        webRenewed = await servedFingerprint(web) === setup.second.fingerprint256;
+        tcpRenewed = await servedFingerprint(tcp) === setup.second.fingerprint256;
+    }
+    check('takes up a renewed certificate on the web port without a restart', webRenewed);
+    check('takes up a renewed certificate on the TCP port without a restart', tcpRenewed);
+    check('logs the renewal', (await logsOf(container)).includes(`(was ${setup.first.fingerprint256})`));
+    check('TCP server answers a handshake over the renewed certificate', await tcpAnswers(tcp, true));
+};
+
 
 const runDeployment = async function (image: string, deployment: Deployment): Promise<void> {
     console.log(`\n${deployment.name}${deployment.user ? ` (--user ${deployment.user})` : ''}`);
@@ -218,7 +296,8 @@ const runDeployment = async function (image: string, deployment: Deployment): Pr
         return;
     }
 
-    const web = `http://127.0.0.1:${await hostPort(container, webPort)}`;
+    const scheme = deployment.tls ? 'https' : 'http';
+    const web = `${scheme}://127.0.0.1:${await hostPort(container, webPort)}`;
 
     if (deployment.symlinkOut) {
         const owner = (await dockerOk([ 'exec', container, 'stat', '-c', '%U', deployment.symlinkOut ])).trim();
@@ -240,7 +319,7 @@ const runDeployment = async function (image: string, deployment: Deployment): Pr
 
     check('sends the admin UI its log over Socket.IO', await adminLogAnswers(web));
 
-    check('TCP server answers a handshake', await tcpAnswers(await hostPort(container, 9012)));
+    check('TCP server answers a handshake', await tcpAnswers(await hostPort(container, 9012), deployment.tls !== undefined));
 
     const malformed = await fetch(`${web}/api/store/image-check/malformed`, {
         method: 'PUT',
@@ -297,6 +376,8 @@ const runDeployment = async function (image: string, deployment: Deployment): Pr
         check('keeps serving the value from memory', get.status === 200 && JSON.stringify(await get.json()) === JSON.stringify(value));
     }
 
+    if (deployment.tls) await checkTls(container, webPort, deployment.tls);
+
     await stopCleanly(container, 1);
 
     if (!deployment.writable) return;
@@ -307,7 +388,7 @@ const runDeployment = async function (image: string, deployment: Deployment): Pr
     const again = await waitHealthy(container);
     check('comes back healthy on the same data', again === 'running healthy', again);
     if (again !== 'running healthy') return;
-    const restartedWeb = `http://127.0.0.1:${await hostPort(container, webPort)}`;
+    const restartedWeb = `${scheme}://127.0.0.1:${await hostPort(container, webPort)}`;
     const res = await fetch(`${restartedWeb}/api/store/image-check/value`);
     const body = res.status === 200 ? await res.json() : undefined;
     check('still has the value after a restart', JSON.stringify(body) === JSON.stringify(value), `HTTP ${res.status}`);
@@ -353,6 +434,20 @@ const main = async function (): Promise<void> {
         created.volumes.add(vol);
         return `${vol}:${DATA_DIR}`;
     };
+
+    // Self-signed, for 127.0.0.1 among others, and trusted from here on by everything in this
+    // process that checks certificates: fetch, Socket.IO and tls.connect alike.
+    const madeDir = path.join(tmp, 'tls-made');
+    await mkdir(madeDir);
+    const tlsSetup: TlsSetup = {
+        dir: path.join(tmp, 'tls-mount'),
+        first: createTestCertificate(madeDir, 'first'),
+        second: createTestCertificate(madeDir, 'second'),
+    };
+    await mkdir(tlsSetup.dir);
+    await chmod(tlsSetup.dir, 0o755);
+    await installCertificate(tlsSetup, tlsSetup.first);
+    tls.setDefaultCACertificates([ ...tls.getCACertificates('default'), tlsSetup.first.cert, tlsSetup.second.cert ]);
 
     const legacy = { app: 'legacy-app', key: 'greeting', value: 'stored by colibri 1.x' };
     const legacyStore = { 'store.json': JSON.stringify({ [legacy.app]: { [legacy.key]: legacy.value } }) };
@@ -434,6 +529,17 @@ const main = async function (): Promise<void> {
             mount: () => volume('web-port-from-env-file'),
             dockerArgs: [ '-v', `${envFile}:/srv/colibri/.env:ro` ],
             webPort: 9112,
+            writable: true,
+        },
+        {
+            // TLS on both ports, with a self-signed certificate mounted read-only. The health check
+            // has to pass over HTTPS without trusting it, and a renewal has to be taken up without
+            // a restart.
+            name: 'tls-self-signed',
+            mount: () => volume('tls-self-signed'),
+            dockerArgs: [ '-v', `${tlsSetup.dir}:/srv/colibri/certs:ro` ],
+            env: { TLS_CERT: '/srv/colibri/certs/fullchain.pem', TLS_KEY: '/srv/colibri/certs/privkey.pem' },
+            tls: tlsSetup,
             writable: true,
         },
     ];

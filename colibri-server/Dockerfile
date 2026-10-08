@@ -52,13 +52,21 @@ EXPOSE 9013/udp
 # other WEBSERVER_PORT, or a host such as localhost (which Node binds to ::1), unhealthy for
 # good, and an orchestrator restarting it over and over. /api/store rather than /, which is
 # only the admin UI while BASE_URL is empty.
+#
+# Over HTTPS when TLS_CERT and TLS_KEY are set, since the server then serves nothing else, and
+# without checking the certificate: one that is self-signed, or names the server's public address
+# rather than this loopback one, is no reason to call the container unhealthy. (fetch cannot be
+# told not to check it, hence http and https.)
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD node -e " \
         try { process.loadEnvFile(); } catch {} \
-        const { WEBSERVER_HOST: h = '', WEBSERVER_PORT: port = '' } = process.env; \
-        const host = h === '' || h === '0.0.0.0' || h === '::' ? '127.0.0.1' : h.includes(':') ? '[' + h + ']' : h; \
-        fetch('http://' + host + ':' + (port || '9011') + '/api/store') \
-            .then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"
+        const { WEBSERVER_HOST: h = '', WEBSERVER_PORT: port = '', TLS_CERT: cert = '', TLS_KEY: key = '' } = process.env; \
+        const host = h === '' || h === '0.0.0.0' || h === '::' ? '127.0.0.1' : h; \
+        const tls = cert.trim() !== '' && key.trim() !== ''; \
+        require(tls ? 'https' : 'http') \
+            .get({ host, port: port || '9011', path: '/api/store', rejectUnauthorized: false }, \
+                r => process.exit(r.statusCode >= 200 && r.statusCode < 300 ? 0 : 1)) \
+            .on('error', () => process.exit(1))"
 
 # Starts as root only long enough to give /srv/colibri/data to the node user, then runs the
 # server as node. node itself, not npm, so the server is PID 1 and receives docker stop's SIGTERM.
