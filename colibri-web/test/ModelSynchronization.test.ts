@@ -87,9 +87,12 @@ describe('ModelSynchronization', () => {
             // initial data fetch
             expect(sendMessageMock).toHaveBeenCalledWith('widget', 'model::request');
 
-            // registered exactly one channel, with the derived name
-            expect(registerChannelMock).toHaveBeenCalledTimes(1);
-            expect(registerChannelMock.mock.calls[0][0]).toBe('widget');
+            // registered the channel with the derived name, and the one the end of the answers after
+            // a reconnect comes on
+            expect(registerChannelMock.mock.calls.map(([channel]) => channel)).toEqual([
+                'widget',
+                'colibri::reconnect'
+            ]);
 
             // handler captured successfully
             expect(typeof capturedHandler()).toBe('function');

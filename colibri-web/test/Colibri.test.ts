@@ -29,12 +29,18 @@ const connectMock = connect as unknown as Mock;
 type SocketHandler = (...args: unknown[]) => void;
 
 function makeFakeSocket() {
+    // The ids asked for on 'colibri::reconnect', kept apart from emit's calls, which a test may
+    // clear: see endOfAnswers.
+    const reconnectMarkers: string[] = [];
     return {
         on: vi.fn<(event: string, cb: SocketHandler) => void>(),
         once: vi.fn<(event: string, cb: SocketHandler) => void>(),
         off: vi.fn<(event: string, cb: SocketHandler) => void>(),
         onAny: vi.fn<(cb: SocketHandler) => void>(),
-        emit: vi.fn<(event: string, ...args: unknown[]) => void>(),
+        emit: vi.fn<(event: string, ...args: unknown[]) => void>((event, msg) => {
+            if (event === 'colibri::reconnect') reconnectMarkers.push(((msg as Message).payload as { id: string }).id);
+        }),
+        reconnectMarkers,
         disconnect: vi.fn<() => void>(),
         // Read when the old-server timer expires: a socket that is already down explains the
         // silence by itself, so the check must not fire on it.
@@ -565,6 +571,17 @@ const deliver = (channel: string, msg: { command: string; payload?: unknown }) =
     }
 };
 
+// The server's answer to each request a RegisterModelSync sent on 'colibri::reconnect' after asking
+// again for its own models on a reconnect, and not answered yet: the answers to those are all in.
+const endOfAnswers = () => {
+    for (const id of fakeSocket.reconnectMarkers.splice(0)) {
+        deliver('colibri::reconnect', { command: 'model::update', payload: { id } });
+    }
+};
+
+// The id each of those requests asks for, which is new every time.
+const endId: unknown = expect.any(String);
+
 const latest = <T>(models$: Observable<T[]>): T[] => {
     let current: T[] = [];
     models$.subscribe(m => (current = m)).unsubscribe();
@@ -817,10 +834,12 @@ describe('sending its own models again after a reconnect', () => {
         deliver('own', { command: 'model::update', payload: { id: 'w2' } });
         expect(sent('model::request').slice(2)).toEqual([['own', {}]]);
 
+        // And one more, for an id nobody has, whose answer comes after all of theirs.
         connectSocket();
         expect(sent('model::request').slice(3)).toEqual([
             ['own', { id: 'w1', again: true }],
-            ['own', { id: 'w2', again: true }]
+            ['own', { id: 'w2', again: true }],
+            ['colibri::reconnect', { id: endId, again: true }]
         ]);
     });
 
@@ -965,6 +984,9 @@ describe('sending its own models again after a reconnect', () => {
     const sentInOrder = () =>
         fakeSocket.emit.mock.calls.map(([, msg]) => [(msg as Message).command, (msg as Message).payload]);
 
+    // The request sent after asking again for the models on a reconnect (see endOfAnswers).
+    const lastRequest = ['model::request', { id: endId, again: true }];
+
     class Pair extends SyncModel<Pair> {
         @Synced() accessor a = '';
         @Synced() accessor b = '';
@@ -1020,6 +1042,7 @@ describe('sending its own models again after a reconnect', () => {
 
         expect(sentInOrder()).toEqual([
             ['model::request', { id: 'p1', again: true }],
+            lastRequest,
             ['model::update', { id: 'p1', a: 'A2', b: 'B' }],
             ['model::request', {}]
         ]);
@@ -1033,6 +1056,7 @@ describe('sending its own models again after a reconnect', () => {
         connectSocket();
         // Another client changed b meanwhile; a is still what this client last sent.
         deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A', b: 'B2' } });
+        endOfAnswers();
         await settle();
 
         expect([pair.a, pair.b]).toEqual(['A2', 'B2']);
@@ -1041,11 +1065,12 @@ describe('sending its own models again after a reconnect', () => {
         // asked for, so that that answer already has it.
         expect(sentInOrder()).toEqual([
             ['model::request', { id: 'p1', again: true }],
+            lastRequest,
             ['model::update', { id: 'p1', a: 'A2' }],
             ['model::request', { id: 'p1', again: true }]
         ]);
         deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A2', b: 'B2' } });
-        expect(sentInOrder().slice(3)).toEqual([['model::request', {}]]);
+        expect(sentInOrder().slice(4)).toEqual([['model::request', {}]]);
 
         // Answered, so from now on a change goes out as it is made.
         fakeSocket.emit.mockClear();
@@ -1065,6 +1090,7 @@ describe('sending its own models again after a reconnect', () => {
         expect(sent('model::update')).toEqual([]);
 
         deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A', b: 'B' } });
+        endOfAnswers();
         await settle();
 
         expect([pair.a, pair.b]).toEqual(['A', 'B2']);
@@ -1084,7 +1110,9 @@ describe('sending its own models again after a reconnect', () => {
 
         expect(sentInOrder()).toEqual([
             ['model::request', { id: 'p1', again: true }],
+            lastRequest,
             ['model::request', { id: 'p1', again: true }],
+            lastRequest,
             ['model::update', { id: 'p1', a: 'A2', b: 'B' }],
             ['model::request', {}]
         ]);
@@ -1568,6 +1596,7 @@ describe('keeping a change made after registerModel', () => {
         fakeSocket.emit.mockClear();
 
         deliver('reg', { command: 'model::update', payload: server });
+        endOfAnswers();
         await settle();
 
         expect(pair.a).toBe('mine');
@@ -1749,6 +1778,7 @@ describe('sending again a change lost in a connection that died', () => {
         await sendAndDie(pair, 'A3');
 
         deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A2', b: 'B' } });
+        endOfAnswers();
         await settle();
 
         expect([pair.a, pair.b]).toEqual(['A3', 'B']);
@@ -1770,6 +1800,7 @@ describe('sending again a change lost in a connection that died', () => {
         await sendAndDie(pair, 'A2');
 
         deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A', b: 'B' } });
+        endOfAnswers();
         await settle();
 
         expect(pair.a).toBe('A2');
@@ -1791,6 +1822,7 @@ describe('sending again a change lost in a connection that died', () => {
         fakeSocket.emit.mockClear();
 
         deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A', b: 'B' } });
+        endOfAnswers();
         await settle();
 
         expect([pair.a, pair.b]).toEqual(['A2', 'B2']);
@@ -1805,6 +1837,7 @@ describe('sending again a change lost in a connection that died', () => {
         await sendAndDie(pair, 'A2');
 
         deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A2', b: 'B' } });
+        endOfAnswers();
         await settle();
 
         expect(pair.a).toBe('A2');
@@ -1816,6 +1849,7 @@ describe('sending again a change lost in a connection that died', () => {
         await sendAndDie(pair, 'A2');
 
         deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'theirs', b: 'B' } });
+        endOfAnswers();
         await settle();
 
         expect(pair.a).toBe('theirs');
@@ -1835,6 +1869,7 @@ describe('sending again a change lost in a connection that died', () => {
         fakeSocket.emit.mockClear();
 
         deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A', b: 'B' } });
+        endOfAnswers();
         await settle();
 
         expect(pair.a).toBe('A');
@@ -1856,6 +1891,7 @@ describe('sending again a change lost in a connection that died', () => {
         fakeSocket.emit.mockClear();
 
         deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A', b: 'B' } });
+        endOfAnswers();
         await settle();
 
         expect(pair.a).toBe('A');
@@ -1875,6 +1911,7 @@ describe('sending again a change lost in a connection that died', () => {
         fakeSocket.emit.mockClear();
 
         deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A', b: 'B' } });
+        endOfAnswers();
         await settle();
 
         expect(pair.a).toBe('A2');
@@ -1896,6 +1933,48 @@ describe('sending again a change lost in a connection that died', () => {
         expect(sentInOrder()).toEqual([]);
     });
 
+    // The server relays another client's update to the new connection as it comes, so one made right
+    // after the reconnect arrives ahead of the answer. Taken for the answer, it settled the model:
+    // the field lost was not in it and never checked, and the answer that followed undid the change.
+    it("checks every update until the answers are over, another client's that comes first included", async () => {
+        const { pair } = await connectedWithOwnPair();
+        await sendAndDie(pair, 'A2');
+
+        deliver('own', { command: 'model::update', payload: { id: 'p1', b: 'theirs' } });
+        deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A', b: 'theirs' } });
+        endOfAnswers();
+        await settle();
+
+        expect([pair.a, pair.b]).toEqual(['A2', 'theirs']);
+        expect(sentInOrder()).toEqual([
+            ['model::update', { id: 'p1', a: 'A2' }],
+            ['model::request', { id: 'p1', again: true }]
+        ]);
+    });
+
+    // Nor may such an update end the outage the change is judged from, when the connection dies again
+    // before the answer comes.
+    it("still judges from the earlier outage when another client's update came before the next one", async () => {
+        const { pair } = await connectedWithOwnPair();
+        await sendAndDie(pair, 'A2');
+        deliver('own', { command: 'model::update', payload: { id: 'p1', b: 'theirs' } });
+        clock += 15_000;
+        hearFromServer();
+        disconnectSocket();
+        connectSocket();
+        fakeSocket.emit.mockClear();
+
+        deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A', b: 'theirs' } });
+        endOfAnswers();
+        await settle();
+
+        expect([pair.a, pair.b]).toEqual(['A2', 'theirs']);
+        expect(sentInOrder()).toEqual([
+            ['model::update', { id: 'p1', a: 'A2' }],
+            ['model::request', { id: 'p1', again: true }]
+        ]);
+    });
+
     it('still drops the model when the answer is model::delete', async () => {
         const { models$, pair } = await connectedWithOwnPair();
         await sendAndDie(pair, 'A2');
@@ -1911,6 +1990,7 @@ describe('sending again a change lost in a connection that died', () => {
         const { pair } = await connectedWithOwnPair();
         await sendAndDie(pair, 'A2');
         deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A', b: 'B' } });
+        endOfAnswers();
         await settle();
         hearFromServer();
         disconnectSocket();
@@ -1918,6 +1998,7 @@ describe('sending again a change lost in a connection that died', () => {
         fakeSocket.emit.mockClear();
 
         deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A', b: 'B' } });
+        endOfAnswers();
         await settle();
 
         expect(pair.a).toBe('A2');
@@ -1939,6 +2020,7 @@ describe('sending again a change lost in a connection that died', () => {
         fakeSocket.emit.mockClear();
 
         deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A', b: 'B' } });
+        endOfAnswers();
         await settle();
 
         expect(pair.a).toBe('A2');
@@ -1956,6 +2038,7 @@ describe('sending again a change lost in a connection that died', () => {
         await sendAndDie(pair, 'A2');
         clock += 15_000;
         deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A', b: 'B' } });
+        endOfAnswers();
         await settle();
         expect(sentInOrder()[0]).toEqual(['model::update', { id: 'p1', a: 'A2' }]);
         hearFromServer();
@@ -1964,6 +2047,7 @@ describe('sending again a change lost in a connection that died', () => {
         fakeSocket.emit.mockClear();
 
         deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A', b: 'B' } });
+        endOfAnswers();
         await settle();
 
         expect(pair.a).toBe('A2');
@@ -2008,6 +2092,7 @@ describe('sending again a change lost in a connection that died', () => {
         noticeAndReconnect();
 
         deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A2', b: 'B' } });
+        endOfAnswers();
         await settle();
 
         expect(pair.a).toBe(WORD);
@@ -2027,6 +2112,7 @@ describe('sending again a change lost in a connection that died', () => {
         noticeAndReconnect();
 
         deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A2', b: 'B' } });
+        endOfAnswers();
         await settle();
 
         expect(pair.a).toBe(WORD);

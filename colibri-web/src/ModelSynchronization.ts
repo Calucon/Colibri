@@ -58,6 +58,13 @@ const isBare = (modelData: object) => Object.keys(modelData).every(key => key ==
 // the same connection, and a bare { id } there is that instance's answer, not a model.
 const ownOnChannel = new Map<string, Set<(id: string) => boolean>>();
 
+// The channel the request that ends the answers after a reconnect goes out on (see takeAnswer), the
+// one colibri-unity uses. No model is ever put on it.
+const RECONNECT_CHANNEL = 'colibri::reconnect';
+
+// How many of those requests this page has sent, so that each asks for an id of its own.
+let reconnectRequests = 0;
+
 // How long an own model asked for again after its held changes were sent (see takeAnswer) waits
 // for an update that shows them, before the changes held since go out anyway. The answer always
 // shows them, unless the server took the request ahead of the update: its limit on the updates a
@@ -142,9 +149,19 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
     }
     const knownValues = new WeakMap<T, Map<string, KnownValue[]>>();
 
-    // Own models asked for again on a reconnect, until the answer comes: it is checked for changes
-    // lost in the connection that died (see lostChanges).
-    const askedAfterOutage = new Set<string>();
+    // Own models asked for again on a reconnect, until the answers are over (see roundEnd): every
+    // update for one until then is checked for changes lost in the connection that died (see
+    // lostChanges). For each, the values those updates showed, and the fields found lost, which keep
+    // their value and take nothing more from them.
+    interface AfterOutage {
+        shown: Map<string, unknown>;
+        lost: Set<string>;
+    }
+    const askedAfterOutage = new Map<string, AfterOutage>();
+
+    // While own models asked for again on a reconnect wait for the answers: the id asked for by the
+    // request sent after theirs, whose answer comes after all of theirs (see takeAnswer).
+    let roundEnd: string | undefined;
 
     // When this client last heard from the server before the connection was lost (see lastHeardFrom).
     let lastHeardBeforeOutage = 0;
@@ -210,8 +227,8 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
         setTimeout(catchUpOnceAnswered, 0);
         onColibriDisconnected(colibri, () => {
             disconnected = true;
-            // Not while an answer to asking again after the last reconnect is still to come: the
-            // connection died again before it, and a change lost in the one before is still in
+            // Not before the answers to asking again after the last reconnect are over: the
+            // connection died again before that, and a change lost in the one before is still in
             // question, so it is judged from when this client last heard from the server then.
             if (askedAfterOutage.size === 0) lastHeardBeforeOutage = lastHeardFrom(colibri) ?? Date.now();
         });
@@ -231,8 +248,13 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
             catchingUpThrough = colibri;
             for (const model of models.value) {
                 if (!ownModels.has(model)) continue;
-                if (answered.has(model)) askedAfterOutage.add(model.id);
+                if (answered.has(model)) askedAfterOutage.set(model.id, { shown: new Map(), lost: new Set() });
                 askFor(colibri, model);
+            }
+            roundEnd = undefined;
+            if (askedAfterOutage.size > 0) {
+                roundEnd = `colibri-web-${++reconnectRequests}`;
+                colibri.sendMessage(RECONNECT_CHANNEL, 'model::request', { id: roundEnd, again: true });
             }
             catchUpOnceAnswered();
         });
@@ -247,6 +269,13 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
         } else {
             console.error(`Unknown model command: ${payload.command}`);
         }
+    });
+
+    // The answer to the request that ends the answers after a reconnect (see takeAnswer). Every
+    // RegisterModelSync receives each one sent on this connection, and takes only its own.
+    RegisterChannel(RECONNECT_CHANNEL, (message: Message) => {
+        const answer = message.payload as { id?: unknown } | undefined;
+        if (message.command === 'model::update' && roundEnd !== undefined && answer?.id === roundEnd) endRound();
     });
 
     // Handle updates
@@ -291,14 +320,23 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
     // was sent. At most one answer made before the server had it can still be on its way, the one
     // to the first request, so the second update since asking again is taken as the answer anyway.
     //
-    // The answer to asking again after a reconnect may also show that a change this client sent
-    // before the outage never reached the server (see lostChanges). Such a field is not applied
-    // either: it is sent again, with what was held back, and waited for in the same way.
+    // After a reconnect, what the server answers for a model it had answered for before may also
+    // show that a change this client sent before the outage never reached the server (see
+    // lostChanges). Which update is that answer cannot be told either, and the server relays an
+    // update another client made to the new connection as soon as it accepts it, so one made just
+    // then comes first. Taken for the answer, it settled the model without checking the field lost,
+    // which it did not have, and the answer itself then put the old value back. So, as colibri-unity
+    // does, one more request follows those (see roundEnd), on a channel with no models, for an id
+    // nobody has. The server handles one client's messages in the order they come and answers them
+    // in that order, so its answer, the bare id, comes after every one of theirs. Until it comes,
+    // each update for such a model is checked, and applied save for what was held back and the
+    // fields found lost. Then the model is settled as on an answer, those fields sent again with
+    // what was held (see endRound).
     const takeAnswer = (id: string, asker: Colibri, model: T | undefined, modelData: Partial<T>) => {
         if (model) answered.add(model);
-        const afterOutage = askedAfterOutage.delete(id);
 
         if (!model || isBare(modelData)) {
+            askedAfterOutage.delete(id);
             awaitingAnswer.delete(id);
             endConfirmation(id);
             if (model) {
@@ -309,6 +347,15 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
                 applyUpdate(model, modelData);
             }
             catchUpOnceAnswered();
+            return;
+        }
+
+        const afterOutage = askedAfterOutage.get(id);
+        if (afterOutage) {
+            const held = [...(heldChanges.get(model) ?? [])];
+            for (const key of lostChanges(model, modelData, held)) afterOutage.lost.add(key);
+            for (const [key, value] of Object.entries(modelData)) afterOutage.shown.set(key, value);
+            applyUpdate(model, withoutKeys(withoutChanges(modelData, model, held), afterOutage.lost));
             return;
         }
 
@@ -325,37 +372,60 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
 
         awaitingAnswer.delete(id);
         const held = releaseHeldChanges(model);
-        const lost = afterOutage ? lostChanges(model, modelData, held) : [];
-        // What the answer has for those is what the server still holds. Should the value sent
-        // again below be lost as well, in a connection that dies soon after, the next answer is
-        // told by it, however long before the change itself was made.
-        if (lost.length > 0)
-            remember(model, Object.fromEntries(lost.map(key => [key, modelData[key as keyof T]])) as Partial<T>);
-        applyUpdate(model, withoutKeys(withoutChanges(modelData, model, held), lost));
-        if (held.length > 0 || lost.length > 0) {
-            // toJson() with no properties named is all of them.
-            const current = model.toJson() as Record<string, unknown>;
-            const sent: Record<string, unknown> = held.length > 0 ? model.toJson(held) : { id };
-            for (const key of lost) sent[key] = current[key];
-            sendUpdate(asker, model, sent as Partial<T>);
+        applyUpdate(model, withoutChanges(modelData, model, held));
+        if (!sendOnTop(id, asker, model, modelData, held, [])) catchUpOnceAnswered();
+    };
 
-            // A field without a JSON value (undefined) is not sent at all, so no update shows it.
-            const differs = new Map<string, string>();
-            for (const [key, value] of Object.entries(sent)) {
-                const json = JSON.stringify(value) as string | undefined;
-                if (key === 'id' || json === undefined) continue;
-                if (!(key in modelData) || JSON.stringify(modelData[key as keyof T]) !== json) differs.set(key, json);
-            }
-            if (differs.size > 0) {
-                const timer = setTimeout(() => {
-                    stopWaiting(id);
-                }, ASK_AGAIN_TIMEOUT_MS);
-                confirming.set(id, { sent: differs, props: held, seen: 0, timer });
-                askFor(asker, model);
-                return;
-            }
+    // The answers to asking again after a reconnect are over (see takeAnswer): each own model asked
+    // for is settled with what they showed.
+    const endRound = () => {
+        roundEnd = undefined;
+        const asked = [...askedAfterOutage];
+        askedAfterOutage.clear();
+        for (const [id, { shown, lost }] of asked) {
+            const asker = awaitingAnswer.get(id);
+            const model = models.value.find(m => m.id === id);
+            // Settled already, by the bare id or model::delete.
+            if (!asker || !model) continue;
+
+            awaitingAnswer.delete(id);
+            const held = releaseHeldChanges(model);
+            // What the server showed for those is what it still holds. Should the value sent again
+            // below be lost as well, in a connection that dies soon after, the next answer is told by
+            // it, however long before the change itself was made.
+            if (lost.size > 0)
+                remember(model, Object.fromEntries([...lost].map(key => [key, shown.get(key)])) as Partial<T>);
+            sendOnTop(id, asker, model, Object.fromEntries(shown) as Partial<T>, held, [...lost]);
         }
         catchUpOnceAnswered();
+    };
+
+    // Sends, on top of what the server showed for an own model (`shown`), what this client changed
+    // while it waited for the answer (`held`, as property names) and the fields found lost in the
+    // connection that died (`lost`, see lostChanges), with the values it has now. When they replace
+    // values the server had, the model is asked for again (see takeAnswer), and this is true.
+    const sendOnTop = (id: string, asker: Colibri, model: T, shown: Partial<T>, held: string[], lost: string[]) => {
+        if (held.length === 0 && lost.length === 0) return false;
+        // toJson() with no properties named is all of them.
+        const current = model.toJson() as Record<string, unknown>;
+        const sent: Record<string, unknown> = held.length > 0 ? model.toJson(held) : { id };
+        for (const key of lost) sent[key] = current[key];
+        sendUpdate(asker, model, sent as Partial<T>);
+
+        // A field without a JSON value (undefined) is not sent at all, so no update shows it.
+        const differs = new Map<string, string>();
+        for (const [key, value] of Object.entries(sent)) {
+            const json = JSON.stringify(value) as string | undefined;
+            if (key === 'id' || json === undefined) continue;
+            if (!(key in shown) || JSON.stringify(shown[key as keyof T]) !== json) differs.set(key, json);
+        }
+        if (differs.size === 0) return false;
+        const timer = setTimeout(() => {
+            stopWaiting(id);
+        }, ASK_AGAIN_TIMEOUT_MS);
+        confirming.set(id, { sent: differs, props: held, seen: 0, timer });
+        askFor(asker, model);
+        return true;
     };
 
     // See ASK_AGAIN_TIMEOUT_MS: the changes held since asking again go out, without an answer.
@@ -409,12 +479,13 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
         return [...values.slice(0, split).slice(-KNOWN_VALUES_KEPT), ...after.slice(0, KNOWN_VALUES_KEPT), ...newest];
     };
 
-    // The fields of an own model that the answer to asking for it again after a reconnect shows with
-    // a value they had before the last change this client sent for them: that change never reached
-    // the server. Socket.IO notices a connection that died without closing (Wi-Fi dropping out, say)
-    // only once its ping timeout has run out, and whatever is sent until then is lost. Applied, the
-    // answer undid the change on this client alone, and nobody else ever saw it; so for these fields,
-    // the value this client has is kept and sent again instead.
+    // The fields of an own model that an update after asking for it again on a reconnect, before the
+    // answers are over (see takeAnswer), shows with a value they had before the last change this
+    // client sent for them: that change never reached the server. Socket.IO notices a connection
+    // that died without closing (Wi-Fi dropping out, say) only once its ping timeout has run out, and
+    // whatever is sent until then is lost. Applied, the answer undid the change on this client alone,
+    // and nobody else ever saw it; so for these fields, the value this client has is kept and sent
+    // again instead.
     //
     // Any other value is applied as it always was: one the field never had here is another client's,
     // set while this one was away, and so is one the server showed again after this client's last

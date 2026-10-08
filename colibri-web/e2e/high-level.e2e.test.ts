@@ -613,6 +613,54 @@ describe('RegisterModelSync own models after a change lost in a dead link', () =
         expect(await storedOn(late, channel, 'lost-2')).toEqual({ id: 'lost-2', value: 'B' });
     });
 
+    // The server relays another client's update to the new connection as it comes, so on a slow link
+    // one made just after the reconnect arrives ahead of the answer. Taken for the answer, it settled
+    // the model, and the answer that followed undid the change.
+    it('sends the change again when another client keeps changing the model through the reconnect', async () => {
+        class Moved extends SyncModel<Moved> {
+            @Synced()
+            accessor value = '';
+            @Synced()
+            accessor pos = 0;
+        }
+
+        const app = uniqueApp('modelsync-own-lost-moved');
+        const channel = uniqueApp('own');
+        const peer = await createClient(app);
+        const link = await startLinkProxy(25);
+        const singleton = await createClientThrough(app, link);
+
+        const [, registerModel] = RegisterModelSync<Moved>({ name: channel, type: Moved });
+        const model = new Moved('lost-5');
+        model.value = 'A';
+        const registered = nextMessage(peer, { channel, command: 'model::update' });
+        registerModel(model);
+        expect((await registered).payload).toEqual({ id: 'lost-5', value: 'A', pos: 0 });
+        await roundTrip(singleton);
+
+        // Another client moves the model all along, as a tracked object would be.
+        let pos = 0;
+        const moving = setInterval(() => {
+            pos += 1;
+            peer.sendMessage(channel, 'model::update', { id: 'lost-5', pos });
+        }, 33);
+        try {
+            link.freeze();
+            model.value = 'B';
+            await reported();
+            expect(await storedOn(peer, channel, 'lost-5')).toMatchObject({ value: 'A' });
+            await cutAndCatchUp(singleton, link);
+        } finally {
+            clearInterval(moving);
+        }
+        await roundTrip(peer);
+        await roundTrip(singleton);
+
+        expect(model.value).toBe('B');
+        expect(model.pos).toBe(pos);
+        expect(await storedOn(peer, channel, 'lost-5')).toEqual({ id: 'lost-5', value: 'B', pos });
+    });
+
     it('takes the value another client set meanwhile, and sends nothing over it', async () => {
         const app = uniqueApp('modelsync-own-lost-overtaken');
         const channel = uniqueApp('own');
