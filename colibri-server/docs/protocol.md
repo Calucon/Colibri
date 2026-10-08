@@ -591,10 +591,13 @@ Both clients ask for the models again after every reconnect, as described under
 - **`model::delete`**: another client deleted the object during the outage. The client removes its
   copy.
 
-colibri-unity sends these requests at once, behind the messages it queued during the outage.
-colibri-web asks for the whole channel only once every one of its own models has its answer, so
-that this answer includes what it sent in between. What a reconnect does not catch up on is
-listed under [Known limits](#known-limits).
+colibri-unity sends these requests at once, behind the messages it queued during the outage. An
+object it changed meanwhile therefore reaches a server that has forgotten it as an update with
+only the changed members, and the answer has those members instead of the bare id, so the full
+state is not sent (see [Known limits](#known-limits)). colibri-web holds such changes back until
+the model's answer has arrived. It asks for the whole channel only once every one of its own
+models has its answer, so that this answer includes what it sent in between. What a reconnect does
+not catch up on is listed under [Known limits](#known-limits).
 
 ## REST store
 
@@ -651,8 +654,13 @@ id, the client sends the model again, and it comes back for everyone. colibri-we
 the models it registered itself: one it got from another client and that was deleted while it was
 away stays in its list, since the answer for the whole channel only lists the models that exist.
 A model the server has forgotten comes back in full only from a client that sends it again after
-reconnecting: colibri-unity sends every synced object in its scene, colibri-web only the models it
-registered. Until then, a change to it creates it with only the fields that changed.
+reconnecting: colibri-web sends the models it registered, colibri-unity each synced object the
+server answers with the bare id. Until then, a change to it creates it with only the fields that
+changed. That includes a colibri-unity object that changed while the client was offline: the
+update goes out ahead of the request, so the server has those fields when it answers, and the
+full state is not sent. Its other fields reach the server only when they change, and a client that
+joins in the meantime has its own starting values for them: the template's, or, for an object
+placed in the scene, the scene's.
 
 **Nobody is authenticated.** Any client that can reach the server can join any app under any name,
 and read and change its models and its REST store. The version check is not access control.
