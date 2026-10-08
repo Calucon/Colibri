@@ -278,23 +278,28 @@ rationale, migration steps, and what the Editor verification did and did not cov
   while every other client kept the old value until the member changed again. Each `[Sync]` member
   now remembers the values it sent around the time the client last heard from the server: the
   latest 8 up to then, the first 8 after it, and the newest, so an object moved through the drop is
-  covered however many moves were lost. It also remembers the value it held before those: the last
-  one dropped, or the one the server last showed it. If what arrives after the reconnect holds a
-  value the member held from 10 s before the outage was noticed, other than the one it sent last,
-  the member keeps its value and sends it again, once, as an ordinary update. That includes the
-  value it held at that point, so an object switched off at the drop after a minute switched on
-  stays off. The value sent last means nothing to do, and any other value is another client's change
-  during the outage, which is applied. If the connection drops again before the answers are in, the
-  next reconnect still counts from the first outage, and a value sent again and lost in that second
-  drop is recognised by the answer's value. To tell when the answers are over, `Sync` sends one more
-  `model::request` after them, on the channel `colibri::reconnect`; the server needs no change.
+  covered however many moves were lost. Those stay as they are until the answers are in, even if the
+  object moves on as soon as the connection is back. It also remembers the value it held before
+  those: the last one dropped, or the one the server last showed it. If what arrives after the
+  reconnect holds a value the member held from 10 s before the outage was noticed, other than the
+  one it sent last, the member keeps its value and sends it again, once, as an ordinary update. That
+  includes the value it held at that point, so an object switched off at the drop after a minute
+  switched on stays off. The value sent last means nothing to do, and any other value is another
+  client's change during the outage, which is applied. If the connection drops again before the
+  answers are in, the next reconnect still counts from the first outage, and a value sent again and
+  lost in that second drop is recognised by the answer's value. After every reconnect, `Sync` sends
+  one more `model::request` after the others, on the channel `colibri::reconnect`, whose answer
+  tells when the answers are over; the server needs no change.
   Objects that never sent anything are not affected. See
   [Connection and outages](docs/guide.md#connection-and-outages).
 - **An object destroyed as the Wi-Fi drops is now deleted for everyone after the reconnect.** Its
   `model::delete` went into the dead connection, and nothing sent it again, so the server and every
   other client kept the object. When the outage is noticed, the deletes made since the client last
   heard from the server, or in the second before, now go out again on the next connection, ahead of
-  the requests made again.
+  the requests made again, and once more if the connection drops again before the answers to those
+  are in. A delete 60 s old or more is not sent again. When the server was last heard from is noted
+  on Unity's clock, since the system clock that times the heartbeats may be set, or run on while a
+  headset sleeps.
 - **A large message on a slow link no longer gets a healthy connection dropped.** The heartbeat
   echo waited for the socket while a long write held it, so the receive loop stopped and the 2 s
   heartbeat watchdog dropped the connection, again and again, since the message stayed first in
