@@ -17,7 +17,8 @@ export function uniqueApp(prefix: string): string {
     return `${prefix}-${Date.now()}-${uniqueCounter}`;
 }
 
-function resetSingleton(): void {
+/** Leaves no Colibri instance, as at the top of a module that runs before `new Colibri()`. */
+export function resetSingleton(): void {
     (Colibri as unknown as { instance: Colibri | null }).instance = null;
 }
 

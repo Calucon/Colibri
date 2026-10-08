@@ -570,6 +570,10 @@ const latest = <T>(models$: Observable<T[]>): T[] => {
     return current;
 };
 
+// RegisterModelSync asks for every model on the next task, once the models registered in the same
+// block of code have been asked for.
+const nextTask = () => new Promise(resolve => setTimeout(resolve, 0));
+
 // Registering first and constructing Colibri second is the natural order for module-level code
 // (`const [players$] = RegisterModelSync(...)` at the top of a file), and it used to leave every
 // one of those registrations listening to nothing, silently.
@@ -632,11 +636,12 @@ describe('registering before new Colibri()', () => {
         expect(fakeSocket.on.mock.calls.map(([event]) => event)).not.toContain('early-unregistered');
     });
 
-    it('requests the current state, and receives models, for a RegisterModelSync made first', () => {
+    it('requests the current state, and receives models, for a RegisterModelSync made first', async () => {
         const [models$] = RegisterModelSync({ name: 'early-widget', type: Widget });
         expect(warnSpy).not.toHaveBeenCalled();
 
         new Colibri('app', 'localhost', 9011);
+        await nextTask();
 
         expect(fakeSocket.emit).toHaveBeenCalledWith('early-widget', { command: 'model::request', payload: {} });
 
@@ -700,10 +705,11 @@ describe('catching up on models after a reconnect', () => {
         debugSpy.mockRestore();
     });
 
-    it('asks for every registered model channel again on each reconnect', () => {
+    it('asks for every registered model channel again on each reconnect', async () => {
         new Colibri('app', 'localhost', 9011);
         RegisterModelSync({ name: 'resync-a', type: Widget });
         RegisterModelSync({ name: 'resync-b', type: Widget });
+        await nextTask();
         expect(requested()).toEqual(['resync-a', 'resync-b']);
 
         // The first connect is not a reconnect: Socket.IO sends the requests above on it.
@@ -717,9 +723,10 @@ describe('catching up on models after a reconnect', () => {
         expect(requested()).toHaveLength(6);
     });
 
-    it('does the same for a RegisterModelSync made before new Colibri()', () => {
+    it('does the same for a RegisterModelSync made before new Colibri()', async () => {
         RegisterModelSync({ name: 'resync-early', type: Widget });
         new Colibri('app', 'localhost', 9011);
+        await nextTask();
 
         connectSocket();
         connectSocket();
@@ -727,9 +734,10 @@ describe('catching up on models after a reconnect', () => {
         expect(requested()).toEqual(['resync-early', 'resync-early']);
     });
 
-    it('brings a model missed during the outage up to date, in place, without duplicating it', () => {
+    it('brings a model missed during the outage up to date, in place, without duplicating it', async () => {
         new Colibri('app', 'localhost', 9011);
         const [models$] = RegisterModelSync({ name: 'resync-widget', type: Widget });
+        await nextTask();
         connectSocket();
         deliver('resync-widget', { command: 'model::update', payload: { id: 'w1', label: 'before' } });
         const [widget] = latest(models$);
@@ -792,20 +800,21 @@ describe('sending its own models again after a reconnect', () => {
         return { models$, widget };
     };
 
-    it('asks again for each of its own models by id on a reconnect', () => {
+    it('asks again for each of its own models by id on a reconnect', async () => {
         new Colibri('app', 'localhost', 9011);
         const [, registerModel] = RegisterModelSync({ name: 'own', type: Widget });
         registerModel(new Widget('w1'));
         registerModel(new Widget('w2'));
+        await nextTask();
 
         connectSocket();
         expect(sent('model::request')).toEqual([
-            ['own', {}],
             ['own', { id: 'w1' }],
             ['own', { id: 'w2' }]
         ]);
         deliver('own', { command: 'model::update', payload: { id: 'w1' } });
         deliver('own', { command: 'model::update', payload: { id: 'w2' } });
+        expect(sent('model::request').slice(2)).toEqual([['own', {}]]);
 
         connectSocket();
         expect(sent('model::request').slice(3)).toEqual([
@@ -816,15 +825,15 @@ describe('sending its own models again after a reconnect', () => {
 
     // Asked for again, the server would answer model::delete for an id another client deleted a
     // moment ago - but this client has the model now, and has never had an answer for it.
-    it('asks afresh after a reconnect for an own model the server has not answered for yet', () => {
+    it('asks afresh after a reconnect for an own model the server has not answered for yet', async () => {
         new Colibri('app', 'localhost', 9011);
         const [, registerModel] = RegisterModelSync({ name: 'own', type: Widget });
         registerModel(new Widget('w1'));
+        await nextTask();
         connectSocket();
 
         connectSocket();
         expect(sent('model::request')).toEqual([
-            ['own', {}],
             ['own', { id: 'w1' }],
             ['own', { id: 'w1' }]
         ]);
@@ -859,6 +868,7 @@ describe('sending its own models again after a reconnect', () => {
     it('leaves alone the models the server told it about', async () => {
         new Colibri('app', 'localhost', 9011);
         RegisterModelSync({ name: 'own', type: Widget });
+        await nextTask();
         connectSocket();
         deliver('own', { command: 'model::update', payload: { id: 'theirs', label: 'not mine' } });
 
@@ -1154,11 +1164,16 @@ describe('registering a model whose id the server may already have', () => {
         debugSpy.mockRestore();
     });
 
-    /** A connected Colibri, a RegisterModelSync on 'reg', and a Pair 'p1' of its own, registered. */
-    const registered = () => {
+    /**
+     * A connected Colibri, a RegisterModelSync on 'reg' that has asked for every model, and then a
+     * Pair 'p1' of its own, registered.
+     */
+    const registered = async () => {
         new Colibri('app', 'localhost', 9011);
         const [models$, registerModel] = RegisterModelSync({ name: 'reg', type: Pair });
         connectSocket();
+        await nextTask();
+        expect(sentInOrder()).toEqual([['model::request', {}]]);
         fakeSocket.emit.mockClear();
 
         const pair = new Pair('p1');
@@ -1169,14 +1184,14 @@ describe('registering a model whose id the server may already have', () => {
     };
 
     it('asks for the id, and sends nothing until the server has answered', async () => {
-        registered();
+        await registered();
         await settle();
 
         expect(sentInOrder()).toEqual([['model::request', { id: 'p1' }]]);
     });
 
     it('takes what the server has for the id instead of overwriting it', async () => {
-        const { models$, pair } = registered();
+        const { models$, pair } = await registered();
 
         deliver('reg', { command: 'model::update', payload: { id: 'p1', a: 'server-a', b: 'server-b' } });
         await settle();
@@ -1188,7 +1203,7 @@ describe('registering a model whose id the server may already have', () => {
 
     // RegisterModelSync asks for every model first, and that answer comes before the one for the id.
     it('takes the answer to the request for every model as its answer too', async () => {
-        const { models$, pair } = registered();
+        const { models$, pair } = await registered();
 
         deliver('reg', { command: 'model::update', payload: { id: 'p1', a: 'server-a', b: 'server-b' } });
         deliver('reg', { command: 'model::update', payload: { id: 'p1', a: 'server-a', b: 'server-b' } });
@@ -1200,7 +1215,7 @@ describe('registering a model whose id the server may already have', () => {
     });
 
     it('sends a change made after registering on top of what the server has', async () => {
-        const { pair } = registered();
+        const { pair } = await registered();
         pair.a = 'changed';
         await settle();
         expect(sentInOrder()).toEqual([['model::request', { id: 'p1' }]]);
@@ -1216,7 +1231,7 @@ describe('registering a model whose id the server may already have', () => {
     });
 
     it('does not ask for everything again once the server has answered', async () => {
-        registered();
+        await registered();
 
         deliver('reg', { command: 'model::update', payload: { id: 'p1' } });
         await settle();
@@ -1231,6 +1246,7 @@ describe('registering a model whose id the server may already have', () => {
         new Colibri('app', 'localhost', 9011);
         const [, registerModel] = RegisterModelSync({ name: 'reg', type: Pair });
         connectSocket();
+        await nextTask();
         disconnectSocket();
         fakeSocket.emit.mockClear();
 
@@ -1254,7 +1270,7 @@ describe('registering a model whose id the server may already have', () => {
 
     // delete() stops this client sending the model's changes; the whole model is one of them.
     it('does not send a model whose delete() was called before the answer came', async () => {
-        const { pair } = registered();
+        const { pair } = await registered();
         pair.delete();
 
         deliver('reg', { command: 'model::update', payload: { id: 'p1' } });
@@ -1268,6 +1284,7 @@ describe('registering a model whose id the server may already have', () => {
         new Colibri('app', 'localhost', 9011);
         const [models$, registerModel] = RegisterModelSync({ name: 'reg', type: Pair });
         connectSocket();
+        await nextTask();
         deliver('reg', { command: 'model::update', payload: { id: 'p1', a: 'server-a', b: 'server-b' } });
         const [copy] = latest(models$);
         fakeSocket.emit.mockClear();
@@ -1289,7 +1306,7 @@ describe('registering a model whose id the server may already have', () => {
     });
 
     it('does nothing when the model listed is registered again', async () => {
-        const { models$, registerModel, pair } = registered();
+        const { models$, registerModel, pair } = await registered();
         registerModel(pair);
 
         deliver('reg', { command: 'model::update', payload: { id: 'p1' } });
@@ -1305,7 +1322,7 @@ describe('registering a model whose id the server may already have', () => {
     it('replaces an own model registered earlier under the same id, and says so', async () => {
         const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
         try {
-            const { models$, registerModel, pair } = registered();
+            const { models$, registerModel, pair } = await registered();
             deliver('reg', { command: 'model::update', payload: { id: 'p1' } });
 
             const second = new Pair('p1');
@@ -1324,6 +1341,82 @@ describe('registering a model whose id the server may already have', () => {
         } finally {
             warnSpy.mockRestore();
         }
+    });
+});
+
+// A change made after registerModel, before the server has answered for the model, is held back and
+// sent on top of what the server has. The answer to the request for every model carries the id too,
+// though, and when it came first it was taken for the answer to the request for the id. The real
+// answer then came after the change was sent, without it, and undid it on this client only: it
+// showed the old value while the server and every other client had the new one.
+describe('keeping a change made after registerModel', () => {
+    const connectSocket = () => {
+        for (const [event, handler] of fakeSocket.on.mock.calls) {
+            if (event === 'connect') handler();
+        }
+    };
+
+    /** Everything emitted, as [command, payload], in the order it was. */
+    const sentInOrder = () =>
+        fakeSocket.emit.mock.calls.map(([, msg]) => [(msg as Message).command, (msg as Message).payload]);
+
+    // Long enough for a change a model reported to have been sent: SyncModel buffers for 1ms.
+    const settle = () => new Promise(resolve => setTimeout(resolve, 10));
+
+    class Pair extends SyncModel<Pair> {
+        @Synced() accessor a = '';
+        @Synced() accessor b = '';
+    }
+
+    const server = { id: 'p1', a: 'server-a', b: 'server-b' };
+
+    let debugSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+        debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => undefined);
+    });
+
+    afterEach(() => {
+        debugSpy.mockRestore();
+    });
+
+    // Registered at the top of a module, before new Colibri(), the usual order.
+    it('asks for a model registered before new Colibri() before asking for every model', async () => {
+        const [, registerModel] = RegisterModelSync({ name: 'reg', type: Pair });
+        const pair = new Pair('p1');
+        registerModel(pair);
+        pair.a = 'changed';
+        new Colibri('app', 'localhost', 9011);
+        connectSocket();
+        await settle();
+        expect(sentInOrder()).toEqual([['model::request', { id: 'p1' }]]);
+
+        deliver('reg', { command: 'model::update', payload: server });
+        await settle();
+        expect(sentInOrder().slice(1)).toEqual([
+            ['model::update', { id: 'p1', a: 'changed' }],
+            ['model::request', {}]
+        ]);
+        // What that request is answered with has the change in it.
+        deliver('reg', { command: 'model::update', payload: { ...server, a: 'changed' } });
+        expect([pair.a, pair.b]).toEqual(['changed', 'server-b']);
+    });
+
+    it('asks for a model registered in the same block as RegisterModelSync before asking for every model', async () => {
+        new Colibri('app', 'localhost', 9011);
+        connectSocket();
+        const [, registerModel] = RegisterModelSync({ name: 'reg', type: Pair });
+        const pair = new Pair('p1');
+        pair.a = 'mine';
+        registerModel(pair);
+        await settle();
+        expect(sentInOrder()).toEqual([['model::request', { id: 'p1' }]]);
+
+        deliver('reg', { command: 'model::update', payload: { id: 'p1' } });
+        expect(sentInOrder().slice(1)).toEqual([
+            ['model::update', { id: 'p1', a: 'mine', b: '' }],
+            ['model::request', {}]
+        ]);
     });
 });
 

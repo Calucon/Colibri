@@ -11,6 +11,7 @@ import {
     dropConnectionUntilReleased,
     isConnected,
     nextMessage,
+    resetSingleton,
     uniqueApp
 } from './helpers';
 import type { Colibri } from '../src/Colibri';
@@ -181,6 +182,15 @@ const roundTrip = async (client: Colibri) => {
     const answer = nextMessage(client, { channel: fence, command: 'model::update' });
     client.sendMessage(fence, 'model::request', { id: 'fence' });
     await answer;
+};
+
+/**
+ * Resolves once a RegisterModelSync made just before has the answer to its request for every model.
+ * It asks on the next task, after the models registered in the same block of code.
+ */
+const listed = async (client: Colibri) => {
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await roundTrip(client);
 };
 
 /** Every model::update `client` receives on `channel` until `until` resolves. */
@@ -485,7 +495,7 @@ describe('RegisterModelSync registering an id the server already has', () => {
         const channel = uniqueApp('shared');
         const { singleton, peer } = await createSingletonWithPeer(app);
         const [models$, registerModel] = RegisterModelSync<Shared>({ name: channel, type: Shared });
-        await roundTrip(singleton);
+        await listed(singleton);
 
         peer.sendMessage(channel, 'model::update', { id: 'marker', value: 'old' });
         peer.sendMessage(channel, 'model::delete', { id: 'marker' });
@@ -516,7 +526,7 @@ describe('RegisterModelSync registering an id the server already has', () => {
 
         const page = await createClient(app);
         const [models$, registerModel] = RegisterModelSync<Shared>({ name: channel, type: Shared });
-        await roundTrip(page);
+        await listed(page);
         expect(latest(models$).map(m => m.toJson())).toEqual([{ id: 'session', value: 'running' }]);
 
         const session = new Shared('session');
@@ -528,6 +538,55 @@ describe('RegisterModelSync registering an id the server already has', () => {
 
         expect(latest(models$)).toEqual([session]);
         expect(session.value).toBe('paused');
+    });
+
+    // A change made after registerModel is held back until the server has answered for the id, and
+    // then sent on top of what it has. It used to be undone on the registering client only, so that
+    // the page showed the old value while the server and every other client had the new one: the
+    // answer for every model came first, and was taken for the answer for the id.
+    describe('keeps a change made right after registerModel', () => {
+        /** A peer that holds 'session' = running and stays connected throughout. */
+        const peerWithSession = async (prefix: string) => {
+            const app = uniqueApp(prefix);
+            const channel = uniqueApp('shared');
+            const peer = await createClient(app);
+            peer.sendMessage(channel, 'model::update', { id: 'session', value: 'running' });
+            await roundTrip(peer);
+            return { app, channel, peer };
+        };
+
+        /** What the page, the server and the peer have for 'session' once everything has arrived. */
+        const outcome = async (page: Colibri, peer: Colibri, channel: string, session: Shared) => {
+            const peerSaw = await updatesDuring(peer, channel, async () => {
+                for (let i = 0; i < 3; i++) await roundTrip(page);
+                await roundTrip(peer);
+            });
+            return {
+                page: session.value,
+                server: await storedOn(peer, channel, 'session'),
+                peerLastSaw: peerSaw.at(-1)
+            };
+        };
+
+        const expected = {
+            page: 'mine',
+            server: { id: 'session', value: 'mine' },
+            peerLastSaw: { id: 'session', value: 'mine' }
+        };
+
+        it('registered at the top of a module, before new Colibri()', async () => {
+            const { app, channel, peer } = await peerWithSession('modelsync-change-early');
+
+            resetSingleton();
+            const [models$, registerModel] = RegisterModelSync<Shared>({ name: channel, type: Shared });
+            const session = new Shared('session');
+            registerModel(session);
+            session.value = 'mine';
+            const page = await createClient(app);
+
+            expect(await outcome(page, peer, channel, session)).toEqual(expected);
+            expect(latest(models$)).toEqual([session]);
+        });
     });
 });
 

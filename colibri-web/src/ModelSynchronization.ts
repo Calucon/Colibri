@@ -110,8 +110,8 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
         );
     };
 
-    // After a reconnect, everything else is asked for once every own model has its answer, so that
-    // that answer has what was sent in between.
+    // At first and after a reconnect, everything else is asked for once every own model asked for
+    // has its answer, so that that answer has what was sent in between.
     const catchUpOnceAnswered = () => {
         if (!catchingUpThrough || awaitingAnswer.size > 0) return;
         const colibri = catchingUpThrough;
@@ -128,8 +128,15 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
     // of an app when the app's last client leaves, and when it restarts. Nothing sent them again,
     // so a client that joined later never saw them. So after a reconnect each own model is asked
     // for by id first (see askFor), and everything else only once they all have their answer.
+    //
+    // The first time too, everything is asked for only once the models registered by then have
+    // their answer: those registered before `new Colibri()`, or in the same block of code as this.
+    // Asked for first, the answer for every model came first, carried the id as well, and was
+    // taken for the answer to the request for the id; the real one came next, without the changes
+    // this client had sent in between, and undid them here.
     withColibri(colibri => {
-        colibri.sendMessage(name, 'model::request');
+        catchingUpThrough = colibri;
+        setTimeout(catchUpOnceAnswered, 0);
         onColibriDisconnected(colibri, () => {
             disconnected = true;
         });

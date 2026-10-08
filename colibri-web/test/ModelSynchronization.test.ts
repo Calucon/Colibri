@@ -76,8 +76,13 @@ describe('ModelSynchronization', () => {
     });
 
     describe('RegisterModelSync', () => {
-        it('requests initial data, registers the channel, and captures the handler', () => {
+        // Asked for on the next task, after the models registered in the same block are asked for.
+        const nextTask = () => new Promise(resolve => setTimeout(resolve, 0));
+
+        it('requests initial data, registers the channel, and captures the handler', async () => {
             RegisterModelSync({ name: 'widget', type: Widget });
+            expect(sendMessageMock).not.toHaveBeenCalled();
+            await nextTask();
 
             // initial data fetch
             expect(sendMessageMock).toHaveBeenCalledWith('widget', 'model::request');
@@ -90,15 +95,17 @@ describe('ModelSynchronization', () => {
             expect(typeof capturedHandler()).toBe('function');
         });
 
-        it('uses an explicit name verbatim', () => {
+        it('uses an explicit name verbatim', async () => {
             RegisterModelSync({ name: 'CustomName', type: Widget });
+            await nextTask();
 
             expect(sendMessageMock).toHaveBeenCalledWith('CustomName', 'model::request');
             expect(registerChannelMock.mock.calls[0][0]).toBe('CustomName');
         });
 
-        it('derives a lowercased class name when name is omitted', () => {
+        it('derives a lowercased class name when name is omitted', async () => {
             RegisterModelSync({ type: Widget });
+            await nextTask();
 
             expect(sendMessageMock).toHaveBeenCalledWith('widget', 'model::request');
             expect(registerChannelMock.mock.calls[0][0]).toBe('widget');
