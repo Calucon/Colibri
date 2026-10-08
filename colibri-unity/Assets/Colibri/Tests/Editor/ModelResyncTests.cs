@@ -196,6 +196,10 @@ namespace HCIKonstanz.Colibri.Tests
         private static JObject Answer(ResyncModel model, string label, int count = 0)
             => new JObject { { "id", model.Id }, { "label", label }, { "count", count } };
 
+        /// <summary>A model::update another client sends, as the server relays it.</summary>
+        private static JObject Relayed(ResyncModel model, string member, JToken value)
+            => new JObject { { "id", model.Id }, { member, value } };
+
         /// <summary>The bug: the answer put the value from before the outage back, and nothing went out.</summary>
         [Test]
         public void AValueLostWithTheConnectionIsKeptAndSentAgain()
@@ -275,27 +279,56 @@ namespace HCIKonstanz.Colibri.Tests
             Assert.That((string)sent["label"], Is.EqualTo("changed since"));
         }
 
-        /// <summary>
-        /// A member whose first value ever was the one lost: the answer does not hold it at all, and
-        /// nobody has set it, so it goes out again, together with what else was lost.
-        /// </summary>
+        /// <summary>Everything the answer shows to have been lost goes out again, as one update.</summary>
         [Test]
-        public void AMemberTheServerNeverGotIsSentAgainWithTheRest()
+        public void EverythingLostWithTheConnectionGoesOutAgainAsOneUpdate()
         {
             var model = SpawnModelThatSent("before");
+            model.Count = 1;
+            Poll(model);
+            Assert.That(SentAt(model, 100.5), Is.Not.Null);
+
             model.Label = "lost at the drop";
             model.Count = 5;
             Poll(model);
             Assert.That(SentAt(model, 101), Is.Not.Null);
 
             Sync.RequestModelsAgain(disconnectedAt: 103);
-            model.OnModelUpdate(new JObject { { "id", model.Id }, { "label", "before" } });
+            model.OnModelUpdate(Answer(model, "before", 1));
 
             var sent = SentAt(model, 104);
             Assert.That(sent, Is.Not.Null);
             Assert.That(Members(sent), Is.EqualTo(new[] { "count", "id", "label" }), $"All that was lost should go out as one update: {sent}");
             Assert.That((int)sent["count"], Is.EqualTo(5));
             Assert.That((string)sent["label"], Is.EqualTo("lost at the drop"));
+        }
+
+        /// <summary>
+        /// Another client's update, relayed while the answers are on their way, lacks a member this
+        /// object sent: that says nothing about what the server holds for it, and it does not go
+        /// out again. Sent again, it overwrote what another client had set during the outage, and
+        /// the answer then put that client's value on this one: two values, for good.
+        /// </summary>
+        [Test]
+        public void AMemberAnUpdateLacksIsNotSentAgain()
+        {
+            var model = SpawnModel();
+            model.OnModelUpdate(Bare(model.Id));
+            model.Label = "mine";
+            model.Count = 1;
+            Poll(model);
+            Assert.That(SentAt(model, 100), Is.Not.Null);
+
+            Sync.RequestModelsAgain(disconnectedAt: 103);
+            model.OnModelUpdate(Relayed(model, "label", "theirs, live"));
+            var sent = SentAt(model, 104);
+            Assert.That(sent, Is.Null, $"Nothing was lost, so nothing should go out again: {sent}");
+
+            model.OnModelUpdate(Answer(model, "theirs, live", 7));
+
+            Assert.That(model.Label, Is.EqualTo("theirs, live"));
+            Assert.That(model.Count, Is.EqualTo(7), "The count another client set during the outage was not applied");
+            Assert.That(SentAt(model, 105), Is.Null);
         }
 
         /// <summary>

@@ -327,11 +327,11 @@ namespace HCIKonstanz.Colibri.E2E
                 yield return E2EServer.Settle(1.5f);
 
                 model.Label = "before the outage";
+                model.Count = 1;
                 yield return _peer.Expect(channel, "model::update",
                     frame => Assert.That((string)TcpPeer.Json(frame)["id"], Is.EqualTo(model.Id)));
 
-                // The link dies in the frame the model changes: the label it had, and the count it
-                // never had before.
+                // The link dies in the frame the model changes.
                 _proxy.Unplug();
                 model.Label = "changed at the drop";
                 model.Count = 7;
@@ -348,6 +348,8 @@ namespace HCIKonstanz.Colibri.E2E
                     "The requests made again after the reconnect were never answered", 20f);
                 Assert.That(answers.Select(a => (string)a["label"]), Is.All.EqualTo("before the outage"),
                     "Precondition: the server should still hold the label from before the outage");
+                Assert.That(answers.Select(a => (int?)a["_count"]), Is.All.EqualTo(1),
+                    "Precondition: the server should still hold the count from before the outage");
 
                 // Long enough for the lost change to have gone out again, and for it to go out twice
                 // if it is going to.
@@ -364,7 +366,7 @@ namespace HCIKonstanz.Colibri.E2E
                 Assert.That(sentAgain.Length, Is.EqualTo(1),
                     $"The lost change should go out again once: {string.Join(", ", sentAgain.Select(u => u.ToString(Newtonsoft.Json.Formatting.None)))}");
                 Assert.That((string)sentAgain[0]["label"], Is.EqualTo("changed at the drop"));
-                Assert.That((int)sentAgain[0]["_count"], Is.EqualTo(7), "The member the server never had a value for was not sent again");
+                Assert.That((int)sentAgain[0]["_count"], Is.EqualTo(7), "Everything lost should go out again in one update");
 
                 // The peer, connected all along, and the server's copy.
                 yield return _peer.Expect(channel, "model::update",

@@ -631,7 +631,8 @@ namespace HCIKonstanz.Colibri.Synchronization
                 // the whole channel (see Sync.RequestModelsAgain); a bare { id } says it does not,
                 // and is the last. An update another client happens to send in between is taken for
                 // one of them, and judged the same way: it is still applied, unless it holds one of
-                // this object's own recent values.
+                // this object's own recent values. What it lacks is left alone: it carries only
+                // what that client changed.
                 var isAnswer = _answersAwaited > 0;
                 if (isAnswer)
                     _answersAwaited = data.Count == 1 ? 0 : _answersAwaited - 1;
@@ -646,9 +647,6 @@ namespace HCIKonstanz.Colibri.Synchronization
 
                     UpdateAttribute(prop.Key, prop.Value);
                 }
-
-                if (isAnswer && data.Count > 1)
-                    SendAgainWhatTheAnswerLacks(data);
 
                 _isReady.TrySetResult(true);
 
@@ -721,6 +719,12 @@ namespace HCIKonstanz.Colibri.Synchronization
          *  - any other value: another client set it while this one was away, and it is applied,
          *    as it always was. So is a member that was not sent recently at all.
          *
+         *  A member missing from what arrives is left alone. An update from another client
+         *  carries only what that client changed, so a missing member says nothing about what
+         *  the server holds for it. Read as "the server has no value", it would send this
+         *  client's value over one that another client set during the outage. So a member whose
+         *  very first value was the one lost stays unsent, as it did before.
+         *
          *  An object that has never sent anything - one a manager built from another client's
          *  update, say - applies its answers exactly as before, and so does every object once its
          *  answers are in: an update from another client is applied as it arrives.
@@ -767,25 +771,6 @@ namespace HCIKonstanz.Colibri.Synchronization
 
                 default:
                     return false;
-            }
-        }
-
-        /// <summary>
-        /// The members an answer does not hold at all although they were sent recently: the first
-        /// value such a member ever sent is the one that was lost, and nobody has set it since.
-        /// </summary>
-        private void SendAgainWhatTheAnswerLacks(JObject answer)
-        {
-            if (_sentValues == null)
-                return;
-
-            for (var i = 0; i < _sentValues.Length; i++)
-            {
-                var sent = _sentValues[i];
-                var attribute = _attributeList[i];
-
-                if (sent != null && sent.HasSentSince(_judgeSince) && !answer.ContainsKey(attribute.Name) && IsSynced(attribute.MemberName))
-                    SendAgain(attribute);
             }
         }
 
