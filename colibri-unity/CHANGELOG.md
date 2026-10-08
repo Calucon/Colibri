@@ -272,6 +272,17 @@ rationale, migration steps, and what the Editor verification did and did not cov
   so the server can tell an object this client held before the outage from one being created now,
   and answers `model::delete` for one another client deleted meanwhile (model tombstones, see the
   server's [protocol docs](../colibri-server/docs/protocol.md#deleted-models)).
+- **A change made as the Wi-Fi drops is no longer undone after the reconnect.** It went into a
+  connection that was already dead, which the client noticed only 2 s later. The server's answer
+  then held the old value, and applying it put the object back on the client that had changed it,
+  while every other client kept the old value until the member changed again. Each `[Sync]` member
+  now remembers the last 8 values it sent. If what arrives after the reconnect holds an earlier
+  one of those sent in the 10 s before the outage was noticed, the member keeps its value and sends
+  it again, once, as an ordinary update. The value sent last means nothing to do, and any other
+  value is another client's change during the outage, which is applied. To tell when the answers
+  are over, `Sync` sends one more `model::request` after them, on the channel `colibri::reconnect`;
+  the server needs no change. Objects that never sent anything are not affected. See
+  [Connection and outages](docs/guide.md#connection-and-outages).
 - **A large message on a slow link no longer gets a healthy connection dropped.** The heartbeat
   echo waited for the socket while a long write held it, so the receive loop stopped and the 2 s
   heartbeat watchdog dropped the connection, again and again, since the message stayed first in
@@ -641,7 +652,13 @@ otherwise spend on their prototype, so:
   peer stays connected, and pin the outage queue end to end: messages arriving in order ahead of
   newer ones, the bound with its single warning, every object's latest state with its requests and
   deletes, the models requested again after reconnecting, and `RemoteLogging` delivering each line
-  once. `ProtocolMismatchDetectionTests` walk the client through scripted sessions against a
+  once. `TcpProxy.Unplug` drops a link silently instead, as a Wi-Fi drop does: with it,
+  `ReconnectTests` check that a change lost at the drop reaches the server and the other clients
+  after the reconnect, that another client's change made during the outage still wins, also when
+  it goes back to a value this client sent long before, and that updates another client keeps
+  sending through the reconnect are not taken for answers. `SentValuesTests` cover how sent and
+  answered values are compared as JSON on the wire, and `ModelResyncTests` what an object does
+  with them. `ProtocolMismatchDetectionTests` walk the client through scripted sessions against a
   `FakeColibriServer` that hangs up, stays silent, heartbeats or refuses: the growing backoff, the
   suspected mismatch and what clears it, the watchdog before the first frame, a refusal in the
   first frame, and the pairing of `OnConnected` and `OnDisconnected`. `SyncTransformTests` cover
@@ -810,6 +827,11 @@ The fixes it produced:
   the outage sends its full state again when the server answers its re-request with nothing. One
   that changed is not sent in full: its merged update reaches the server first, so the server has
   only the members that changed, and learns the others only when they change.
+- A change lost at the drop is recognised only by an earlier value the member sent in the 10 s
+  before the outage was noticed, and since it last took one from another client. Otherwise the
+  answer after the reconnect undoes it, and a member whose very first value was lost is not sent
+  again. Another client that sets a member back during the outage, to a value this client sent in
+  those 10 s, is undone.
 - `SyncBehaviourManager` must unsubscribe from `SyncBehaviour<T>.ModelCreated` / `ModelDestroyed` in
   `OnDestroy`, since static events do not do it themselves. It does; anything else subscribing to
   them has to as well, or it leaks across Play sessions when domain reload is disabled.
