@@ -35,10 +35,15 @@ namespace HCIKonstanz.Colibri.Setup
         /// <see cref="_refused"/>. A change reaches Config only if it passes the checks (see
         /// <see cref="ApplyValidSettings"/>).
         /// </summary>
-        private ColibriConfig _edited;
+        /// <remarks>
+        /// Serialized, as <see cref="_refused"/> is, so that a refused value stays in the window
+        /// through a domain reload, such as when entering Play mode: an object that is not saved
+        /// outlives the reload, and Unity restores the window's reference to it.
+        /// </remarks>
+        [SerializeField] private ColibriConfig _edited;
 
         /// <summary>The settings whose value in <see cref="_edited"/> the checks refused, so Config does not have it.</summary>
-        private List<string> _refused = new List<string>();
+        [SerializeField] private List<string> _refused = new List<string>();
 
         private Vector2 _scroll;
 
@@ -106,15 +111,20 @@ namespace HCIKonstanz.Colibri.Setup
                 SaveConfig();
             }
 
-            // OnGUI fills it.
-            _edited = CreateInstance<ColibriConfig>();
-            _edited.hideFlags = HideFlags.HideAndDontSave;
-            _refused.Clear();
+            // Still there after a domain reload. OnGUI fills it.
+            if (_edited == null)
+            {
+                _edited = CreateInstance<ColibriConfig>();
+                _edited.hideFlags = HideFlags.HideAndDontSave;
+
+                // Left from a copy that is gone, it would hold back the new copy's defaults.
+                _refused.Clear();
+            }
         }
 
-        // Before every domain reload too, entering Play mode's included. OnEnable then shows the
-        // configuration in use again, so a value the checks refused does not survive one.
-        private void OnDisable()
+        // When the window closes, which drops a value the checks refused; not before a domain
+        // reload, as OnDisable would.
+        private void OnDestroy()
         {
             if (_edited != null)
                 DestroyImmediate(_edited);
