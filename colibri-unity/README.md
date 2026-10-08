@@ -38,15 +38,16 @@ Newtonsoft JSON, is installed with it. A [`.unitypackage`](docs/guide.md#unitypa
      server `colibri.hci.uni-konstanz.de`, usable only while that runs colibri-server 2.x. You can
      also [run your own](../colibri-server/README.md#docker-recommended). On a headset, `localhost`
      is the headset: enter the IPv4 address of the server machine on your local network.
-3. Import the **SendData** sample (*Window → Package Manager → Colibri → Samples → Import*), open its
-   scene and press Play. Tick `SendProperties` on the `SendMessages` object and watch the console.
-   The scene needs [TextMeshPro's essential resources](docs/guide.md#samples).
-4. Turn on *Project Settings → Player → Resolution and Presentation → **Run In Background***. With it
+3. Turn on *Project Settings → Player → Resolution and Presentation → **Run In Background***. With it
    off, the Editor stops running your game when its window loses focus: still *Connected*, but
-   nothing is sent or delivered. It is the most confusing way for two clients on one machine to
-   appear broken.
-5. To see two clients talk, build the scene and run the build alongside the Editor, or open the
-   project a second time from the Unity Hub.
+   nothing is sent or delivered.
+4. Import the **SendData** sample (*Window → Package Manager → Colibri → Samples → Import*). Its
+   scene needs [TextMeshPro's essential resources](docs/guide.md#samples).
+5. Start a second client. Unity does not open one project twice, so copy the project's `Assets`,
+   `Packages` and `ProjectSettings` folders into a new folder and open that from the Unity Hub.
+6. Open the sample scene in both Editors and press Play. Tick `SendProperties` on the `[ClickMe]`
+   object in one: the other's console logs `Received message with value …`. The sender logs no such
+   line, as a client never receives what it sent itself.
 
 ## Usage
 
@@ -67,10 +68,10 @@ private void OnNumber(float myNumber) {
 Sync.Send("MyChannel", 5f);
 ```
 
-Channel *and* type have to match. `bool`, `int`, `float`, `string`, `Vector2`, `Vector3`,
-`Quaternion`, `Color` and arrays of them work directly, anything else as JSON. A listener registered
-by a `MonoBehaviour` is removed by itself when that component is destroyed
-([details](docs/guide.md#sending-data-between-clients)).
+`Sync.Send` reaches every other client with the same app name, never the sender. Channel *and* type
+have to match. `bool`, `int`, `float`, `string`, `Vector2`, `Vector3`, `Quaternion`, `Color` and
+arrays of them work directly, anything else as JSON. A listener registered by a `MonoBehaviour` is
+removed by itself when that component is destroyed ([details](docs/guide.md#sending-data-between-clients)).
 
 ### SyncTransform
 

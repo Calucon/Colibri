@@ -77,19 +77,24 @@ Alternatively, import the `.unitypackage` attached to the 2.0.0 release on the [
    public test server `colibri.hci.uni-konstanz.de`, which this package can only use while it runs
    colibri-server 2.x: against a 1.x server, *Window → Colibri Status* reports a suspected protocol
    mismatch (see [Requirements](#requirements)).
-3. Import the **SendData** sample: *Window → Package Manager → Colibri → Samples → Import*.
-4. Open the sample scene and press Play. Tick `SendProperties` on the `SendMessages` object and
-   watch the console. (The scene needs TextMeshPro's essential resources; see
-   [Samples](#samples).)
-5. Turn on *Project Settings → Player → Resolution and Presentation → **Run In Background***.
+3. Turn on *Project Settings → Player → Resolution and Presentation → **Run In Background***.
    Unity leaves this off by default, and with it off the Editor stops running your game the
    moment its window loses focus. The connection stays up and the status window still says
    *Connected*, but nothing is sent and nothing that arrived is delivered, because none of that
    happens until `Update` runs again. It is the single most confusing way for two clients on one
    machine to appear broken. (Unity ignores this setting on Android, so it does not matter for
    the Quest build itself.)
-6. To see two clients talk to each other, build the scene and run the build alongside the Editor, or
-   open the project a second time from the Unity Hub.
+4. Import the **SendData** sample: *Window → Package Manager → Colibri → Samples → Import*. (The
+   scene needs TextMeshPro's essential resources; see [Samples](#samples).)
+5. Start a second client. Unity does not open one project twice, so copy the project's `Assets`,
+   `Packages` and `ProjectSettings` folders into a new folder and open that from the Unity Hub. The
+   copy has the same configuration (`Assets/Resources/ColibriConfig`) and the imported sample. A
+   build of the scene is a client too, but it has no Inspector to tick `SendProperties` in, and
+   its log goes to a file rather than a console.
+6. Open the sample scene in both Editors and press Play. Tick `SendProperties` on the `[ClickMe]`
+   object (its `SendMessages` component) in one: the other's console logs `Received message with
+   value …` for every value sent. The sender logs none of these lines, because a client never
+   receives what it sent itself (see [Sending Data between Clients](#sending-data-between-clients)).
 
 Stuck? Open **Window → Colibri Status**. It shows whether you are connected, which app name you
 are connected as, which channels have listeners, and the last messages in and out.
@@ -211,7 +216,7 @@ Colibri also reports the common mistakes in the console rather than failing quie
 | Two clients don't see each other | The connect log names the app name in use; both clients must show the same one |
 | Objects or messages you did not create show up | Nothing in Unity at runtime: someone else uses the same app name. *Window → Colibri Configuration* warns when it is a name many people use, such as `myAppName` or `test`, and the server's log warns, naming the app, once it has more than 8 clients (by default) |
 | A `[Sync]` field never syncs | Its type is reported at startup if Colibri cannot put it on the wire |
-| Connected, but one client is silent | That client's Editor window is in the background and *Run In Background* is off (see step 5 of the Quickstart) |
+| Connected, but one client is silent | That client's Editor window is in the background and *Run In Background* is off (see step 3 of the [Quickstart](#quickstart)) |
 | `Store.Get`/`Put` reports a failure | The log names the operation, the object, the URL, the transport error and the HTTP status; requests give up after 10 s rather than hanging |
 | Never connects, although something answers on the port | `invalid frame from server` errors if the server sends anything, then `3 connections in a row were accepted but ended before a single frame could be read. This usually means a protocol mismatch…`: the server is probably 1.x, or the address is not a colibri-server |
 | Works in the Editor, not on the Quest | With the Android target active: `Colibri (Android build): …` in the console, and the *Android / Meta Quest* section of *Window → Colibri Configuration* |
@@ -233,6 +238,9 @@ the executed code, as illustrated with the following simple example of sending a
 float myNumber = 5;
 Sync.Send("MyChannel", myNumber);
 ```
+
+`Sync.Send` reaches every other client with the same app name, never the client that sent it:
+the server passes the message on to everyone else in the app.
 
 The sent data can then be received anywhere within Unity by registering a listener. Name the type
 you expect in the angle brackets:
