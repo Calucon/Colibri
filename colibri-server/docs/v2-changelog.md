@@ -360,9 +360,10 @@ EditMode tests, which `npm run test:vectors` checks in CI.
   `model::delete`, to the requester only, for a model that was deleted while the client was away,
   and the tombstone stays. colibri-unity and colibri-web 2.0.0 send the re-request form. See
   [Deleted models](./protocol.md#deleted-models).
-- **Answers keep their order.** After its re-requests, colibri-unity 2.0.0 sends one more,
-  `{ id, again: true }` for a fresh id on the channel `colibri::reconnect`, and takes its bare
-  answer as the end of the others. The server needs no code for this, but has to keep handling one
+- **Answers keep their order.** After every reconnect, colibri-unity 2.0.0 sends one more request
+  after its re-requests, `{ id, again: true }` for a fresh id on the channel `colibri::reconnect`,
+  and takes its bare answer as the end of the others, and as the point by which the server has read
+  the deletes it sent again. The server needs no code for this, but has to keep handling one
   client's messages in order and writing its answers to it in that order. See
   [Requests](./protocol.md#requests).
 
