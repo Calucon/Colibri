@@ -1,4 +1,5 @@
 #if UNITY_EDITOR
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -286,55 +287,97 @@ namespace HCIKonstanz.Colibri.Setup
 
         /// <summary>
         /// Copies to <paramref name="config"/>, the configuration in use, each setting in which
-        /// <paramref name="shown"/> differs from it, if they pass the checks that Save makes, and
-        /// otherwise none. So a valid change takes effect at once, as it always has, while one that
-        /// Save refuses is neither used in Play mode nor written to disk by whatever saves the
-        /// project's assets next. Writing the fields straight into the configuration did both,
-        /// though Save was disabled. Copying only those settings leaves a change made elsewhere to
-        /// any other in place.
+        /// <paramref name="shown"/> differs from it, unless one of the checks that Save makes, and
+        /// that looks at the setting, then fails. So a valid change takes effect at once, as it
+        /// always has, even while another setting shows an error, and a value that Save refuses is
+        /// neither used in Play mode nor written to disk by whatever saves the project's assets
+        /// next. Writing the fields straight into the configuration did both, though Save was
+        /// disabled. Copying only those settings leaves a change made elsewhere to any other in place.
         /// </summary>
         /// <returns>The settings it did not copy, by name.</returns>
         /// <remarks>Internal for the EditMode tests.</remarks>
         internal static List<string> ApplyValidSettings(ColibriConfig shown, ColibriConfig config)
         {
             var changed = Settings.Where(setting => !Equals(setting.GetValue(shown), setting.GetValue(config))).ToList();
-            if (ConfigurationErrors(shown).Count != 0)
-                return changed.Select(setting => setting.Name).ToList();
+            if (changed.Count == 0)
+                return new List<string>();
 
-            foreach (var setting in changed)
-                setting.SetValue(config, setting.GetValue(shown));
-            return new List<string>();
+            var candidate = CreateInstance<ColibriConfig>();
+            candidate.hideFlags = HideFlags.HideAndDontSave;
+            try
+            {
+                // Those of the settings that a failing check looks at, when they have their value
+                // from shown and every other setting has config's.
+                List<FieldInfo> Failing(List<FieldInfo> settings)
+                {
+                    foreach (var setting in Settings)
+                        setting.SetValue(candidate, setting.GetValue(settings.Contains(setting) ? shown : config));
+                    var looked = Checks.Where(check => check.Error(candidate) != null).SelectMany(check => check.LooksAt).ToList();
+                    return settings.Where(setting => looked.Contains(setting.Name)).ToList();
+                }
+
+                // All together first, since two ports can only be swapped together, less those
+                // that a failing check looks at, until the rest pass.
+                var applied = changed.ToList();
+                for (var failing = Failing(applied); failing.Count != 0; failing = Failing(applied))
+                    applied = applied.Except(failing).ToList();
+
+                // Then each of the others on its own, so that a refused value does not hold back a
+                // valid one that shares a check with it, such as the voice port while the web port
+                // has the TCP port's number.
+                foreach (var setting in changed.Except(applied).ToList())
+                    if (Failing(applied.Append(setting).ToList()).Count == 0)
+                        applied.Add(setting);
+
+                foreach (var setting in applied)
+                    setting.SetValue(config, setting.GetValue(shown));
+                return changed.Except(applied).Select(setting => setting.Name).ToList();
+            }
+            finally
+            {
+                DestroyImmediate(candidate);
+            }
         }
+
+        /// <summary>
+        /// The checks that Save makes, each with the settings it looks at, and its error if it
+        /// fails, or null.
+        /// </summary>
+        private static readonly (string[] LooksAt, Func<ColibriConfig, string> Error)[] Checks =
+        {
+            // The status window's test. A name of spaces only used to pass here, and the status
+            // window then reported the project as not configured.
+            (new[] { nameof(ColibriConfig.AppName) },
+                config => config.IsConfigured ? null : "App Name must not be empty!"),
+            (new[] { nameof(ColibriConfig.ServerAddress) },
+                config => !config.ServerAddress.Contains("://") ? null
+                    : "Server address should not contain a protocol (only IP or domain name)"),
+            (new[] { nameof(ColibriConfig.WebServerPort) },
+                config => IsPort(config.WebServerPort) ? null
+                    : "Web server port invalid (must be a number between 1 - 65535, default 9011)"),
+            (new[] { nameof(ColibriConfig.TcpServerPort) },
+                config => IsPort(config.TcpServerPort) ? null
+                    : "TCP server port invalid (must be a number between 1 - 65535, default 9012)"),
+            (new[] { nameof(ColibriConfig.VoiceServerPort) },
+                config => IsPort(config.VoiceServerPort) ? null
+                    : "Voice server port invalid (must be a number between 1 - 65535, default 9013)"),
+            (new[] { nameof(ColibriConfig.WebServerPort), nameof(ColibriConfig.TcpServerPort), nameof(ColibriConfig.VoiceServerPort) },
+                config => new[] { config.WebServerPort, config.TcpServerPort, config.VoiceServerPort }.Distinct().Count() == 3 ? null
+                    : "Two ports may not have the same value!"),
+            (new[] { nameof(ColibriConfig.VoiceServerSamplingRate) },
+                config => config.VoiceServerSamplingRate >= 16000 && config.VoiceServerSamplingRate <= 48000 ? null
+                    : "Voice server sampling rate invalid (must be a number between 16000 - 48000, default 48000)"),
+            (new[] { nameof(ColibriConfig.MaxSendRate) },
+                config => config.MaxSendRate >= 0 ? null
+                    : $"Max send rate invalid (updates per second per synced object; 0 = no limit, default {ColibriConfig.DEFAULT_MAX_SEND_RATE})"),
+            (new[] { nameof(ColibriConfig.IsSSL), nameof(ColibriConfig.ServerCertificateSha256) }, CertificateSettingsError),
+        };
+
+        private static bool IsPort(int port) => port > 0 && port <= 65535;
 
         /// <summary>What keeps the configuration from being saved; empty if nothing does.</summary>
         internal static List<string> ConfigurationErrors(ColibriConfig config)
-        {
-            var errors = new List<string>();
-
-            // The status window's test. A name of spaces only used to pass here, and the status
-            // window then reported the project as not configured.
-            if (!config.IsConfigured)
-                errors.Add("App Name must not be empty!");
-            if (config.ServerAddress.Contains("://"))
-                errors.Add("Server address should not contain a protocol (only IP or domain name)");
-            if (config.WebServerPort <= 0 || config.WebServerPort > 65535)
-                errors.Add("Web server port invalid (must be a number between 1 - 65535, default 9011)");
-            if (config.TcpServerPort <= 0 || config.TcpServerPort > 65535)
-                errors.Add("TCP server port invalid (must be a number between 1 - 65535, default 9012)");
-            if (config.VoiceServerPort <= 0 || config.VoiceServerPort > 65535)
-                errors.Add("Voice server port invalid (must be a number between 1 - 65535, default 9013)");
-            if ((new int[] { config.WebServerPort, config.TcpServerPort, config.VoiceServerPort }).Distinct().Count() != 3)
-                errors.Add("Two ports may not have the same value!");
-            if (config.VoiceServerSamplingRate < 16000 || config.VoiceServerSamplingRate > 48000)
-                errors.Add("Voice server sampling rate invalid (must be a number between 16000 - 48000, default 48000)");
-            if (config.MaxSendRate < 0)
-                errors.Add($"Max send rate invalid (updates per second per synced object; 0 = no limit, default {ColibriConfig.DEFAULT_MAX_SEND_RATE})");
-            var certificateError = CertificateSettingsError(config);
-            if (certificateError != null)
-                errors.Add(certificateError);
-
-            return errors;
-        }
+            => Checks.Select(check => check.Error(config)).Where(error => error != null).ToList();
 
         /// <summary>
         /// What is wrong with the certificate settings, or null. A pinned fingerprint that cannot

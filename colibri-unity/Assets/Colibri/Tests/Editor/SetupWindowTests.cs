@@ -123,6 +123,57 @@ namespace HCIKonstanz.Colibri.Tests
         }
 
         /// <summary>
+        /// One refused value used to hold back every other change: the window applied all of its
+        /// settings or none.
+        /// </summary>
+        [Test]
+        public void AValidChangeIsAppliedWhileAnotherIsRefused()
+        {
+            _edited.ServerCertificateSha256 = "AB:CD:XY";
+            _edited.WebServerPort = 9111;
+            Apply();
+
+            Assert.That(_refused, Is.EqualTo(new[] { nameof(ColibriConfig.ServerCertificateSha256) }));
+            Assert.That(_config.WebServerPort, Is.EqualTo(9111));
+            Assert.That(_config.ServerCertificateSha256, Is.Empty);
+        }
+
+        /// <summary>The voice port shares the check for equal ports with the refused web port, which is not its concern.</summary>
+        [Test]
+        public void APortIsAppliedWhileAnotherHasTheSameNumberAsAThird()
+        {
+            var webPort = _config.WebServerPort;
+            _edited.WebServerPort = _config.TcpServerPort;
+            Apply();
+
+            Show();
+            _edited.VoiceServerPort = 9113;
+            Apply();
+
+            Assert.That(_refused, Is.EqualTo(new[] { nameof(ColibriConfig.WebServerPort) }));
+            Assert.That(_config.VoiceServerPort, Is.EqualTo(9113));
+            Assert.That(_config.WebServerPort, Is.EqualTo(webPort));
+        }
+
+        /// <summary>Each half of a swap is refused on its own, as the two ports are then equal.</summary>
+        [Test]
+        public void TwoPortsCanBeSwappedWhileAnotherValueIsRefused()
+        {
+            var (webPort, tcpPort) = (_config.WebServerPort, _config.TcpServerPort);
+            _edited.ServerCertificateSha256 = "AB:CD:XY";
+            _edited.WebServerPort = tcpPort;
+            Apply();
+            Assert.That(_config.WebServerPort, Is.EqualTo(webPort), "Two equal ports were applied");
+
+            Show();
+            _edited.TcpServerPort = webPort;
+            Apply();
+
+            Assert.That(_refused, Is.EqualTo(new[] { nameof(ColibriConfig.ServerCertificateSha256) }));
+            Assert.That((_config.WebServerPort, _config.TcpServerPort), Is.EqualTo((tcpPort, webPort)));
+        }
+
+        /// <summary>
         /// Such as in the asset's Inspector while the window is open. The window copied the
         /// configuration only when it opened, and its next change wrote all of that copy back.
         /// </summary>
