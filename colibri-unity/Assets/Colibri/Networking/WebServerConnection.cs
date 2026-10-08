@@ -183,15 +183,62 @@ namespace HCIKonstanz.Colibri.Networking
         // Instance, not static: static state survives Enter Play Mode with domain reload
         // disabled and would leave a second play session talking to a dead socket.
         //
-        // volatile: written by the connection loop off the main thread, read by Update()'s
-        // heartbeat watchdog and by OnDisable. Closing it is what ends a session, TLS or not. The
-        // send path uses _outboxSession instead.
-        private volatile Socket _socket;
+        // Main thread only: the loop the last OnEnable started, until OnDisable ends it.
+        private ConnectionLoop _loop;
+
+        /// <summary>
+        /// One run of the connection loop, from the OnEnable that starts it to the OnDisable that
+        /// ends it, and what belongs to that run alone.
+        /// </summary>
+        /// <remarks>
+        /// A disable and enable in one frame starts the next run while the last one is still
+        /// unwinding on a worker thread. Its cleanup used to work on the component's fields, which
+        /// by then were the next run's: it closed the new socket in the middle of its connect,
+        /// disarmed its watchdog, and could close the outbox and set Disconnected under a session
+        /// that was already Connected. A run keeps its socket and watchdog here instead. What the
+        /// component shares - <see cref="Status"/>, the outbox and what is reported about the
+        /// connection - a run changes only while its token is not cancelled, checked under the lock
+        /// that guards it. OnDisable cancels the token before it sets all of that itself, so a run
+        /// it has ended changes none of it, however late it unwinds.
+        /// </remarks>
+        private sealed class ConnectionLoop
+        {
+            public readonly CancellationTokenSource Lifetime = new CancellationTokenSource();
+
+            // Taken once: the source's Token throws after OnDisable has disposed it, and the run
+            // may still be unwinding then.
+            public readonly CancellationToken Token;
+
+            // The socket of the attempt or session in progress, or null between two. Closing it is
+            // what ends a session, TLS or not. Set and cleared by the run; read by Update()'s
+            // heartbeat watchdog and by OnDisable. The send path uses _outboxSession instead.
+            public volatile Socket Socket;
+
+            // Set as soon as the TCP connection is accepted, cleared when the session ends or the
+            // watchdog in Update() fires. Covers the stretch before the first frame too: something
+            // that accepts the connection and then never says a word would otherwise hold a session
+            // in Connecting forever, now that Connected waits for the server to speak.
+            public volatile bool IsWatchdogArmed;
+
+            // Session-scoped: set once the TCP connection is up and this client has sent its
+            // handshake. Without it, a session that never got that far - "connection refused"
+            // because the server simply is not running - would count towards the framing hint and
+            // have this client blaming a version mismatch for a server that is switched off.
+            public volatile bool ReachedHandshake;
+
+            // Session-scoped: set once the session has decoded anything at all. Only a session that
+            // ends *before* this is set counts towards the framing hint.
+            public volatile bool DecodedAnyFrame;
+
+            public ConnectionLoop()
+            {
+                Token = Lifetime.Token;
+            }
+        }
 
         /// <remarks>Internal for the tests, which shrink its send buffer to stand in for a slow link.</remarks>
-        internal Socket CurrentSocket => _socket;
+        internal Socket CurrentSocket => _loop?.Socket;
 
-        private CancellationTokenSource _lifetime;
         private string _hostname = "";
 
         // Serializes every write to the socket - the outbox's messages and the receive loop's
@@ -394,34 +441,19 @@ namespace HCIKonstanz.Colibri.Networking
         private volatile string _serverVersion;
         private volatile string _protocolMismatchReason;
 
-        // Session-scoped: reset when a session starts, set once it has decoded anything at all.
-        // Only a session that ends *before* this is set counts towards the framing hint.
-        private volatile bool _decodedAnyFrame;
-
         // Connection loop only (the receive loop is part of it), except for the test accessor.
         private int _consecutiveEarlyFrameFailures;
         private volatile string _suspectedProtocolMismatch;
 
         // Whether the current session uses TLS, read from the configuration when it started.
-        // Written by the connection loop, read by UsesTls on any thread.
+        // Written by the connection loop under _statusLock, read by UsesTls on any thread.
         private volatile bool _sessionUsesTls;
-
-        // Session-scoped: set once the TCP connection is up and this client has sent its
-        // handshake. Without it, a session that never got that far - "connection refused" because
-        // the server simply is not running - would count towards the framing hint and have this
-        // client blaming a version mismatch for a server that is switched off.
-        private volatile bool _reachedHandshake;
-
-        // Session-scoped: set as soon as the TCP connection is accepted, cleared when the session
-        // ends or the watchdog in Update() fires. Covers the stretch before the first frame too:
-        // something that accepts the connection and then never says a word would otherwise hold a
-        // session in Connecting forever, now that Connected waits for the server to speak.
-        private volatile bool _isWatchdogArmed;
 
         // The setter is a read-modify-write over several fields, and the connection loop and
         // Update()'s heartbeat watchdog can both reach it at the same time. Interleaved, the two
         // can lose a transition - the watchdog's Disconnected landing between the loop's compare
-        // and its assignment leaves the gate open on a socket that is already closed.
+        // and its assignment leaves the gate open on a socket that is already closed. A loop sets
+        // it through TrySetStatus, which checks under this lock that the loop has not been ended.
         private readonly object _statusLock = new object();
 
         public ConnectionStatus Status
@@ -469,6 +501,26 @@ namespace HCIKonstanz.Colibri.Networking
             }
         }
 
+        /// <summary>
+        /// Sets <see cref="Status"/> for the connection loop that <paramref name="token"/> belongs
+        /// to, unless OnDisable has ended that loop: the status is then OnDisable's, and the next
+        /// loop's. Checked under the lock the setter takes, so that OnDisable, which cancels the
+        /// token before it sets Disconnected, always has the last word.
+        /// </summary>
+        /// <returns>False if the loop has been ended.</returns>
+        /// <remarks>Internal for the EditMode tests.</remarks>
+        internal bool TrySetStatus(ConnectionStatus value, CancellationToken token)
+        {
+            lock (_statusLock)
+            {
+                if (token.IsCancellationRequested)
+                    return false;
+
+                Status = value;
+                return true;
+            }
+        }
+
         private struct InPacket
         {
             public string Channel;
@@ -502,8 +554,8 @@ namespace HCIKonstanz.Colibri.Networking
             _hasWarnedAboutUntrustedCertificate = false;
             _reportedTlsFailure = null;
 
-            _lifetime = new CancellationTokenSource();
-            _ = RunConnectionLoop(_lifetime.Token);
+            _loop = new ConnectionLoop();
+            _ = RunConnectionLoop(_loop);
         }
 
         private void RefreshConfig()
@@ -529,12 +581,16 @@ namespace HCIKonstanz.Colibri.Networking
             if (SingletonLifetime.IsQuitting)
                 WaitForOutboxToDrain(QUIT_DRAIN_TIMEOUT_MS);
 
-            _lifetime?.Cancel();
-            _lifetime?.Dispose();
-            _lifetime = null;
-
-            CloseSocket(_socket);
-            _socket = null;
+            // Cancelled before anything below: from here on the loop leaves the status and the
+            // outbox alone, however late it unwinds (see ConnectionLoop).
+            var loop = _loop;
+            _loop = null;
+            if (loop != null)
+            {
+                loop.Lifetime.Cancel();
+                loop.Lifetime.Dispose();
+                CloseSocket(loop.Socket);
+            }
 
             // Whatever is still queued stays queued: re-enabling the component sends it.
             CloseOutbox();
@@ -573,10 +629,11 @@ namespace HCIKonstanz.Colibri.Networking
             RaiseConnectionEvents();
             DeliverReceivedMessages();
 
-            if (_isWatchdogArmed && MillisSinceLastHeartbeat() > HEARTBEAT_TIMEOUT_THRESHOLD_MS)
+            var loop = _loop;
+            if (loop != null && loop.IsWatchdogArmed && MillisSinceLastHeartbeat() > HEARTBEAT_TIMEOUT_THRESHOLD_MS)
             {
                 // Disarmed first so this does not re-fire every frame while the session unwinds.
-                _isWatchdogArmed = false;
+                loop.IsWatchdogArmed = false;
 
                 if (Status == ConnectionStatus.Connected)
                 {
@@ -593,7 +650,7 @@ namespace HCIKonstanz.Colibri.Networking
                 }
 
                 // Faults the receive loop into the reconnect backoff.
-                CloseSocket(_socket);
+                CloseSocket(loop.Socket);
             }
         }
 
@@ -902,8 +959,9 @@ namespace HCIKonstanz.Colibri.Networking
 
         // One long-lived task per component lifetime, instead of Update() re-entering
         // Connect() every frame while disconnected.
-        private async Task RunConnectionLoop(CancellationToken token)
+        private async Task RunConnectionLoop(ConnectionLoop loop)
         {
+            var token = loop.Token;
             while (!token.IsCancellationRequested)
             {
                 var address = _serverAddress;
@@ -944,11 +1002,9 @@ namespace HCIKonstanz.Colibri.Networking
 
                 try
                 {
-                    _decodedAnyFrame = false;
-                    _reachedHandshake = false;
-                    _sessionUsesTls = _useTls;
-                    await RunSession(address, _tcpPort, handshakeApp, _sessionUsesTls, token)
-                        .ConfigureAwait(false);
+                    loop.DecodedAnyFrame = false;
+                    loop.ReachedHandshake = false;
+                    await RunSession(loop, address, _tcpPort, handshakeApp, _useTls).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
                 {
@@ -1004,23 +1060,28 @@ namespace HCIKonstanz.Colibri.Networking
                 }
                 finally
                 {
-                    _isWatchdogArmed = false;
-                    CloseOutbox();
-                    CloseSocket(_socket);
-                    _socket = null;
+                    // This loop's own, whatever the next loop is doing by now (see ConnectionLoop).
+                    loop.IsWatchdogArmed = false;
+                    CloseSocket(loop.Socket);
+                    loop.Socket = null;
 
                     // However the session ended - a clean hang-up, an undecodable frame, a reset,
                     // the watchdog - except for this component being disabled, which says nothing
                     // about the server.
                     if (!token.IsCancellationRequested)
-                        CountSessionWithoutAFrame();
+                        CountSessionWithoutAFrame(loop);
+
+                    // Shared with the next loop, so only while this one has not been ended: OnDisable
+                    // has then closed the outbox and set the status itself, and they may already
+                    // belong to a session the next enable started.
+                    CloseOutbox(token);
 
                     // Before the status changes, so nothing that reacts to ProtocolMismatch can
                     // still queue a message that would wait for a connection that never comes.
                     if (mismatched)
-                        RefuseSends();
+                        RefuseSends(token);
 
-                    Status = mismatched ? ConnectionStatus.ProtocolMismatch : ConnectionStatus.Disconnected;
+                    TrySetStatus(mismatched ? ConnectionStatus.ProtocolMismatch : ConnectionStatus.Disconnected, token);
                 }
 
                 // Terminal. Retrying cannot make the two sides agree, and a reconnect loop would
@@ -1052,14 +1113,14 @@ namespace HCIKonstanz.Colibri.Networking
         /// means what it says: it used to be updated only on a clean hang-up or an undecodable
         /// frame, and a session ended by a reset or the watchdog neither counted nor cleared it.
         /// </summary>
-        private void CountSessionWithoutAFrame()
+        private void CountSessionWithoutAFrame(ConnectionLoop loop)
         {
             // Never got as far as a connected socket: that is a server that is down, a wrong
             // address or a closed port, and has nothing to say about protocol versions.
-            if (!_reachedHandshake)
+            if (!loop.ReachedHandshake)
                 return;
 
-            if (_decodedAnyFrame)
+            if (loop.DecodedAnyFrame)
                 return;
 
             _consecutiveEarlyFrameFailures++;
@@ -1087,9 +1148,9 @@ namespace HCIKonstanz.Colibri.Networking
         /// server speaks our framing, so it clears the count and the suspicion at once rather than
         /// whenever the session happens to end.
         /// </summary>
-        private void OnFrameDecoded()
+        private void OnFrameDecoded(ConnectionLoop loop)
         {
-            _decodedAnyFrame = true;
+            loop.DecodedAnyFrame = true;
             _consecutiveEarlyFrameFailures = 0;
             _suspectedProtocolMismatch = null;
         }
@@ -1100,17 +1161,23 @@ namespace HCIKonstanz.Colibri.Networking
         /// </summary>
         internal int ConsecutiveEarlyFrameFailures => Volatile.Read(ref _consecutiveEarlyFrameFailures);
 
-        private async Task RunSession(string host, int port, string app, bool useTls, CancellationToken token)
+        private async Task RunSession(ConnectionLoop loop, string host, int port, string app, bool useTls)
         {
-            bool firstAttempt;
+            var token = loop.Token;
             lock (_statusLock)
-                firstAttempt = _connectAttempts == 0;
+            {
+                // A loop that OnDisable has ended starts nothing: the status, and the connection
+                // UsesTls describes, may already be the next loop's.
+                token.ThrowIfCancellationRequested();
 
-            Status = firstAttempt ? ConnectionStatus.Connecting : ConnectionStatus.Reconnecting;
+                _sessionUsesTls = useTls;
+                Status = _connectAttempts == 0 ? ConnectionStatus.Connecting : ConnectionStatus.Reconnecting;
+            }
+
             Debug.Log($"Colibri: connecting to {host}:{port}{(useTls ? " (TLS)" : "")}");
 
             var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
-            _socket = socket;
+            loop.Socket = socket;
 
             var certificateCheck = useTls
                 ? new ServerCertificateCheck(host, _allowSelfSignedCertificate, _serverCertificateSha256)
@@ -1125,12 +1192,12 @@ namespace HCIKonstanz.Colibri.Networking
                 {
                     stream = await OpenStreamAsync(socket, host, port, certificateCheck, CONNECT_TIMEOUT_MS, token).ConfigureAwait(false);
                 }
-                catch (TimeoutException e)
+                catch (TimeoutException e) when (!token.IsCancellationRequested)
                 {
                     _lastConnectFailure = e.Message;
                     throw;
                 }
-                catch (TlsHandshakeException e)
+                catch (TlsHandshakeException e) when (!token.IsCancellationRequested)
                 {
                     _lastConnectFailure = e.Message;
                     throw;
@@ -1154,15 +1221,15 @@ namespace HCIKonstanz.Colibri.Networking
                     // Accepted, but nothing is known about what accepted it yet. The watchdog gives
                     // it as long to say something as a connected server gets between heartbeats.
                     StampLiveness();
-                    _isWatchdogArmed = true;
+                    loop.IsWatchdogArmed = true;
 
                     await SendFrame(session, FrameCodec.EncodeHandshake(CLIENT_VERSION, app, _hostname), token)
                         .ConfigureAwait(false);
                     // Past this point the connection was accepted and this client has spoken, so a
                     // session that now ends without a frame is a statement about the server.
-                    _reachedHandshake = true;
+                    loop.ReachedHandshake = true;
 
-                    await ReceiveLoop(session, host, port, app, token).ConfigureAwait(false);
+                    await ReceiveLoop(loop, session, host, port, app).ConfigureAwait(false);
                 }
                 finally
                 {
@@ -1404,6 +1471,10 @@ namespace HCIKonstanz.Colibri.Networking
         /// </summary>
         private void BecomeConnected(Session session, string host, int port, string app, CancellationToken token)
         {
+            // A loop that OnDisable has ended does not connect: Connected, and the outbox, may
+            // already be the next loop's.
+            token.ThrowIfCancellationRequested();
+
             StampLiveness();
 
             lock (_queuedCommandsLock)
@@ -1419,11 +1490,13 @@ namespace HCIKonstanz.Colibri.Networking
             // Starts sending whatever queued up during the outage, in order. Opened before Status
             // says Connected, so anything sent by code that reacts to Connected lines up behind it.
             OpenOutbox(session, token);
-            Status = ConnectionStatus.Connected;
+            if (!TrySetStatus(ConnectionStatus.Connected, token))
+                token.ThrowIfCancellationRequested();
         }
 
-        private async Task ReceiveLoop(Session session, string host, int port, string app, CancellationToken token)
+        private async Task ReceiveLoop(ConnectionLoop loop, Session session, string host, int port, string app)
         {
+            var token = loop.Token;
             var reader = new FrameReader();
             var buffer = new byte[RECEIVE_BUFFER_SIZE];
             var isConnected = false;
@@ -1449,8 +1522,8 @@ namespace HCIKonstanz.Colibri.Networking
                     StampLiveness();
 
                 var frames = ReadFrames(reader, buffer, received);
-                if (frames.Count > 0 && !_decodedAnyFrame)
-                    OnFrameDecoded();
+                if (frames.Count > 0 && !loop.DecodedAnyFrame)
+                    OnFrameDecoded(loop);
 
                 for (var i = 0; i < frames.Count; i++)
                 {
@@ -1843,13 +1916,20 @@ namespace HCIKonstanz.Colibri.Networking
         private readonly Dictionary<(string Channel, string Id), LinkedListNode<Outgoing>> _queuedModelUpdates
             = new Dictionary<(string Channel, string Id), LinkedListNode<Outgoing>>();
 
-        /// <summary>Lets the outbox drain into this session. Called once it is Connected.</summary>
+        /// <summary>
+        /// Lets the outbox drain into this session. Called once it is Connected, with the token of
+        /// the loop the session belongs to: once OnDisable has ended that loop this does nothing.
+        /// </summary>
         /// <remarks>Internal for the EditMode tests, which open and close it around sessions they fake.</remarks>
         internal void OpenOutbox(Session session, CancellationToken token)
         {
             bool startDraining;
             lock (_outboxLock)
             {
+                // Checked under the lock: OnDisable cancels the token before it closes the outbox.
+                if (token.IsCancellationRequested)
+                    return;
+
                 _outboxSession = session;
                 _outboxToken = token;
                 _hasWarnedAboutDrops = false;
@@ -1882,6 +1962,21 @@ namespace HCIKonstanz.Colibri.Networking
 
                 // Nothing more will be written to that session: see WaitForOutboxToDrain.
                 Monitor.PulseAll(_outboxLock);
+            }
+        }
+
+        /// <summary>
+        /// <see cref="CloseOutbox()"/> for the connection loop that <paramref name="token"/> belongs
+        /// to, when its session ends: unless OnDisable has ended that loop, which has then closed
+        /// the outbox itself, and the outbox may already drain into the next loop's session.
+        /// </summary>
+        /// <remarks>Internal for the EditMode tests.</remarks>
+        internal void CloseOutbox(CancellationToken token)
+        {
+            lock (_outboxLock)
+            {
+                if (!token.IsCancellationRequested)
+                    CloseOutbox();
             }
         }
 
@@ -1919,12 +2014,19 @@ namespace HCIKonstanz.Colibri.Networking
         /// now on is dropped as it is made. Waiting would be waiting forever - nothing will ever
         /// connect again - and that is a task leaked per send, plus RemoteLogging's queue growing
         /// for good behind a send that never returns.
+        ///
+        /// Not once OnDisable has ended the loop that <paramref name="token"/> belongs to: enabling
+        /// the component again is a deliberate retry, and the next loop's sends are not refused.
         /// </summary>
-        private void RefuseSends()
+        private void RefuseSends(CancellationToken token)
         {
             Outgoing[] dropped;
             lock (_outboxLock)
             {
+                // Checked under the lock that OnEnable lifts a refusal under.
+                if (token.IsCancellationRequested)
+                    return;
+
                 _isRefused = true;
                 dropped = TakeEverythingQueued();
             }
