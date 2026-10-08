@@ -124,6 +124,14 @@ Colibri component from 1.x.
   outage no longer stops the catch-up. The delete counts as the answer for it, the model is
   dropped, and the request for every other model still goes out, so the changes and new models
   made meanwhile arrive.
+- A change to a registered model made just before the connection died without closing (Wi-Fi
+  dropping out, say) is no longer undone after the reconnect, however many more were made before
+  Socket.IO noticed. Socket.IO notices such a connection only after its ping timeout, and what is
+  sent until then is lost. The answer after the reconnect had the value from before, and applying
+  it reverted the change here while no other client ever saw it. The field now keeps its value and
+  sends it again; a value another client set meanwhile is still applied. A field changed more than
+  about 8 times right at the moment the connection died may still not be recognised. See
+  [docs/guide.md](docs/guide.md#syncmodel).
 - `registerModel` with an id that `models$` already lists replaces that entry instead of listing
   the id twice. The replaced instance stops syncing (with a console warning if it was registered
   on this client), and registering the same instance again does nothing.
