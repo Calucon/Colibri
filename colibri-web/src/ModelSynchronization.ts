@@ -81,8 +81,8 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
     const deletedWhileAwaited = new Set<string>();
 
     // Changes to own models held back instead of sent, by the property names SyncModel reports
-    // them under: made while the connection was down, or since the reconnect but before the
-    // server answered for the model (see registerModel).
+    // them under: made while the connection was down, or since registering the model or since a
+    // reconnect but before the server answered for it (see registerModel).
     const heldChanges = new WeakMap<T, Set<string>>();
 
     // From a disconnect until the next connect.
