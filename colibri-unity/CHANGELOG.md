@@ -140,7 +140,9 @@ rationale, migration steps, and what the Editor verification did and did not cov
   `ColibriConfig.ServerCertificateSha256`** (*Server certificate SHA-256*, which pins one
   certificate by its fingerprint), shown in the Setup window when TLS is on. By default only
   certificates the device trusts are accepted, and existing configuration assets load with both
-  off.
+  off. A fingerprint that is not 64 hexadecimal digits is an error in the window, and is neither
+  saved nor used. The window's label column is as wide as these two labels, which Unity's default
+  of 150 px cut off.
 - **The Store's `https` requests honour the same two settings**, so a server with a self-signed
   certificate works for the Store as well as for the TCP connection.
 - **Clear TLS errors**, each logged as an error once and then retried with backoff. A server that
@@ -149,7 +151,8 @@ rationale, migration steps, and what the Editor verification did and did not cov
   fingerprint to pin. A certificate accepted only because self-signed ones are allowed is a warning,
   once per session.
 - **The Status window shows TLS** next to the server address, how the certificate was accepted,
-  and its SHA-256 fingerprint, selectable for copying.
+  and its SHA-256 fingerprint, selectable for copying. Those two wrap to the window's width rather
+  than run past its edge.
 - For a client without TLS, the suspected-protocol-mismatch error also suggests ticking 'Server
   supports SSL/TLS', since a server with TLS on hangs up on such a client before a frame.
 
@@ -508,6 +511,12 @@ otherwise spend on their prototype, so:
   than 8 clients (by default; `APP_CLIENT_WARNING_THRESHOLD`), except for `colibri`, the admin UI's
   own app. The window also no longer accepts an App Name of only spaces, and its title no longer
   forces a horizontal scrollbar.
+- **The setup window applies only what it would save.** It wrote every field straight into the
+  configuration, and *Save Config* only saved it. So a value the window marked as an error, such
+  as port 0 or a malformed *Server certificate SHA-256*, was used in Play mode all the same, though
+  *Save Config* was disabled, and written to disk by the next save of the project's assets. The
+  fields now edit a copy: a valid change still takes effect at once, without saving, and one with
+  an error stays in the window while the configuration keeps its last valid settings.
 - **`Window → Colibri Status`**: connection state, server, app name, protocol version, time since
   the last server heartbeat (not a latency: the heartbeat carries the *server's* clock), the
   channels with listeners and the type each expects, and the last 20 messages in and out. It uses
@@ -694,6 +703,7 @@ otherwise spend on their prototype, so:
   showing and hiding, a server value replacing a held change, a delete from another client
   dropping it, and where the limit comes from. `ModelUpdateTests` cover an update reaching a model
   before any object of its type has woken; `AppNameCheckTests` the shared-app-name warning;
+  `SetupWindowTests` that a value the Setup window marks as an error stays out of the configuration;
   `ConnectTimeoutTests` an attempt nothing answers, cancelling one, and a refusal reported at
   once; `VoicePacketQueueTests` voice packets from several receive threads at once; `OutboxTests`
   the 10 000-message cap, connected and not; `RemoteLoggingTests` the missing-lines note. In
