@@ -1380,6 +1380,33 @@ describe('keeping a change made after registerModel', () => {
         debugSpy.mockRestore();
     });
 
+    /** A connected RegisterModelSync on 'reg' that has asked for every model, then 'p1' registered. */
+    const registeredLate = async () => {
+        new Colibri('app', 'localhost', 9011);
+        const [models$, registerModel] = RegisterModelSync({ name: 'reg', type: Pair });
+        connectSocket();
+        await nextTask();
+        fakeSocket.emit.mockClear();
+        const pair = new Pair('p1');
+        registerModel(pair);
+        return { models$, pair };
+    };
+
+    // SyncModel reports a change 1 ms after it is made. Decided then, the change was not held, the
+    // answer was applied over it, and the report sent the server's old value to every client.
+    it('keeps it when the answer comes before SyncModel reports the change', async () => {
+        const { pair } = await registeredLate();
+        pair.a = 'changed';
+        deliver('reg', { command: 'model::update', payload: server });
+        await settle();
+
+        expect([pair.a, pair.b]).toEqual(['changed', 'server-b']);
+        expect(sentInOrder()).toEqual([
+            ['model::request', { id: 'p1' }],
+            ['model::update', { id: 'p1', a: 'changed' }]
+        ]);
+    });
+
     // Registered at the top of a module, before new Colibri(), the usual order.
     it('asks for a model registered before new Colibri() before asking for every model', async () => {
         const [, registerModel] = RegisterModelSync({ name: 'reg', type: Pair });

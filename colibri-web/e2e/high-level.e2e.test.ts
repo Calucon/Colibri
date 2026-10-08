@@ -542,8 +542,9 @@ describe('RegisterModelSync registering an id the server already has', () => {
 
     // A change made after registerModel is held back until the server has answered for the id, and
     // then sent on top of what it has. It used to be undone on the registering client only, so that
-    // the page showed the old value while the server and every other client had the new one: the
-    // answer for every model came first, and was taken for the answer for the id.
+    // the page showed the old value while the server and every other client had the new one: when
+    // the answer for every model came first and was taken for the answer for the id, and when the
+    // answer came before SyncModel reported the change, 1 ms after it was made.
     describe('keeps a change made right after registerModel', () => {
         /** A peer that holds 'session' = running and stays connected throughout. */
         const peerWithSession = async (prefix: string) => {
@@ -586,6 +587,24 @@ describe('RegisterModelSync registering an id the server already has', () => {
 
             expect(await outcome(page, peer, channel, session)).toEqual(expected);
             expect(latest(models$)).toEqual([session]);
+        });
+
+        // Run a few times over: whether the answer comes within the 1 ms is down to timing.
+        it('registered later, on a button press say', async () => {
+            for (let run = 0; run < 6; run++) {
+                const { app, channel, peer } = await peerWithSession('modelsync-change-late');
+                const page = await createClient(app);
+                const [models$, registerModel] = RegisterModelSync<Shared>({ name: channel, type: Shared });
+                await listed(page);
+                expect(latest(models$)).toHaveLength(1);
+
+                const session = new Shared('session');
+                registerModel(session);
+                session.value = 'mine';
+
+                expect({ run, ...(await outcome(page, peer, channel, session)) }).toEqual({ run, ...expected });
+                expect(latest(models$)).toEqual([session]);
+            }
         });
     });
 });

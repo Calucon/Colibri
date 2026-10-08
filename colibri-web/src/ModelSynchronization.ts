@@ -85,6 +85,10 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
     // reconnect but before the server answered for it (see registerModel).
     const heldChanges = new WeakMap<T, Set<string>>();
 
+    // Changes to own models made while nothing was held back, waiting for SyncModel to report them
+    // (it buffers for 1 ms) to go out together.
+    const changesToSend = new WeakMap<T, Set<string>>();
+
     // From a disconnect until the next connect.
     let disconnected = false;
 
@@ -277,28 +281,42 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
             );
         }
 
+        // Whether a change is held back is decided as it is made, not once SyncModel reports it
+        // 1 ms later: an answer that came in between was applied over it, and the report then sent
+        // the server's old value in its place, to every client.
+        //
+        // Held back until the server has answered for the model, and then sent on top of what it
+        // has: a change made since registering (before `new Colibri()` included), or after a
+        // reconnect but before the answer, which the answer would otherwise undo. Also one made
+        // while disconnected, which Socket.IO would buffer and send on the reconnect ahead of the
+        // request for the model: to a server that had forgotten the model, that change alone
+        // became all of it, the answer had fields in it, and the rest was never sent again.
+        const mustHold = () => !Colibri.getInstance(false) || disconnected || awaitingAnswer.has(model.id);
+        model.modelChanges.subscribe(change => {
+            if (mustHold()) {
+                holdChanges(model, [change]);
+                return;
+            }
+            const toSend = changesToSend.get(model);
+            if (toSend) toSend.add(change);
+            else changesToSend.set(model, new Set([change]));
+        });
         model.modelChanges$.subscribe({
-            next: changes => {
-                const colibri = Colibri.getInstance(false);
+            next: () => {
+                const changes = [...(changesToSend.get(model) ?? [])];
+                changesToSend.delete(model);
+                if (changes.length === 0) return;
 
-                // Held back until the server has answered for the model, and then sent on top of
-                // what it has: a change made since registering (before `new Colibri()` included),
-                // or after a reconnect but before the answer, which the answer would otherwise
-                // undo. Also one made while disconnected, which Socket.IO would buffer and send on
-                // the reconnect ahead of the request for the model: to a server that had forgotten
-                // the model, that change alone became all of it, the answer had fields in it, and
-                // the rest was never sent again.
-                if (!colibri || disconnected || awaitingAnswer.has(model.id)) {
-                    holdChanges(model, changes);
-                    return;
-                }
-                colibri.sendMessage(name, 'model::update', model.toJson(changes));
+                const colibri = Colibri.getInstance(false);
+                if (!colibri || mustHold()) holdChanges(model, changes);
+                else colibri.sendMessage(name, 'model::update', model.toJson(changes));
             },
             // delete() ends the stream: this client sends nothing more for the model - so neither
             // a held change, nor the whole model again after a reconnect.
             complete: () => {
                 ownModels.delete(model);
                 heldChanges.delete(model);
+                changesToSend.delete(model);
             }
         });
 
