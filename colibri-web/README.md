@@ -81,7 +81,7 @@ Always pass `name`. To sync with a Unity `SyncBehaviour<T>`, use the Unity class
 - **Clients do not see each other.** They use different app names or servers. A listener only receives what is sent
   while it is registered and connected.
 - **Nothing connects from an `https://` page.** Browsers block `ws://` and `http://` from it (mixed content). Use
-  `https://` or `wss://`, which needs a proxy in front of the server that adds TLS.
+  `https://` or `wss://`, which needs [TLS on the server](docs/guide.md#tls) or a proxy in front of it that adds TLS.
 - **`colibri.protocolMismatch` emits.** With `fatal: true` the server refused this client and the connection is
   closed; with `fatal: false` the server is suspected to be older than 2.0.0, and the connection keeps working. Use
   2.x on both sides. See [Protocol version](docs/guide.md#protocol-version).
@@ -99,6 +99,7 @@ Always pass `name`. To sync with a Unity `SyncBehaviour<T>`, use the Unity class
 
 - [Installation](docs/guide.md#installation): building the package from a checkout
 - [Configuration](docs/guide.md#configuration): app name, server address, port, HTTPS
+- [TLS](docs/guide.md#tls): a server with TLS on, self-signed certificates in browsers and Node
 - [Protocol version](docs/guide.md#protocol-version): what `protocolMismatch` reports
 - [Sending data between clients](docs/guide.md#sending-data-between-clients): types, colours, numbers, rate limits
 - [SyncModel](docs/guide.md#syncmodel): ids, channel names, reconnects, deleting
