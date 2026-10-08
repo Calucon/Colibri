@@ -246,8 +246,78 @@ namespace HCIKonstanz.Colibri.Tests
 
 
         /*
+         *  A connection loop that has been ended
+         *
+         *  A disable and enable in one frame starts the next connection loop while the ended one is
+         *  still unwinding on a worker thread. Its cleanup used to close the outbox under the next
+         *  loop's session and set Disconnected, whenever it got round to it: a session already
+         *  Connected was then either dropped or left saying Connected with every send waiting.
+         */
+
+        /// <summary>
+        /// The ended loop's cleanup, late, after the next loop's session is up: the session stays
+        /// Connected, and what is sent still goes out on it.
+        /// </summary>
+        [Test]
+        public void AnEndedLoopLeavesTheNextSessionConnectedAndItsOutboxOpen()
+        {
+            var server = OpenSession();
+            Assert.That(_connection.TrySetStatus(ConnectionStatus.Connected, CancellationToken.None), Is.True);
+
+            var ended = EndedLoop();
+            _connection.CloseOutbox(ended);
+            Assert.That(_connection.TrySetStatus(ConnectionStatus.Disconnected, ended), Is.False);
+
+            Assert.That(_connection.Status, Is.EqualTo(ConnectionStatus.Connected));
+            _connection.SendCommand(Channel, "broadcast::int", 1);
+            Assert.That(Receive(server, 1).Select(Describe), Is.EqualTo(new[] { "broadcast::int 1" }));
+        }
+
+        /// <summary>
+        /// A session of the ended loop that gets as far as its first frame does not take the outbox
+        /// over: what is sent waits for the next loop's session rather than going to a socket that
+        /// is being closed.
+        /// </summary>
+        [Test]
+        public void AnEndedLoopDoesNotOpenTheOutbox()
+        {
+            var listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            Socket endedServer;
+            Socket endedClient;
+            try
+            {
+                endedClient = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+                _disposables.Add(endedClient);
+                endedClient.Connect((IPEndPoint)listener.LocalEndpoint);
+                endedServer = listener.AcceptSocket();
+                _disposables.Add(endedServer);
+            }
+            finally
+            {
+                listener.Stop();
+            }
+
+            _connection.OpenOutbox(WebServerConnection.Session.Plain(endedClient), EndedLoop());
+            _connection.SendCommand(Channel, "broadcast::int", 1);
+
+            Assert.That(endedServer.Poll(300 * 1000, SelectMode.SelectRead), Is.False, "A message went out on the ended loop's session");
+            Assert.That(SendEverythingQueued().Select(Describe), Is.EqualTo(new[] { "broadcast::int 1" }));
+        }
+
+
+        /*
          *  Helpers
          */
+
+        /// <summary>The token of a connection loop that OnDisable has ended.</summary>
+        private CancellationToken EndedLoop()
+        {
+            var loop = new CancellationTokenSource();
+            _disposables.Add(loop);
+            loop.Cancel();
+            return loop.Token;
+        }
 
         /// <summary>
         /// Connects a fresh session, as a reconnect does, and returns everything it is sent: what
