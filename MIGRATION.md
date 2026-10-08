@@ -544,7 +544,7 @@ The test suites:
 - `node colibri-unity/run-tests.mjs`: the Unity client's EditMode tests, and its PlayMode tests
   against a real server (started with Docker, unless one is already running). It needs a local
   Unity installation and does not run in CI. See
-  [colibri-unity/README.md](colibri-unity/README.md#for-maintainers).
+  [Running the tests](colibri-unity/docs/guide.md#running-the-tests).
 - `npm run test:docker` in `colibri-server`: runs the image against a fresh, a root-owned and a
   named-volume data directory. Needs Docker; not run in CI.
 

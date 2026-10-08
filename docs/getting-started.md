@@ -292,6 +292,6 @@ sent, and the problem is at the receiving end: nearly always the channel name or
 3. **One client owns each object.**
 4. **Watch the console.** Colibri reports the common mistakes by name instead of failing quietly.
 
-Next: [colibri-unity/README.md](../colibri-unity/README.md) for everything else about the Unity
-client, [colibri-web/README.md](../colibri-web/README.md) for the web client, and
+Next: the [Unity guide](../colibri-unity/docs/guide.md) for everything else about the Unity
+client, the [web guide](../colibri-web/docs/guide.md) for the web client, and
 [MIGRATION.md](../MIGRATION.md) for upgrading a project from Colibri 1.x.
