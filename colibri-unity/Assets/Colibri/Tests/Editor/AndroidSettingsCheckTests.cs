@@ -1,7 +1,11 @@
 using System.Linq;
+using System.Text.RegularExpressions;
 using HCIKonstanz.Colibri.Setup;
 using NUnit.Framework;
 using UnityEditor;
+using UnityEngine;
+using UnityEngine.TestTools;
+using Object = UnityEngine.Object;
 using Setting = HCIKonstanz.Colibri.Setup.AndroidSettingsCheck.Setting;
 
 namespace HCIKonstanz.Colibri.Tests
@@ -65,6 +69,58 @@ namespace HCIKonstanz.Colibri.Tests
             Assert.That(Issues(http: InsecureHttpOption.DevelopmentOnly, development: true, internet: true), Is.Empty);
             Assert.That(Issues(http: InsecureHttpOption.DevelopmentOnly, development: false, internet: true),
                 Is.EqualTo(new[] { Setting.AllowDownloadsOverHttp }));
+        }
+
+        /// <summary>
+        /// The build hook. Unity cannot be made to build from a test, so it is driven through the
+        /// method the hook calls, with the settings passed in.
+        /// </summary>
+        [Test]
+        public void AnAndroidBuildWithBothSettingsWrongLogsBothWarnings()
+        {
+            var config = RemoteConfig();
+            try
+            {
+                LogAssert.Expect(LogType.Warning, new Regex(@"^Colibri \(Android build\): Internet Access is set to Auto"));
+                LogAssert.Expect(LogType.Warning, new Regex(@"^Colibri \(Android build\): Allow downloads over HTTP is 'Not allowed'"));
+
+                AndroidSettingsBuildCheck.Check(BuildTarget.Android, false, config, InsecureHttpOption.NotAllowed, false);
+
+                LogAssert.NoUnexpectedReceived();
+            }
+            finally
+            {
+                Object.DestroyImmediate(config);
+            }
+        }
+
+        [Test]
+        public void ABuildWithNothingToReportLogsNothing()
+        {
+            var config = RemoteConfig();
+            try
+            {
+                AndroidSettingsBuildCheck.Check(BuildTarget.Android, false, config, InsecureHttpOption.AlwaysAllowed, true);
+                AndroidSettingsBuildCheck.Check(BuildTarget.StandaloneWindows64, false, config, InsecureHttpOption.NotAllowed, false);
+                // HTTP allowed in development builds, and this is one.
+                AndroidSettingsBuildCheck.Check(BuildTarget.Android, true, config, InsecureHttpOption.DevelopmentOnly, true);
+                // A project without a Colibri configuration has no server address to judge.
+                AndroidSettingsBuildCheck.Check(BuildTarget.Android, false, null, InsecureHttpOption.NotAllowed, false);
+
+                LogAssert.NoUnexpectedReceived();
+            }
+            finally
+            {
+                Object.DestroyImmediate(config);
+            }
+        }
+
+        private static ColibriConfig RemoteConfig()
+        {
+            var config = ScriptableObject.CreateInstance<ColibriConfig>();
+            config.ServerAddress = RemoteServer;
+            config.IsSSL = false;
+            return config;
         }
 
         [Test]

@@ -3,6 +3,8 @@ using System;
 using System.Collections.Generic;
 using System.Net;
 using UnityEditor;
+using UnityEditor.Build;
+using UnityEditor.Build.Reporting;
 using UnityEngine;
 
 namespace HCIKonstanz.Colibri.Setup
@@ -12,9 +14,10 @@ namespace HCIKonstanz.Colibri.Setup
     /// and start normally, and then fail on the headset, where there is no console to say why.
     /// </summary>
     /// <remarks>
-    /// Checked after every domain reload - which switching the build target causes too - and
-    /// reported as a console warning. The Colibri Setup window (Window -> Colibri Configuration)
-    /// shows the same issues, each with a button that fixes it.
+    /// Checked after every domain reload - which switching the build target causes too - and at
+    /// the start of every Android build, and reported as a console warning. The Colibri Setup
+    /// window (Window -> Colibri Configuration) shows the same issues, each with a button that
+    /// fixes it.
     /// </remarks>
     internal static class AndroidSettingsCheck
     {
@@ -135,14 +138,59 @@ namespace HCIKonstanz.Colibri.Setup
         private static void CheckAfterReload()
         {
             // Deferred: the configuration is loaded through Resources, which is not reliably
-            // available while the domain is still being set up.
-            EditorApplication.delayCall += LogIssues;
+            // available while the domain is still being set up. To the first editor update rather
+            // than delayCall: Unity holds delayCall while the editor is in the background, so a
+            // build target switched just before looking elsewhere said nothing until the editor
+            // had focus again.
+            EditorApplication.update += CheckOnFirstUpdate;
+        }
+
+        private static void CheckOnFirstUpdate()
+        {
+            EditorApplication.update -= CheckOnFirstUpdate;
+            LogIssues();
         }
 
         internal static void LogIssues()
         {
-            foreach (var issue in FindIssues(ColibriConfig.Load()))
+            var config = ColibriConfig.Load();
+            if (config != null)
+                LogIssues(FindIssues(config));
+        }
+
+        internal static void LogIssues(IEnumerable<Issue> issues)
+        {
+            foreach (var issue in issues)
                 Debug.LogWarning($"Colibri (Android build): {issue.Message}\nWindow -> Colibri Configuration can fix this with one click.");
+        }
+    }
+
+    /// <summary>
+    /// The same check when the settings take effect: at the start of an Android build. The
+    /// warnings go into the build log, and the build goes ahead regardless.
+    /// </summary>
+    internal sealed class AndroidSettingsBuildCheck : IPreprocessBuildWithReport
+    {
+        public int callbackOrder => 0;
+
+        public void OnPreprocessBuild(BuildReport report)
+        {
+            // The build's own Development flag, not the Build Settings window's: a scripted build
+            // passes its options directly.
+            var development = (report.summary.options & BuildOptions.Development) != 0;
+            Check(report.summary.platform, development, ColibriConfig.Load(),
+                PlayerSettings.insecureHttpOption, PlayerSettings.Android.forceInternetPermission);
+        }
+
+        /// <summary>The build's check with every input passed in. Exists for the test suite.</summary>
+        internal static void Check(BuildTarget target, bool development, ColibriConfig config,
+            InsecureHttpOption httpOption, bool forceInternetPermission)
+        {
+            if (config == null)
+                return;
+
+            AndroidSettingsCheck.LogIssues(AndroidSettingsCheck.FindIssues(
+                target, config.ServerAddress, config.IsSSL, httpOption, development, forceInternetPermission));
         }
     }
 }
