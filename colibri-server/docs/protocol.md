@@ -661,7 +661,8 @@ while no other client ever saw it. So both clients compare the answer with what 
 - **colibri-unity** keeps, for each `[Sync]` member, the values it sent around when it last heard
   from the server, whose heartbeat comes every 100 ms: the latest 8 up to then, the first 8 after
   that, and the newest. The link died shortly after that time, and the value the server has was
-  sent around then. From its re-request until the end of the answers, those stay as they are, and of
+  sent around then. What the next connection hears from the server before the re-requests go out
+  does not count. From its re-request until the end of the answers, those stay as they are, and of
   what the member sends meanwhile only the newest is kept besides: no answer can hold it. It also
   keeps the value the member held before those: the last one dropped, or the one the server last
   showed it, in another client's update or in an answer. Everything it receives for an object from
@@ -669,13 +670,16 @@ while no other client ever saw it. So both clients compare the answer with what 
   included, is compared member by member with the values the member held from 10 s before the client
   noticed the outage: those it sent since, and the one it held at that point. The value sent last
   means nothing to do. An earlier one means the last change was lost: the member keeps its value,
-  sends it again once in an ordinary update, and takes nothing more until the answers end. Any other
-  value is applied, as is everything for a member that sent nothing in those 10 s, and a member
-  missing from an update is left alone. An object that has never sent anything applies everything.
-  When it notices the outage, it also sends again every `model::delete` it sent after it last heard
-  from the server, or in the second before, unless it is 60 s old or more; the connection holds them
-  for the next session, ahead of the re-requests. If the connection drops again before the end of
-  the answers, it sends them again once more, counted from the earlier outage.
+  sends it again once in an ordinary update, and takes nothing more until the answers end. So does a
+  member changed after the re-requests, whatever arrives: the server reads that change after all of
+  it. Any other value is applied, as is everything for a member that sent nothing in those 10 s, and
+  a member missing from an update is left alone. An object that has never sent anything applies
+  everything. When it notices the outage, it also sends again every `model::delete` it sent after
+  it last heard from the server, or in the second before, unless it is 60 s old or more; the
+  connection holds them for the next session, ahead of the re-requests. If the connection drops
+  again before the end of the answers, it sends them once more, however old, with every
+  `model::delete` it has sent since it noticed the outage, except for an id it has asked for afresh
+  since.
 - **colibri-web** checks only the answer to a registered model's re-request, field by field,
   against the value the server last showed it and the values it sent since. Of these it keeps the
   latest 8 up to when it last heard from the server, the first 8 after that, and the newest: the
