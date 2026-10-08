@@ -588,14 +588,14 @@ How the two clients use the three forms:
   server had, to see that the server has them.
 
 **The end of the answers.** On the wire, an answer is an ordinary `model::update`, just like an
-update the server relays from another client meanwhile. So when colibri-unity has re-requested
-any synced object after a reconnect, it sends one more request after all the others:
-`{ "id": "<fresh GUID>", "again": true }` on the channel `colibri::reconnect`, where Colibri never
-stores a model. The server answers it like any other, with the bare id, and colibri-unity takes
-that answer as the end of the answers to its re-requests (see
-[After a reconnect](#after-a-reconnect)). Nothing on that channel reaches an application listener.
-The server has no code of its own for this. It works because of two things the server already
-does, which have to stay:
+update the server relays from another client meanwhile. So after every reconnect, colibri-unity
+sends one more request after all the others: `{ "id": "<fresh GUID>", "again": true }` on the
+channel `colibri::reconnect`, where Colibri never stores a model. The server answers it like any
+other, with the bare id, and colibri-unity takes that answer as the end of the answers to its
+re-requests, and as the point by which the server has read everything it queued before, the deletes
+it sent again included (see [After a reconnect](#after-a-reconnect)). Nothing on that channel
+reaches an application listener. The server has no code of its own for this. It works because of two
+things the server already does, which have to stay:
 
 - it handles one client's messages in the order they arrive, and
 - it writes its answers to that client in the same order.
@@ -661,18 +661,21 @@ while no other client ever saw it. So both clients compare the answer with what 
 - **colibri-unity** keeps, for each `[Sync]` member, the values it sent around when it last heard
   from the server, whose heartbeat comes every 100 ms: the latest 8 up to then, the first 8 after
   that, and the newest. The link died shortly after that time, and the value the server has was
-  sent around then. It also keeps the value the member held before those: the last one dropped, or
-  the one the server last showed it, in another client's update or in an answer. Everything it
-  receives for an object from its re-request until the end of the answers (see
-  [Requests](#requests)), other clients' updates included, is compared member by member with the
-  values the member held from 10 s before the client noticed the outage: those it sent since, and
-  the one it held at that point. The value sent last means nothing to do. An earlier one means the
-  last change was lost: the member keeps its value, sends it again once in an ordinary update, and
-  takes nothing more until the answers end. Any other value is applied, as is everything for a
-  member that sent nothing in those 10 s, and a member missing from an update is left alone. An
-  object that has never sent anything applies everything. When it notices the outage, it also
-  sends again every `model::delete` it sent after it last heard from the server, or in the second
-  before; the connection holds them for the next session, ahead of the re-requests.
+  sent around then. From its re-request until the end of the answers, those stay as they are, and of
+  what the member sends meanwhile only the newest is kept besides: no answer can hold it. It also
+  keeps the value the member held before those: the last one dropped, or the one the server last
+  showed it, in another client's update or in an answer. Everything it receives for an object from
+  its re-request until the end of the answers (see [Requests](#requests)), other clients' updates
+  included, is compared member by member with the values the member held from 10 s before the client
+  noticed the outage: those it sent since, and the one it held at that point. The value sent last
+  means nothing to do. An earlier one means the last change was lost: the member keeps its value,
+  sends it again once in an ordinary update, and takes nothing more until the answers end. Any other
+  value is applied, as is everything for a member that sent nothing in those 10 s, and a member
+  missing from an update is left alone. An object that has never sent anything applies everything.
+  When it notices the outage, it also sends again every `model::delete` it sent after it last heard
+  from the server, or in the second before, unless it is 60 s old or more; the connection holds them
+  for the next session, ahead of the re-requests. If the connection drops again before the end of
+  the answers, it sends them again once more, counted from the earlier outage.
 - **colibri-web** checks only the answer to a registered model's re-request, field by field,
   against the value the server last showed it and the values it sent since. Of these it keeps the
   latest 8 up to when it last heard from the server, the first 8 after that, and the newest: the
@@ -756,12 +759,13 @@ change: the reconnecting client sends its own value over it. colibri-unity judge
 that arrives before the end of the answers like that, even one another client made after the
 reconnect. Both clients may miss a member or field that changed more than about 8 times within
 100 ms of when they last heard from the server, which for colibri-unity takes a send-rate limit
-above about 80 updates a second. colibri-unity does not send again a member whose very first value
-was lost, having held nothing before it, and colibri-web checks only the models it registered. A
-value sent again can cross a change another client makes right after the answers, like any two
-changes made at the same time. A `model::delete` colibri-unity sends again after an outage also
-removes an object another client has created under the same id since, as a delete sent during the
-outage does.
+above about 80 updates a second. colibri-unity may also miss a member that changed more than once
+between a reconnect and a second drop before the end of the answers. It does not send again a
+member whose very first value was lost, having held nothing before it, and colibri-web checks only
+the models it registered. A value sent again can cross a change another client makes right after the
+answers, like any two changes made at the same time. A `model::delete` colibri-unity sends again
+after an outage also removes an object another client has created under the same id since, as a
+delete sent during the outage does.
 
 **Nobody is authenticated.** Any client that can reach the server can join any app under any name,
 and read and change its models and its REST store. The version check is not access control.
