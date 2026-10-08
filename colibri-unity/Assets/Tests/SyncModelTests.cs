@@ -231,6 +231,57 @@ namespace HCIKonstanz.Colibri.E2E
         }
 
         /// <summary>
+        /// A manager without a template is how objects placed in the scene are synced, so it is not
+        /// a mistake in itself. It used to warn at every Play regardless - the SyncTransform sample
+        /// included - and now says so only when a model arrives that it would have to build, once,
+        /// naming the model.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator AManagerWithoutATemplateWarnsOnceWhenItCannotBuildAModel()
+        {
+            var warnings = new System.Collections.Generic.List<string>();
+            void OnLog(string message, string stackTrace, LogType type)
+            {
+                if (type == LogType.Warning && message.IndexOf("template", StringComparison.OrdinalIgnoreCase) >= 0)
+                    warnings.Add(message);
+            }
+
+            Application.logMessageReceived += OnLog;
+            try
+            {
+                var placed = SpawnConfigured<E2ESyncModel>("placed", _ => { });
+                Spawn<E2ESyncModelManager>("manager-without-template");
+
+                yield return null;
+                yield return LetInitialStateArrive();
+
+                // Updates for an object the scene has are no reason to warn.
+                Peer.Send(Channel, "model::update", new JObject { { "id", placed.Id }, { "label", "known" } });
+                yield return E2EServer.WaitUntil(() => placed.Label == "known", "The placed model never received its update");
+                Assert.That(warnings, Is.Empty, "A manager without a template warned before it had anything to build");
+
+                // Two updates of one unknown model and one of another: a single warning, for the first.
+                var first = Guid.NewGuid().ToString();
+                Peer.Send(Channel, "model::update", new JObject { { "id", first }, { "label", "a" } });
+                Peer.Send(Channel, "model::update", new JObject { { "id", first }, { "label", "b" } });
+                Peer.Send(Channel, "model::update", new JObject { { "id", Guid.NewGuid().ToString() }, { "label", "c" } });
+
+                yield return E2EServer.WaitUntil(() => warnings.Count > 0,
+                    "The manager never said that it could not build a model it has no template for");
+                yield return E2EServer.Settle(1f);
+
+                Assert.That(warnings, Has.Count.EqualTo(1), string.Join("\n", warnings));
+                Assert.That(warnings[0], Does.Contain(first));
+                Assert.That(warnings[0], Does.Not.Contain("  "), "The message has a gap where a value is missing");
+                Assert.That(Instances(first), Is.Empty);
+            }
+            finally
+            {
+                Application.logMessageReceived -= OnLog;
+            }
+        }
+
+        /// <summary>
         /// Templates are often kept switched off in the scene, so that they are not objects of their
         /// own. A clone starts out as its template is, and a clone that is off never ran Awake: it
         /// never registered for its own updates or with the ticker, and stayed exactly as the first

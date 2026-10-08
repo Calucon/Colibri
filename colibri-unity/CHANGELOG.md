@@ -336,6 +336,10 @@ rationale, migration steps, and what the Editor verification did and did not cov
   so `Awake` runs, and the state decides whether it stays visible. The member table is also built
   when the first update arrives, not only in `Awake`, so an update that reaches a model before any
   object of its type has woken is applied instead of being dropped with `Unable to sync attribute`.
+- **A manager without a `Template` no longer warns at every Play.** A manager without one is how
+  objects placed in the scene are synced (the `SyncTransform` sample has one), yet `Start` warned
+  regardless, with a gap in the message where a model ID would have gone. It now warns once, naming
+  the model, when a model arrives that is not in the scene and that it has no template to build.
 - **Wire names are lowercased the same way on every machine.** Model channels and `[Sync]` member
   names used `ToLower()`, which on Turkish and Azerbaijani systems turns `I` into a dotless `ı`:
   `PhysicsId` went out under a name no other client uses, and stopped syncing. They now use
