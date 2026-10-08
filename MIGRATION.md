@@ -39,6 +39,7 @@ with a 2.0 server, and from the moment it runs, the server's log names every cli
 - [ ] [Port `ObservableModel<T>` / `ObservableManager<T>` to `SyncBehaviour<T>` / `SyncBehaviourManager<T>`](#breaking-observablemodelt-and-observablemanagert-are-deleted)
 - [ ] [Import any sample your code uses; samples are no longer compiled into your project](#breaking-the-samples-are-no-longer-compiled-into-your-project)
 - [ ] [Replace `LockFreeQueue<T>` with `ConcurrentQueue<T>`](#breaking-lockfreequeue-is-gone)
+- [ ] [*Server supports SSL/TLS?* ticked: the server's TCP port needs TLS now too](#optional-tls)
 
 **Everywhere**
 
@@ -387,6 +388,20 @@ out of `Packages/Colibri/Prefabs`.
 producer, so they were deleted. If your code used them, use
 `System.Collections.Concurrent.ConcurrentQueue<T>`, which is safe with any number of producers and
 consumers.
+
+---
+
+## Optional TLS
+
+TLS is optional in 2.0. To turn it on, set `TLS_CERT` and `TLS_KEY` on the server and tick *Server
+supports SSL/TLS?* in each Unity app (see TLS in the [server](colibri-server/docs/guide.md#tls) and
+[Unity](colibri-unity/docs/guide.md#tls) guides). That setting (`ColibriConfig.IsSSL`) now covers
+the TCP connection too, not only the Store. A deployment with only the web port behind a TLS proxy,
+such as nginx on 443, and a plain TCP port 9012 therefore needs TLS for 9012 as well once the
+setting is ticked: `TLS_CERT` and `TLS_KEY`, or TLS termination for 9012 in the proxy. Otherwise
+the client reports that the server did not answer the TLS handshake. Existing `ColibriConfig`
+assets load unchanged, with both new certificate settings off or empty. 1.x clients cannot use
+TLS. The protocol version does not change.
 
 ---
 
