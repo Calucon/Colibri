@@ -51,7 +51,8 @@ The admin UI is then at `http://<your-server-ip>:9011`, and `docker logs colibri
   `DATA_ROOT` unset. A host directory, one left behind by colibri-server 1.x included, ends up
   owned by uid 1000. With `--user`, see
   [Running as another user](docs/guide.md#running-as-another-user).
-- **Settings** go into an `environment:` section, e.g. `CONSOLE_LOG_LEVEL: debug`.
+- **Settings** go into an `environment:` section, e.g. `CONSOLE_LOG_LEVEL: debug`, or into a
+  `.env` file mounted at `/srv/colibri/.env`.
 - **Other ports:** change only the host side of `ports:`, e.g. `"8011:9011"`.
 
 ### Node
@@ -61,7 +62,8 @@ Clone this repository, then in `colibri-server` run `npm ci`, `npm run build` an
 ## Configuration
 
 Settings are environment variables, or lines in a `.env` file in the directory the server is
-started from. [`.env.example`](.env.example) lists every one with its default, and the
+started from: `colibri-server` for `npm start`, `/srv/colibri` in the Docker image.
+[`.env.example`](.env.example) lists every one with its default, and the
 [guide](docs/guide.md#configuration) explains each.
 
 ## Common problems
