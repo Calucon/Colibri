@@ -1331,6 +1331,24 @@ describe('registering a model whose id the server may already have', () => {
         ]);
     });
 
+    // Every RegisterModelSync on a channel receives the answer to a request another one sent.
+    it('does not list the bare answer to another RegisterModelSync on the channel as a model', async () => {
+        new Colibri('app', 'localhost', 9011);
+        const [, registerModel] = RegisterModelSync({ name: 'reg-twice', type: Pair });
+        const [other$] = RegisterModelSync({ name: 'reg-twice', type: Pair });
+        connectSocket();
+        await nextTask();
+        registerModel(new Pair('p1'));
+
+        deliver('reg-twice', { command: 'model::update', payload: { id: 'p1' } });
+        await settle();
+        expect(latest(other$)).toEqual([]);
+
+        // One another client has is still listed, fields or not.
+        deliver('reg-twice', { command: 'model::update', payload: { id: 'theirs' } });
+        expect(latest(other$).map(m => m.id)).toEqual(['theirs']);
+    });
+
     it('replaces an own model registered earlier under the same id, and says so', async () => {
         const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
         try {

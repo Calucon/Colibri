@@ -53,6 +53,11 @@ const warnIfMinified = (className: string, channel: string) => {
 // fields at all is ever sent like this.
 const isBare = (modelData: object) => Object.keys(modelData).every(key => key === 'id');
 
+// For each channel, whether a RegisterModelSync on it has a model of its own with a given id: every
+// RegisterModelSync on the channel receives the server's answer to a request one of them sent, on
+// the same connection, and a bare { id } there is that instance's answer, not a model.
+const ownOnChannel = new Map<string, Set<(id: string) => boolean>>();
+
 // How long an own model asked for again after its held changes were sent (see takeAnswer) waits
 // for an update that shows them, before the changes held since go out anyway. The answer always
 // shows them, unless the server took the request ahead of the update: its limit on the updates a
@@ -118,6 +123,11 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
 
     // From a disconnect until the next connect.
     let disconnected = false;
+
+    const hasOwn = (id: string) => models.value.some(m => m.id === id && ownModels.has(m));
+    const onChannel = ownOnChannel.get(name);
+    if (onChannel) onChannel.add(hasOwn);
+    else ownOnChannel.set(name, new Set([hasOwn]));
 
     // Asks the server for an own model by id; onUpdate or onDelete takes the answer. The server
     // answers with what it has - or, for a model it does not have, a bare { id }, and only then
@@ -210,9 +220,19 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
         const id = modelData.id;
         if (id !== undefined && deletedWhileAwaited.delete(id) && !model && isBare(modelData)) return;
         const asker = id === undefined ? undefined : awaitingAnswer.get(id);
-        if (id !== undefined && asker) takeAnswer(id, asker, model, modelData);
-        else applyUpdate(model, modelData);
+        if (id !== undefined && asker) {
+            takeAnswer(id, asker, model, modelData);
+            return;
+        }
+
+        // The answer to another RegisterModelSync on this channel, which has its own model with
+        // the id. Listed here, it became a model with no fields, which nothing ever filled in: the
+        // full state that instance sends in reply is relayed to every client but this one.
+        if (!model && id !== undefined && isBare(modelData) && ownElsewhere(id)) return;
+        applyUpdate(model, modelData);
     };
+
+    const ownElsewhere = (id: string) => [...(ownOnChannel.get(name) ?? [])].some(has => has !== hasOwn && has(id));
 
     // The first update for an own model after its request settles it. One with fields in it means
     // the server has the model - the server stores an update before it relays it - and is applied

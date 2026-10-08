@@ -207,6 +207,34 @@ const updatesDuring = async (client: Colibri, channel: string, until: () => Prom
     return received;
 };
 
+// Every RegisterModelSync on a channel receives the answer to a request another one on the same
+// page sent. The bare answer for an id the server did not have was listed by the other one as a
+// model with no fields, which nothing ever filled in: the full state sent in reply is relayed to
+// every client but this one.
+describe('RegisterModelSync twice on one channel', () => {
+    class Shared extends SyncModel<Shared> {
+        @Synced()
+        accessor value = '';
+    }
+
+    it('does not list a model with no fields for an id the other one registers', async () => {
+        const app = uniqueApp('modelsync-two-on-a-channel');
+        const channel = uniqueApp('shared');
+        const page = await createClient(app);
+        const [, registerModel] = RegisterModelSync<Shared>({ name: channel, type: Shared });
+        const [other$] = RegisterModelSync<Shared>({ name: channel, type: Shared });
+        await listed(page);
+
+        const mine = new Shared('mine');
+        mine.value = 'set';
+        registerModel(mine);
+        await roundTrip(page);
+        await roundTrip(page);
+
+        expect(latest(other$)).toEqual([]);
+    });
+});
+
 // The server forgets an app's models when its last client leaves, and a model a client had
 // registered itself was never sent again - so a client that joined after the outage never saw it.
 describe('RegisterModelSync own models after a reconnect', () => {
