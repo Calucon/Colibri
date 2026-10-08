@@ -1069,6 +1069,11 @@ namespace HCIKonstanz.Colibri.Networking
                 $"{_consecutiveEarlyFrameFailures} connections in a row were accepted but ended before a single frame could be read. " +
                 $"This usually means a protocol mismatch: this client speaks v{CLIENT_VERSION} and needs colibri-server >= 2.0.0.";
 
+            // A server with TLS turned on hangs up on a client that is not using it, before a
+            // frame, exactly like this.
+            if (!_sessionUsesTls)
+                suspicion += " If the server has TLS turned on, tick 'Server supports SSL/TLS' in the Colibri configuration.";
+
             // Logged before it is published. This runs on the session loop's thread, so whatever
             // polls SuspectedProtocolMismatch on the main thread - the Status window, a test
             // waiting for it - could otherwise act on the value before the line exists.

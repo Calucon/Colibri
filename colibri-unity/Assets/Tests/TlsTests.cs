@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Linq;
 using System.Text.RegularExpressions;
 using HCIKonstanz.Colibri.Networking;
+using HCIKonstanz.Colibri.Setup;
 using HCIKonstanz.Colibri.Synchronization;
 using Newtonsoft.Json.Linq;
 using NUnit.Framework;
@@ -190,6 +191,29 @@ namespace HCIKonstanz.Colibri.E2E
             Assert.That(Logged(LogType.Error, NoTlsAnswer).Length, Is.EqualTo(1),
                 "A server without TLS should be named as such once, and only noted after that");
             Assert.That(Connection.LastConnectFailure, Does.Contain("did not answer the TLS handshake"));
+        }
+
+        /// <summary>
+        /// The other way round: a client without TLS against a server with it. The server hangs up
+        /// on it without a frame, which the client can only suspect the cause of; the suspicion now
+        /// names TLS as well as the protocol version.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator APlainClientAgainstATlsServerIsToldToTickTheTlsSetting()
+        {
+            LogAssert.Expect(LogType.Error, new Regex(
+                @"connections in a row were accepted but ended before a single frame could be read.*If the server has TLS turned on, tick 'Server supports SSL/TLS'",
+                RegexOptions.Singleline));
+
+            E2EServer.Configure();
+            ColibriConfig.Load().TcpServerPort = E2EServer.TlsTcpPort;
+            Assert.That(Connection, Is.Not.Null);
+
+            yield return E2EServer.WaitUntil(() => Connection.SuspectedProtocolMismatch != null,
+                "Three sessions against a TLS server without TLS raised no suspicion", 20f);
+
+            Assert.That(Connection.SuspectedProtocolMismatch, Does.Contain("tick 'Server supports SSL/TLS'"));
+            Assert.That(Connection.UsesTls, Is.False);
         }
 
 
