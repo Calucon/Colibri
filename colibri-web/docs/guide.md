@@ -290,6 +290,13 @@ client's outage looks like to it. A registered instance another client deleted d
 list, if the delete is no more than `MODEL_TOMBSTONE_SECONDS` (10 minutes by default) old. See
 [After a reconnect](../../colibri-server/docs/protocol.md#after-a-reconnect) in the protocol docs.
 
+A change to a registered instance made just before the connection dies without closing (Wi-Fi dropping out, say) may
+never reach the server: Socket.IO notices such a connection only after its ping timeout, up to about 45 s with the
+server's defaults, and what is sent until then is lost. When the server's answer after the reconnect shows a field with
+an earlier value it had here, one it still had in the 10 s before the connection stopped working, Colibri keeps the
+local value and sends it again, however many changes were made in the meantime. A value this client never had is
+another client's and is applied.
+
 See also [the model-sync sample](../samples/model-sync.ts) (run sample with `npm run samples/model-sync`).
 
 Limitations:
@@ -301,6 +308,12 @@ Limitations:
   An instance another client (e.g. Unity) deletes is removed from the list. If this client was disconnected at the
   time, that happens on the reconnect only for an instance it registered itself, and only within
   `MODEL_TOMBSTONE_SECONDS` of the delete; any other stays in the list.
+- A change lost in a connection that died is sent again only for an instance this client registered. On a model listed
+  from the server, the server's value replaces it after the reconnect.
+- A field changed more than about 8 times within roughly 100 ms of the last message from the server before the
+  connection died (a fast drag on a slow link, say) may not be recognised; the server's value is then applied.
+- Another client that sets a field back during the outage, to a value the field had here in the 10 s before the
+  connection died, looks like a lost change: this client's value replaces it.
 
 ### Remote Store
 
