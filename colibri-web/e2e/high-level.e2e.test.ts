@@ -334,6 +334,61 @@ describe('RegisterModelSync own models after a reconnect', () => {
         expect([model.a, model.b]).toEqual(['A2', 'B2']);
         expect(await storedOn(peer, channel, 'own-4')).toEqual({ id: 'own-4', a: 'A2', b: 'B2' });
     });
+
+    /** Every model::update `client` receives on `channel` until `until` resolves. */
+    const updatesDuring = async (client: Colibri, channel: string, until: () => Promise<unknown>) => {
+        const received: unknown[] = [];
+        const subscription = client.messages.subscribe(msg => {
+            if (msg.channel === channel && msg.command === 'model::update') received.push(msg.payload);
+        });
+        try {
+            await until();
+        } finally {
+            subscription.unsubscribe();
+        }
+        return received;
+    };
+
+    /** Every model the server has on `channel`, asked for through `client`. */
+    const modelsOn = (client: Colibri, channel: string) =>
+        updatesDuring(client, channel, () => {
+            client.sendMessage(channel, 'model::request');
+            return roundTrip(client);
+        });
+
+    // Another client (a Unity client destroying the object, say) deleted it while this one was away,
+    // so the delete it relayed never arrived here. Sending the model in full again after the
+    // reconnect would build it again on every client.
+    it('does not bring back its own model that another client deleted while it was away', async () => {
+        const app = uniqueApp('modelsync-own-deleted-away');
+        const channel = uniqueApp('own');
+        // The peer stays connected throughout, so the server keeps the app's models.
+        const { singleton, peer } = await createSingletonWithPeer(app);
+
+        const [models$, registerModel] = RegisterModelSync<OwnModel>({ name: channel, type: OwnModel });
+        const model = new OwnModel('own-5');
+        model.value = 'mine';
+        const arrived = nextMessage(peer, { channel, command: 'model::update' });
+        registerModel(model);
+        await arrived;
+
+        const reconnect = await dropConnectionUntilReleased(singleton);
+        peer.sendMessage(channel, 'model::delete', { id: 'own-5' });
+        await roundTrip(peer);
+
+        const sentAgain = await updatesDuring(peer, channel, async () => {
+            await reconnect();
+            // The answer to what the reconnect asked for, then whatever the client sent in reply,
+            // then that relayed to the peer.
+            await roundTrip(singleton);
+            await roundTrip(singleton);
+            await roundTrip(peer);
+        });
+
+        expect(sentAgain).toEqual([]);
+        expect(latest(models$)).toEqual([]);
+        expect(await modelsOn(peer, channel)).toEqual([]);
+    });
 });
 
 describe('RemoteLogger high-level API', () => {

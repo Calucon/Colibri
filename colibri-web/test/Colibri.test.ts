@@ -782,7 +782,7 @@ describe('sending its own models again after a reconnect', () => {
         return { models$, widget };
     };
 
-    it('asks for each of its own models by id on a reconnect, and not on the first connect', () => {
+    it('asks again for each of its own models by id on a reconnect, and not on the first connect', () => {
         new Colibri('app', 'localhost', 9011);
         const [, registerModel] = RegisterModelSync({ name: 'own', type: Widget });
         registerModel(new Widget('w1'));
@@ -794,8 +794,8 @@ describe('sending its own models again after a reconnect', () => {
         connectSocket();
         expect(sent('model::request')).toEqual([
             ['own', {}],
-            ['own', { id: 'w1' }],
-            ['own', { id: 'w2' }]
+            ['own', { id: 'w1', again: true }],
+            ['own', { id: 'w2', again: true }]
         ]);
     });
 
@@ -945,7 +945,7 @@ describe('sending its own models again after a reconnect', () => {
         await settle();
 
         expect(sentInOrder()).toEqual([
-            ['model::request', { id: 'p1' }],
+            ['model::request', { id: 'p1', again: true }],
             ['model::update', { id: 'p1', a: 'A2', b: 'B' }],
             ['model::request', {}]
         ]);
@@ -965,7 +965,7 @@ describe('sending its own models again after a reconnect', () => {
         expect(latest(models$)).toEqual([pair]);
         // Sent before everything else is asked for, so that that answer already has it.
         expect(sentInOrder()).toEqual([
-            ['model::request', { id: 'p1' }],
+            ['model::request', { id: 'p1', again: true }],
             ['model::update', { id: 'p1', a: 'A2' }],
             ['model::request', {}]
         ]);
@@ -1006,8 +1006,8 @@ describe('sending its own models again after a reconnect', () => {
         await settle();
 
         expect(sentInOrder()).toEqual([
-            ['model::request', { id: 'p1' }],
-            ['model::request', { id: 'p1' }],
+            ['model::request', { id: 'p1', again: true }],
+            ['model::request', { id: 'p1', again: true }],
             ['model::update', { id: 'p1', a: 'A2', b: 'B' }],
             ['model::request', {}]
         ]);

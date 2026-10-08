@@ -89,8 +89,14 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
     // this client changed itself while it waited, which it sends instead. Everything else is asked
     // for once every own model has its answer, so that that answer has what was sent in between.
     //
-    // The server keeps no record of deletes, so a model another client deleted while this one was
-    // away looks the same as one the server forgot, and is sent again too.
+    // Another client may also have deleted an own model while this one was away, and the delete
+    // it relayed never arrived here. So the request says `again: true`: this client held the
+    // model before the outage. The server remembers a delete for a while (MODEL_TOMBSTONE_SECONDS)
+    // and answers such a request with model::delete, which onDelete applies. Without the flag the
+    // server takes the request for one from a client that has the object now, and so forgets the
+    // delete and answers with the bare id, and the full state sent then brings the model back on
+    // every client. Once that while is over, a deleted model looks the same as one the server
+    // forgot, and is sent again.
     withColibri(colibri => {
         colibri.sendMessage(name, 'model::request');
         onColibriDisconnected(colibri, () => {
@@ -103,7 +109,7 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
             for (const model of models.value) {
                 if (!ownModels.has(model)) continue;
                 awaitingAnswer.set(model.id, colibri);
-                colibri.sendMessage(name, 'model::request', { id: model.id });
+                colibri.sendMessage(name, 'model::request', { id: model.id, again: true });
             }
             if (awaitingAnswer.size === 0) colibri.sendMessage(name, 'model::request');
         });
