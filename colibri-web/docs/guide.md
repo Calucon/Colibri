@@ -295,7 +295,8 @@ never reach the server: Socket.IO notices such a connection only after its ping 
 server's defaults, and what is sent until then is lost. When the server's answer after the reconnect shows a field with
 an earlier value it had here, one it still had in the 10 s before the connection stopped working, Colibri keeps the
 local value and sends it again, however many changes were made in the meantime. A value this client never had is
-another client's and is applied.
+another client's and is applied. This holds when the connection dies again before that answer comes, too, or before the
+value sent again arrives.
 
 See also [the model-sync sample](../samples/model-sync.ts) (run sample with `npm run samples/model-sync`).
 
