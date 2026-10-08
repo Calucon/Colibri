@@ -1,6 +1,6 @@
 import { readFileSync } from 'fs';
 import { readFile } from 'fs/promises';
-import { X509Certificate, createPrivateKey } from 'crypto';
+import { KeyObject, X509Certificate, createPrivateKey } from 'crypto';
 import * as tls from 'tls';
 
 /**
@@ -69,8 +69,9 @@ export const checkTlsCredentials = function (credentials: TlsCredentials, certPa
         );
     }
 
+    let privateKey: KeyObject;
     try {
-        createPrivateKey(credentials.key);
+        privateKey = createPrivateKey(credentials.key);
     } catch (err) {
         throw new TlsFileError(
             `TLS_KEY (${keyPath}) holds no private key the server can use (${errorMessage(err)}). It has to be the ` +
@@ -78,15 +79,19 @@ export const checkTlsCredentials = function (credentials: TlsCredentials, certPa
         );
     }
 
+    // Checked here rather than left to createSecureContext: OpenSSL keeps an RSA and an EC key in
+    // separate slots, so it takes an RSA certificate with an EC key, or the other way round, without
+    // a word, and then fails every handshake.
+    if (!new X509Certificate(credentials.cert).checkPrivateKey(privateKey)) {
+        throw new TlsFileError(
+            `TLS_KEY (${keyPath}) is not the private key of the certificate in TLS_CERT (${certPath}). Both have to ` +
+                'come from the same certificate (Let\'s Encrypt: fullchain.pem and privkey.pem from the same directory).'
+        );
+    }
+
     try {
         tls.createSecureContext({ cert: credentials.cert, key: credentials.key });
     } catch (err) {
-        if (errorCode(err) === 'ERR_OSSL_X509_KEY_VALUES_MISMATCH') {
-            throw new TlsFileError(
-                `TLS_KEY (${keyPath}) is not the private key of the certificate in TLS_CERT (${certPath}). Both have to ` +
-                    'come from the same certificate (Let\'s Encrypt: fullchain.pem and privkey.pem from the same directory).'
-            );
-        }
         throw new TlsFileError(`TLS_CERT (${certPath}) and TLS_KEY (${keyPath}) cannot serve TLS together: ${errorMessage(err)}`);
     }
 

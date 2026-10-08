@@ -114,11 +114,14 @@ describe('Config', () => {
         let dir: string;
         let server: TestCertificate;
         let other: TestCertificate;
+        // server and other have EC keys.
+        let rsa: TestCertificate;
 
         beforeAll(async () => {
             dir = await mkdtemp(path.join(tmpdir(), 'colibri-config-tls-'));
             server = createTestCertificate(dir, 'server');
             other = createTestCertificate(dir, 'other');
+            rsa = createTestCertificate(dir, 'rsa', { keyType: 'rsa' });
         });
 
         afterAll(async () => {
@@ -140,6 +143,13 @@ describe('Config', () => {
 
             expect(config.TLS_CERT).toBe(server.certPath);
             expect(config.TLS_KEY).toBe(server.keyPath);
+        });
+
+        it('take an RSA certificate and its key', async () => {
+            const config = await loadConfig({ TLS_CERT: rsa.certPath, TLS_KEY: rsa.keyPath });
+
+            expect(config.TLS_CERT).toBe(rsa.certPath);
+            expect(config.TLS_KEY).toBe(rsa.keyPath);
         });
 
         it('resolve relative paths like DATA_ROOT\'s', async () => {
@@ -202,6 +212,19 @@ describe('Config', () => {
         it('refuse to start with the key of another certificate', async () => {
             await expect(loadConfig({ TLS_CERT: server.certPath, TLS_KEY: other.keyPath }))
                 .rejects.toThrow(`TLS_KEY (${other.keyPath}) is not the private key of the certificate in TLS_CERT (${server.certPath})`);
+        });
+
+        // OpenSSL itself takes these without a word, and then fails every handshake.
+        it.each([
+            [ 'an RSA certificate and an EC key', 'rsa', 'server' ],
+            [ 'an EC certificate and an RSA key', 'server', 'rsa' ],
+        ] as const)('refuse to start with %s', async (_what, certOf, keyOf) => {
+            const certificates = { server, rsa };
+            const { certPath } = certificates[certOf];
+            const { keyPath } = certificates[keyOf];
+
+            await expect(loadConfig({ TLS_CERT: certPath, TLS_KEY: keyPath }))
+                .rejects.toThrow(`TLS_KEY (${keyPath}) is not the private key of the certificate in TLS_CERT (${certPath})`);
         });
 
         // Node would otherwise either fail with an OpenSSL decoder error or, on a terminal, ask for it.

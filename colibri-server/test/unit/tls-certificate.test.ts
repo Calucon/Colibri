@@ -14,6 +14,8 @@ describe('TlsCertificate', () => {
     let fixtures: string;
     let first: TestCertificate;
     let second: TestCertificate;
+    // first and second have EC keys.
+    let rsa: TestCertificate;
 
     // The files the server is pointed at; each test starts with `first` in them.
     let dir: string;
@@ -36,6 +38,7 @@ describe('TlsCertificate', () => {
         fixtures = await mkdtemp(path.join(tmpdir(), 'colibri-tls-certificate-'));
         first = createTestCertificate(fixtures, 'first');
         second = createTestCertificate(fixtures, 'second', { commonName: 'second.localhost' });
+        rsa = createTestCertificate(fixtures, 'rsa', { keyType: 'rsa' });
     });
 
     afterAll(async () => {
@@ -177,6 +180,28 @@ describe('TlsCertificate', () => {
             await tls.check();
             expect(changes).toHaveLength(1);
             expect(tls.info.fingerprint256).toBe(second.fingerprint256);
+        });
+
+        // OpenSSL itself takes a certificate with a key of another type without a word, and then fails
+        // every handshake.
+        it('is not taken up while the key is still the old one of another type, and is once it has followed', async () => {
+            const tls = open();
+            const changes: TlsCredentials[] = [];
+            tls.changes$.subscribe(c => changes.push(c));
+
+            await install(rsa, first);
+            for (let i = 0; i < 4; i++) await tls.check();
+            expect(changes).toEqual([]);
+            expect(tls.info.fingerprint256).toBe(first.fingerprint256);
+            expect(tls.credentials.cert.equals(first.cert)).toBe(true);
+            expect(logged(LogLevel.Warn)).toEqual([ expect.stringContaining('is not the private key of the certificate') ]);
+            expect(logged(LogLevel.Info).filter(l => l.startsWith('Reloaded'))).toEqual([]);
+
+            await install(rsa, rsa);
+            await tls.check();
+            await tls.check();
+            expect(changes).toHaveLength(1);
+            expect(tls.info.fingerprint256).toBe(rsa.fingerprint256);
         });
 
         it('warns once while the files cannot be read, keeps the certificate it has, and says when they can again', async () => {
