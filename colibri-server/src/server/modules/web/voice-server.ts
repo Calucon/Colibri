@@ -79,9 +79,10 @@ export class VoiceServer extends Service {
     // `this.clients` on every incoming voice packet (received at up to ~50 packets/s/client).
     private clientsCache: VoiceClient[] | undefined;
 
-    // Guards checkClientsDisconnected against overlapping fs work when a save outlives its
-    // tick; see the comment there.
-    private savingRecordings = false;
+    // The recordings checkClientsDisconnected is saving, while it is. Guards it against
+    // overlapping fs work when a save outlives its tick (see the comment there), and lets
+    // stop() wait for it.
+    private savingRecordings: Promise<void> | undefined;
 
     // Report key (see reportMalformedPacket and reportRelayFailure) -> when it was last
     // reported. See REPORT_INTERVAL_MILLIS; pruned every disconnect-check tick.
@@ -215,9 +216,35 @@ export class VoiceServer extends Service {
     }
 
     // Tolerates never having been started, for the same reason as SocketIOServer.stop().
-    public stop(): void {
+    //
+    // Saves every recording still held before it resolves. A recording used to be saved only
+    // once its client had been quiet for disconnectTimeoutMillis, so stopping the server (docker
+    // stop, a restart, a crash) while anyone was still talking, or within 2 s of them stopping,
+    // dropped their whole recording without a word.
+    public async stop(): Promise<void> {
         if (this.disconnectCheckInterval) clearInterval(this.disconnectCheckInterval);
-        if (this.udpSocket) this.udpSocket.close();
+        if (this.udpSocket) {
+            // Throws if the socket is closed already. That must not cost the recordings below.
+            try {
+                this.udpSocket.close();
+            } catch {
+                // Nothing left to close.
+            }
+        }
+
+        // A save the last disconnect check started may still be writing. Waiting for it keeps
+        // the two from writing at once; the clients it is saving are no longer in the map.
+        await this.savingRecordings;
+
+        const pendingRecordings = Array.from(this.clients.values()).filter(client => client.recordingData.length > 0);
+        this.clients.clear();
+        this.clientsCache = undefined;
+        if (pendingRecordings.length === 0) return;
+
+        this.logInfo(`Saving ${pendingRecordings.length} voice recording(s) still in progress before stopping`);
+        for (const client of pendingRecordings) {
+            await this.saveRecording(client);
+        }
     }
 
     private reportMalformedPacket(source: string, reason: string, nowMillis: number): void {
@@ -288,30 +315,35 @@ export class VoiceServer extends Service {
 
         if (pendingRecordings.length === 0) return;
 
-        this.savingRecordings = true;
-        try {
+        const saving = (async () => {
             for (const client of pendingRecordings) {
                 await this.saveRecording(client);
             }
+        })();
+        this.savingRecordings = saving;
+        try {
+            await saving;
         } finally {
-            this.savingRecordings = false;
+            this.savingRecordings = undefined;
         }
     }
 
+    // Never throws: a failed save is logged.
     private async saveRecording(client: VoiceClient): Promise<void> {
+        const samples = client.recordingData.toTypedArray();
+        const dateString = client.recordingStartDate.toISOString().replace(/:/g, '_');
+        const filename = path.join(this.voiceRecordingPath, `rec_${dateString}_ID_${client.userId}.wav`);
+        const seconds = (samples.length / this.samplingRate).toFixed(1);
         try {
-            // Create wave file from recording data
             const wav = new WaveFile();
-            wav.fromScratch(1, this.samplingRate, '16', client.recordingData.toTypedArray());
-
-            // Save wave file
-            const dateString = client.recordingStartDate.toISOString().replace(/:/g, '_');
+            wav.fromScratch(1, this.samplingRate, '16', samples);
             await mkdir(this.voiceRecordingPath, { recursive: true });
-            const filename = `rec_${dateString}_ID_${client.userId}.wav`;
-            await writeFile(path.join(this.voiceRecordingPath, filename), wav.toBuffer());
-            this.logDebug(`Voice recording saved to ${filename}`);
+            await writeFile(filename, wav.toBuffer());
+            this.logInfo(`Voice recording of client ID ${client.userId} (${client.ip}:${client.port}, ${seconds} s) saved to ${filename}`);
         } catch (err) {
-            this.logError(`Failed to save voice recording: ${err instanceof Error ? err.message : String(err)}`, false);
+            // An fs error names the file itself.
+            this.logError(`Failed to save the voice recording of client ID ${client.userId} (${client.ip}:${client.port}, ${seconds} s): `
+                + `${err instanceof Error ? err.message : String(err)}`, false);
         }
     }
 }

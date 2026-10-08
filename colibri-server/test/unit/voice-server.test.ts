@@ -1,10 +1,16 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as dgram from 'dgram';
 import { once } from 'events';
+import { mkdir, mkdtemp, readdir, readFile, rm } from 'fs/promises';
 import { AddressInfo } from 'net';
+import { tmpdir } from 'os';
+import * as path from 'path';
 import { Subscription } from 'rxjs';
+import wavefile from 'wavefile';
 import { VoiceServer } from '../../src/server/modules/web/voice-server.js';
 import { ConsoleLog, LogLevel, LogMessage, Service } from '../../src/server/modules/core/index.js';
+
+const { WaveFile } = wavefile;
 
 // |userId(2)|sequence(2)|frameSize(2)|codec(1)|data|, little-endian, as Unity sends it.
 const voicePacket = function (userId: number, sequence: number, data: number[] = [ 0, 0 ]): Buffer {
@@ -16,11 +22,20 @@ const voicePacket = function (userId: number, sequence: number, data: number[] =
     return Buffer.concat([ header, Buffer.from(data) ]);
 };
 
+// A PCM packet carrying `samples` as 16-bit little-endian values.
+const pcmPacket = function (userId: number, sequence: number, samples: number[]): Buffer {
+    const data = Buffer.alloc(samples.length * 2);
+    samples.forEach((sample, i) => data.writeInt16LE(sample, i * 2));
+    return Buffer.concat([ voicePacket(userId, sequence, []), data ]);
+};
+
 interface VoiceServerInternals {
     udpSocket: dgram.Socket;
     clients: Map<string, unknown>;
     reportedAt: Map<string, number>;
+    savingRecordings: Promise<void> | undefined;
     pruneReports(nowMillis: number): void;
+    checkClientsDisconnected(): Promise<void>;
 }
 
 describe('VoiceServer', () => {
@@ -74,10 +89,10 @@ describe('VoiceServer', () => {
         port = (internals.udpSocket.address() as AddressInfo).port;
     });
 
-    afterEach(() => {
+    afterEach(async () => {
         logSubscription.unsubscribe();
         for (const socket of sockets) socket.close();
-        server.stop();
+        await server.stop();
     });
 
     it('survives a datagram shorter than the header and still relays valid packets', async () => {
@@ -256,7 +271,7 @@ describe('VoiceServer startup', () => {
             expect(listening[0]).toMatch(/ INFO {2}\[web\/VoiceServer\] Voice server listening on 127\.0\.0\.1:\d+$/);
         } finally {
             subscription.unsubscribe();
-            server.stop();
+            await server.stop();
         }
     });
 
@@ -285,9 +300,9 @@ describe('VoiceServer startup', () => {
             server = new VoiceServer(48000, '/nonexistent-voice-recordings');
         });
 
-        afterEach(() => {
+        afterEach(async () => {
             for (const subscription of subscriptions) subscription.unsubscribe();
-            server.stop();
+            await server.stop();
             for (const socket of sockets) socket.close();
         });
 
@@ -329,5 +344,169 @@ describe('VoiceServer startup', () => {
             expect(errors()[0]!.message).not.toContain('Voice is disabled');
             expect(consoleError).not.toHaveBeenCalled();
         });
+    });
+});
+
+describe('VoiceServer recordings', () => {
+    const SAMPLING_RATE = 48000;
+
+    let dir: string;
+    let server: VoiceServer;
+    let internals: VoiceServerInternals;
+    let port: number;
+    let sockets: dgram.Socket[];
+    let logs: LogMessage[];
+    let logSubscription: Subscription;
+
+    beforeEach(async () => {
+        sockets = [];
+        logs = [];
+        logSubscription = Service.output$.subscribe(log => logs.push(log));
+        dir = await mkdtemp(path.join(tmpdir(), 'colibri-voice-recordings-'));
+
+        server = new VoiceServer(SAMPLING_RATE, dir, true);
+        internals = server as unknown as VoiceServerInternals;
+        server.start(0, '127.0.0.1');
+        await once(internals.udpSocket, 'listening');
+        port = (internals.udpSocket.address() as AddressInfo).port;
+    });
+
+    afterEach(async () => {
+        logSubscription.unsubscribe();
+        for (const socket of sockets) socket.close();
+        await server.stop();
+        await rm(dir, { recursive: true, force: true });
+    });
+
+    const openClient = async (): Promise<dgram.Socket> => {
+        const socket = dgram.createSocket('udp4');
+        sockets.push(socket);
+        socket.bind(0, '127.0.0.1');
+        await once(socket, 'listening');
+        return socket;
+    };
+
+    const send = (socket: dgram.Socket, bytes: Buffer): Promise<void> =>
+        new Promise((resolve, reject) => socket.send(bytes, port, '127.0.0.1', err => err ? reject(err) : resolve()));
+
+    // Sends `samples` from a new client as user `userId`, 480 to a packet, and returns once the
+    // server has handled every packet: each is relayed to a listener registered beforehand,
+    // which sends nothing that would be recorded itself.
+    const talk = async (userId: number, samples: number[]): Promise<void> => {
+        const listener = await openClient();
+        await send(listener, voicePacket(99, 0, []));
+        const speaker = await openClient();
+        for (let i = 0; i < samples.length; i += 480) {
+            const relayed = once(listener, 'message');
+            await send(speaker, pcmPacket(userId, i / 480, samples.slice(i, i + 480)));
+            await relayed;
+        }
+    };
+
+    const recordings = async () => (await readdir(dir)).filter(name => name.endsWith('.wav')).sort();
+
+    const readSamples = async (name: string): Promise<number[]> => {
+        const wav = new WaveFile(await readFile(path.join(dir, name)));
+        expect(wav.fmt).toMatchObject({ audioFormat: 1, numChannels: 1, sampleRate: SAMPLING_RATE, bitsPerSample: 16 });
+        return Array.from(wav.getSamples(false, Int16Array) as unknown as Int16Array);
+    };
+
+    const savedLogs = () => logs.filter(l => l.origin === 'VoiceServer' && /Voice recording of client ID \d+ .* saved to /.test(l.message));
+
+    const someSamples = (count: number, seed: number) => Array.from({ length: count }, (_, i) => Math.round(30000 * Math.sin((i + seed) / 7)));
+
+    // A recording used to be saved only once its client had been quiet for 2 s. stop() closed the
+    // socket and returned, so `docker stop` or a restart while anyone was still talking left no
+    // .wav file, and no log line saying a recording had been dropped.
+    it('saves a recording still in progress when it stops, and logs it', async () => {
+        const samples = someSamples(4800, 0);
+        await talk(7, samples);
+        expect(await recordings()).toEqual([]);
+
+        await server.stop();
+
+        const files = await recordings();
+        expect(files).toHaveLength(1);
+        expect(files[0]).toMatch(/^rec_\d{4}-\d\d-\d\dT\d\d_\d\d_\d\d\.\d{3}Z_ID_7\.wav$/);
+        expect(await readSamples(files[0]!)).toEqual(samples);
+
+        const saved = savedLogs();
+        expect(saved).toHaveLength(1);
+        // Info, so the default CONSOLE_LOG_LEVEL prints it.
+        expect(saved[0]!.level).toBe(LogLevel.Info);
+        expect(saved[0]!.message).toContain('Voice recording of client ID 7 (127.0.0.1:');
+        expect(saved[0]!.message).toContain(`, 0.1 s) saved to ${path.join(dir, files[0]!)}`);
+    });
+
+    it('saves every client\'s recording when it stops', async () => {
+        const first = someSamples(960, 1);
+        const second = someSamples(1440, 2);
+        await talk(1, first);
+        await talk(2, second);
+
+        await server.stop();
+
+        const files = await recordings();
+        expect(files.map(name => name.replace(/^rec_.*_ID_/, ''))).toEqual([ '1.wav', '2.wav' ]);
+        expect(await readSamples(files[0]!)).toEqual(first);
+        expect(await readSamples(files[1]!)).toEqual(second);
+        expect(savedLogs()).toHaveLength(2);
+    });
+
+    it('waits for a save the disconnect check started before it saves the rest', async () => {
+        await talk(3, someSamples(480, 3));
+        let release!: () => void;
+        internals.savingRecordings = new Promise<void>(resolve => release = resolve);
+
+        let stopped = false;
+        const stopping = server.stop().then(() => stopped = true);
+        await new Promise(resolve => setTimeout(resolve, 50));
+        expect(stopped).toBe(false);
+        expect(await recordings()).toEqual([]);
+
+        release();
+        await stopping;
+        expect(await recordings()).toHaveLength(1);
+    });
+
+    it('still saves when its socket has been closed already', async () => {
+        await talk(4, someSamples(480, 4));
+        internals.udpSocket.close();
+
+        await server.stop();
+
+        expect(await recordings()).toHaveLength(1);
+    });
+
+    it('saves a recording once, when its client goes quiet, and not again when it stops', async () => {
+        const samples = someSamples(960, 5);
+        await talk(5, samples);
+        for (const client of internals.clients.values()) (client as { lastHeartbeat: number }).lastHeartbeat -= 5000;
+
+        await internals.checkClientsDisconnected();
+        const files = await recordings();
+        expect(files).toHaveLength(1);
+        expect(await readSamples(files[0]!)).toEqual(samples);
+
+        await server.stop();
+        expect(await recordings()).toEqual(files);
+        expect(savedLogs()).toHaveLength(1);
+    });
+
+    it('logs a recording it cannot save, and saves the others', async () => {
+        await talk(6, someSamples(480, 6));
+        await talk(8, someSamples(480, 8));
+        // A directory where client 6's file would go.
+        const client6 = Array.from(internals.clients.values()).find(client => (client as { userId: number }).userId === 6) as { recordingStartDate: Date };
+        await mkdir(path.join(dir, `rec_${client6.recordingStartDate.toISOString().replace(/:/g, '_')}_ID_6.wav`));
+
+        await server.stop();
+
+        const failed = logs.filter(l => l.origin === 'VoiceServer' && l.level === LogLevel.Error);
+        expect(failed).toHaveLength(1);
+        expect(failed[0]!.message).toContain('Failed to save the voice recording of client ID 6 (127.0.0.1:');
+        expect(failed[0]!.message).toContain('EISDIR');
+        expect((await recordings()).filter(name => name.endsWith('_ID_8.wav'))).toHaveLength(1);
+        expect(savedLogs()).toHaveLength(1);
     });
 });

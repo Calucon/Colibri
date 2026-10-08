@@ -124,9 +124,11 @@ const shutdown = async (reason: string, exitCode: number) => {
 
     await runShutdownStep('WebServer', () => webServer.stop());
     await runShutdownStep('SocketIOServer', () => socketioServer.stop());
-    await runShutdownStep('VoiceServer', () => voiceServer.stop());
     await runShutdownStep('TCPServer', () => tcpServer.stop());
     await runShutdownStep('RestAPI', () => restApi.flush());
+    // Last: it saves the voice recordings still in progress, which can take a while for long
+    // ones, and must not leave the store's pending writes to the watchdog.
+    await runShutdownStep('VoiceServer', () => voiceServer.stop());
 
     clearTimeout(watchdog);
     process.exit(exitCode);
