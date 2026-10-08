@@ -337,8 +337,8 @@ namespace HCIKonstanz.Colibri.Synchronization
         private bool _sendAtOnce;
 
         // Parallel to _attributeList, each made when its member is first sent or first takes a value
-        // from elsewhere: the values the member sent most recently, and the one it held before
-        // them. Null for an object that has done neither.
+        // from elsewhere: the values the member sent around the time the connection last worked,
+        // and the one it held before them. Null for an object that has done neither.
         private SentValues[] _sentValues;
 
         // The round of answers to the requests made again after the last reconnect, while they are
@@ -539,9 +539,9 @@ namespace HCIKonstanz.Colibri.Synchronization
             }
         }
 
-        void SyncTicker.ITickable.FlushUpdate(double now, double interval)
+        void SyncTicker.ITickable.FlushUpdate(double now, double interval, double heardAt)
         {
-            var update = TakeDueUpdate(now, interval);
+            var update = TakeDueUpdate(now, interval, heardAt);
             if (update != null)
                 Sync.SendModelUpdate(Channel, update);
         }
@@ -557,7 +557,7 @@ namespace HCIKonstanz.Colibri.Synchronization
         /// flushes every object in every frame, so the last values of a burst go out whether or
         /// not anything changes after them.
         /// </remarks>
-        internal JObject TakeDueUpdate(double now, double interval)
+        internal JObject TakeDueUpdate(double now, double interval, double heardAt)
         {
             var sendAtOnce = _sendAtOnce;
             _sendAtOnce = false;
@@ -585,7 +585,7 @@ namespace HCIKonstanz.Colibri.Synchronization
 
             var update = _nextUpdate;
             _nextUpdate = null;
-            RememberSent(update, now);
+            RememberSent(update, now, heardAt);
             return update;
         }
 
@@ -593,7 +593,7 @@ namespace HCIKonstanz.Colibri.Synchronization
         /// Keeps the values of an update that is going out, for the answers to the request made
         /// again after a reconnect. See <see cref="KeepsLocalValue"/>.
         /// </summary>
-        private void RememberSent(JObject update, double now)
+        private void RememberSent(JObject update, double now, double heardAt)
         {
             // Walked by hand: Properties() would allocate an enumerator for every update sent.
             for (var token = update.First; token != null; token = token.Next)
@@ -602,7 +602,7 @@ namespace HCIKonstanz.Colibri.Synchronization
                 if (!_syncedAttributes.TryGetValue(property.Name, out var attribute))
                     continue;
 
-                SentValuesOf(attribute).Remember(ToKeep(attribute, property.Value), now);
+                SentValuesOf(attribute).Remember(ToKeep(attribute, property.Value), now, heardAt);
             }
         }
 

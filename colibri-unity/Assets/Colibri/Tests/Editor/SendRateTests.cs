@@ -98,7 +98,7 @@ namespace HCIKonstanz.Colibri.Tests
             where T : SyncBehaviour<T>
         {
             ((SyncTicker.ITickable)model).PollChanges();
-            return model.TakeDueUpdate(now, interval);
+            return model.TakeDueUpdate(now, interval, heardAt: now);
         }
 
         /// <summary>Frames at <paramref name="fps"/> from <paramref name="from"/> up to <paramref name="to"/>, collecting what is sent.</summary>
@@ -499,7 +499,7 @@ namespace HCIKonstanz.Colibri.Tests
             ((SyncTicker.ITickable)model).PollChanges();
             model.OnModelUpdate(new JObject { { "id", model.Id }, { "label", "theirs" } });
 
-            Assert.That(model.TakeDueUpdate(Start, interval: 0), Is.Null);
+            Assert.That(model.TakeDueUpdate(Start, interval: 0, heardAt: Start), Is.Null);
             Assert.That(model.Label, Is.EqualTo("theirs"));
         }
 
@@ -528,7 +528,7 @@ namespace HCIKonstanz.Colibri.Tests
             LogAssert.Expect(LogType.Error, new Regex("Destroy may not be called from edit mode"));
             Sync.OnServerMessage(model.Channel, "model::delete", new JObject { { "id", model.Id } });
 
-            Assert.That(model.TakeDueUpdate(Start + Interval, Interval), Is.Null,
+            Assert.That(model.TakeDueUpdate(Start + Interval, Interval, heardAt: Start + Interval), Is.Null,
                 "The held update was still sent after the model had been deleted");
         }
 

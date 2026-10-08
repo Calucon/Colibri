@@ -111,6 +111,18 @@ namespace HCIKonstanz.Colibri.Synchronization
         private static void OnDisconnected() => _disconnectedAt = Time.unscaledTimeAsDouble;
 
         /// <summary>
+        /// When this client last heard from the server, on SyncTicker's clock, as of
+        /// <paramref name="now"/>: any bytes count, and the server heartbeats every 100 ms, so
+        /// while the connection works that was a moment ago. What is sent after it may be going
+        /// into a link that has died (see SentValues). <paramref name="now"/> without a connection.
+        /// </summary>
+        internal static double LastHeardAt(double now)
+        {
+            var connection = _connection;
+            return connection == null ? now : now - connection.MillisSinceLastHeartbeat() / 1000.0;
+        }
+
+        /// <summary>
         /// The requests made again after one reconnect, from when they go out until the answers
         /// to all of them have arrived: the stretch in which a SyncBehaviour compares what it
         /// receives with what it sent before the outage (see SyncBehaviour's OnModelUpdate).

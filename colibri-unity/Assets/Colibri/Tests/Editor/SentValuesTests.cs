@@ -1,3 +1,4 @@
+using System;
 using System.IO;
 using HCIKonstanz.Colibri.Synchronization;
 using Newtonsoft.Json;
@@ -21,9 +22,15 @@ namespace HCIKonstanz.Colibri.Tests
         {
             var sent = new SentValues();
             for (var i = 0; i < values.Length; i++)
-                sent.Remember(values[i], 100 + i);
+                Send(sent, values[i], 100 + i);
             return sent;
         }
+
+        /// <summary>
+        /// A value sent at <paramref name="time"/> over a connection that works: this client heard
+        /// from the server at that moment.
+        /// </summary>
+        private static void Send(SentValues sent, JToken value, double time) => sent.Remember(value, time, heardAt: time);
 
         /// <summary>
         /// A value as an answer from the server carries it: JSON the server wrote, read the way the
@@ -70,8 +77,8 @@ namespace HCIKonstanz.Colibri.Tests
          */
 
         /// <summary>
-        /// The ninth value sent pushes out the first, which stays known as the value held before
-        /// the oldest one kept. The tenth pushes that out for good.
+        /// Over a connection that works, the ninth value sent drops the first, which stays known as
+        /// the value held before the oldest one kept. The tenth drops that for good.
         /// </summary>
         [Test]
         public void TheLastEightValuesAndTheOneBeforeThemAreKept()
@@ -80,12 +87,12 @@ namespace HCIKonstanz.Colibri.Tests
 
             Assert.That(sent.Judge(Wire("\"v1\""), Always), Is.EqualTo(SentValues.Verdict.Lost));
             Assert.That(sent.Judge(Wire("\"v0\""), Always), Is.EqualTo(SentValues.Verdict.Lost),
-                "The value pushed out of the ring was held before the oldest one kept");
+                "The value dropped was held before the oldest one kept");
 
-            sent.Remember("v9", 109);
+            Send(sent, "v9", 109);
             Assert.That(sent.Judge(Wire("\"v1\""), Always), Is.EqualTo(SentValues.Verdict.Lost));
             Assert.That(sent.Judge(Wire("\"v0\""), Always), Is.EqualTo(SentValues.Verdict.ChangedElsewhere),
-                "The tenth value sent should have pushed out the first for good");
+                "The tenth value sent should have dropped the first for good");
         }
 
         /// <summary>
@@ -115,28 +122,85 @@ namespace HCIKonstanz.Colibri.Tests
         public void AfterAQuietSpellTheValueHeldWhenTheWindowBeganCounts()
         {
             var sent = new SentValues();
-            sent.Remember(true, 100);
-            sent.Remember(false, 200);
+            Send(sent, true, 100);
+            Send(sent, false, 200);
 
             Assert.That(sent.Judge(Wire("true"), since: 190), Is.EqualTo(SentValues.Verdict.Lost));
             Assert.That(sent.Judge(Wire("false"), since: 190), Is.EqualTo(SentValues.Verdict.Arrived));
         }
 
         /// <summary>
-        /// Pushed out of the ring by values sent in the window, the value from before them still
+        /// Dropped to make room for values sent in the window, the value from before them still
         /// counts: it is what the member held when the window began, or one it sent in the window.
         /// </summary>
         [Test]
-        public void AValuePushedOutOfTheRingCountsAsTheOneHeldBeforeTheOldestKept()
+        public void ADroppedValueCountsAsTheOneHeldBeforeTheOldestKept()
         {
             var sent = new SentValues();
-            sent.Remember("held for a minute", 100);
+            Send(sent, "held for a minute", 100);
             for (var i = 0; i < SentValues.Capacity; i++)
-                sent.Remember($"moved {i}", 200 + i * 0.1);
+                Send(sent, $"moved {i}", 200 + i * 0.1);
 
             Assert.That(sent.Judge(Wire("\"held for a minute\""), since: 190), Is.EqualTo(SentValues.Verdict.Lost));
             Assert.That(sent.Judge(Wire("\"moved 0\""), since: 190), Is.EqualTo(SentValues.Verdict.Lost));
             Assert.That(sent.Judge(Wire("\"elsewhere\""), since: 190), Is.EqualTo(SentValues.Verdict.ChangedElsewhere));
+        }
+
+        /// <summary>
+        /// Moved at 30 updates a second from 199 on, to x1 ... x90, while the server was last heard
+        /// from at 200, right after x30 was sent. The link died a moment later, and the outage was
+        /// noticed at 202.
+        /// </summary>
+        private static SentValues MovedAcrossTheDrop()
+        {
+            var sent = new SentValues();
+            for (var i = 1; i <= 90; i++)
+            {
+                var time = 199 + i / 30.0;
+                sent.Remember($"x{i}", time, heardAt: Math.Min(time, 200));
+            }
+            return sent;
+        }
+
+        /// <summary>
+        /// Everything sent after the server was last heard from went into the dead link, 60 values
+        /// here, and the server has one sent around then. The first values sent after that time are
+        /// kept, as are the latest before it, so it is recognised however many follow.
+        /// </summary>
+        [Test]
+        public void AroundTheTimeTheServerWasLastHeardFromValuesAreKeptHoweverManyFollow()
+        {
+            var sent = MovedAcrossTheDrop();
+            const double since = 202 - 10;
+
+            Assert.That(sent.Judge(Wire("\"x90\""), since), Is.EqualTo(SentValues.Verdict.Arrived));
+            foreach (var kept in new[] { "x22", "x23", "x30", "x31", "x32", "x38" })
+                Assert.That(sent.Judge(Wire($"\"{kept}\""), since), Is.EqualTo(SentValues.Verdict.Lost), kept);
+
+            // The limit: the ninth value after the server was last heard from, and those up to the
+            // newest, are not kept.
+            Assert.That(sent.Judge(Wire("\"x39\""), since), Is.EqualTo(SentValues.Verdict.ChangedElsewhere));
+            Assert.That(sent.Judge(Wire("\"x89\""), since), Is.EqualTo(SentValues.Verdict.ChangedElsewhere));
+            Assert.That(sent.Judge(Wire("\"x21\""), since), Is.EqualTo(SentValues.Verdict.ChangedElsewhere));
+        }
+
+        /// <summary>
+        /// Heard from again, the server has had everything sent up to then: of that, only the latest
+        /// values are kept, as over a connection that works.
+        /// </summary>
+        [Test]
+        public void OnceTheServerIsHeardFromAgainOnlyTheLatestValuesAreKept()
+        {
+            var sent = MovedAcrossTheDrop();
+
+            sent.Remember("later", 210, heardAt: 209.9);
+
+            Assert.That(sent.Judge(Wire("\"later\""), Always), Is.EqualTo(SentValues.Verdict.Arrived));
+            Assert.That(sent.Judge(Wire("\"x90\""), Always), Is.EqualTo(SentValues.Verdict.Lost));
+            Assert.That(sent.Judge(Wire("\"x32\""), Always), Is.EqualTo(SentValues.Verdict.Lost));
+            Assert.That(sent.Judge(Wire("\"x31\""), Always), Is.EqualTo(SentValues.Verdict.Lost),
+                "The value before the oldest one kept");
+            Assert.That(sent.Judge(Wire("\"x30\""), Always), Is.EqualTo(SentValues.Verdict.ChangedElsewhere));
         }
 
         /// <summary>
@@ -154,7 +218,7 @@ namespace HCIKonstanz.Colibri.Tests
                 "Nothing was sent since the value was taken");
             Assert.That(sent.HasSentSince(Always), Is.False);
 
-            sent.Remember("mine", 200);
+            Send(sent, "mine", 200);
             Assert.That(sent.Judge(Wire("\"mine\""), since: 190), Is.EqualTo(SentValues.Verdict.Arrived));
             Assert.That(sent.Judge(Wire("\"theirs\""), since: 190), Is.EqualTo(SentValues.Verdict.Lost),
                 "The value taken long before was still held when the window began");
@@ -172,12 +236,12 @@ namespace HCIKonstanz.Colibri.Tests
         public void TheValueAnAnswerShowedTellsAChangeSentAgainLostAsWell()
         {
             var sent = new SentValues();
-            sent.Remember(true, 100);
-            sent.Remember(false, 200);
+            Send(sent, true, 100);
+            Send(sent, false, 200);
             Assert.That(sent.Judge(Wire("true"), since: 192), Is.EqualTo(SentValues.Verdict.Lost), "Precondition");
 
             sent.ServerShowed(Wire("true"));
-            sent.Remember(false, 210);
+            Send(sent, false, 210);
 
             Assert.That(sent.Judge(Wire("true"), since: 202), Is.EqualTo(SentValues.Verdict.Lost));
             Assert.That(sent.Judge(Wire("false"), since: 202), Is.EqualTo(SentValues.Verdict.Arrived));
@@ -189,7 +253,7 @@ namespace HCIKonstanz.Colibri.Tests
         {
             var sent = new SentValues();
             sent.ServerShowed(Wire("[0,-3,0]"));
-            sent.Remember(new Vector3(7, 0, 7).ToJson(), 200);
+            Send(sent, new Vector3(7, 0, 7).ToJson(), 200);
 
             Assert.That(sent.Judge(Wire("[0,-3,0]"), since: 190), Is.EqualTo(SentValues.Verdict.Lost));
         }
@@ -202,7 +266,7 @@ namespace HCIKonstanz.Colibri.Tests
         public void BeforeTheFirstValueNothingWasHeld()
         {
             var sent = new SentValues();
-            sent.Remember("first", 200);
+            Send(sent, "first", 200);
 
             Assert.That(sent.Judge(Wire("\"\""), since: 190), Is.EqualTo(SentValues.Verdict.ChangedElsewhere));
         }
@@ -216,8 +280,8 @@ namespace HCIKonstanz.Colibri.Tests
         public void AnotherClientSettingTheValueHeldWhenTheWindowBeganBackLooksLikeALostChange()
         {
             var sent = new SentValues();
-            sent.Remember(true, 100);
-            sent.Remember(false, 200); // arrived; then another client set it back to true
+            Send(sent, true, 100);
+            Send(sent, false, 200); // arrived; then another client set it back to true
 
             Assert.That(sent.Judge(Wire("true"), since: 190), Is.EqualTo(SentValues.Verdict.Lost));
         }

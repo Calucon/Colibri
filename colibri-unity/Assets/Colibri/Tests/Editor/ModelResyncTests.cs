@@ -79,11 +79,14 @@ namespace HCIKonstanz.Colibri.Tests
 
         /// <summary>Whatever the model would send now, without a send-rate limit.</summary>
         private static JObject Sent<T>(SyncBehaviour<T> model) where T : SyncBehaviour<T>
-            => model.TakeDueUpdate(100.0, interval: 0);
+            => SentAt(model, 100.0);
 
-        /// <summary>Whatever the model would send at <paramref name="time"/>, on SyncTicker's clock.</summary>
+        /// <summary>
+        /// Whatever the model would send at <paramref name="time"/>, on SyncTicker's clock, over a
+        /// connection that works: this client heard from the server at that moment.
+        /// </summary>
         private static JObject SentAt<T>(SyncBehaviour<T> model, double time) where T : SyncBehaviour<T>
-            => model.TakeDueUpdate(time, interval: 0);
+            => model.TakeDueUpdate(time, interval: 0, heardAt: time);
 
         private static void Poll(object model) => ((SyncTicker.ITickable)model).PollChanges();
 
@@ -255,6 +258,39 @@ namespace HCIKonstanz.Colibri.Tests
             Assert.That(sent, Is.Not.Null, "The position that was lost was not sent again");
             Assert.That(Members(sent), Is.EqualTo(new[] { "id", "position" }), $"Only what was lost goes out again: {sent}");
             Assert.That(sent["position"].ToVector3(), Is.EqualTo(new Vector3(7, 0, 7)));
+        }
+
+        /// <summary>
+        /// An object moved across the drop at 30 updates a second, and let go before the outage was
+        /// noticed: every position sent after the server was last heard from went into the dead
+        /// link, 30 of them, and the answer holds one from about when the link died. It is still
+        /// recognised, and the object stays where it was let go.
+        /// </summary>
+        [Test]
+        public void AnObjectMovedAcrossTheDropStaysWhereItWasLetGo()
+        {
+            var sync = Spawn<ResyncTransform>("resync-transform");
+            sync.Wake();
+            sync.OnModelUpdate(Bare(sync.Id));
+
+            // Heard from until 200, after x = 30 was sent; the link died a moment later.
+            for (var x = 1; x <= 60; x++)
+            {
+                var time = 199 + x / 30.0;
+                sync.transform.position = new Vector3(x, 0, 0);
+                Poll(sync);
+                Assert.That(sync.TakeDueUpdate(time, interval: 0, heardAt: System.Math.Min(time, 200)), Is.Not.Null,
+                    "Precondition: the move goes out");
+            }
+
+            Sync.RequestModelsAgain(disconnectedAt: 202);
+            sync.OnModelUpdate(JObject.Parse($"{{\"id\":\"{sync.Id}\",\"active\":true,\"position\":[32,0,0],\"scale\":[1,1,1]}}"));
+
+            Assert.That(sync.transform.position, Is.EqualTo(new Vector3(60, 0, 0)), "The answer put the object back where it was when the link died");
+            var sent = SentAt(sync, 203);
+            Assert.That(sent, Is.Not.Null, "The position the object was let go at was not sent again");
+            Assert.That(Members(sent), Is.EqualTo(new[] { "id", "position" }), $"Only what was lost goes out again: {sent}");
+            Assert.That(sent["position"].ToVector3(), Is.EqualTo(new Vector3(60, 0, 0)));
         }
 
         /// <summary>

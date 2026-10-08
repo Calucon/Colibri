@@ -34,7 +34,11 @@ namespace HCIKonstanz.Colibri.Synchronization
             /// The send-rate limit as an interval, 1 / <see cref="SyncSettings.MaxSendRate"/>
             /// seconds; 0 for no limit.
             /// </param>
-            void FlushUpdate(double now, double interval);
+            /// <param name="heardAt">
+            /// When this client last heard from the server, on the same clock: what is sent after
+            /// it may be going into a link that has died (see <see cref="SentValues"/>).
+            /// </param>
+            void FlushUpdate(double now, double interval, double heardAt);
         }
 
         private static readonly List<ITickable> _tickables = new List<ITickable>();
@@ -146,14 +150,16 @@ namespace HCIKonstanz.Colibri.Synchronization
 
         private void LateUpdate()
         {
-            // Read once per frame, so every object is flushed against the same clock and limit.
+            // Read once per frame, so every object is flushed against the same clock and limit,
+            // and against the same moment the server was last heard from.
             // Unscaled, or a game paused with timeScale = 0 would stop sending; and the double,
             // which still resolves milliseconds after the app has been running for days.
             var now = Time.unscaledTimeAsDouble;
             var interval = SyncSettings.SendInterval;
+            var heardAt = Sync.LastHeardAt(now);
 
             for (var i = 0; i < _tickables.Count; i++)
-                _tickables[i]?.FlushUpdate(now, interval);
+                _tickables[i]?.FlushUpdate(now, interval, heardAt);
 
             if (_hasEmptySlots)
                 Compact();
@@ -214,8 +220,9 @@ namespace HCIKonstanz.Colibri.Synchronization
                 _tickables[i]?.PollChanges();
 
             var now = Time.unscaledTimeAsDouble;
+            var heardAt = Sync.LastHeardAt(now);
             for (var i = 0; i < _tickables.Count; i++)
-                _tickables[i]?.FlushUpdate(now, 0);
+                _tickables[i]?.FlushUpdate(now, 0, heardAt);
         }
 
         private static void Compact()

@@ -7,9 +7,10 @@ using UnityEngine;
 namespace HCIKonstanz.Colibri.Synchronization
 {
     /// <summary>
-    /// The values one [Sync] member of one object sent most recently, and the one it held before
-    /// them, kept for a single decision: what to do with that member in the server's answers to
-    /// the requests made again after a reconnect (see <see cref="Judge"/> and Sync.ReconnectRound).
+    /// The values one [Sync] member of one object sent around the time the connection last worked,
+    /// and the one it held before them, kept for a single decision: what to do with that member in
+    /// the server's answers to the requests made again after a reconnect (see <see cref="Judge"/>
+    /// and Sync.ReconnectRound).
     /// </summary>
     /// <remarks>
     /// <para>
@@ -32,9 +33,19 @@ namespace HCIKonstanz.Colibri.Synchronization
     /// switched on a minute ago and switched off at the drop sent only <c>false</c> in the window,
     /// and the answer's <c>true</c> is the change lost, not another client's. It is the newest
     /// value sent before the window if one is kept, and otherwise the value held before the oldest
-    /// one kept: one pushed out of the ring, or the one the server last showed. That is a value the
+    /// one kept: the last one dropped, or the one the server last showed. That is a value the
     /// member took from elsewhere, such as the server's state when the object first came up, or
     /// the one an answer held when it showed the member's last change lost.
+    /// </para>
+    /// <para>
+    /// Which values are kept follows from when this client last heard from the server, which
+    /// heartbeats every 100 ms: the link died at most about that long after, and the value the
+    /// server has was sent around then. Everything sent from then until the outage is noticed went
+    /// into the dead link, about 60 values for an object moved at 30 updates a second. So kept are
+    /// the latest <see cref="Capacity"/> values sent up to that time, the first
+    /// <see cref="Capacity"/> sent after it, and the newest, however long the outage. While the
+    /// connection works, this client hears from the server all the time, and a value dropped from
+    /// in between was replaced by a later one that reached the server as well.
     /// </para>
     /// </remarks>
     internal sealed class SentValues
@@ -60,7 +71,10 @@ namespace HCIKonstanz.Colibri.Synchronization
             ChangedElsewhere,
         }
 
-        /// <summary>The most values kept per member; the oldest goes first.</summary>
+        /// <summary>
+        /// How many values are kept on either side of when this client last heard from the server:
+        /// the latest sent up to then, and the first sent after. The newest is kept as well.
+        /// </summary>
         internal const int Capacity = 8;
 
         private const double DefaultWindowSeconds = 10;
@@ -80,8 +94,9 @@ namespace HCIKonstanz.Colibri.Synchronization
         /// </para>
         /// <para>
         /// Counted back from the moment this client noticed the outage, not from the answer, so a
-        /// change lost at the drop is still recognised after an outage of any length. Settable only
-        /// so the test suite can shorten it.
+        /// change lost at the drop is still recognised after an outage of any length; after a link
+        /// that drops again before the answers arrive, from the first outage (see
+        /// Sync.RequestModelsAgain). Settable only so the test suite can shorten it.
         /// </para>
         /// </remarks>
         internal static double WindowSeconds = DefaultWindowSeconds;
@@ -90,16 +105,19 @@ namespace HCIKonstanz.Colibri.Synchronization
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
         private static void ResetWindow() => WindowSeconds = DefaultWindowSeconds;
 
-        // A ring buffer: _newest is the slot of the latest value, the ones before it are older.
-        // Made at the first send, since every member that takes a value from elsewhere has a
-        // SentValues too, and on an object only ever moved by other clients none of them sends.
+        // Oldest first: the first _heard were sent by the time this client last heard from the
+        // server, as the latest send knew it, the rest after. Made at the first send, since every
+        // member that takes a value from elsewhere has a SentValues too, and on an object only ever
+        // moved by other clients none of them sends. Capacity on either side, the newest, and room
+        // for the value coming in.
         private JToken[] _values;
         private double[] _times;
         private int _count;
-        private int _newest = -1;
+        private int _heard;
 
-        // The value the member held before the oldest one in the ring: the last one pushed out of
-        // it, or the one the server last showed. Null when there is neither.
+        // The value the member held before the oldest one kept: the last one dropped from those sent
+        // by the time the server was last heard from, or the one the server last showed. Null when
+        // there is neither.
         private JToken _heldBefore;
 
         /// <param name="value">
@@ -107,23 +125,45 @@ namespace HCIKonstanz.Colibri.Synchronization
         /// one that may.
         /// </param>
         /// <param name="time">When it was sent, on <see cref="SyncTicker"/>'s clock.</param>
-        internal void Remember(JToken value, double time)
+        /// <param name="heardAt">When this client last heard from the server, on the same clock.</param>
+        internal void Remember(JToken value, double time, double heardAt)
         {
             if (_values == null)
             {
-                _values = new JToken[Capacity];
-                _times = new double[Capacity];
+                _values = new JToken[2 * Capacity + 2];
+                _times = new double[2 * Capacity + 2];
             }
 
-            _newest = (_newest + 1) % Capacity;
+            _values[_count] = value;
+            _times[_count] = time;
+            _count++;
 
-            if (_count < Capacity)
-                _count++;
-            else
-                _heldBefore = _values[_newest];
+            // Sent in order, so those sent by the time the server was last heard from come first.
+            while (_heard < _count && _times[_heard] <= heardAt)
+                _heard++;
 
-            _values[_newest] = value;
-            _times[_newest] = time;
+            // Of those, the latest are kept, and the one before them is what the member held before
+            // the oldest one kept.
+            var dropped = _heard - Capacity;
+            if (dropped > 0)
+            {
+                _heldBefore = _values[dropped - 1];
+                _count -= dropped;
+                _heard = Capacity;
+                Array.Copy(_values, dropped, _values, 0, _count);
+                Array.Copy(_times, dropped, _times, 0, _count);
+                Array.Clear(_values, _count, dropped);
+            }
+
+            // Of those sent after, the first are kept, and the newest: the value before the newest
+            // goes unless it is one of the first.
+            if (_count - _heard > Capacity + 1)
+            {
+                _count--;
+                _values[_count - 1] = _values[_count];
+                _times[_count - 1] = _times[_count];
+                _values[_count] = null;
+            }
         }
 
         /// <summary>
@@ -139,14 +179,14 @@ namespace HCIKonstanz.Colibri.Synchronization
         internal void ServerShowed(JToken value)
         {
             if (_values != null)
-                Array.Clear(_values, 0, _values.Length);
+                Array.Clear(_values, 0, _count);
             _count = 0;
-            _newest = -1;
+            _heard = 0;
             _heldBefore = value;
         }
 
         /// <summary>Whether a value was sent at or after <paramref name="since"/>.</summary>
-        internal bool HasSentSince(double since) => _count > 0 && _times[_newest] >= since;
+        internal bool HasSentSince(double since) => _count > 0 && _times[_count - 1] >= since;
 
         /// <summary>
         /// Compares the server's value with the values sent at or after <paramref name="since"/>,
@@ -159,18 +199,17 @@ namespace HCIKonstanz.Colibri.Synchronization
                 return Verdict.NotSentRecently;
 
             var server = ToWireForm(serverValue);
-            for (var age = 0; age < _count; age++)
+            for (var i = _count - 1; i >= 0; i--)
             {
-                var slot = (_newest - age + Capacity) % Capacity;
-                var held = WireEquals(ToWireForm(_values[slot]), server);
+                var held = WireEquals(ToWireForm(_values[i]), server);
 
                 // Sent before the window: the value held when it began. Sent in order, so
                 // everything past this one is older still and does not count.
-                if (_times[slot] < since)
+                if (_times[i] < since)
                     return held ? Verdict.Lost : Verdict.ChangedElsewhere;
 
                 if (held)
-                    return age == 0 ? Verdict.Arrived : Verdict.Lost;
+                    return i == _count - 1 ? Verdict.Arrived : Verdict.Lost;
             }
 
             // Everything kept was sent in the window, so the value from before the oldest of
