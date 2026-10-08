@@ -91,7 +91,21 @@ type Refusal = 'rate' | 'backlog';
 // its app's synchronized models alive - until the kernel gave up retransmitting to it, which takes
 // many minutes. A live client is never anywhere near this quiet: colibri-unity echoes the 100 ms
 // heartbeat from its receive thread, so even a main thread busy loading a scene keeps it talking.
+//
+// That holds only as long as the client finds heartbeats in what it reads, also while it is still
+// reading a backlog: see HEARTBEAT_EVERY_BYTES and writeHeartbeat.
 export const DEFAULT_IDLE_TIMEOUT_MILLIS = 10_000;
+
+// After this many bytes of messages written to a client since its last heartbeat, it is sent one
+// more ahead of the next message, between the ticks' heartbeats.
+//
+// A client that sends nothing of its own is kept connected by echoing heartbeats, and it can echo
+// only those it has read. Everything written at once, the answer to a model::request for a large
+// store say, used to have no heartbeat in it: the tick's next one queued behind all of it. On a
+// slow link such a client, reading all along, went quiet for longer than the idle timeout and was
+// disconnected, and asked for the whole store again when it reconnected. With a heartbeat every
+// 64 KiB it echoes one at least every 10 s down to about 6.4 KiB/s.
+export const HEARTBEAT_EVERY_BYTES = 64 * 1024;
 
 // If the worker's own 100 ms tick comes this late, the thread itself was stalled (a long GC, a
 // starved CPU) and could not have read anything in the meantime. Every client would look idle for
@@ -177,12 +191,14 @@ interface TcpClient {
     // CLOSE_GRACE_MILLIS.
     closeTimer: NodeJS.Timeout | undefined;
     // Set while writes to this client are being dropped for backpressure. Only the
-    // transitions in and out of that state are logged: a stalled client drops at least ten
-    // heartbeats a second, and each dropped-packet warning is postMessage'd to the main
+    // transitions in and out of that state are logged: a stalled client in a busy app drops
+    // many messages a second, and each dropped-packet warning is postMessage'd to the main
     // thread and re-broadcast to every admin UI, which WebLog can't dedupe because the
     // byte count is interpolated into the message.
     dropping: boolean;
     droppedSinceWarning: number;
+    // Bytes of messages written to this client since its last heartbeat; see HEARTBEAT_EVERY_BYTES.
+    bytesSinceHeartbeat: number;
     // Bytes of replies handed to the socket that it has not flushed to the kernel yet; see
     // MAX_REPLY_BACKLOG_BYTES. Taken off writableLength before it is compared with highWaterMark.
     replyBytesQueued: number;
@@ -430,6 +446,27 @@ export class TCPServerWorker extends WorkerService {
             return;
         }
 
+        if (client.bytesSinceHeartbeat >= HEARTBEAT_EVERY_BYTES) {
+            this.writeHeartbeat(client, encodeHeartbeatFrame(process.hrtime.bigint()));
+        }
+        client.bytesSinceHeartbeat += packet.length;
+        this.write(client, packet, reply);
+    }
+
+    // A heartbeat is never dropped for a client that is behind, as relayed traffic is past
+    // highWaterMark: a client that sends nothing of its own is kept connected only by echoing
+    // heartbeats (see endIdleClients), so one dropped from what a live client is still reading made
+    // it look gone. Heartbeats come ten a second at 13 bytes each, which bounds what they can add.
+    private writeHeartbeat(client: TcpClient, packet: Buffer): void {
+        if (client.socket.writableEnded || client.socket.destroyed) {
+            return;
+        }
+
+        client.bytesSinceHeartbeat = 0;
+        this.write(client, packet, false);
+    }
+
+    private write(client: TcpClient, packet: Buffer, reply: boolean): void {
         if (reply) client.replyBytesQueued += packet.length;
         client.socket.write(packet, (err) => {
             // Called once the kernel has taken the packet, or the write failed: either way it is
@@ -450,8 +487,8 @@ export class TCPServerWorker extends WorkerService {
         });
     }
 
-    // Whether relayed traffic (and heartbeats) may still be queued for the client: not once more
-    // than highWaterMark of it is waiting. Replies waiting ahead of it do not count, so a client
+    // Whether relayed traffic may still be queued for the client: not once more than highWaterMark
+    // of it is waiting. Replies waiting ahead of it do not count, so a client
     // still reading the answer to its model::request gets the updates made meanwhile too.
     private admitRelayed(client: TcpClient): boolean {
         const relayedBytes = client.socket.writableLength - client.replyBytesQueued;
@@ -527,6 +564,7 @@ export class TCPServerWorker extends WorkerService {
             closeTimer: undefined,
             dropping: false,
             droppedSinceWarning: 0,
+            bytesSinceHeartbeat: 0,
             replyBytesQueued: 0,
             droppingReplies: false,
             droppedRepliesSinceWarning: 0,
@@ -977,7 +1015,7 @@ export class TCPServerWorker extends WorkerService {
     private handleHeartbeat(): void {
         const packet = encodeHeartbeatFrame(process.hrtime.bigint());
         for (const client of this.clients.values()) {
-            this.writeToClient(client, packet);
+            this.writeHeartbeat(client, packet);
         }
     }
 }

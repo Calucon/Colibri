@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import type * as net from 'net';
-import { MAX_REPLY_BACKLOG_BYTES, TCPServerWorker, TcpServerOptions, WireNetworkMessage } from '../../src/server/modules/networking/tcp-server-worker.js';
+import { HEARTBEAT_EVERY_BYTES, MAX_REPLY_BACKLOG_BYTES, TCPServerWorker, TcpServerOptions, WireNetworkMessage } from '../../src/server/modules/networking/tcp-server-worker.js';
 import { FrameReader, FrameType, PROTOCOL_VERSION, encodeHandshakeFrame, encodeHeartbeatFrame, encodeMessageFrame } from '../../src/server/modules/networking/protocol.js';
 import { LogLevel } from '../../src/server/modules/core/log-message.js';
 
@@ -46,14 +46,16 @@ class FakeSocket extends EventEmitter {
     // Set for a peer that reads slower than it is sent to: each write then waits, counted in
     // writableLength, until flush() hands it to the kernel, as a real socket's writes do.
     public holdWrites = false;
-    private readonly heldWrites: { length: number; callback?: (err?: Error) => void }[] = [];
+    private readonly heldWrites: { data: Buffer; callback?: (err?: Error) => void }[] = [];
 
-    // Lets the oldest `count` held writes go, as the kernel takes them.
-    public flush(count = this.heldWrites.length): void {
-        for (const write of this.heldWrites.splice(0, count)) {
-            this.writableLength -= write.length;
+    // Lets the oldest `count` held writes go, as the kernel takes them, and returns them.
+    public flush(count = this.heldWrites.length): Buffer[] {
+        const flushed = this.heldWrites.splice(0, count);
+        for (const write of flushed) {
+            this.writableLength -= write.data.length;
             write.callback?.();
         }
+        return flushed.map(write => write.data);
     }
 
     // Modelled on what a real net.Socket does with a write after end(): the write fails, the
@@ -77,7 +79,7 @@ class FakeSocket extends EventEmitter {
         this.written.push(data);
         if (this.holdWrites) {
             this.writableLength += data.length;
-            this.heldWrites.push({ length: data.length, callback });
+            this.heldWrites.push({ data, callback });
             return false;
         }
         callback?.();
@@ -699,12 +701,15 @@ describe('TCPServerWorker', () => {
 
             const model = (i: number): string => JSON.stringify({ id: `m${i}`, data: 'x'.repeat(2000) });
 
+            // Each write is one frame; heartbeats are written between messages too.
+            const messagesWritten = (socket: FakeSocket): number => socket.written.filter(chunk => chunk[4] === FrameType.Message).length;
+
             it('are all written, however far over the high-water mark the client is', () => {
                 const socket = handshaked();
 
                 for (let i = 0; i < 3000; i++) reply(model(i));
 
-                expect(socket.written).toHaveLength(3000);
+                expect(messagesWritten(socket)).toBe(3000);
                 expect(socket.writableLength).toBeGreaterThan(5 * 1024 * 1024);
                 expect(logs().filter(msg => msg.includes('Dropping'))).toEqual([]);
             });
@@ -717,12 +722,12 @@ describe('TCPServerWorker', () => {
 
                 relay(model(9000));
                 internals.handleHeartbeat();
-                expect(socket.written).toHaveLength(3002);
+                expect(messagesWritten(socket)).toBe(3001);
 
                 // 1 MiB of relayed traffic behind the replies, and the next is dropped.
                 for (let i = 0; i < 600; i++) relay(model(10_000 + i));
                 internals.handleHeartbeat();
-                const relayedWritten = socket.written.length - 3002;
+                const relayedWritten = messagesWritten(socket) - 3001;
                 expect(relayedWritten).toBeGreaterThan(500);
                 expect(relayedWritten).toBeLessThan(600);
                 expect(logs().filter(msg => msg.includes('Dropping messages to client'))).toHaveLength(1);
@@ -742,7 +747,7 @@ describe('TCPServerWorker', () => {
 
                 relay(model(9000));
 
-                expect(socket.written).toHaveLength(1000);
+                expect(messagesWritten(socket)).toBe(1000);
                 expect(logs().filter(msg => msg.includes('Dropping messages to client'))).toHaveLength(1);
             });
 
@@ -753,7 +758,7 @@ describe('TCPServerWorker', () => {
 
                 for (let i = 0; i < fitting + 2; i++) reply(big);
 
-                expect(socket.written).toHaveLength(fitting);
+                expect(messagesWritten(socket)).toBe(fitting);
                 const started = logs().filter(msg => msg.includes('Dropping answers to Unity client'));
                 expect(started).toHaveLength(1);
                 expect(started[0]).toContain('\'late-joiner\'');
@@ -762,8 +767,60 @@ describe('TCPServerWorker', () => {
                 socket.flush();
                 reply(model(1));
 
-                expect(socket.written).toHaveLength(fitting + 1);
+                expect(messagesWritten(socket)).toBe(fitting + 1);
                 expect(logs().filter(msg => msg.includes('is taking answers again; dropped 2 answer(s)'))).toHaveLength(1);
+            });
+        });
+
+        // A client that sends nothing of its own is kept connected by echoing the heartbeats it
+        // reads; see the idle timeout tests.
+        describe('heartbeats', () => {
+            const framesOf = function (socket: FakeSocket) {
+                const reader = new FrameReader();
+                return socket.written.flatMap(chunk => reader.append(chunk));
+            };
+
+            it('are written between messages, one after every 64 KiB of them', () => {
+                const { socket, id } = connect();
+                socket.emit('data', encodeHandshakeFrame(PROTOCOL_VERSION, 'appA', 'late-joiner'));
+                socket.written.length = 0;
+
+                for (let i = 0; i < 3000; i++) {
+                    internals.handleParentMessage({
+                        channel: 'm:broadcast',
+                        content: { msg: wireMessage('store', 'model::update', `{"id":"m${i}","data":"${'x'.repeat(1000)}"}`), clients: [id], reply: true },
+                    });
+                }
+
+                // The bytes of messages before each heartbeat, and after the last.
+                const runs: number[] = [0];
+                for (const chunk of socket.written) {
+                    if (chunk[4] === FrameType.Heartbeat) runs.push(0);
+                    else runs[runs.length - 1]! += chunk.length;
+                }
+                // About 3 MB of messages, at most one message (~1 KB) past each 64 KiB.
+                expect(runs.length - 1).toBeGreaterThanOrEqual(45);
+                for (const between of runs.slice(0, -1)) {
+                    expect(between).toBeGreaterThanOrEqual(HEARTBEAT_EVERY_BYTES);
+                    expect(between).toBeLessThan(HEARTBEAT_EVERY_BYTES + 1100);
+                }
+                expect(runs.at(-1)).toBeLessThan(HEARTBEAT_EVERY_BYTES + 1100);
+                expect(framesOf(socket).filter(f => f.type === FrameType.Message)).toHaveLength(3000);
+            });
+
+            it('are still written to a client past the high-water mark, where relayed traffic is dropped', () => {
+                const { socket } = connect();
+                socket.emit('data', encodeHandshakeFrame(PROTOCOL_VERSION, 'appA', 'a'));
+                socket.written.length = 0;
+                socket.writableLength = 2 * 1024 * 1024;
+
+                internals.handleParentMessage({
+                    channel: 'm:broadcastToApp',
+                    content: { msg: wireMessage('c', 'model::update'), app: 'appA' },
+                });
+                internals.handleHeartbeat();
+
+                expect(framesOf(socket).map(f => f.type)).toEqual([FrameType.Heartbeat]);
             });
         });
     });
@@ -1404,6 +1461,66 @@ describe('TCPServerWorker', () => {
             run(30_000, () => sender.socket.emit('data', encodeMessageFrame(wireMessage('objects', 'model::update', '{"id":"a"}'))));
 
             expect(disconnected()).toEqual([]);
+        });
+
+        // A client that sends nothing of its own is kept connected by echoing heartbeats, and it can
+        // echo only those it has read. The answer to its model::request for a large store had none
+        // in it, so on a slow link such a client was disconnected 10 s in, while reading all along.
+        describe('a client still reading a backlog', () => {
+            // A client that reads `writesPerTick` of what was written to it each tick and echoes every
+            // heartbeat it finds, the way colibri-unity's receive thread does. Returns the models it read.
+            const reader = function (client: { socket: FakeSocket }, writesPerTick: number): { each: () => void; models: Set<string> } {
+                const frames = new FrameReader();
+                const models = new Set<string>();
+                return {
+                    models,
+                    each: () => {
+                        for (const chunk of client.socket.flush(writesPerTick)) {
+                            for (const frame of frames.append(chunk)) {
+                                if (frame.type === FrameType.Heartbeat) client.socket.emit('data', encodeHeartbeatFrame(frame.pingTimestamp));
+                                else if (frame.type === FrameType.Message) models.add(String(JSON.parse(frame.payload.toString()).id));
+                            }
+                        }
+                    },
+                };
+            };
+
+            const answered = function (name: string): { socket: FakeSocket; id: string } {
+                const client = handshaked(name);
+                client.socket.holdWrites = true;
+                for (let i = 0; i < 3000; i++) {
+                    internals.handleParentMessage({
+                        channel: 'm:broadcast',
+                        content: { msg: wireMessage('store', 'model::update', `{"id":"m${i}","data":"${'x'.repeat(1000)}"}`), clients: [client.id], reply: true },
+                    });
+                }
+                return client;
+            };
+
+            it('is kept while it reads, however long the backlog takes it', () => {
+                const spectator = answered('spectator');
+                const reading = reader(spectator, 10);
+
+                // About 100 KiB a second: over half a minute for its 3 MB.
+                run(40_000, reading.each);
+
+                expect(reading.models.size).toBe(3000);
+                expect(disconnected()).toEqual([]);
+                expect(spectator.socket.destroyed).toBe(false);
+            });
+
+            it('is ended 10 s after it stops reading', () => {
+                const spectator = answered('spectator');
+                const reading = reader(spectator, 10);
+                run(5_000, reading.each);
+
+                run(9_000);
+                expect(disconnected()).toEqual([]);
+                run(1_000);
+
+                expect(disconnected()).toEqual([spectator.id]);
+                expect(warnings().filter(w => w.includes('spectator') && w.includes('has sent nothing for 10 s'))).toHaveLength(1);
+            });
         });
 
         it('ends a connection that never handshakes', () => {
