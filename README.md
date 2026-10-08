@@ -1,6 +1,6 @@
 # Colibri
 
-<img src="img/colibri_header.png" width=800/>
+<img src="img/colibri_header.png" alt="Colibri" width="800"/>
 
 Colibri synchronizes data between Unity and web clients for cross-reality research prototypes.
 
@@ -11,9 +11,8 @@ Colibri synchronizes data between Unity and web clients for cross-reality resear
 - Key-value store on the server
 - Remote logging to the server's admin UI
 - Voice chat between Unity clients
-- TLS for client connections
-
-Colibri is built for lab networks and favors low latency and high throughput over bandwidth savings.
+- TLS for Unity (TCP) and web (HTTPS, WSS) connections, not for voice
+- Optimized for low latency and high throughput on local networks, not for low bandwidth
 
 ## Components
 
@@ -21,13 +20,15 @@ Colibri is built for lab networks and favors low latency and high throughput ove
 | --- | --- |
 | [colibri-unity](colibri-unity/README.md) | Unity client, Unity 2022.3 or newer |
 | [colibri-web](colibri-web/README.md) | TypeScript client, [`@hcikn/colibri`](https://www.npmjs.com/package/@hcikn/colibri) on npm |
-| [colibri-server](colibri-server/README.md) | Server, Node.js 24 or newer or [Docker image](https://hub.docker.com/r/hcikn/colibri) |
+| [colibri-server](colibri-server/README.md) | Server. Runs as a [Docker image](https://hub.docker.com/r/hcikn/colibri) or on Node.js 24 or newer |
 
 Clients and server must all be 2.x. Upgrading from 1.x: [MIGRATION.md](MIGRATION.md).
 
-## Getting started
+## Quick start
 
-Tutorial: [docs/getting-started.md](docs/getting-started.md)
+1. Start a server with [Docker Compose](colibri-server/README.md#docker) or [Node.js](colibri-server/README.md#nodejs).
+2. Install the [Unity package](colibri-unity/README.md#installation) or run `npm install @hcikn/colibri@2`.
+3. Follow the [tutorial](docs/getting-started.md).
 
 ## Testing
 
@@ -39,13 +40,12 @@ runs the Unity unit and end-to-end tests ([details](colibri-unity/docs/guide.md#
 Colibri has no authentication. Any client that can reach a server can join any app on it and read
 and change its data. Run the server on a trusted network.
 
-## Publication
-
-Colibri was published at the ISMAR'23 Adjunct "1st Joint Workshop on Cross Reality":
+## Citation
 
 > Sebastian Hubenschmid\*, Daniel Immanuel Fink\*, Johannes Zagermann, Jonathan Wieland, Harald Reiterer, Tiare Feuchtner. In: *ISMAR'23 Adjunct.* 2023. **Colibri: A toolkit for rapid prototyping of networking across realities**. doi: [10.1109/ISMAR-Adjunct60411.2023.00010](https://doi.org/10.1109/ISMAR-Adjunct60411.2023.00010)
 
-Citation metadata: [CITATION.cff](CITATION.cff). Contact: [Sebastian Hubenschmid](https://hci.uni-konstanz.de/personen/wissenschaftliche-mitarbeiterinnen/sebastian-hubenschmid/) ([GitHub](https://github.com/SebiH)), [Daniel Fink](https://hci.uni-konstanz.de/personen/wissenschaftliche-mitarbeiterinnen/daniel-fink/) ([GitHub](https://github.com/dunifi91)).
+Published at the ISMAR'23 Adjunct "1st Joint Workshop on Cross Reality". Metadata: [CITATION.cff](CITATION.cff).
+Contact: [Sebastian Hubenschmid](https://hci.uni-konstanz.de/personen/wissenschaftliche-mitarbeiterinnen/sebastian-hubenschmid/) ([GitHub](https://github.com/SebiH)), [Daniel Fink](https://hci.uni-konstanz.de/personen/wissenschaftliche-mitarbeiterinnen/daniel-fink/) ([GitHub](https://github.com/dunifi91)).
 
 ## Projects built with early Colibri versions
 
