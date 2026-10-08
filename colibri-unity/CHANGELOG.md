@@ -706,7 +706,7 @@ otherwise spend on their prototype, so:
   *Connecting* after 5 s.
 - `node colibri-unity/run-tests.mjs` runs both suites, starting and stopping a server with
   `docker compose`, unless one is already listening, which it uses as it stands. See
-  [README.md](README.md#for-maintainers).
+  [README.md](README.md#testing).
 - The cross-implementation protocol vectors are checked automatically: `npm run test:vectors` in
   colibri-server re-encodes each one and fails if `ProtocolVectorTests.cs` no longer expects the
   same bytes. It also fails when `WebServerConnection`'s `CLIENT_VERSION` differs from the server's
