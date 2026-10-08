@@ -99,9 +99,11 @@ namespace HCIKonstanz.Colibri.Synchronization
                     _reconnectRound = null;
                 }
 
-                // Nor has this one heard from the server yet.
+                // Nor has this one heard from the server yet, and it makes no requests again at
+                // its first connection.
                 _heardStamps = 0;
                 _heardAt = double.NegativeInfinity;
+                _heardAtHeld = false;
             }
             return _connection;
         }
@@ -150,6 +152,9 @@ namespace HCIKonstanz.Colibri.Synchronization
             if (_reconnectRound != null)
                 _deletesSince = Math.Min(_deletesSince, _reconnectRound.DeletesSince);
 
+            // Until the requests go out again: see _heardAtHeld.
+            _heardAtHeld = true;
+
             var deletes = LocallyDeletedModels.Since(_deletesSince, now);
             if (deletes == null)
                 return;
@@ -174,11 +179,26 @@ namespace HCIKonstanz.Colibri.Synchronization
         private static double _heardAskedAt = double.NegativeInfinity;
 
         /// <summary>
+        /// Whether <see cref="LastHeardAt"/> keeps the time the connection that died last heard
+        /// from the server: from when this client notices the outage until it makes the requests
+        /// again after the reconnect.
+        /// </summary>
+        /// <remarks>
+        /// The next connection hears from the server as soon as it is accepted, a frame or so
+        /// before the requests go out. The values a member sent into the dead link are kept for
+        /// the answers to those requests (see SentValues), and a value sent in that frame, counted
+        /// as sent after the server was last heard from again, pushed them out: the answer holding
+        /// one was taken for another client's change if the link dropped again before it came.
+        /// </remarks>
+        private static bool _heardAtHeld;
+
+        /// <summary>
         /// When this client last heard from the server, on SyncTicker's clock, as of
         /// <paramref name="now"/>: any bytes count, and the server heartbeats every 100 ms, so
         /// while the connection works that was a moment ago. What is sent after it may be going
         /// into a link that has died (see SentValues). <paramref name="now"/> without a connection;
-        /// negative infinity before this connection has heard from the server at all.
+        /// negative infinity before this connection has heard from the server at all. Held from
+        /// an outage until the requests go out again (see <see cref="_heardAtHeld"/>).
         /// </summary>
         /// <remarks>
         /// SyncTicker asks once a frame. When the connection has heard from the server since the
@@ -198,7 +218,7 @@ namespace HCIKonstanz.Colibri.Synchronization
                 return now;
 
             var stamps = connection.LivenessStamps;
-            if (stamps != _heardStamps)
+            if (stamps != _heardStamps && !_heardAtHeld)
             {
                 _heardStamps = stamps;
                 var heardAt = now - connection.MillisSinceLastHeartbeat() / 1000.0;
@@ -381,6 +401,10 @@ namespace HCIKonstanz.Colibri.Synchronization
             var round = new ReconnectRound(disconnectedAt, _deletesSince);
             _reconnectRound = round;
             SendCommand(ReconnectRoundChannel, "model::request", new JObject { { "id", round.EndMarkerId }, { "again", true } });
+
+            // What is sent from here on goes out after the requests, and their answers cannot hold
+            // it: hearing from the server on this connection counts again.
+            _heardAtHeld = false;
 
             if (toTell == null)
                 return;
@@ -806,13 +830,14 @@ namespace HCIKonstanz.Colibri.Synchronization
 
             // The previous session's outage and the deletes it sent again, on a clock that has gone
             // on running since, its round of answers, which no object of this session is part of,
-            // and when its connection last heard from the server, and when that was last asked.
+            // and when its connection last heard from the server, as last asked and held.
             _disconnectedAt = double.NegativeInfinity;
             _deletesSince = double.PositiveInfinity;
             _reconnectRound = null;
             _heardStamps = 0;
             _heardAt = double.NegativeInfinity;
             _heardAskedAt = double.NegativeInfinity;
+            _heardAtHeld = false;
         }
 
         // `track` is off for the model channels: they are Colibri's own SyncBehaviour plumbing,

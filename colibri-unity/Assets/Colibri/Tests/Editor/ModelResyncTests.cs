@@ -341,6 +341,52 @@ namespace HCIKonstanz.Colibri.Tests
         }
 
         /// <summary>
+        /// Moved on earlier still, in the frame between the new connection first hearing from the
+        /// server and the requests going out, and the link drops again before the answers. The
+        /// answer after the next reconnect still holds a position sent into the first dead link,
+        /// and is recognised. Counted as sent after the server was last heard from on the new
+        /// connection, the move pushed those positions out.
+        /// </summary>
+        [Test]
+        public void AnObjectMovedOnBeforeTheRequestsStillTellsThePositionLostAtTheDrop()
+        {
+            var sync = Spawn<ResyncTransform>("resync-transform");
+            sync.Wake();
+            sync.OnModelUpdate(Bare(sync.Id));
+
+            // Heard from until 200, after x = 30 was sent; the link died a moment later.
+            for (var x = 1; x <= 60; x++)
+            {
+                var time = 199 + x / 30.0;
+                if (time <= 200)
+                    WebServerConnection.Instance.StampLiveness();
+                sync.transform.position = new Vector3(x, 0, 0);
+                Poll(sync);
+                Assert.That(sync.TakeDueUpdate(time, interval: 0, heardAt: Sync.LastHeardAt(time)), Is.Not.Null,
+                    "Precondition: the move goes out");
+            }
+            Sync.OnDisconnected(now: 202);
+
+            // Accepted at 203, and moved on in that frame; the requests go out in the next.
+            WebServerConnection.Instance.StampLiveness();
+            sync.transform.position = new Vector3(61, 0, 0);
+            Poll(sync);
+            Assert.That(sync.TakeDueUpdate(203, interval: 0, heardAt: Sync.LastHeardAt(203)), Is.Not.Null,
+                "Precondition: the move goes out");
+            Sync.RequestModelsAgain();
+
+            // Dropped again before the answers, and back.
+            Sync.OnDisconnected(now: 206);
+            Sync.RequestModelsAgain();
+            sync.OnModelUpdate(JObject.Parse($"{{\"id\":\"{sync.Id}\",\"active\":true,\"position\":[31,0,0],\"scale\":[1,1,1]}}"));
+
+            Assert.That(sync.transform.position, Is.EqualTo(new Vector3(61, 0, 0)), "The answer put the object back where it was when the first link died");
+            var sent = SentAt(sync, 210);
+            Assert.That(sent, Is.Not.Null, "The position the object is at now was not sent again");
+            Assert.That(sent["position"].ToVector3(), Is.EqualTo(new Vector3(61, 0, 0)));
+        }
+
+        /// <summary>
         /// The other side: what the server holds is no value of this client's, so another client set
         /// it while this one was away - and that is the newer change.
         /// </summary>
