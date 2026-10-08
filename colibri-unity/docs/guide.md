@@ -687,6 +687,7 @@ Limitations:
 node colibri-unity/run-tests.mjs              # both suites
 node colibri-unity/run-tests.mjs --editmode   # unit tests only, no server needed
 node colibri-unity/run-tests.mjs --playmode   # end-to-end only
+node colibri-unity/run-tests.mjs --editmode --stripping   # plus the code-stripping check
 ```
 
 Two suites, and they need different things:
@@ -701,6 +702,17 @@ Two suites, and they need different things:
   something is already listening on the port, which it uses as it stands and leaves running.
   Reconnects go through a proxy the test can cut, and the mismatch detection runs against a
   scripted stand-in server.
+
+`--stripping` adds a third check, off by default, for what neither suite can see: whether `[Sync]`
+members survive managed code stripping. An editor never strips, so it builds a Release IL2CPP
+player of `Assets/StrippingCheck/` for the desktop platform the editor runs on, with *Managed
+Stripping Level* High, and runs it. The player checks that every `[Sync]` member of
+`SyncTransform` and of a test model (a private serialized field, public value and reference fields,
+a property) is still there with its `[Sync]`, then applies an update to each and checks the values
+arrived. It exits 1 on any failure, and the result lines are printed. It needs no server, takes a
+few minutes, and needs the IL2CPP module for that platform; without it, the check is skipped with a
+notice rather than failed. The project's `ProjectSettings` are put back exactly as they were after
+the build.
 
 Results land in `TestResults/` as NUnit XML plus the editor log. Without a reachable server the
 end-to-end tests report as *skipped* with the command that fixes it, rather than failing.

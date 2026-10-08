@@ -656,6 +656,9 @@ otherwise spend on their prototype, so:
   licence secret. Voice chat has no end-to-end coverage (it needs a microphone); only the choice of
   the server's address and the queue that hands received packets to the main thread are
   unit-tested.
+- `run-tests.mjs --stripping` builds a Release IL2CPP player with *Managed Stripping Level* High and
+  checks inside it that every `[Sync]` member survived with its `[Sync]` and still syncs. Off by
+  default; skipped with a notice without the platform's IL2CPP module.
 
 ## End-to-end verification, and what it fixed
 
