@@ -74,13 +74,13 @@ describe('DataStore', () => {
             vi.useRealTimers();
         });
 
-        it('remembers which client deleted a model, for 10 minutes by default', () => {
+        it('remembers that a model was deleted, for 10 minutes by default', () => {
             const store = new DataStore();
             store.updateModel('app', 'channel', { id: 'a' });
 
-            store.removeModel('app', 'channel', 'a', 'client-1');
+            store.removeModel('app', 'channel', 'a');
 
-            expect(store.deletion('app', 'channel', 'a')).toMatchObject({ channel: 'channel', id: 'a', deletedBy: ['client-1'] });
+            expect(store.deletion('app', 'channel', 'a')).toMatchObject({ channel: 'channel', id: 'a' });
             vi.advanceTimersByTime(DEFAULT_TOMBSTONE_MILLIS - 1);
             expect(store.deletion('app', 'channel', 'a')).toBeDefined();
             vi.advanceTimersByTime(1);
@@ -90,7 +90,7 @@ describe('DataStore', () => {
         it('remembers a delete for an id it never had', () => {
             const store = new DataStore();
 
-            store.removeModel('app', 'channel', 'never-seen', 'client-1');
+            store.removeModel('app', 'channel', 'never-seen');
 
             expect(store.deletion('app', 'channel', 'never-seen')).toBeDefined();
         });
@@ -99,7 +99,7 @@ describe('DataStore', () => {
             const store = new DataStore();
             store.tombstoneMillis = 0;
 
-            store.removeModel('app', 'channel', 'a', 'client-1');
+            store.removeModel('app', 'channel', 'a');
 
             expect(store.deletion('app', 'channel', 'a')).toBeUndefined();
             expect(store.tombstoneCount('app')).toBe(0);
@@ -108,31 +108,31 @@ describe('DataStore', () => {
         it('keeps apps and channels apart', () => {
             const store = new DataStore();
 
-            store.removeModel('app', 'channel', 'a', 'client-1');
+            store.removeModel('app', 'channel', 'a');
 
             expect(store.deletion('app', 'other', 'a')).toBeUndefined();
             expect(store.deletion('other', 'channel', 'a')).toBeUndefined();
             expect(store.deletion('app', 'channel', 'b')).toBeUndefined();
         });
 
-        it('counts a delete of a deleted model as the latest, and remembers each client that sent one', () => {
+        it('counts a delete of a deleted model as the latest', () => {
             const store = new DataStore();
             store.tombstoneMillis = 1000;
-            store.removeModel('app', 'channel', 'a', 'client-1');
+            store.removeModel('app', 'channel', 'a');
             vi.advanceTimersByTime(800);
 
-            store.removeModel('app', 'channel', 'a', 'client-2');
-            store.removeModel('app', 'channel', 'a', 'client-1');
+            store.removeModel('app', 'channel', 'a');
+            store.removeModel('app', 'channel', 'a');
             vi.advanceTimersByTime(800);
 
-            expect(store.deletion('app', 'channel', 'a')?.deletedBy).toEqual(['client-1', 'client-2']);
+            expect(store.deletion('app', 'channel', 'a')).toBeDefined();
             expect(store.tombstoneCount('app')).toBe(1);
         });
 
         it('forgets a deletion it is told to', () => {
             const store = new DataStore();
-            store.removeModel('app', 'channel', 'a', 'client-1');
-            store.removeModel('app', 'channel', 'b', 'client-1');
+            store.removeModel('app', 'channel', 'a');
+            store.removeModel('app', 'channel', 'b');
 
             store.forgetDeletion('app', 'channel', 'a');
 
@@ -143,8 +143,8 @@ describe('DataStore', () => {
 
         it('keeps at most MAX_TOMBSTONES_PER_APP per app, forgetting the oldest first', () => {
             const store = new DataStore();
-            for (let i = 0; i <= MAX_TOMBSTONES_PER_APP; i++) store.removeModel('app', `channel-${i % 3}`, `id-${i}`, 'client-1');
-            store.removeModel('other', 'channel-0', 'id-0', 'client-1');
+            for (let i = 0; i <= MAX_TOMBSTONES_PER_APP; i++) store.removeModel('app', `channel-${i % 3}`, `id-${i}`);
+            store.removeModel('other', 'channel-0', 'id-0');
 
             expect(store.tombstoneCount('app')).toBe(MAX_TOMBSTONES_PER_APP);
             expect(store.deletion('app', 'channel-0', 'id-0')).toBeUndefined();
@@ -156,10 +156,10 @@ describe('DataStore', () => {
         it('drops expired tombstones as new ones come, without being asked about them', () => {
             const store = new DataStore();
             store.tombstoneMillis = 1000;
-            for (let i = 0; i < 100; i++) store.removeModel('app', 'channel', `old-${i}`, 'client-1');
+            for (let i = 0; i < 100; i++) store.removeModel('app', 'channel', `old-${i}`);
 
             vi.advanceTimersByTime(1000);
-            store.removeModel('app', 'channel', 'new', 'client-1');
+            store.removeModel('app', 'channel', 'new');
 
             expect(store.tombstoneCount('app')).toBe(1);
         });
@@ -168,8 +168,8 @@ describe('DataStore', () => {
         // session started afresh is not haunted by the deletes of the one before.
         it('forgets an app\'s tombstones with its models, and only that app\'s', () => {
             const store = new DataStore();
-            store.removeModel('test', 'channel', 'a', 'client-1');
-            store.removeModel('test2', 'channel', 'a', 'client-2');
+            store.removeModel('test', 'channel', 'a');
+            store.removeModel('test2', 'channel', 'a');
 
             store.clearApp('test');
 

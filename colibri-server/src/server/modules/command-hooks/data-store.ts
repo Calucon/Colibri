@@ -14,17 +14,17 @@ export const DEFAULT_TOMBSTONE_MILLIS = 600_000;
 // keep. Past it the oldest is forgotten first.
 export const MAX_TOMBSTONES_PER_APP = 10_000;
 
-// How many clients that deleted the same model, one after another, a tombstone remembers.
-const MAX_DELETERS_PER_TOMBSTONE = 8;
-
 // What is left of a deleted model.
+//
+// Who deleted it is not part of it. A client is known only by its connection id, which is new
+// after every reconnect, so "the client that deleted it may create it again" did not hold for a
+// headset that had reconnected in between. A client that creates the object again says so instead,
+// with a fresh model::request { id } (see ModelSynchronization.sendInitialState).
 export interface Tombstone {
     readonly channel: string;
     readonly id: string;
     // performance.now() of the latest delete.
     deletedAt: number;
-    // The clients (connection ids) that sent a delete for it, oldest first.
-    readonly deletedBy: string[];
 }
 
 // One app's tombstones: by channel and id for lookups, and in the order they were last deleted
@@ -74,17 +74,17 @@ export class DataStore extends Service {
         }
     }
 
-    // Removes the model and, for tombstoneMillis, remembers that it was deleted and by whom.
+    // Removes the model and, for tombstoneMillis, remembers that it was deleted.
     //
     // updateModel() creates whatever model it is handed, so without that memory any update that
     // arrives after a delete brings the model back: one another client sent before the delete
     // reached it, one this server held back under a limit and passed on after the delete (order
     // is only kept per client), or one a client queued while it was offline. Relayed, it has every
     // client's manager spawn the object again, with nobody left to delete it.
-    public removeModel(group: string, channel: string, id: string, deletedBy?: string): void {
+    public removeModel(group: string, channel: string, id: string): void {
         this.store.get(group)?.get(channel)?.delete(id);
         if (this.tombstoneMillis > 0) {
-            this.addTombstone(group, channel, id, deletedBy);
+            this.addTombstone(group, channel, id);
         }
     }
 
@@ -103,7 +103,7 @@ export class DataStore extends Service {
         return tombstone;
     }
 
-    // For a model that is being created again on purpose; see ModelSynchronization.
+    // For an id a client has in its scene again; see ModelSynchronization.sendInitialState.
     public forgetDeletion(group: string, channel: string, id: string): void {
         const app = this.tombstones.get(group);
         const tombstone = app?.byChannel.get(channel)?.get(id);
@@ -151,7 +151,7 @@ export class DataStore extends Service {
         return models;
     }
 
-    private addTombstone(group: string, channel: string, id: string, deletedBy: string | undefined): void {
+    private addTombstone(group: string, channel: string, id: string): void {
         const now = performance.now();
 
         let app = this.tombstones.get(group);
@@ -172,15 +172,10 @@ export class DataStore extends Service {
             app.oldestFirst.delete(tombstone);
             tombstone.deletedAt = now;
         } else {
-            tombstone = { channel, id, deletedAt: now, deletedBy: [] };
+            tombstone = { channel, id, deletedAt: now };
             byId.set(id, tombstone);
         }
         app.oldestFirst.add(tombstone);
-
-        if (deletedBy !== undefined && !tombstone.deletedBy.includes(deletedBy)) {
-            tombstone.deletedBy.push(deletedBy);
-            if (tombstone.deletedBy.length > MAX_DELETERS_PER_TOMBSTONE) tombstone.deletedBy.shift();
-        }
 
         // Oldest first: drop the expired ones, and the oldest live ones while there are too many.
         for (const oldest of app.oldestFirst) {
