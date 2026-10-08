@@ -6,6 +6,7 @@ export * from './payload.js';
 export * from './redirect-console.js';
 export * from './ring-buffer.js';
 export * from './serializable.js';
+export * from './server-process.js';
 export * from './service.js';
 export * from './worker-message.js';
 export * from './worker-service-proxy.js';

@@ -161,6 +161,9 @@ const stopCleanly = async function (container: string, nth: number): Promise<voi
     const logs = await logsOf(container);
     const received = logs.split('Received SIGTERM, shutting down').length - 1;
     check('docker stop delivers SIGTERM to the server', received === nth, `${received} shutdown line(s)\n${logs.slice(-400)}`);
+    // It was a bare console.log, the one line without a timestamp, level and source.
+    const formatted = logs.match(/^\d{4}-\d\d-\d\dT[\d:.]+Z INFO {2}\[core\/Server\] Received SIGTERM, shutting down\.\.\.$/gm)?.length ?? 0;
+    check('says so in the console log format', formatted === nth, `${formatted} formatted shutdown line(s)\n${logs.slice(-400)}`);
     check('exits with code 0', exitCode === '0', `exit code ${exitCode}`);
 };
 
