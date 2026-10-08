@@ -69,6 +69,7 @@ namespace HCIKonstanz.Colibri.Store
             {
                 request.method = UnityWebRequest.kHttpVerbGET;
                 request.timeout = TimeoutSeconds;
+                request.certificateHandler = ServerCertificateHandler.For(ColibriConfig.Load());
                 request.SetRequestHeader("Accept", "application/json");
                 await SendAsync(request);
 
@@ -90,6 +91,7 @@ namespace HCIKonstanz.Colibri.Store
             {
                 request.method = UnityWebRequest.kHttpVerbPUT;
                 request.timeout = TimeoutSeconds;
+                request.certificateHandler = ServerCertificateHandler.For(ColibriConfig.Load());
                 request.SetRequestHeader("Content-Type", "application/json");
                 request.SetRequestHeader("Accept", "application/json");
                 await SendAsync(request);
@@ -109,6 +111,7 @@ namespace HCIKonstanz.Colibri.Store
             {
                 request.method = UnityWebRequest.kHttpVerbDELETE;
                 request.timeout = TimeoutSeconds;
+                request.certificateHandler = ServerCertificateHandler.For(ColibriConfig.Load());
                 request.SetRequestHeader("Content-Type", "application/json");
                 await SendAsync(request);
 

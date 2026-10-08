@@ -154,4 +154,93 @@ namespace HCIKonstanz.Colibri.E2E
             }
         }
     }
+
+    /// <summary>
+    /// The Store over https, against the TLS test server (see <see cref="TlsTests"/>), whose web
+    /// port serves the same self-signed certificate as its TCP port. The certificate settings have
+    /// to work for the Store's requests too, or a server with a self-signed certificate could
+    /// connect and still not load or save anything.
+    /// </summary>
+    /// <remarks>
+    /// "Server supports SSL/TLS" is shared with the TCP connection that other fixtures leave
+    /// running, but that only reads it when it reconnects, and these tests put it back long before
+    /// one is due. The TCP port is left alone.
+    /// </remarks>
+    public class StoreOverTlsTests
+    {
+        private const string OtherSha256 =
+            "BA:78:16:BF:8F:01:CF:EA:41:41:40:DE:5D:AE:22:23:B0:03:61:A3:96:17:7A:9C:B4:10:FF:61:F2:00:15:AD";
+
+        [SetUp]
+        public void RequireTheTlsServer() => E2EServer.RequireTlsServer();
+
+        [TearDown]
+        public void RestoreTheConfiguration() => E2EServer.Configure();
+
+        [UnityTest]
+        public IEnumerator SavesAndReadsBackWithThePinnedCertificate()
+        {
+            UseTheTlsServer(allowSelfSigned: false, pin: E2EServer.TlsCertificateSha256);
+            yield return SaveReadAndDelete();
+        }
+
+        [UnityTest]
+        public IEnumerator SavesAndReadsBackWhenSelfSignedCertificatesAreAllowed()
+        {
+            UseTheTlsServer(allowSelfSigned: true, pin: "");
+            yield return SaveReadAndDelete();
+        }
+
+        [UnityTest]
+        public IEnumerator RejectsTheSelfSignedCertificateByDefault()
+        {
+            UseTheTlsServer(allowSelfSigned: false, pin: "");
+            LogAssert.Expect(LogType.Error, new Regex("^Colibri: could not load "));
+
+            var get = ColibriStore.Get<StoredThing>("does-not-matter");
+            yield return E2EServer.Await(get, "Store.Get never completed", 20f);
+
+            Assert.That(get.Result, Is.Null);
+        }
+
+        [UnityTest]
+        public IEnumerator RejectsAnotherCertificateWhenOneIsPinned()
+        {
+            UseTheTlsServer(allowSelfSigned: true, pin: OtherSha256);
+            LogAssert.Expect(LogType.Error, new Regex("^Colibri: could not load "));
+
+            var get = ColibriStore.Get<StoredThing>("does-not-matter");
+            yield return E2EServer.Await(get, "Store.Get never completed", 20f);
+
+            Assert.That(get.Result, Is.Null);
+        }
+
+        private static void UseTheTlsServer(bool allowSelfSigned, string pin)
+        {
+            E2EServer.Configure();
+
+            var config = ColibriConfig.Load();
+            config.IsSSL = true;
+            config.WebServerPort = E2EServer.TlsWebPort;
+            config.AllowSelfSignedCertificate = allowSelfSigned;
+            config.ServerCertificateSha256 = pin;
+        }
+
+        private static IEnumerator SaveReadAndDelete()
+        {
+            var key = $"e2e-tls-{Guid.NewGuid():N}";
+
+            var put = ColibriStore.Put(key, new StoredThing { Name = "over https", Count = 5 });
+            yield return E2EServer.Await(put, "Store.Put never completed", 20f);
+            Assert.That(put.Result, Is.True, "Store.Put reported failure over https");
+
+            var get = ColibriStore.Get<StoredThing>(key);
+            yield return E2EServer.Await(get, "Store.Get never completed", 20f);
+            Assert.That(get.Result?.Name, Is.EqualTo("over https"));
+
+            var delete = ColibriStore.Delete(key);
+            yield return E2EServer.Await(delete, "Store.Delete never completed", 20f);
+            Assert.That(delete.Result, Is.True, "Store.Delete reported failure over https");
+        }
+    }
 }
