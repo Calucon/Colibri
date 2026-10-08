@@ -1259,6 +1259,31 @@ describe('keeping a change sent just after asking for every model', () => {
         expect(pair.b).toBe('theirs too');
     });
 
+    // Every RegisterModelSync on the page receives the answer to each one's request on
+    // 'colibri::reconnect', and another one's may come first.
+    it("keeps it out until the end of its own answers, not another RegisterModelSync's", async () => {
+        new Colibri('app', 'localhost', 9011);
+        const [, registerModel] = RegisterModelSync({ name: 'own', type: Pair });
+        RegisterModelSync({ name: 'other', type: Pair });
+        const pair = new Pair('p1');
+        pair.a = 'A';
+        pair.b = 'B';
+        registerModel(pair);
+        connectSocket();
+        await nextTask();
+        deliver('own', { command: 'model::update', payload: { id: 'p1' } });
+        pair.b = 'B2';
+        await settle();
+        expect(fakeSocket.endMarkers).toHaveLength(2);
+
+        // The end of the answers to the request the other one sent for every model, then the answer
+        // to this one's.
+        endOfAnswers(1);
+        deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A', b: 'B' } });
+
+        expect(pair.b).toBe('B2');
+    });
+
     it('keeps a change to a model another client made, sent just after it', async () => {
         new Colibri('app', 'localhost', 9011);
         const [models$] = RegisterModelSync({ name: 'own', type: Pair });
@@ -2230,6 +2255,40 @@ describe('sending again a change lost in a connection that died', () => {
 
         expect(latest(models$)).toEqual([]);
         expect(sentInOrder()).toEqual([['model::request', {}]]);
+    });
+
+    // Each RegisterModelSync sends its own request after its re-requests, so the answer to the one
+    // sent first comes ahead of the answers to the next one's re-requests. Taken for the end of those,
+    // it settled the model early, and the answer that came next undid the change.
+    it('waits for the end of its own answers when another RegisterModelSync asked again first', async () => {
+        new Colibri('app', 'localhost', 9011);
+        const [, registerOther] = RegisterModelSync({ name: 'other', type: Pair });
+        const [, registerModel] = RegisterModelSync({ name: 'own', type: Pair });
+        registerOther(new Pair('q1'));
+        const pair = new Pair('p1');
+        pair.a = 'A';
+        pair.b = 'B';
+        registerModel(pair);
+        connectSocket();
+        deliver('other', { command: 'model::update', payload: { id: 'q1' } });
+        deliver('own', { command: 'model::update', payload: { id: 'p1' } });
+        deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A', b: 'B' } });
+        endOfAnswers();
+        await settle();
+        await sendAndDie(pair, 'A2');
+        expect(fakeSocket.endMarkers).toHaveLength(2);
+
+        deliver('other', { command: 'model::update', payload: { id: 'q1', a: '', b: '' } });
+        endOfAnswers(1);
+        deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A', b: 'B' } });
+        endOfAnswers();
+        await settle();
+
+        expect(pair.a).toBe('A2');
+        expect(sentInOrder()).toEqual([
+            ['model::update', { id: 'p1', a: 'A2' }],
+            ['model::request', { id: 'p1', again: true }]
+        ]);
     });
 
     // delete() stops this client sending the model's changes, a lost one sent again among them.
