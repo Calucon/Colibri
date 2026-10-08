@@ -284,10 +284,11 @@ sent until that answer.
 
 `RegisterModelSync` and registering instances may happen before `new Colibri()`; the server is asked once it is
 created. After a reconnect, Colibri asks the server again for each instance this client registered, then for all the
-others, so what changed in the meantime is applied. An instance the server no longer has is sent again in full: the
-server forgets an app's models when it restarts and when the app's last client disconnects, which is what a lone
-client's outage looks like to it. A registered instance another client deleted during the outage is removed from the
-list, if the delete is no more than `MODEL_TOMBSTONE_SECONDS` (10 minutes by default) old. See
+others, so what changed in the meantime is applied. A change made while that answer is on its way, at first or after a
+reconnect, is kept: the server made the answer before it had the change. An instance the server no longer has is sent
+again in full: the server forgets an app's models when it restarts and when the app's last client disconnects, which is
+what a lone client's outage looks like to it. A registered instance another client deleted during the outage is removed
+from the list, if the delete is no more than `MODEL_TOMBSTONE_SECONDS` (10 minutes by default) old. See
 [After a reconnect](../../colibri-server/docs/protocol.md#after-a-reconnect) in the protocol docs.
 
 A change to a registered instance made just before the connection dies without closing (Wi-Fi dropping out, say) may
@@ -316,6 +317,8 @@ Limitations:
   connection died (a fast drag on a slow link, say) may not be recognised; the server's value is then applied.
 - Another client that sets a field back during the outage, or just after the reconnect, to a value the field had here in
   the 10 s before the connection died, looks like a lost change: this client's value replaces it.
+- A field changed while this client waits for the server's answer after `registerModel` or a reconnect is sent again
+  when the server still shows the value it replaced a round trip later, even if another client set it back meanwhile.
 
 ### Remote Store
 

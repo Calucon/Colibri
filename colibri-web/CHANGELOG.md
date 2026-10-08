@@ -43,8 +43,9 @@ Colibri component from 1.x.
   `new Colibri()`, have their answer. If the server already has the id, its copy wins over the
   values set before `registerModel`. Changes made after `registerModel` are held until the
   answer, then sent on top of it, and kept on this client. When they replace values the server
-  had, the model is asked for once more, and changes made meanwhile wait for that answer (5
-  seconds at most). If the server has nothing for the id, the model is sent in full. So a
+  had, the model is asked for once more, followed by a request on `colibri::reconnect` whose
+  answer tells when that answer is over; changes made meanwhile wait for it, then go out. If the
+  server has nothing for the id, the model is sent in full. So a
   reloaded page that registers a fixed id no longer shows old values while everyone else has new
   ones, and an id deleted a moment ago can be registered again. A new model reaches other clients
   one round trip after `registerModel`.
@@ -137,6 +138,12 @@ Colibri component from 1.x.
   `colibri::reconnect`; the server needs no change. A field changed more than about 8 times right
   at the moment the connection died may still not be recognised. See
   [docs/guide.md](docs/guide.md#syncmodel).
+- A change sent within a round trip of asking the server for every model, on connecting or after
+  a reconnect, is no longer undone by the answer. The server made that answer before it had the
+  change, and never sends a client's own update back to it, so this page showed the old value
+  while the server and every other client had the new one. `RegisterModelSync` now sends one more
+  request on `colibri::reconnect` after that one, and keeps the fields it sends out of every update
+  until the answer: whatever arrives before then was made before the server had them.
 - `registerModel` with an id that `models$` already lists replaces that entry instead of listing
   the id twice. The replaced instance stops syncing (with a console warning if it was registered
   on this client), and registering the same instance again does nothing.
