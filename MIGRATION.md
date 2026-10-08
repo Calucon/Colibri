@@ -11,54 +11,43 @@ component's changelog has the full detail:
 
 **Upgrade the server first, then Unity, then the web clients.** No 1.x client, Unity or web, works
 with a 2.0 server, and from the moment it runs, the server's log names every client still on 1.x
-([why, and what each side shows](#read-this-first-the-server-and-unity-move-together)).
+([why, and what each side shows](#why-the-server-and-unity-move-together)).
 
 **Server**
 
-- [ ] Node 24, and the server is native ESM now ([details](#breaking))
-- [ ] Rewrite anything of your own that speaks TCP to Colibri against the new protocol
-      ([details](#breaking))
-- [ ] Docker: pin the image version you run ([details](#worth-knowing))
-- [ ] Docker: remove `tty: true` if your compose file came from the 1.x README
-      ([details](#worth-knowing))
-- [ ] Docker with `--user` (or `user:` in compose): give the data directory to that user
-      ([details](#worth-knowing))
+- [ ] [Node 24; the server is native ESM now](#breaking)
+- [ ] [Rewrite anything of your own that speaks TCP to Colibri against the new protocol](#breaking)
+- [ ] [Docker: pin the image version you run](#worth-knowing)
+- [ ] [Docker: remove `tty: true` if your compose file came from the 1.x README](#worth-knowing)
+- [ ] [Docker with `--user` (or `user:` in compose): give the data directory to that user](#worth-knowing)
 
 **Web**
 
-- [ ] `@Synced() private x = 0` → `@Synced() accessor x = 0`, and drop `experimentalDecorators`
-      ([details](#breaking-synced-needs-standard-decorators))
-- [ ] Add `rxjs` to your own dependencies ([details](#breaking-typescript-and-rxjs-is-yours-now))
-- [ ] `receiveColor` / `receiveColorArray` callbacks get a `ColorValue`, not a `string`
-      ([details](#breaking-colour-callbacks-get-a-colorvalue))
-- [ ] Pass `name` to `RegisterModelSync` for anything you bundle ([details](#fixed))
+- [ ] [`npm install @hcikn/colibri@^2`: a 1.x web client is refused, with no error on the client](#why-the-server-and-unity-move-together)
+- [ ] [TypeScript 5.0 or newer](#breaking-typescript-and-rxjs-is-yours-now); plain JavaScript: [`colibri-web/docs/js-workaround`](colibri-web/docs/js-workaround)
+- [ ] [Add `rxjs` to your own dependencies](#breaking-typescript-and-rxjs-is-yours-now)
+- [ ] [`@Synced() private x = 0` → `@Synced() accessor x = 0`; drop `experimentalDecorators`](#breaking-synced-needs-standard-decorators)
+- [ ] [`receiveColor` / `receiveColorArray` callbacks get a `ColorValue`, not a `string`](#breaking-colour-callbacks-get-a-colorvalue)
+- [ ] [Pass `name` to `RegisterModelSync` for anything you bundle](#fixed)
 
 **Unity**
 
-- [ ] Unity 2022.3 LTS or newer ([details](#breaking-unity-20223-lts))
-- [ ] Delete your vendored `Newtonsoft.Json.dll` ([details](#breaking-no-more-vendored-newtonsoft))
-- [ ] Replace every `IObservable` subscription with `+=` / `-=`, and unsubscribe yourself
-      ([details](#breaking-unirx-is-gone-and-was-not-replaced))
-- [ ] Replace `Connected.Subscribe(...)` with the `OnConnected` / `OnDisconnected` events
-      ([details](#breaking-webserverconnectionconnected-is-a-task))
-- [ ] `ObservableModel<T>` / `ObservableManager<T>` are gone; use `SyncBehaviour<T>` /
-      `SyncBehaviourManager<T>`
-      ([details](#breaking-observablemodelt-and-observablemanagert-are-deleted))
-- [ ] Import any sample you were relying on from the Package Manager; sample types are no longer
-      compiled into your project
-      ([details](#breaking-the-samples-are-no-longer-compiled-into-your-project))
-- [ ] `LockFreeQueue<T>` is gone; use `ConcurrentQueue<T>`
-      ([details](#breaking-lockfreequeue-is-gone))
+- [ ] [Unity 2022.3 LTS or newer](#breaking-unity-20223-lts)
+- [ ] [Delete your vendored `Newtonsoft.Json.dll`](#breaking-no-more-vendored-newtonsoft)
+- [ ] [Replace every `IObservable` subscription with `+=` / `-=`, and unsubscribe yourself](#breaking-unirx-is-gone-and-was-not-replaced)
+- [ ] [Replace `Connected.Subscribe(...)` with the `OnConnected` / `OnDisconnected` events](#breaking-webserverconnectionconnected-is-a-task)
+- [ ] [Port `ObservableModel<T>` / `ObservableManager<T>` to `SyncBehaviour<T>` / `SyncBehaviourManager<T>`](#breaking-observablemodelt-and-observablemanagert-are-deleted)
+- [ ] [Import any sample your code uses; samples are no longer compiled into your project](#breaking-the-samples-are-no-longer-compiled-into-your-project)
+- [ ] [Replace `LockFreeQueue<T>` with `ConcurrentQueue<T>`](#breaking-lockfreequeue-is-gone)
 
 **Everywhere**
 
-- [ ] Read [Behaviour changes that will not fail to
-      compile](#behaviour-changes-that-will-not-fail-to-compile): that is where the surprises are
+- [ ] Read [Behaviour changes that will not fail to compile](#behaviour-changes-that-will-not-fail-to-compile): that is where the surprises are
 - [ ] Go through [After upgrading, check these](#after-upgrading-check-these)
 
 ---
 
-## Read this first: the server and Unity move together
+## Why the server and Unity move together
 
 colibri-unity 2.0.0 speaks a [new binary TCP protocol](colibri-server/docs/protocol.md) and
 **requires colibri-server ≥ 2.0.0**. There is no version negotiation: a 1.x Unity client cannot
@@ -82,13 +71,15 @@ See [Version checking](colibri-server/docs/protocol.md#version-checking).
 
 **Web clients are covered by the same check**, even though Socket.IO itself did not change.
 `colibri-web` 1.x announces `version: '1'` in its handshake query, so a 2.0.0 server refuses it.
-This is the one place the version check is a breaking change for web, and the symptom is quiet. No
-1.x release of `colibri-web` (the last is 1.3.2) knows `protocol::rejected`, so the client receives
-the rejection as an ordinary message on `Colibri.messages`, which nothing is listening for, and is
-then disconnected. Socket.IO does not reconnect after a server-side disconnect, so **it connects
-once and then stops, with no error on the client at all**. The server's log line (which names the
-client, its address and both versions) is the diagnostic. `colibri-web` 2.0.0 logs a refusal
-itself and exposes it on `Colibri.protocolMismatch`.
+This is the one place the version check is a breaking change for web, and the symptom is quiet:
+
+- No 1.x release of `colibri-web` (the last is 1.3.2) knows `protocol::rejected`. The client
+  receives the rejection as an ordinary message on `Colibri.messages`, which nothing is listening
+  for, and is then disconnected.
+- Socket.IO does not reconnect after a server-side disconnect, so **it connects once and then
+  stops, with no error on the client at all**.
+- The server's log line, which names the client, its address and both versions, is the diagnostic.
+- `colibri-web` 2.0.0 logs a refusal itself and exposes it on `Colibri.protocolMismatch`.
 
 **Upgrading in the other order (clients first) is noticed too, though only as a suspicion.** The
 version check lives on the server, and a 1.x server has none, so neither client can be *told* it is
@@ -102,8 +93,7 @@ silence is the signal:
   mismatch after three connections that were accepted and then ended before a frame could be read,
   and keeps retrying.
 
-Details in
-[Detecting an out-of-date server](colibri-server/docs/protocol.md#detecting-an-out-of-date-server).
+Details: [Detecting an out-of-date server](colibri-server/docs/protocol.md#detecting-an-out-of-date-server).
 
 So the safe order is: **upgrade the server first** (from then on its log names every client that is
 still on 1.x), then Unity, then the web clients, which cannot be left on 1.x either.
