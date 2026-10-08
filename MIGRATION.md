@@ -477,8 +477,9 @@ they have rather than creating duplicates.
   such a value, the member or field looks like a lost change, and the other client's change is
   undone (see [Known limits](colibri-server/docs/protocol.md#known-limits)). A Unity object
   destroyed at the drop has its delete sent again. After their re-requests, both clients send one
-  more `model::request`, on the channel `colibri::reconnect`, to tell when the answers are over; a
-  Unity client does so after every reconnect.
+  more `model::request`, on the channel `colibri::reconnect`, to tell when the answers are over. A
+  Unity client does so after every reconnect; colibri-web also does so after asking for every model
+  and after asking for one of its models once more.
   See [After a reconnect](colibri-server/docs/protocol.md#after-a-reconnect).
 - While a Unity client is disconnected, what it sends waits in one queue and goes out in order when
   the connection is back. Past 256 broadcasts and log lines the oldest are dropped, with one
