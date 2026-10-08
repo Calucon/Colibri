@@ -20,9 +20,9 @@ is in [protocol.md](protocol.md), and everything that changed since 1.x in
 - [Development](#development)
 
 The server connects the Unity clients (TCP) and web clients (Socket.IO) of each app: it relays
-their `broadcast::` messages and model changes to each other and keeps the app's synchronized
-models. It also stores values through a small REST API, relays voice over UDP, and serves an
-admin UI showing what every client logs.
+their messages (`broadcast::`) and changes to synced objects (models) to each other, and keeps a
+copy of each app's models. It also stores values through a small REST API, relays voice over UDP,
+and serves an admin UI showing what every client logs.
 
 Colibri has no authentication: anyone who can reach these ports can join any app, read and change
 its data, and read the log. Run it on a network you trust.
