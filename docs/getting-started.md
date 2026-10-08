@@ -102,9 +102,8 @@ something of it: a field, a method, `transform`.
 
 A listener that uses nothing of a component belongs to none: a static method, or a lambda that only
 works with its parameter, `Debug.Log` or a static such as `GameManager.Instance`. It stays
-registered until you call `Sync.Unregister`. Every time `Start` runs again (after a scene reload,
-say), it is added once more, and each message then reaches it once per registration. When in
-doubt, use a method of the component, as above.
+registered until you call `Sync.Unregister`. Registering it again, as `Start` does after a scene
+reload, adds nothing, so each message still reaches it once.
 
 Three things worth knowing straight away:
 
