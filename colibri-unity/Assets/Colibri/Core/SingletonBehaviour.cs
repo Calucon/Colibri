@@ -65,7 +65,7 @@ namespace HCIKonstanz.Colibri.Core
                 try
                 {
                     // An instance placed in the scene by hand wins over creating one.
-                    _instance = FindFirstObjectByType<T>();
+                    _instance = FindAnyObjectByType<T>();
 
                     if (_instance == null)
                         _instance = new GameObject($"[{typeof(T).Name}]").AddComponent<T>();

@@ -383,7 +383,7 @@ namespace HCIKonstanz.Colibri.Synchronization
             ModelCreated?.Invoke(this);
 
             // check if the scene contains a matching manager
-            var hasManager = FindObjectsByType<SyncBehaviourManager<T>>(FindObjectsSortMode.None)
+            var hasManager = UnityCompat.FindAll<SyncBehaviourManager<T>>()
                 .Where(m => m.Template?.ModelId == ModelId || (String.IsNullOrEmpty(m.Template?.ModelId) && String.IsNullOrEmpty(ModelId)))
                 .Any();
 

@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using HCIKonstanz.Colibri.Core;
 using UnityEngine;
 
 namespace HCIKonstanz.Colibri.Synchronization
@@ -19,7 +20,7 @@ namespace HCIKonstanz.Colibri.Synchronization
 
         private void Start()
         {
-            var existingBehaviours = FindObjectsByType<T>(FindObjectsSortMode.None)
+            var existingBehaviours = UnityCompat.FindAll<T>()
                 .Where(o => o.ModelId == Template?.ModelId || (Template == null && String.IsNullOrEmpty(o.ModelId)));
             _existingObjects.AddRange(existingBehaviours);
 
@@ -37,7 +38,7 @@ namespace HCIKonstanz.Colibri.Synchronization
                 Debug.LogWarning($"No template provided for Colibri manager '{GetType().FullName}' { (String.IsNullOrEmpty(Template?.ModelId) ? "" : $"(ModelID: {Template?.ModelId})") }, unable to instantiate new objects!");
 
             // Avoid potential ModelId overlaps
-            var hasConflict = FindObjectsByType(GetType(), FindObjectsSortMode.None)
+            var hasConflict = UnityCompat.FindAll(GetType())
                 .Where(o => o != this)
                 .Any(o => (o as SyncBehaviourManager<T>)?.Template?.ModelId == Template?.ModelId);
             if (hasConflict)

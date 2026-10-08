@@ -413,7 +413,7 @@ otherwise spend on their prototype, so:
 - **`Window → Colibri Status`**: connection state, server, app name, protocol version, time since
   the last server heartbeat (not a latency: the heartbeat carries the *server's* clock), the
   channels with listeners and the type each expects, and the last 20 messages in and out. It uses
-  `FindFirstObjectByType`, never `WebServerConnection.Instance`, which *creates* a GameObject.
+  `FindAnyObjectByType`, never `WebServerConnection.Instance`, which *creates* a GameObject.
 - **Status reports the delivery rate, not just the connection.** With the socket off the main
   thread, what is left between a message arriving and user code seeing it is one frame of *this*
   client's. So the window states it: the rate `Update` is running at, the delay that implies per
@@ -493,9 +493,11 @@ otherwise spend on their prototype, so:
   registers only `broadcast::*`, `model::request`, `model::update`, `model::delete`,
   `client::request` and `latency`, so none of those commands are handled: the API was provably dead
   against the server it targets. `SyncBehaviour`/`SyncBehaviourManager` cover the same use case.
-- **Deprecated Unity APIs**: `FindObjectOfType` → `FindFirstObjectByType`, `FindObjectsOfType` →
-  `FindObjectsByType(..., FindObjectsSortMode.None)`. `SyncBehaviour.Awake` also scanned the whole
-  scene twice per `Awake` and threw one of the results away.
+- **Deprecated Unity APIs**: `FindObjectOfType` → `FindAnyObjectByType`, `FindObjectsOfType` →
+  `FindObjectsByType`, without a sort order from Unity 6000.4 on (which deprecates the overloads
+  taking one) and with `FindObjectsSortMode.None` before that, so neither end of the supported
+  range warns. `SyncBehaviour.Awake` also scanned the whole scene twice per `Awake` and threw one
+  of the results away.
 - Vendored `Newtonsoft.Json.dll` replaced by `com.unity.nuget.newtonsoft-json`, declared as a real
   `dependencies` entry in `package.json` (which previously declared none at all).
 

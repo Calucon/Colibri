@@ -107,7 +107,7 @@ namespace HCIKonstanz.Colibri.Setup
             }
 
             // Never WebServerConnection.Instance - see the class comment.
-            var connection = FindFirstObjectByType<WebServerConnection>();
+            var connection = FindAnyObjectByType<WebServerConnection>();
             if (connection == null)
             {
                 EditorGUILayout.HelpBox("No Colibri connection in the scene yet. It is created automatically the first time something calls Sync.Send, Sync.Receive, or a SyncBehaviour wakes up.", MessageType.Info);

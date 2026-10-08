@@ -132,7 +132,12 @@ namespace HCIKonstanz.Colibri.Synchronization
         public bool PhysicsAuthority = false;
         public bool isKinematic;
 
+        // Component.rigidbody, long obsolete, is only gone from 6000.5 on: before that this hides it.
+#if UNITY_6000_5_OR_NEWER
+        private Rigidbody rigidbody;
+#else
         private new Rigidbody rigidbody;
+#endif
 
         void Start()
         {
