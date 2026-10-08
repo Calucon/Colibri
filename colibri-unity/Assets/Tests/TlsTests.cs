@@ -90,6 +90,8 @@ namespace HCIKonstanz.Colibri.E2E
             Assert.That(Logged(LogType.Warning, UntrustedAccepted).Length, Is.EqualTo(1));
             Assert.That(Normalized(Logged(LogType.Warning, UntrustedAccepted)[0]), Does.Contain(E2EServer.TlsCertificateSha256),
                 "The warning should give the fingerprint that would pin this certificate");
+            Assert.That(Logged(LogType.Warning, UntrustedAccepted)[0], Does.Match(ProblemsUnder(E2EServer.Host)),
+                "The warning should say what is wrong with the certificate under the configured server address, and nothing else");
 
             // A reconnect is the same session.
             Connection.CurrentSocket.Close();
@@ -386,6 +388,31 @@ namespace HCIKonstanz.Colibri.E2E
         {
             lock (_log)
                 return _log.Where(entry => entry.Type == type && pattern.IsMatch(entry.Message)).Select(entry => entry.Seconds).ToArray();
+        }
+
+        /// <summary>
+        /// What is wrong with the TLS test server's certificate under <paramref name="host"/>, as it
+        /// appears in "accepted the certificate of ... although ..., because": it is self-signed,
+        /// and under an address it is not issued for, it is not issued for that address. It is
+        /// issued for localhost, 127.0.0.1 and ::1. Not every TLS backend matches an address
+        /// against the IP addresses in a certificate, so under those two either is right; under a
+        /// name, only the check against the configured one is (the EditMode TlsConnectTests pin
+        /// that down for every backend).
+        /// </summary>
+        private static string ProblemsUnder(string host)
+        {
+            const string selfSigned = "it is self-signed";
+            var notIssuedFor = Regex.Escape($" and it is not issued for '{host}'");
+
+            string problems;
+            if (host == "localhost")
+                problems = selfSigned;
+            else if (host == "127.0.0.1" || host == "::1")
+                problems = $"{selfSigned}({notIssuedFor})?";
+            else
+                problems = selfSigned + notIssuedFor;
+
+            return $" although {problems}, because ";
         }
 
         /// <summary>A fingerprint, or a line that contains one, without colons and in lower case.</summary>

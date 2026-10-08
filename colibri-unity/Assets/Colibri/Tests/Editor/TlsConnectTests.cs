@@ -136,8 +136,102 @@ namespace HCIKonstanz.Colibri.Tests
 
 
         /*
+         *  The name the certificate is checked against
+         *
+         *  Against a TLS server in the test process, with "localhost" as the server address: a
+         *  name, which every TLS backend matches against a certificate's names. Not every one
+         *  matches an IP address against a certificate's IP addresses.
+         */
+
+        /// <summary>
+        /// The certificate is checked against the configured server address. One issued for it has
+        /// nothing wrong with it but being self-signed; checked against any other name, it would
+        /// not be issued for that name either.
+        /// </summary>
+        [Test]
+        public void TheCertificateIsCheckedAgainstTheConfiguredServerAddress()
+        {
+            var server = Serve(TlsTestServer.Localhost());
+            var check = new ServerCertificateCheck("localhost", true, "");
+
+            Open("localhost", server, check);
+
+            Assert.That(check.Verdict, Is.EqualTo(ServerCertificatePolicy.Verdict.AcceptedUntrusted));
+            Assert.That(check.Problems, Is.EqualTo("it is self-signed"),
+                "The certificate is issued for localhost, so being self-signed is all that is wrong with it");
+        }
+
+        /// <summary>
+        /// The server is asked for the configured address too (SNI): a server, or a proxy in front
+        /// of several, picks the certificate to answer with by it.
+        /// </summary>
+        [Test]
+        public void TheServerIsAskedForTheConfiguredServerAddress()
+        {
+            var server = Serve(TlsTestServer.Localhost());
+
+            Open("localhost", server, new ServerCertificateCheck("localhost", true, ""));
+
+            Assert.That(server.RequestedServerName, Is.EqualTo("localhost"));
+        }
+
+        /// <summary>
+        /// A certificate issued for another name is rejected by default, and the rejection says
+        /// which address it is not issued for.
+        /// </summary>
+        [Test]
+        public void ACertificateIssuedForAnotherNameIsRejectedSayingWhichAddressItIsNotIssuedFor()
+        {
+            var server = Serve(TlsTestServer.OtherName());
+            var check = new ServerCertificateCheck("localhost", false, "");
+
+            var e = Assert.Throws<TlsHandshakeException>(() => Open("localhost", server, check));
+
+            Assert.That(e.Kind, Is.EqualTo(TlsHandshakeException.Failure.CertificateRejected));
+            Assert.That(e.Message, Does.StartWith(
+                $"rejected the certificate of localhost:{server.Port}: it is self-signed and it is not issued for 'localhost'. "));
+        }
+
+        /// <summary>"Allow self-signed certificate" accepts it, and says what is wrong with it: both things.</summary>
+        [Test]
+        public void ACertificateIssuedForAnotherNameIsAcceptedWhenSelfSignedCertificatesAreAllowed()
+        {
+            var server = Serve(TlsTestServer.OtherName());
+            var check = new ServerCertificateCheck("localhost", true, "");
+
+            Open("localhost", server, check);
+
+            Assert.That(check.Verdict, Is.EqualTo(ServerCertificatePolicy.Verdict.AcceptedUntrusted));
+            Assert.That(check.Problems, Is.EqualTo("it is self-signed and it is not issued for 'localhost'"));
+        }
+
+        /// <summary>A pinned certificate is accepted whatever name it is issued for: the pin is the whole check.</summary>
+        [Test]
+        public void APinnedCertificateIsAcceptedWhateverNameItIsIssuedFor()
+        {
+            var server = Serve(TlsTestServer.OtherName());
+            var check = new ServerCertificateCheck("localhost", false, TlsTestServer.OtherNameSha256);
+
+            Open("localhost", server, check);
+
+            Assert.That(check.Verdict, Is.EqualTo(ServerCertificatePolicy.Verdict.Pinned));
+        }
+
+
+        /*
          *  Helpers
          */
+
+        private TlsTestServer Serve(System.Security.Cryptography.X509Certificates.X509Certificate2 certificate)
+        {
+            _disposables.Add(certificate);
+            var server = new TlsTestServer(certificate);
+            _disposables.Add(server);
+            return server;
+        }
+
+        private void Open(string host, TlsTestServer server, ServerCertificateCheck check)
+            => _disposables.Add(Wait(WebServerConnection.OpenStreamAsync(NewSocket(), host, server.Port, check, 5000, CancellationToken.None)));
 
         private TcpListener Listen()
         {
