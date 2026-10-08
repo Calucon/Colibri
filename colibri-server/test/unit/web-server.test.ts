@@ -345,6 +345,89 @@ describe('WebServer over HTTP', () => {
             expectNoInternals(text);
         });
     });
+
+    // The admin UI's SPA fallback answered every path nothing else did, /api/... included, with
+    // 200 and index.html: a REST store write sent with the wrong method or path stored nothing,
+    // and the script that sent it saw success.
+    describe('a request no API route answers', () => {
+        const expectNoRoute = async (response: Response, method: string, url: string) => {
+            expect(response.status).toBe(404);
+            expect(response.headers.get('content-type')).toMatch(/^application\/json/);
+            expect(await response.json()).toEqual({ error: `No API route for ${method} ${url}` });
+        };
+
+        it('answers a store write with the wrong method 404, and stores nothing', async () => {
+            const post = await fetch(storeUrl('app1', 'v1'), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: '42',
+            });
+
+            await expectNoRoute(post, 'POST', '/api/store/app1/v1');
+            expect((await fetch(storeUrl('app1', 'v1'))).status).toBe(404);
+            expect((await fetch(`${baseUrl}/api/store/app1`)).status).toBe(404);
+        });
+
+        it('answers a store write without a value name 404', async () => {
+            const put = await fetch(`${baseUrl}/api/store/app1`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: '42',
+            });
+
+            await expectNoRoute(put, 'PUT', '/api/store/app1');
+        });
+
+        it.each([ '/api', '/api/', '/api/nope', '/api/stores/app1/v1?x=1' ])('answers GET %s 404', async (url) => {
+            await expectNoRoute(await fetch(`${baseUrl}${url}`), 'GET', url);
+        });
+
+        it('carries the CORS headers, and logs a warning', async () => {
+            const response = await fetch(`${baseUrl}/api/nope`, { headers: { 'Origin': 'http://dev-laptop.local:5173' } });
+
+            expect(response.status).toBe(404);
+            expect(response.headers.get('access-control-allow-origin')).toBe('*');
+            const warnings = logs.filter(l => l.origin === 'WebServer' && l.level === LogLevel.Warn);
+            expect(warnings).toHaveLength(1);
+            expect(warnings[0]!.message).toContain('GET /api/nope answered 404');
+        });
+
+        it('still serves the admin UI for every other path', async () => {
+            for (const url of [ '/', '/log', '/statistics', '/apiary', '/log/api/x' ]) {
+                const response = await fetch(`${baseUrl}${url}`);
+                expect(response.status, url).toBe(200);
+                expect(await response.text(), url).toContain('<title>Colibri</title>');
+            }
+        });
+    });
+});
+
+// The API is at /api whatever BASE_URL is; only the admin UI moves.
+describe('WebServer with a BASE_URL', () => {
+    it('answers an unknown /api path 404 in JSON, and serves the admin UI under BASE_URL', async () => {
+        const webRoot = await mkdtemp(path.join(tmpdir(), 'colibri-web-server-base-url-'));
+        await writeFile(path.join(webRoot, 'index.html'), '<!doctype html><title>Colibri</title>', 'utf8');
+        const webServer = new WebServer('127.0.0.1', 0, webRoot, '/colibri');
+        const httpServer = webServer.start();
+        try {
+            await once(httpServer, 'listening');
+            const url = `http://127.0.0.1:${(httpServer.address() as AddressInfo).port}`;
+
+            const api = await fetch(`${url}/api/nope`);
+            expect(api.status).toBe(404);
+            expect(await api.json()).toEqual({ error: 'No API route for GET /api/nope' });
+
+            const page = await fetch(`${url}/colibri/log`);
+            expect(page.status).toBe(200);
+            expect(await page.text()).toContain('<title>Colibri</title>');
+        } finally {
+            const closed = once(httpServer, 'close');
+            webServer.stop();
+            httpServer.closeAllConnections();
+            await closed;
+            await rm(webRoot, { recursive: true, force: true });
+        }
+    });
 });
 
 describe('WebServer startup', () => {

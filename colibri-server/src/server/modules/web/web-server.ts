@@ -71,6 +71,15 @@ export class WebServer extends Service {
     }
 
     public start(): http.Server {
+        // Whatever reached /api without an API route answering it: a mistyped path, or a method
+        // the route does not have (POST /api/store/app/name). The SPA fallback below used to
+        // answer these too, with 200 and the admin UI's index.html, so a REST store write that
+        // stored nothing looked like it had worked. Any method, and whatever BASE_URL is, since
+        // addApi mounts the API at /api regardless of it.
+        this.app.use('/api', (req, _res, next) => {
+            next(Object.assign(new Error(`No API route for ${req.method} ${req.originalUrl}`), { status: 404, expose: true }));
+        });
+
         // SPA fallback, added last: the Angular router owns every path that isn't a static
         // asset or an API route (e.g. /log, /statistics), so this fires on every normal page
         // load/refresh, not just on genuine 404s - it must not log, or the log viewer fills up
