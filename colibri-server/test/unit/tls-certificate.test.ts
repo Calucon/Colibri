@@ -89,6 +89,19 @@ describe('TlsCertificate', () => {
             expect(line).toContain('Server certificate SHA-256');
         });
 
+        it('names the authority that signed a certificate, and gives no advice for a self-signed one', async () => {
+            const authority = createTestCertificate(dir, 'authority', { commonName: 'Colibri Test CA' });
+            const signed = createTestCertificate(dir, 'signed', { signedBy: authority });
+            await install(Buffer.concat([ signed.cert, authority.cert ]), signed);
+
+            open().start();
+
+            const [line] = logged(LogLevel.Info);
+            expect(line).toContain('issued by CN=Colibri Test CA');
+            expect(line).toContain(`SHA-256 fingerprint ${signed.fingerprint256}`);
+            expect(line).not.toContain('self-signed');
+        });
+
         it('warns about a certificate that has expired', () => {
             open({ now: () => first.validTo + HOUR }).start();
 

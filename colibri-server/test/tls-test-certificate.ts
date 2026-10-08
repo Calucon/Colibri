@@ -1,6 +1,7 @@
-// Self-signed certificates for the TLS tests, made with the openssl command line tool so that the
-// fingerprint the server computes is checked against one it did not compute itself. Each one is
-// valid for localhost and 127.0.0.1, for two days: long enough for any run, and never committed.
+// Certificates for the TLS tests, self-signed unless signed by another of them, made with the
+// openssl command line tool so that the fingerprint the server computes is checked against one it
+// did not compute itself. Each one is valid for localhost and 127.0.0.1, for two days: long enough
+// for any run, and never committed.
 import { execFileSync } from 'child_process';
 import { X509Certificate } from 'crypto';
 import { readFileSync } from 'fs';
@@ -34,6 +35,9 @@ export interface TestCertificateOptions {
     commonName?: string;
     // An EC P-256 key unless said otherwise.
     keyType?: 'ec' | 'rsa';
+    // Signed by this certificate (made by createTestCertificate too), as a certificate authority,
+    // rather than by itself.
+    signedBy?: TestCertificate;
 }
 
 const KEY_OPTIONS = {
@@ -43,14 +47,23 @@ const KEY_OPTIONS = {
 
 // Writes <name>.pem and <name>.key into `dir`.
 export const createTestCertificate = function (dir: string, name = 'server', options: TestCertificateOptions = {}): TestCertificate {
-    const { commonName = 'localhost', keyType = 'ec' } = options;
+    const { commonName = 'localhost', keyType = 'ec', signedBy } = options;
     const certPath = path.join(dir, `${name}.pem`);
     const keyPath = path.join(dir, `${name}.key`);
-    openssl([
-        'req', '-x509', ...KEY_OPTIONS[keyType], '-nodes',
-        '-keyout', keyPath, '-out', certPath, '-days', '2',
+    const request = [
+        ...KEY_OPTIONS[keyType], '-nodes', '-keyout', keyPath,
         '-subj', `/CN=${commonName}`, '-addext', 'subjectAltName=DNS:localhost,IP:127.0.0.1',
-    ]);
+    ];
+    if (signedBy) {
+        const requestPath = path.join(dir, `${name}.csr`);
+        openssl([ 'req', '-new', ...request, '-out', requestPath ]);
+        openssl([
+            'x509', '-req', '-in', requestPath, '-out', certPath, '-days', '2', '-copy_extensions', 'copyall',
+            '-CA', signedBy.certPath, '-CAkey', signedBy.keyPath, '-set_serial', String(Date.now()),
+        ]);
+    } else {
+        openssl([ 'req', '-x509', ...request, '-out', certPath, '-days', '2' ]);
+    }
     // "sha256 Fingerprint=AB:CD:..." (the prefix's case differs between OpenSSL versions)
     const fingerprint256 = openssl([ 'x509', '-in', certPath, '-noout', '-fingerprint', '-sha256' ]).trim().split('=')[1]!;
     const cert = readFileSync(certPath);
