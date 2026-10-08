@@ -99,13 +99,13 @@ type Refusal = 'rate' | 'backlog';
 // has taken it, and the kernel's buffers, and those of a proxy in between such as Docker's port
 // forwarding, take megabytes at once: on loopback, all of that broadcast within 0.2 s. Such a client
 // was disconnected 10 s in while reading all along, and once it had reconnected it never got the
-// message. So until a client echoes a heartbeat sent after its largest such message, it may stay
-// quiet one more idle timeout for every HEARTBEAT_EVERY_BYTES of that message, the rate the
-// heartbeats between messages already assume (6.4 KiB/s at the default), up to
-// MAX_IDLE_ALLOWANCE_TIMEOUTS more (idleAllowanceMillis). The extra time ends once it echoes a
-// heartbeat sent after the message; a client that never echoes heartbeats keeps it from its first
-// such message on. The price is that a client that is gone by the time such a message is sent to
-// it, or goes while it is being read, is noticed that much later.
+// message. So until a client echoes a heartbeat sent after the latest such message written to it,
+// it may stay quiet one more idle timeout for every HEARTBEAT_EVERY_BYTES of the largest one sent
+// to it since it last did, the rate the heartbeats between messages already assume (6.4 KiB/s at
+// the default), up to MAX_IDLE_ALLOWANCE_TIMEOUTS more (idleAllowanceMillis). The extra time ends
+// once it echoes a heartbeat sent after the latest one; a client that never echoes heartbeats
+// keeps it from its first such message on. The price is that a client that is gone by the time
+// such a message is sent to it, or goes while it is being read, is noticed that much later.
 export const DEFAULT_IDLE_TIMEOUT_MILLIS = 10_000;
 
 // The most idle timeouts a client reading a large message may stay quiet on top of its own; see
@@ -292,10 +292,10 @@ interface TcpClient {
     droppedRepliesSinceWarning: number;
     // performance.now() of the last bytes received, or of the connection if none have been yet.
     lastInboundAt: number;
-    // The size of the largest message over HEARTBEAT_EVERY_BYTES written to this client that it has
-    // not shown it has read, 0 if there is none; and when the latest such message was written, on
-    // the clock heartbeats carry. It has read them all once it echoes a heartbeat from after that.
-    // See DEFAULT_IDLE_TIMEOUT_MILLIS.
+    // The size of the largest message over HEARTBEAT_EVERY_BYTES written to this client since it
+    // last showed it had read all such messages, 0 if there is none; and when the latest such
+    // message was written, on the clock heartbeats carry. It has read them all once it echoes a
+    // heartbeat from after that. See DEFAULT_IDLE_TIMEOUT_MILLIS.
     unreadLargeBytes: number;
     lastLargeWrittenAt: bigint;
     // Whether any bytes have been received from it yet; see handleSocketData.
@@ -642,9 +642,9 @@ export class TCPServerWorker extends WorkerService {
     }
 
     // How much longer than idleTimeoutMillis the client may stay quiet: one more idle timeout for
-    // every HEARTBEAT_EVERY_BYTES of the largest message it has not shown it has read yet, the time
-    // that message takes at the rate the heartbeats already assume, but no more than
-    // MAX_IDLE_ALLOWANCE_TIMEOUTS. See DEFAULT_IDLE_TIMEOUT_MILLIS.
+    // every HEARTBEAT_EVERY_BYTES of the message unreadLargeBytes measures, the time it takes at the
+    // rate the heartbeats already assume, but no more than MAX_IDLE_ALLOWANCE_TIMEOUTS. See
+    // DEFAULT_IDLE_TIMEOUT_MILLIS.
     private idleAllowanceMillis(client: TcpClient): number {
         return this.idleTimeoutMillis * Math.min(client.unreadLargeBytes / HEARTBEAT_EVERY_BYTES, MAX_IDLE_ALLOWANCE_TIMEOUTS);
     }

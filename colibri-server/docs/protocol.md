@@ -265,14 +265,15 @@ by this setting: Socket.IO's own ping notices one that has gone, by default with
 A message larger than 64 KiB has no heartbeat inside it, so a client reading one can echo nothing
 until it is through. Nor can the server watch it being read: the kernel's send buffer, and those of
 a proxy in between such as Docker's port forwarding, take megabytes at once. So until a client
-echoes a heartbeat sent after the largest such message written to it, it may stay silent one more
-`TCP_IDLE_TIMEOUT_SECONDS` for every 64 KiB of that message, the rate the heartbeat after every
-64 KiB allows for (about 6.4 KiB/s at the default), but at most 6 more: 70 s in all at the
-default, enough for a 4 MiB message read at about 60 KB/s or faster. A client that reads it more
-slowly is disconnected, and the warning names the size of the message it was given extra time for.
-A client that is gone by the time such a message is sent to it, or goes while it is being read, is
-noticed that much later. The extra time ends only once the client echoes a heartbeat sent after
-the message, so a client that does not echo heartbeats keeps it from its first such message on.
+echoes a heartbeat sent after the latest such message written to it, it may stay silent one more
+`TCP_IDLE_TIMEOUT_SECONDS` for every 64 KiB of the largest one written to it since it last did,
+the rate the heartbeat after every 64 KiB allows for (about 6.4 KiB/s at the default), but at most
+6 more: 70 s in all at the default, enough for a 4 MiB message read at about 60 KB/s or faster. A
+client that reads it more slowly is disconnected, and the warning names the size of the message it
+was given extra time for. A client that is gone by the time such a message is sent to it, or goes
+while it is being read, is noticed that much later. The extra time ends only once the client
+echoes a heartbeat sent after the latest such message, so a client that does not echo heartbeats
+keeps it from its first such message on.
 
 Socket.IO clients are not sent that frame - they get a `colibri`/`latency` event directly, also
 every 100ms, from the same `MeasureLatency` timer.
