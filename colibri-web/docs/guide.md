@@ -278,6 +278,10 @@ other clients in full. An id that is already in the list, such as a copy the ser
 instance you register; the replaced one stops syncing, and Colibri warns in the console if this client had registered it
 itself.
 
+`SampleClasses$` emits a freshly registered instance once with its constructor values, in the same tick as
+`registerModel` and before the server's answer arrives, so a UI bound to it briefly shows the defaults; nothing of it is
+sent until that answer.
+
 `RegisterModelSync` and registering instances may happen before `new Colibri()`; the server is asked once it is
 created. After a reconnect, Colibri asks the server again for each instance this client registered, then for all the
 others, so what changed in the meantime is applied. An instance the server no longer has is sent again in full: the
