@@ -238,13 +238,14 @@ about naming the cause rather than deciding whether to continue.
 ### Heartbeat / latency
 
 The server sends a `heartbeat` frame every 100ms to each TCP client whose handshake it accepted,
-until the connection closes, carrying `process.hrtime.bigint()` as the ping timestamp. A client is
-expected to echo the frame back verbatim. The server relays an echoed heartbeat into the normal
-message pipeline as a synthetic `colibri`/`latency` message so `MeasureLatency`'s round-trip
-accounting handles it the same way it handles a web client's latency ping - this is the only place
-a `heartbeat` frame travels client→server. Merging the heartbeat and the latency ping into one
-frame halves the idle per-client packet rate compared to running them as two independent 100ms
-timers.
+until the connection closes, carrying `process.hrtime.bigint()` as the ping timestamp; a client
+whose previous heartbeat is still waiting to go out is skipped (see [Backpressure](#backpressure)).
+A client is expected to echo the frame back verbatim. The server relays an echoed heartbeat into
+the normal message pipeline as a synthetic `colibri`/`latency` message so `MeasureLatency`'s
+round-trip accounting handles it the same way it handles a web client's latency ping - this is the
+only place a `heartbeat` frame travels client→server. Merging the heartbeat and the latency ping
+into one frame halves the idle per-client packet rate compared to running them as two independent
+100ms timers.
 
 Because the server is never silent for long, a client can treat silence as a dead connection:
 colibri-unity drops a session after 2s without any frame - including while it waits for the
@@ -377,7 +378,8 @@ Two kinds of frame are exempt:
   have been written to the client since the last one. A client that sends nothing of its own stays
   connected by echoing heartbeats, and it can only echo the ones it has read, so this keeps a live
   client that is still reading a long answer from being disconnected as idle (see
-  [Heartbeat / latency](#heartbeat--latency)).
+  [Heartbeat / latency](#heartbeat--latency)). The 100 ms heartbeat is not queued behind one that
+  still waits, though, so a client that keeps sending but never reads is not sent ten a second.
 
 This is the outgoing side. For what the server does when clients send more than it can process,
 see [Inbound limits](#inbound-limits).
