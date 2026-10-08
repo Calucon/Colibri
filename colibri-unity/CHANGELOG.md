@@ -448,6 +448,11 @@ otherwise spend on their prototype, so:
   accessor, or two members whose lowercased names collide are reported when the model type is first
   initialized instead of failing on the first message.
 - Samples and README lead with the cast-free form.
+- **The samples are no longer magenta under URP.** Their objects used Unity's built-in
+  `Default-Material`, whose shader belongs to the built-in render pipeline. They share
+  `Materials/ColibriSample.mat` now, whose shader `Colibri/Sample Lit` draws in the built-in pipeline
+  and URP alike (with the stereo-instancing macros a headset needs), without making the package
+  depend on URP.
 
 ## Performance
 
