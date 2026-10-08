@@ -558,6 +558,101 @@ namespace HCIKonstanz.Colibri.E2E
         }
 
         /// <summary>
+        /// An object shown for longer than the window and hidden in the frame the link dies: the
+        /// switch-off is all it sent in the window, and the answer holds the value it had been
+        /// showing all along. That is the value it held when the window began, so the switch-off
+        /// was lost: the object stays hidden here, and is hidden on the other client too.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator AnObjectHiddenAtTheDropAfterAQuietSpellStaysHiddenAndIsHiddenElsewhere()
+        {
+            const string channel = "synctransform";
+            var spawned = new List<GameObject>();
+            var checker = new TcpPeer();
+            var answers = new List<JObject>();
+            var window = SentValues.WindowSeconds;
+            SyncTransform sync = null;
+            System.Action<JObject> recordAnswers = update =>
+            {
+                if (sync != null && (string)update["id"] == sync.Id)
+                    answers.Add(update);
+            };
+
+            // Shortened from its ten seconds, but longer than the 2 s the client takes to notice a
+            // silent drop, so the switch-off falls into it.
+            SentValues.WindowSeconds = 4;
+            Sync.AddModelUpdateListener(channel, recordAnswers);
+            try
+            {
+                sync = Spawn<SyncTransform>(spawned, "hidden-at-the-drop");
+                yield return E2EServer.Settle(1.5f);
+
+                // Hidden and shown again, so the server and the other client have it shown.
+                sync.gameObject.SetActive(false);
+                yield return _peer.Expect(channel, "model::update",
+                    frame => Assert.That((bool?)TcpPeer.Json(frame)["active"], Is.False));
+                sync.gameObject.SetActive(true);
+                yield return _peer.Expect(channel, "model::update",
+                    frame => Assert.That((bool?)TcpPeer.Json(frame)["active"], Is.True));
+
+                // Left shown for longer than the window reaches back before the drop: it is counted
+                // from when the drop is noticed, 2 s after it.
+                yield return E2EServer.Settle(3.5f);
+
+                _proxy.Unplug();
+                sync.gameObject.SetActive(false);
+
+                yield return E2EServer.WaitUntil(() => Swallowed(channel, sync.Id).Any(),
+                    "The switch-off was never written into the dead connection");
+                Assert.That((bool?)Swallowed(channel, sync.Id)[0]["active"], Is.False);
+
+                yield return E2EServer.WaitUntil(() => Connection.Status != ConnectionStatus.Connected,
+                    "The client never noticed that its connection had died", 10f);
+                answers.Clear();
+
+                yield return E2EServer.WaitUntil(() => answers.Count >= 2,
+                    "The requests made again after the reconnect were never answered", 20f);
+                Assert.That(answers.Select(a => (bool?)a["active"]), Is.All.True,
+                    "Precondition: the server should still have the object shown");
+
+                yield return E2EServer.Settle(1f);
+
+                Assert.That(sync.gameObject.activeSelf, Is.False,
+                    "The answer to the request made again after the reconnect showed the object again");
+                var sentAgain = SecondSession()
+                    .Where(f => f.Channel == channel && f.Command == "model::update" && (string)TcpPeer.Json(f)["id"] == sync.Id)
+                    .Select(f => (JObject)TcpPeer.Json(f))
+                    .ToArray();
+                Assert.That(sentAgain.Select(u => u.ToString(Newtonsoft.Json.Formatting.None)),
+                    Is.EqualTo(new[] { new JObject { { "id", sync.Id }, { "active", false } }.ToString(Newtonsoft.Json.Formatting.None) }),
+                    "The switch-off lost at the drop should go out again, once");
+
+                yield return _peer.Expect(channel, "model::update",
+                    frame => Assert.That((bool?)TcpPeer.Json(frame)["active"], Is.False, "The other client still shows the object"));
+                yield return checker.Connect("hidden-at-the-drop-checker");
+                yield return E2EServer.Settle(0.3f);
+                checker.Send(channel, "model::request", new JObject { { "id", sync.Id } });
+                yield return checker.Expect(channel, "model::update", frame =>
+                {
+                    var payload = (JObject)TcpPeer.Json(frame);
+                    Assert.That((bool?)payload["active"], Is.False, $"The server holds {payload}");
+                });
+            }
+            finally
+            {
+                SentValues.WindowSeconds = window;
+                checker.Dispose();
+                Sync.RemoveModelUpdateListener(channel, recordAnswers);
+
+                foreach (var gameObject in spawned)
+                {
+                    if (gameObject)
+                        Object.DestroyImmediate(gameObject);
+                }
+            }
+        }
+
+        /// <summary>
         /// Another client keeps updating the object while this one comes back, as one moving it
         /// would. The server relays those updates from the moment it accepts the connection, so they
         /// arrive before, between and after the answers to the requests made again, and look just
