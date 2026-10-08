@@ -569,7 +569,7 @@ values from the scene.
 
 The server remembers a delete for `MODEL_TOMBSTONE_SECONDS`, 10 minutes by default. An object
 that another client deleted longer ago than that, while this client was away, is answered with
-nothing, so this client sends it again and it comes back for everyone. See
+nothing, so this client sends it again, and it is back as if this client had just created it. See
 [After a reconnect](../colibri-server/docs/protocol.md#after-a-reconnect) in the protocol docs.
 
 A refused protocol version is final: `Status` becomes `ProtocolMismatch`, the client stops
