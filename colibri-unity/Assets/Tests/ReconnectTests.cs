@@ -653,6 +653,95 @@ namespace HCIKonstanz.Colibri.E2E
         }
 
         /// <summary>
+        /// An object moved every frame from the moment the link dies, and let go before the outage
+        /// is noticed: every position written into the dead link is lost, far more of them than a
+        /// member keeps in a row, and the server keeps the one from before the drop. The answer
+        /// after the reconnect holds that one. It is told from another client's all the same, as
+        /// one of the values sent around when the server was last heard from: the object stays
+        /// where it was let go, and moves there on the other client too.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator AnObjectMovedAcrossTheDropStaysWhereItWasLetGoAndMovesThereElsewhere()
+        {
+            const string channel = "synctransform";
+            var spawned = new List<GameObject>();
+            var checker = new TcpPeer();
+            var answers = new List<JObject>();
+            SyncTransform sync = null;
+            System.Action<JObject> recordAnswers = update =>
+            {
+                if (sync != null && (string)update["id"] == sync.Id)
+                    answers.Add(update);
+            };
+
+            Sync.AddModelUpdateListener(channel, recordAnswers);
+            try
+            {
+                sync = Spawn<SyncTransform>(spawned, "moved-across-the-drop");
+                yield return E2EServer.Settle(1.5f);
+
+                sync.transform.position = new Vector3(0, 1, 0);
+                yield return _peer.Expect(channel, "model::update",
+                    frame => Assert.That(TcpPeer.Json(frame)["position"]?.ToVector3(), Is.EqualTo(new Vector3(0, 1, 0))));
+
+                // Moved every frame for a second from the moment the link dies, at the send-rate limit.
+                _proxy.Unplug();
+                var until = Time.realtimeSinceStartup + 1f;
+                for (var x = 1; Time.realtimeSinceStartup < until; x++)
+                {
+                    sync.transform.position = new Vector3(x, 1, 0);
+                    yield return null;
+                }
+                var letGoAt = sync.transform.position;
+
+                yield return E2EServer.WaitUntil(() => Connection.Status != ConnectionStatus.Connected,
+                    "The client never noticed that its connection had died", 10f);
+                Assert.That(Swallowed(channel, sync.Id).Length, Is.GreaterThan(SentValues.Capacity + 1),
+                    "Precondition: more moves should have gone into the dead link than a member keeps in a row");
+                answers.Clear();
+
+                yield return E2EServer.WaitUntil(() => answers.Count >= 2,
+                    "The requests made again after the reconnect were never answered", 20f);
+                Assert.That(answers.Select(a => a["position"]?.ToVector3()), Is.All.EqualTo(new Vector3(0, 1, 0)),
+                    "Precondition: the server should still have the object where it was before the drop");
+
+                yield return E2EServer.Settle(1f);
+
+                Assert.That(sync.transform.position, Is.EqualTo(letGoAt),
+                    "The answer to the request made again after the reconnect put the object back where it was before the drop");
+                var sentAgain = SecondSession()
+                    .Where(f => f.Channel == channel && f.Command == "model::update" && (string)TcpPeer.Json(f)["id"] == sync.Id)
+                    .Select(f => (JObject)TcpPeer.Json(f))
+                    .ToArray();
+                Assert.That(sentAgain.Length, Is.EqualTo(1),
+                    $"The position let go at should go out again once: {string.Join(", ", sentAgain.Select(u => u.ToString(Newtonsoft.Json.Formatting.None)))}");
+                Assert.That(sentAgain[0]["position"]?.ToVector3(), Is.EqualTo(letGoAt));
+
+                yield return _peer.Expect(channel, "model::update",
+                    frame => Assert.That(TcpPeer.Json(frame)["position"]?.ToVector3(), Is.EqualTo(letGoAt), "The other client still has the object where it was before the drop"));
+                yield return checker.Connect("moved-across-the-drop-checker");
+                yield return E2EServer.Settle(0.3f);
+                checker.Send(channel, "model::request", new JObject { { "id", sync.Id } });
+                yield return checker.Expect(channel, "model::update", frame =>
+                {
+                    var payload = (JObject)TcpPeer.Json(frame);
+                    Assert.That(payload["position"]?.ToVector3(), Is.EqualTo(letGoAt), $"The server holds {payload}");
+                });
+            }
+            finally
+            {
+                checker.Dispose();
+                Sync.RemoveModelUpdateListener(channel, recordAnswers);
+
+                foreach (var gameObject in spawned)
+                {
+                    if (gameObject)
+                        Object.DestroyImmediate(gameObject);
+                }
+            }
+        }
+
+        /// <summary>
         /// Another client keeps updating the object while this one comes back, as one moving it
         /// would. The server relays those updates from the moment it accepts the connection, so they
         /// arrive before, between and after the answers to the requests made again, and look just
