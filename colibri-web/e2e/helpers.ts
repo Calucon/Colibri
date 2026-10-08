@@ -124,9 +124,11 @@ const proxies: { server: net.Server; sockets: Set<net.Socket> }[] = [];
 
 /**
  * Starts a {@link LinkProxy} to the server. A client connects through it with
- * {@link createClientThrough}; {@link disconnectAll} closes it.
+ * {@link createClientThrough}; {@link disconnectAll} closes it. With `delayMs`, whatever either end
+ * writes reaches the other that much later, in order, as over a slow network; what is still on its
+ * way when the link is frozen is lost.
  */
-export async function startLinkProxy(): Promise<LinkProxy> {
+export async function startLinkProxy(delayMs = 0): Promise<LinkProxy> {
     const sockets = new Set<net.Socket>();
     const links: { client: net.Socket; upstream: net.Socket; frozen: boolean }[] = [];
 
@@ -141,17 +143,26 @@ export async function startLinkProxy(): Promise<LinkProxy> {
             socket.on('error', () => undefined);
         }
 
+        const later = (pass: () => void) => {
+            if (delayMs <= 0) {
+                if (!link.frozen) pass();
+                return;
+            }
+            setTimeout(() => {
+                if (!link.frozen) pass();
+            }, delayMs);
+        };
         client.on('data', data => {
-            if (!link.frozen) upstream.write(data);
+            later(() => upstream.write(data));
         });
         upstream.on('data', data => {
-            if (!link.frozen) client.write(data);
+            later(() => client.write(data));
         });
         client.on('close', () => {
-            if (!link.frozen) upstream.destroy();
+            later(() => upstream.destroy());
         });
         upstream.on('close', () => {
-            if (!link.frozen) client.destroy();
+            later(() => client.destroy());
         });
     });
     proxies.push({ server, sockets });
