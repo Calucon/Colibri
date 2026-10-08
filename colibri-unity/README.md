@@ -26,7 +26,8 @@ https://github.com/hcigroupkonstanz/Colibri.git?path=colibri-unity/Assets/Colibr
 The Package Manager should list **Colibri 2.0.0** or newer; errors about UniRx or UniTask mean it
 installed a 1.x. To stay on one version, append a release tag from the [Releases
 page](https://github.com/hcigroupkonstanz/Colibri/releases), e.g. `#v2.0.0`. The only dependency,
-Newtonsoft JSON, is installed with it. A [`.unitypackage`](docs/guide.md#unitypackage) works too.
+Newtonsoft JSON, is installed with it. A [`.unitypackage`](docs/guide.md#unitypackage) works too,
+but then Newtonsoft JSON (`com.unity.nuget.newtonsoft-json`) has to be added by hand.
 
 ## Quickstart
 
@@ -77,8 +78,9 @@ removed by itself when that component is destroyed ([details](docs/guide.md#send
 
 Attach `SyncTransform` to an object: its active state, position, rotation and scale are synced
 between all clients, and a client that joins later gets the current state. For objects created at
-runtime, add a `[SyncTransformManager]` prefab to the scene and set its `Template` to the object's
-prefab, which needs a `ModelId` and an empty `Id` ([details](docs/guide.md#synctransform)).
+runtime, add the `[SyncTransformManager]` prefab from `Packages/Colibri/Prefabs/` to the scene and
+set its `Template` to the object's prefab, which needs a `ModelId` and an empty `Id`
+([details](docs/guide.md#synctransform)).
 
 ### SyncBehaviour
 
@@ -94,7 +96,9 @@ public class MyClassManager : SyncBehaviourManager<MyClass> { }
 ```
 
 Add the manager to your scene, e.g. on an empty GameObject, and set its `Template` to a prefab with
-the model script ([details](docs/guide.md#syncbehaviour)).
+the model script ([details](docs/guide.md#syncbehaviour)). Need `Awake` or `OnDestroy` in a model?
+Override them and call `base.Awake()` / `base.OnDestroy()`: a plain `void Awake()` hides the one
+where the object registers, and it never syncs (only compiler warning CS0114 says so).
 
 ## Meta Quest
 
