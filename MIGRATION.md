@@ -1,13 +1,60 @@
 # Upgrading to Colibri 2.0
 
-For anyone with a project built on Colibri 1.x. It covers all three components (the server, the
-web client and the Unity client) and concentrates on what you have to change and what changes
-underneath you.
-
-Each component has its own changelog with the full detail:
+For projects built on Colibri 1.x: what you have to change in the server, the web client and the
+Unity client, and what changes underneath you. Each checklist item links to its detail below; each
+component's changelog has the full detail:
 [`colibri-server/docs/v2-changelog.md`](colibri-server/docs/v2-changelog.md),
 [`colibri-web/CHANGELOG.md`](colibri-web/CHANGELOG.md),
 [`colibri-unity/CHANGELOG.md`](colibri-unity/CHANGELOG.md).
+
+## The short version
+
+**Upgrade the server first, then Unity, then the web clients.** No 1.x client, Unity or web, works
+with a 2.0 server, and from the moment it runs, the server's log names every client still on 1.x
+([why, and what each side shows](#read-this-first-the-server-and-unity-move-together)).
+
+**Server**
+
+- [ ] Node 24, and the server is native ESM now ([details](#breaking))
+- [ ] Rewrite anything of your own that speaks TCP to Colibri against the new protocol
+      ([details](#breaking))
+- [ ] Docker: pin the image version you run ([details](#worth-knowing))
+- [ ] Docker: remove `tty: true` if your compose file came from the 1.x README
+      ([details](#worth-knowing))
+- [ ] Docker with `--user` (or `user:` in compose): give the data directory to that user
+      ([details](#worth-knowing))
+
+**Web**
+
+- [ ] `@Synced() private x = 0` → `@Synced() accessor x = 0`, and drop `experimentalDecorators`
+      ([details](#breaking-synced-needs-standard-decorators))
+- [ ] Add `rxjs` to your own dependencies ([details](#breaking-typescript-and-rxjs-is-yours-now))
+- [ ] `receiveColor` / `receiveColorArray` callbacks get a `ColorValue`, not a `string`
+      ([details](#breaking-colour-callbacks-get-a-colorvalue))
+- [ ] Pass `name` to `RegisterModelSync` for anything you bundle ([details](#fixed))
+
+**Unity**
+
+- [ ] Unity 2022.3 LTS or newer ([details](#breaking-unity-20223-lts))
+- [ ] Delete your vendored `Newtonsoft.Json.dll` ([details](#breaking-no-more-vendored-newtonsoft))
+- [ ] Replace every `IObservable` subscription with `+=` / `-=`, and unsubscribe yourself
+      ([details](#breaking-unirx-is-gone-and-was-not-replaced))
+- [ ] Replace `Connected.Subscribe(...)` with the `OnConnected` / `OnDisconnected` events
+      ([details](#breaking-webserverconnectionconnected-is-a-task))
+- [ ] `ObservableModel<T>` / `ObservableManager<T>` are gone; use `SyncBehaviour<T>` /
+      `SyncBehaviourManager<T>`
+      ([details](#breaking-observablemodelt-and-observablemanagert-are-deleted))
+- [ ] Import any sample you were relying on from the Package Manager; sample types are no longer
+      compiled into your project
+      ([details](#breaking-the-samples-are-no-longer-compiled-into-your-project))
+- [ ] `LockFreeQueue<T>` is gone; use `ConcurrentQueue<T>`
+      ([details](#breaking-lockfreequeue-is-gone))
+
+**Everywhere**
+
+- [ ] Read [Behaviour changes that will not fail to
+      compile](#behaviour-changes-that-will-not-fail-to-compile): that is where the surprises are
+- [ ] Go through [After upgrading, check these](#after-upgrading-check-these)
 
 ---
 
@@ -58,23 +105,6 @@ accepted and then ended before a frame could be read, and keeps retrying. Detail
 So the safe order is: **upgrade the server first** (from then on its log names every client that is
 still on 1.x), then Unity, then the web clients. A 2.0.0 server refuses 1.x web clients, so they
 have to be upgraded too; they cannot be left running.
-
----
-
-## The short version
-
-- [ ] Server: Node 24, and it is ESM now
-- [ ] Unity: 2022.3 LTS or newer, and delete your vendored `Newtonsoft.Json.dll`
-- [ ] Unity: replace every `IObservable` subscription with `+=` / `-=`, and unsubscribe yourself
-- [ ] Unity: `ObservableModel<T>` / `ObservableManager<T>` are gone; use `SyncBehaviour<T>` /
-      `SyncBehaviourManager<T>`
-- [ ] Unity: import any sample you were relying on from the Package Manager; sample types are no
-      longer compiled into your project
-- [ ] Web: `@Synced() private x = 0` → `@Synced() accessor x = 0`, and drop `experimentalDecorators`
-- [ ] Web: add `rxjs` to your own dependencies
-- [ ] Web: `receiveColor` / `receiveColorArray` callbacks get a `ColorValue`, not a `string`
-- [ ] Everywhere: read [Behaviour changes that will not fail to
-      compile](#behaviour-changes-that-will-not-fail-to-compile): that is where the surprises are
 
 ---
 
