@@ -470,6 +470,12 @@ they have rather than creating duplicates.
 - An object another client deleted during the outage is deleted on the reconnecting client too, if
   the delete is no more than `MODEL_TOMBSTONE_SECONDS` (ten minutes) old (colibri-web: again only
   for the models it registered; one it got from another client stays).
+- A change made as the connection dies without closing (a Wi-Fi drop) goes into the dead link and
+  is lost. The answer after the reconnect no longer undoes it: the client keeps its value and sends
+  it again, unless another client changed that member or field during the outage, whose value then
+  wins (colibri-web: for the models it registered). After its re-requests, a Unity client sends one
+  more `model::request`, on the channel `colibri::reconnect`, to tell when the answers are over.
+  See [After a reconnect](colibri-server/docs/protocol.md#after-a-reconnect).
 - While a Unity client is disconnected, what it sends waits in one queue and goes out in order when
   the connection is back. Past 256 broadcasts and log lines the oldest are dropped, with one
   warning per outage, while the model updates for one object are merged into one instead. Behind
