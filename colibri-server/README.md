@@ -68,14 +68,15 @@ The ports and the admin UI are the same as with Docker; the data goes to `colibr
 Settings are environment variables, or lines in a `.env` file in the directory the server is
 started from: `colibri-server` for `npm start`, `/srv/colibri` in the Docker image.
 [`.env.example`](.env.example) lists every one with its default, and the
-[guide](docs/guide.md#configuration) explains each.
+[guide](docs/guide.md#configuration) explains each. `TLS_CERT` and `TLS_KEY` turn on
+[TLS](docs/guide.md#tls) for both client ports.
 
 ## Common problems
 
 | What you see | What to do |
 | --- | --- |
 | At startup, on stderr: the server cannot write to its data directory | It keeps running but saves nothing. The message names the path, the uid and the fix; see [When the server cannot save](docs/guide.md#when-the-server-cannot-save) |
-| A client never appears in the admin UI, and the server log has a `Refusing ...` warning or error | Its protocol version does not match: 1.x clients cannot use a 2.x server. Update colibri-unity or colibri-web to 2.x |
+| A client never appears in the admin UI, and the server log has a `Refusing ...` warning or error | Its protocol version does not match: 1.x clients cannot use a 2.x server. Update colibri-unity or colibri-web to 2.x. If the warning names TLS, the Unity app's *Server supports SSL/TLS?* does not match the server: see [TLS](docs/guide.md#tls-in-the-log) |
 | A Unity client is disconnected while you are stopped at a breakpoint | A debugger usually pauses the thread that answers heartbeats too. On your own server, raise `TCP_IDLE_TIMEOUT_SECONDS` (10 s) or set it to `0` |
 | `App 'MyApp' now has 9 clients, more than 8 ...` | Usually separate projects that kept the same app name. Give each project its own |
 | Warnings naming `TCP_INBOUND_BACKLOG_LIMIT` or `CLIENT_MESSAGE_RATE_LIMIT`; synced objects lag and broadcasts go missing | Backlog: sync fewer objects, less often, or with fewer clients per app. Rate: the named client sends too much, usually every frame with no rate cap. See [Load limits](docs/guide.md#load-limits) |
@@ -96,6 +97,7 @@ started from: `colibri-server` for `npm start`, `/srv/colibri` in the Docker ima
 - [Docker in detail](docs/guide.md#docker-recommended): building from a checkout, host
   directories, `--user`, clean shutdown
 - [Configuration](docs/guide.md#configuration): every variable, and what stops the server at startup
+- [TLS](docs/guide.md#tls): certificates, Docker, renewal, what the clients need, what it costs
 - [Logs](docs/guide.md#logs), [Load limits](docs/guide.md#load-limits) and
   [Lost connections](docs/guide.md#lost-connections)
 - [Protocol and version checking](docs/guide.md#protocol)
