@@ -122,6 +122,7 @@ last 20 messages in and out. Colibri also reports the common mistakes in the con
 | `… did not answer within 5 s` | Wrong address, another network, Wi-Fi client isolation or a firewall |
 | `… failed (ConnectionRefused), retrying...` | Nothing listens on the TCP port: start colibri-server, or check the port |
 | `… This usually means a protocol mismatch…` | The server is probably 1.x, or the address is not a colibri-server |
+| `… did not answer the TLS handshake` or `rejected the certificate of …` | [TLS](docs/guide.md#tls-errors) does not match the server, or the certificate needs a setting |
 | Objects or messages you did not create | Someone else uses the same app name |
 | `NullReferenceException` in `TMP_Settings` in a sample | [TextMeshPro's essential resources](docs/guide.md#samples) are missing |
 | Works in the Editor, not on the Quest | Look for `Colibri (Android build): …` in the console ([Meta Quest](#meta-quest)) |
@@ -129,6 +130,7 @@ last 20 messages in and out. Colibri also reports the common mistakes in the con
 ## [Full guide](docs/guide.md)
 
 - [Configuration](docs/guide.md#configuration): ports, plain HTTP, voice sampling rate, send rate
+- [TLS](docs/guide.md#tls): encrypting the connection, self-signed certificates, TLS errors
 - [Meta Quest and Android](docs/guide.md#meta-quest-and-android): build checks, code stripping, IL2CPP
 - [Sending Data between Clients](docs/guide.md#sending-data-between-clients): JSON, your own classes
 - [SyncTransform](docs/guide.md#synctransform): hiding, deleting, physics, objects created at runtime
