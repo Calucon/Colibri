@@ -108,7 +108,39 @@ namespace HCIKonstanz.Colibri.Synchronization
         /// </summary>
         private static double _disconnectedAt = double.NegativeInfinity;
 
-        private static void OnDisconnected() => _disconnectedAt = Time.unscaledTimeAsDouble;
+        /// <summary>
+        /// Notes when the outage was noticed, and sends again the deletes that may have gone into
+        /// the dead link.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// A synced object destroyed in the moment the Wi-Fi drops writes its model::delete into a
+        /// link that is already dead, and nothing sent it again: the reconnect asks only for the
+        /// objects this client still has. The server and every other client kept the object, and
+        /// the answers after the reconnect offered it to this client's managers again, which
+        /// LocallyDeletedModels holds off for a minute only.
+        /// </para>
+        /// <para>
+        /// So a delete made after this client last heard from the server, or in the second before,
+        /// when it may still have been on its way, goes out again. It waits for the next
+        /// connection and goes ahead of the requests made again there, as a delete made during the
+        /// outage does. One that did arrive is deleted again, which changes nothing unless another
+        /// client has created the object anew meanwhile, with the same id: then that one goes, as
+        /// it would for a delete made during the outage.
+        /// </para>
+        /// </remarks>
+        private static void OnDisconnected()
+        {
+            var now = Time.unscaledTimeAsDouble;
+            _disconnectedAt = now;
+
+            var deletes = LocallyDeletedModels.Since(LastHeardAt(now) - 1);
+            if (deletes == null)
+                return;
+
+            foreach (var (channel, id) in deletes)
+                SendModelDelete(channel, id);
+        }
 
         /// <summary>
         /// When this client last heard from the server, on SyncTicker's clock, as of

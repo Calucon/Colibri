@@ -110,6 +110,30 @@ namespace HCIKonstanz.Colibri.Tests
             Assert.That(LocallyDeletedModels.Contains("channel", "x", LocallyDeletedModels.WindowSeconds + 2.0), Is.True);
         }
 
+        /// <summary>
+        /// What Sync sends again when it notices an outage: the deletes made from a given time on,
+        /// once each and in the order they were made, except one forgotten since.
+        /// </summary>
+        [Test]
+        public void TheDeletesSinceATimeAreThoseMadeFromThenOnAndNotForgotten()
+        {
+            LocallyDeletedModels.Remember("channel", "long before", 100.0);
+            LocallyDeletedModels.Remember("channel", "deleted twice", 150.0);
+            LocallyDeletedModels.Remember("channel", "at the drop", 200.0);
+            LocallyDeletedModels.Remember("other-channel", "just after", 200.5);
+            LocallyDeletedModels.Remember("channel", "deleted twice", 200.6);
+            LocallyDeletedModels.Remember("channel", "created here again", 200.7);
+            LocallyDeletedModels.Forget("channel", "created here again");
+
+            Assert.That(LocallyDeletedModels.Since(199.0), Is.EqualTo(new[]
+            {
+                ("channel", "at the drop"),
+                ("other-channel", "just after"),
+                ("channel", "deleted twice"),
+            }));
+            Assert.That(LocallyDeletedModels.Since(300.0), Is.Null);
+        }
+
         /// <summary>A clock behind a delete has started again since, which no delete outlives.</summary>
         [Test]
         public void NothingIsRememberedFromBeforeTheClockStartedAgain()
