@@ -476,9 +476,9 @@ they have rather than creating duplicates.
   outage still wins, unless it is one this client had in the 10 s before the outage: set back to
   such a value, the member or field looks like a lost change, and the other client's change is
   undone (see [Known limits](colibri-server/docs/protocol.md#known-limits)). A Unity object
-  destroyed at the drop has its delete sent again. After its re-requests, a Unity client sends one
-  more `model::request`, on the channel `colibri::reconnect`, to tell when the answers are over.
-  See [After a reconnect](colibri-server/docs/protocol.md#after-a-reconnect).
+  destroyed at the drop has its delete sent again. After every reconnect, a Unity client sends one
+  more `model::request` after its re-requests, on the channel `colibri::reconnect`, to tell when the
+  answers are over. See [After a reconnect](colibri-server/docs/protocol.md#after-a-reconnect).
 - While a Unity client is disconnected, what it sends waits in one queue and goes out in order when
   the connection is back. Past 256 broadcasts and log lines the oldest are dropped, with one
   warning per outage, while the model updates for one object are merged into one instead. Behind
