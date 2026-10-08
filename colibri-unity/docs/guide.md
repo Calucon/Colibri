@@ -10,6 +10,7 @@ For installing it and getting two clients to talk, the [README](../README.md) is
   - [Installation](#installation)
   - [Quickstart](#quickstart)
   - [Configuration](#configuration)
+  - [TLS](#tls)
   - [Meta Quest and Android](#meta-quest-and-android)
   - [Samples](#samples)
   - [Troubleshooting](#troubleshooting)
@@ -117,13 +118,13 @@ Upon installation, a configuration window should show up:
 If your server is running a non-default configuration, the advanced configuration allows you to modify server ports.
 The ports must match the server's, so change them only if the server does not use the defaults.
 
-The Remote Store talks to the server over REST. With the `SSL/TLS` toggle off those requests go
-out as plain `http`, and Unity blocks cleartext HTTP by default. **Loopback is exempt**, so a
+The Remote Store talks to the server over REST. With *Server supports SSL/TLS?* off those requests
+go out as plain `http`, and Unity blocks cleartext HTTP by default. **Loopback is exempt**, so a
 server on `localhost` needs no change at all; this only comes up once the server is a real
 remote host that is not on HTTPS (and from a headset, every server is a remote host). In that case
 set *Project Settings → Player → Other Settings → **Allow downloads over HTTP*** to *Always
-allowed*, or put the server behind HTTPS and turn `SSL/TLS` back on. With the Android target
-active, Colibri checks this for you (see [Meta Quest and Android](#meta-quest-and-android)).
+allowed*, or turn [TLS](#tls) on at the server and tick *Server supports SSL/TLS?*. With the
+Android target active, Colibri checks this for you (see [Meta Quest and Android](#meta-quest-and-android)).
 
 When using the voice chat, Colibri allows to adjust the sampling rate on the server. In this case, clients need to manually set the `Voice Sampling Rate` setting in the configuration.
 
@@ -136,6 +137,66 @@ Default values:
 - Voice server Port: `9013`
 - Voice Sampling Rate: `48000`
 - Max Send Rate: `30` (updates per second per synced object; `0` = no limit)
+
+## TLS
+
+*Server supports SSL/TLS?* (`ColibriConfig.IsSSL`, under *Optional Config*) encrypts the TCP
+connection to colibri-server and switches the Store to `https`. The server needs TLS turned on,
+with `TLS_CERT` and `TLS_KEY` (see [TLS](../../colibri-server/docs/guide.md#tls) in the server
+guide), and the setting has to match it: a server with TLS accepts only TLS on its TCP port, and
+one without TLS accepts none. Inside TLS run the same v3 frames; the protocol version is
+unchanged.
+
+- The TLS handshake has to finish within the same 5 s connect timeout.
+- Unity's TLS backend negotiates TLS 1.2.
+- The client sends the configured *Server Address* as SNI, and checks the certificate against it.
+- Voice chat (UDP) stays unencrypted.
+
+The Setup window's labels are *Server supports SSL/TLS?*, *Allow self-signed certificate* and
+*Server certificate SHA-256*, and the server's log uses exactly these. Unity's own console messages
+call the first one 'Server supports SSL/TLS', without the question mark.
+
+### Which certificates are accepted
+
+- **From a certificate authority** (Let's Encrypt, or your institution's): nothing more to set. The
+  device's trust store decides, on Android and the Quest too.
+- **Self-signed:** paste the server's fingerprint into *Server certificate SHA-256*
+  (`ColibriConfig.ServerCertificateSha256`). Then only that certificate is accepted, trusted or
+  not, and its names are ignored, so a certificate for an IP address works too. Case and colons do
+  not matter; anything but 64 hexadecimal digits (or nothing) is not saved.
+- **Self-signed, without a fingerprint:** *Allow self-signed certificate*
+  (`ColibriConfig.AllowSelfSignedCertificate`) accepts a certificate the device does not trust.
+  The connection is still encrypted, but nothing checks that it goes to your server, and the
+  console warns once per session, with the fingerprint to pin instead.
+
+Both settings appear in the Setup window only with *Server supports SSL/TLS?* ticked. A
+configuration saved before they existed loads with both off and empty, so only certificates the
+device trusts are accepted.
+
+The fingerprint is in the server's startup log (`TLS is on, ... SHA-256 fingerprint AB:CD:...`), in
+Colibri's warning or rejection message, and in the *SHA-256* row of *Window → Colibri Status*,
+which can be selected and copied. Do not pin a certificate from Let's Encrypt: it changes with
+every renewal, and the pin then rejects the server.
+
+The Store's `https` requests follow the same two settings; with neither set, the system checks the
+certificate, as before. *Window → Colibri Status* shows TLS next to the server address, how the
+certificate was accepted (`trusted by this device`, `matches 'Server certificate SHA-256'`, or
+`not trusted, accepted because 'Allow self-signed certificate' is on`), and its fingerprint.
+
+### TLS errors
+
+| Console | What to do |
+|---|---|
+| `<host:port> did not answer the TLS handshake …` | The server has no TLS: set `TLS_CERT` and `TLS_KEY` there, or untick *Server supports SSL/TLS?* |
+| `rejected the certificate of <host:port>: it is self-signed …` | Pin its fingerprint, or tick *Allow self-signed certificate* |
+| `… it expired on <date>` | Renew the certificate on the server |
+| `… it is not issued for '<address>'` | Connect by a name the certificate covers, or pin it, or allow self-signed certificates |
+| `… its SHA-256 fingerprint is <X>, not the one in 'Server certificate SHA-256' …` | The server's certificate was replaced: copy the new fingerprint from the server's log |
+| `… This usually means a protocol mismatch … tick 'Server supports SSL/TLS' …` | A client without TLS is talking to a server with TLS: tick the setting |
+
+Each is logged as an error once, and then only noted while the client retries with the usual
+backoff, so fixing the server needs no restart of the app. `LastConnectFailure` and the Status
+window show the latest one.
 
 ## Meta Quest and Android
 
@@ -151,9 +212,9 @@ with a button that fixes it:
 - **Internet Access** must be *Require* (*Player → Other Settings*). Colibri connects with plain
   sockets, and with *Auto* the build may lack Android's INTERNET permission: the app starts and
   never connects.
-- **Allow downloads over HTTP** must be *Always allowed* while the `SSL/TLS` toggle is off and the
-  server is not `localhost`. Otherwise every `Store` call fails with "Insecure connection not
-  allowed".
+- **Allow downloads over HTTP** must be *Always allowed* while *Server supports SSL/TLS?* is off
+  and the server is not `localhost`. Otherwise every `Store` call fails with "Insecure connection
+  not allowed". With [TLS](#tls) on, this does not apply.
 
 Also worth knowing:
 
@@ -218,8 +279,9 @@ Colibri also reports the common mistakes in the console rather than failing quie
 | A `[Sync]` field never syncs | Its type is reported at startup if Colibri cannot put it on the wire |
 | Connected, but one client is silent | That client's Editor window is in the background and *Run In Background* is off (see step 3 of the [Quickstart](#quickstart)) |
 | `Store.Get`/`Put` reports a failure | The log names the operation, the object, the URL, the transport error and the HTTP status; requests give up after 10 s rather than hanging |
-| Never connects, although something answers on the port | `invalid frame from server` errors if the server sends anything, then `3 connections in a row were accepted but ended before a single frame could be read. This usually means a protocol mismatch…`: the server is probably 1.x, or the address is not a colibri-server |
+| Never connects, although something answers on the port | `invalid frame from server` errors if the server sends anything, then `3 connections in a row were accepted but ended before a single frame could be read. This usually means a protocol mismatch…`: the server is probably 1.x, or the address is not a colibri-server, or the server has [TLS](#tls) on and *Server supports SSL/TLS?* is off |
 | Works in the Editor, not on the Quest | With the Android target active: `Colibri (Android build): …` in the console, and the *Android / Meta Quest* section of *Window → Colibri Configuration* |
+| Never connects, with TLS on either side | `… did not answer the TLS handshake …` or `rejected the certificate of …`: see [TLS errors](#tls-errors) |
 
 Other failures to connect name their socket error the same way, such as `failed (HostUnreachable)`
 or `failed (NetworkUnreachable)`; like the timeout, they point at the address or the network.
