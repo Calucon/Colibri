@@ -1,7 +1,7 @@
 # Upgrading to Colibri 2.0
 
-For anyone with a project built on Colibri 1.x. It covers all three components — the server, the
-web client and the Unity client — and concentrates on what you have to change and what changes
+For anyone with a project built on Colibri 1.x. It covers all three components (the server, the
+web client and the Unity client) and concentrates on what you have to change and what changes
 underneath you.
 
 Each component has its own changelog with the full detail:
@@ -14,12 +14,12 @@ Each component has its own changelog with the full detail:
 ## Read this first: the server and Unity move together
 
 colibri-unity 2.0.0 speaks a [new binary TCP protocol](colibri-server/docs/protocol.md) and
-**requires colibri-server ≥ 2.0.0**. There is no version negotiation — both sides have to be
+**requires colibri-server ≥ 2.0.0**. There is no version negotiation: both sides have to be
 upgraded together. A 1.x Unity client cannot talk to a 2.0.0 server, and a 2.0.0 Unity client
 cannot talk to a 1.x server.
 
-The failure is at least diagnosable now. The server's log — the admin UI's log page, and since 2.0
-also the server's console output, so `docker logs` for a container — says what is wrong:
+The failure is at least diagnosable now. The server's log (the admin UI's log page, and since 2.0
+also the server's console output, so `docker logs` for a container) says what is wrong:
 
 - **A 1.x Unity client** cannot even send the server a handshake it can read, so the server cannot
   check its version or tell it anything. It recognizes the 1.x wire format instead and logs a
@@ -34,29 +34,29 @@ also the server's console output, so `docker logs` for a container — says what
 See [Version checking](colibri-server/docs/protocol.md#version-checking).
 
 **Web clients are covered by the same check**, even though Socket.IO itself did not change.
-`colibri-web` 1.x announces `version: '1'` in its handshake query, so a 2.0.0 server refuses it —
-this is the one place the version check is a breaking change for web.
+`colibri-web` 1.x announces `version: '1'` in its handshake query, so a 2.0.0 server refuses it.
+This is the one place the version check is a breaking change for web.
 
 The symptom on a stale web client is quiet, because no 1.x release of `colibri-web` (the last is
 1.3.2) knows `protocol::rejected`. It receives the rejection as an ordinary message on
 `Colibri.messages`, which nothing is listening for, and is then disconnected; Socket.IO does not
 reconnect after a server-side disconnect, so **it connects once and then stops, with no error on the
-client at all**. The server's log line — which names the client, its address and both versions — is
+client at all**. The server's log line (which names the client, its address and both versions) is
 the diagnostic. `colibri-web` 2.0.0 logs a refusal itself and exposes it on
 `Colibri.protocolMismatch`.
 
-Upgrading in the other order — clients first, server later — is now noticed too, though only ever
+Upgrading in the other order (clients first, server later) is now noticed too, though only ever
 as a suspicion. Neither client can be *told* it is talking to a 1.x server, because the version
 check lives on the server and a 1.x server has none. A 2.0.0+ server therefore announces itself to
 web clients on connect, and its silence is the signal: a current web client warns after five
-seconds and **stays connected** (it works — the Socket.IO envelope did not change, verified against
+seconds and **stays connected** (it works: the Socket.IO envelope did not change, verified against
 real 1.1.1 and 1.3.1 servers with traffic flowing both ways). A current Unity client cannot connect
 to a 1.x server at all; it reports a likely protocol mismatch after three connections that were
 accepted and then ended before a frame could be read, and keeps retrying. Details in
 [Detecting an out-of-date server](colibri-server/docs/protocol.md#detecting-an-out-of-date-server).
 
-So the safe order is: **upgrade the server first** — from then on its log names every client that is
-still on 1.x — then Unity, then the web clients. A 2.0.0 server refuses 1.x web clients, so they
+So the safe order is: **upgrade the server first** (from then on its log names every client that is
+still on 1.x), then Unity, then the web clients. A 2.0.0 server refuses 1.x web clients, so they
 have to be upgraded too; they cannot be left running.
 
 ---
@@ -66,7 +66,7 @@ have to be upgraded too; they cannot be left running.
 - [ ] Server: Node 24, and it is ESM now
 - [ ] Unity: 2022.3 LTS or newer, and delete your vendored `Newtonsoft.Json.dll`
 - [ ] Unity: replace every `IObservable` subscription with `+=` / `-=`, and unsubscribe yourself
-- [ ] Unity: `ObservableModel<T>` / `ObservableManager<T>` are gone — use `SyncBehaviour<T>` /
+- [ ] Unity: `ObservableModel<T>` / `ObservableManager<T>` are gone; use `SyncBehaviour<T>` /
       `SyncBehaviourManager<T>`
 - [ ] Unity: import any sample you were relying on from the Package Manager; sample types are no
       longer compiled into your project
@@ -74,7 +74,7 @@ have to be upgraded too; they cannot be left running.
 - [ ] Web: add `rxjs` to your own dependencies
 - [ ] Web: `receiveColor` / `receiveColorArray` callbacks get a `ColorValue`, not a `string`
 - [ ] Everywhere: read [Behaviour changes that will not fail to
-      compile](#behaviour-changes-that-will-not-fail-to-compile) — that is where the surprises are
+      compile](#behaviour-changes-that-will-not-fail-to-compile): that is where the surprises are
 
 ---
 
@@ -111,7 +111,7 @@ colibri-unity does, keeps a client well inside that.
 ### Worth knowing
 
 **If you run the published image without a version tag** (`hcikn/colibri`, which means `latest`),
-the next pull can take a 1.x server to 2.x — and that cuts off every 1.x client. Pin the version
+the next pull can take a 1.x server to 2.x, and that cuts off every 1.x client. Pin the version
 you run, and change it when you upgrade the clients.
 
 **The Docker image is multi-stage now.** It ships only `dist/` and production dependencies, sets
@@ -121,13 +121,13 @@ shuts down cleanly on `docker stop`), and has a `HEALTHCHECK` on the web port.
 **The server no longer runs as root.** The container starts as root only long enough to hand
 `/srv/colibri/data` to the image's `node` user (uid 1000), then runs the server as `node`. A
 `./data` that Docker creates, or the root-owned one 1.x left behind, therefore works without any
-manual step — but on the host it now belongs to uid 1000. Started with `docker run --user …` (or
+manual step, but on the host it now belongs to uid 1000. Started with `docker run --user …` (or
 `user:` in compose), the container cannot change ownership: give the directory to that user
 yourself, or use a named volume. If the server cannot write its data directory, it says so on
 stderr at startup, with the fix, and keeps running without saving anything.
 
 **The server's log reaches `docker logs`.** In 1.x its log messages only appeared on the admin
-UI's log page. They are now also printed to stdout, errors and warnings to stderr — the refusals
+UI's log page. They are now also printed to stdout, errors and warnings to stderr: the refusals
 and the 1.x-client warning above included, and so are the log lines clients send through Unity's
 `[RemoteLogger]` prefab or colibri-web's `RemoteLogger`. `CONSOLE_LOG_LEVEL` (`error`, `warn`,
 `info` or `debug`; default `info`) sets how much is printed, and broadcast traffic is only printed
@@ -219,7 +219,7 @@ unchanged.
 
 ### Fixed
 
-`import { ColibriError } from '@hcikn/colibri'` works — it was a default export, which `export *`
+`import { ColibriError } from '@hcikn/colibri'` works. It was a default export, which `export *`
 does not re-export, so it silently imported `undefined`. `require()` consumers now get their own
 `.d.cts` declarations. A stray `console.log` on every model registration is gone, which for anyone
 using `RemoteLogger` was also a stream of pointless network traffic.
@@ -227,7 +227,7 @@ using `RemoteLogger` was also a stream of pointless network traffic.
 The server address can be written the way a browser shows it:
 `new Colibri('my-app', 'http://192.168.0.10:9011')` works, as do `https://`, `ws://` and `wss://`,
 a port in the address and a trailing slash. The port is the one in the address, else the third
-argument, else 9011 — for `https://` too. An address that 1.x turned into a URL that could never
+argument, else 9011, for `https://` too. An address that 1.x turned into a URL that could never
 connect now throws a `ColibriError` instead: a path after the host (the admin UI's own `…/log`,
 say), an unknown scheme, a port that is not a whole number, or a port in the address that disagrees
 with the port argument.
@@ -236,7 +236,7 @@ with the port argument.
 `new Colibri()`; they take effect once it is constructed.
 
 `RegisterModelSync` names its channel after the class unless you pass `name`, and a minifier
-renames classes — so a minified build can end up on a different channel from Unity and from other
+renames classes, so a minified build can end up on a different channel from Unity and from other
 builds, without any error. It now warns when the class name looks minified. Pass `name` for
 anything you bundle: `RegisterModelSync({ name: 'player', type: Player })`.
 
@@ -269,7 +269,7 @@ private void OnDisable() => SyncBehaviour<Player>.ModelCreated -= Register;
 
 **Read that second half carefully.** A UniRx subscription with `AddTo(this)` unsubscribed itself
 when the component was destroyed. A static event does not. Miss the `-=` and you leak the handler
-and the destroyed object behind it — and with *Enter Play Mode Options → Disable Domain Reload* on,
+and the destroyed object behind it, and with *Enter Play Mode Options → Disable Domain Reload* on,
 the leak survives into the next Play session and everything fires twice.
 
 `this.ObserveEveryValueChanged(...)` has no replacement either. Colibri's own change detection now
@@ -319,14 +319,14 @@ any client appears on all of them.
 
 `Assets/Colibri/Plugins/Newtonsoft.Json.dll` is gone, replaced by the
 `com.unity.nuget.newtonsoft-json` package, declared as a real dependency. **Delete your own copy if
-you have one** — two Newtonsoft assemblies in one project is a compile error, not a warning.
+you have one**: two Newtonsoft assemblies in one project is a compile error, not a warning.
 
 Installing Colibri is now one git URL and nothing else: no UniRx, no UniTask, no NuGetForUnity.
 
 ### Breaking: the samples are no longer compiled into your project
 
 `Samples/` was a live package folder, so every consumer compiled `HCIKonstanz.Colibri.Samples.*`
-into the Colibri assembly whether they wanted it or not — and *Package Manager → Import Sample*
+into the Colibri assembly whether they wanted it or not, and *Package Manager → Import Sample*
 then made a second copy of the same types.
 
 Samples now live in `Samples~`, which Unity does not compile. Those types exist only after you
@@ -373,7 +373,7 @@ it as a string.
 
 **Colours cross between Unity and the web in both directions.** Unity writes `#RRGGBBAA`;
 colibri-web's `sendColor` writes `[r, g, b, a]` when given an array. Unity used to throw an
-`InvalidCastException` on the array form — out of the frame's single dispatch loop, taking every
+`InvalidCastException` on the array form, out of the frame's single dispatch loop, taking every
 message queued behind it that frame with it. It now accepts both, and so does colibri-web (see
 [colour callbacks](#breaking-colour-callbacks-get-a-colorvalue)).
 
@@ -386,8 +386,8 @@ server address left `Get`/`Put`/`Delete` outstanding forever: no result, no erro
 console. Calls that used to hang now fail, and say what failed, at which URL, with the HTTP status.
 
 **The store takes any JSON value.** 1.x answered `400` to anything but an object or an array, and
-`413` above 100 kB. A plain number, string, boolean or `null` is now stored too — Unity's
-`Store.Put("score", 42)`, colibri-web's `setRestObject('note', 'text')` — up to 5 MiB.
+`413` above 100 kB. A plain number, string, boolean or `null` is now stored too (Unity's
+`Store.Put("score", 42)`, colibri-web's `setRestObject('note', 'text')`), up to 5 MiB.
 
 **Clients catch up after a reconnect.** Both clients used to ask for the synced models' state only
 when a listener registered, so whatever other clients changed during an outage was missed until the
@@ -413,17 +413,17 @@ asset, which made `GetWebUrl` throw an NRE and the connection loop poll forever 
 returns defaults and reports the missing configuration once, naming the menu item that fixes it.
 
 **New warnings in the console.** Colibri routes messages on the channel *and* the type, so a `float`
-sent to a `string` listener was previously dropped without a word. That mismatch is now reported —
-once per (channel, type), not once per message — and it names both types and the fix. If new
-warnings appear after upgrading, they were always happening; you just could not see them.
+sent to a `string` listener was previously dropped without a word. That mismatch is now reported
+once per (channel, type), not once per message, and it names both types and the fix. If new warnings
+appear after upgrading, they were always happening; you just could not see them.
 
 **`Sync` listeners now unregister themselves with their component.** `Sync.Receive` records which
-Unity object the listener belongs to — the component for a method group, the component the closure
-captured for a lambda — and drops the listener once that object is destroyed. A listener with no
-such object stays registered until `Sync.Unregister`, as in 1.x: a static method, or a lambda that
-uses nothing of its component (only its parameter, `Debug.Log` or a static), because that lambda
-captures nothing. Registering does not check for duplicates, so if `Start` adds one of those, a
-scene reload adds it again and each message then reaches it twice.
+Unity object the listener belongs to (the component for a method group, the component the closure
+captured for a lambda) and drops the listener once that object is destroyed. A listener with no such
+object stays registered until `Sync.Unregister`, as in 1.x: a static method, or a lambda that uses
+nothing of its component (only its parameter, `Debug.Log` or a static), because that lambda captures
+nothing. Registering does not check for duplicates, so if `Start` adds one of those, a scene reload
+adds it again and each message then reaches it twice.
 
 Your existing `Sync.Unregister` calls in `OnDestroy` are still correct and still worth keeping; for
 listeners that belong to a component they are simply no longer the difference between working and
@@ -452,7 +452,7 @@ store as well.
    themselves now; a static method or a lambda that uses nothing of its component still needs its
    `Sync.Unregister` (see [above](#behaviour-changes-that-will-not-fail-to-compile)).
 3. **Turn on *Run In Background*** (Project Settings → Player). With it off, an unfocused Editor
-   stops running the player loop, so the client silently stops sending and receiving — while the
+   stops running the player loop, so the client silently stops sending and receiving, while the
    socket stays up and everything still reports itself connected. This is not new in 2.0, but it is
    the most common source of lost debugging time.
 4. **Open *Window → Colibri Status*** while connected. It shows the app name, and a typo there
@@ -467,15 +467,15 @@ store as well.
 
 The test suites:
 
-- `npm test` in `colibri-server` and in `colibri-web` — unit tests. Both run in CI, together with a
+- `npm test` in `colibri-server` and in `colibri-web`: unit tests. Both run in CI, together with a
   check that the server's frame encoding matches the vectors the Unity tests use, and that every
   client announces the protocol version the server speaks.
-- `npm run test:e2e` in `colibri-web` — against a running server. Not run in CI.
-- `node colibri-unity/run-tests.mjs` — the Unity client's EditMode tests, and its PlayMode tests
+- `npm run test:e2e` in `colibri-web`: against a running server. Not run in CI.
+- `node colibri-unity/run-tests.mjs`: the Unity client's EditMode tests, and its PlayMode tests
   against a real server (started with Docker, unless one is already running). It needs a local
   Unity installation and does not run in CI. See
   [colibri-unity/README.md](colibri-unity/README.md#for-maintainers).
-- `npm run test:docker` in `colibri-server` — runs the image against a fresh, a root-owned and a
+- `npm run test:docker` in `colibri-server`: runs the image against a fresh, a root-owned and a
   named-volume data directory. Needs Docker; not run in CI.
 
 What none of them covers:
@@ -484,7 +484,7 @@ What none of them covers:
   queue that hands received packets to the main thread. The rest needs a microphone; the client's
   socket and its shutdown were reviewed and compiled, not exercised.
 - **Android and Meta Quest.** No suite builds for Android or runs on a headset. The code that only
-  runs there — the IL2CPP `[Sync]` accessors — and the Android settings check are tested in the
+  runs there (the IL2CPP `[Sync]` accessors) and the Android settings check are tested in the
   Editor.
 - **Two Unity clients following each other.** The PlayMode tests talk to a scripted peer, not to a
   second Unity client; an object following its copy between two Unity players is a manual check.
