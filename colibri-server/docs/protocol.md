@@ -262,6 +262,18 @@ loop, off Unity's main thread. A connection that has not sent a handshake within
 closed too. Every connection also has TCP keepalive switched on. Socket.IO clients are not covered
 by this setting: Socket.IO's own ping notices one that has gone, by default within 45 s.
 
+A message larger than 64 KiB has no heartbeat inside it, so a client reading one can echo nothing
+until it is through. Nor can the server watch it being read: the kernel's send buffer, and those of
+a proxy in between such as Docker's port forwarding, take megabytes at once. So until a client
+echoes a heartbeat sent after the largest such message written to it, it may stay silent one more
+`TCP_IDLE_TIMEOUT_SECONDS` for every 64 KiB of that message, the rate the heartbeat after every
+64 KiB allows for (about 6.4 KiB/s at the default), but at most 6 more: 70 s in all at the
+default, enough for a 4 MiB message read at about 60 KB/s or faster. A client that reads it more
+slowly is disconnected, and the warning names the size of the message it was given extra time for.
+A client that is gone by the time such a message is sent to it, or goes while it is being read, is
+noticed that much later. The extra time ends only once the client echoes a heartbeat sent after
+the message, so a client that does not echo heartbeats keeps it from its first such message on.
+
 Socket.IO clients are not sent that frame - they get a `colibri`/`latency` event directly, also
 every 100ms, from the same `MeasureLatency` timer.
 
@@ -394,9 +406,10 @@ Two kinds of frame are exempt:
 - **Heartbeats are never dropped either**, and one goes out ahead of the next message once 64 KiB
   have been written to the client since the last one. A client that sends nothing of its own stays
   connected by echoing heartbeats, and it can only echo the ones it has read, so this keeps a live
-  client that is still reading a long answer from being disconnected as idle (see
-  [Heartbeat / latency](#heartbeat--latency)). The 100 ms heartbeat is not queued behind one that
-  still waits, though, so a client that keeps sending but never reads is not sent ten a second.
+  client that is still reading a long answer from being disconnected as idle. A single message
+  larger than 64 KiB has none inside it; [Heartbeat / latency](#heartbeat--latency) says how long a
+  client reading one may stay silent. The 100 ms heartbeat is not queued behind one that still
+  waits, though, so a client that keeps sending but never reads is not sent ten a second.
 
 This is the outgoing side. For what the server does when clients send more than it can process,
 see [Inbound limits](#inbound-limits).

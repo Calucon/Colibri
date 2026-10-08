@@ -152,7 +152,7 @@ short:
 | `CONSOLE_LOG_BROADCAST_TRAFFIC` | `false` | `true` also prints every `broadcast::` message, whatever the level |
 | `TCP_INBOUND_BACKLOG_LIMIT` | `2000` | messages from Unity clients that may wait for the server's main thread before it holds back `model::update` and drops `broadcast::` messages, so an overloaded server's memory and delay stay bounded; `0`: no limit |
 | `CLIENT_MESSAGE_RATE_LIMIT`, `CLIENT_MESSAGE_RATE_BURST` | `1000`, `2000` | `model::update` and `broadcast::` messages a second that one client, Unity or web, may send, and how many at once after a quieter stretch; beyond that, the same happens to its messages. Catches a runaway send loop. `0` turns the limit off; the burst must be at least 1 |
-| `TCP_IDLE_TIMEOUT_SECONDS` | `10` | seconds a Unity client may send nothing at all, not even its heartbeat replies, before it is disconnected as gone, e.g. a headset that left the Wi-Fi; a connection that has not handshaked by then is closed too. `0`: never |
+| `TCP_IDLE_TIMEOUT_SECONDS` | `10` | seconds a Unity client may send nothing at all, not even its heartbeat replies, before it is disconnected as gone, e.g. a headset that left the Wi-Fi; a connection that has not handshaked by then is closed too. A client reading a message larger than 64 KiB gets up to 6 times this much more (see [Lost connections](#lost-connections)). `0`: never |
 | `APP_CLIENT_WARNING_THRESHOLD` | `8` | log a warning when one app has more clients than this, Unity and web together, the admin UI not counted; usually separate projects that kept the same app name. `0`: never |
 | `MODEL_TOMBSTONE_SECONDS` | `600` | seconds the server remembers that a synced object (model) was deleted. Meanwhile it ignores updates for it, so one another client sent before the delete reached it cannot create the object again, and it tells a client that asks for the object again after a reconnect to delete its copy. A client that has the object in its scene again, such as a scene with placed objects loaded again, ends this early. Forgotten with the app's models once its last client has left. `0`: not remembered. See [Deleted models](protocol.md#deleted-models) |
 | `TLS_CERT`, `TLS_KEY` | empty | PEM files of the certificate (with its chain) and of its private key. Set both, and the TCP port and the web port serve TLS only; see [TLS](#tls) |
@@ -384,6 +384,16 @@ as if it had closed the connection, with a warning naming it: the other clients 
 leave, and if it was the app's last client, the app's synchronized models are cleared. This is how
 a headset that left the Wi-Fi or went to sleep without closing its connection is noticed, which
 would otherwise take the operating system many minutes.
+
+A message larger than 64 KiB has no heartbeat inside it, so a client reading one over a slow link
+echoes nothing until it is through, and the server cannot see it being read. Until it echoes a
+heartbeat sent after the message, such a client may stay silent one more
+`TCP_IDLE_TIMEOUT_SECONDS` for every 64 KiB of the message, but at most 6 more (60 s at the
+default). A 4 MiB message thus needs a link of about 60 KB/s or faster; over a slower one the
+client is disconnected, and the warning names the message's size. Data sent as messages of 64 KiB
+or less has heartbeats in between and needs no extra time. The price is that a headset that is
+gone by the time such a message is sent to it, or goes while it is being read, is noticed that much
+later: within 7 times `TCP_IDLE_TIMEOUT_SECONDS` (70 s) at worst.
 
 colibri-unity echoes the heartbeats off Unity's main thread, so a long scene load does not trip
 the timeout. A debugger stopped at a breakpoint usually pauses every thread of the app, though,
