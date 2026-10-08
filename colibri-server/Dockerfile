@@ -33,7 +33,11 @@ COPY --from=builder /srv/colibri/dist ./dist
 COPY docker-entrypoint.sh /usr/local/bin/colibri-entrypoint.sh
 RUN sed -i 's/\r$//' /usr/local/bin/colibri-entrypoint.sh && chmod 755 /usr/local/bin/colibri-entrypoint.sh
 
-RUN mkdir -p data && chown -R node:node /srv/colibri
+# The data directory is the only place the server writes, so it is the only thing the node user
+# owns. Everything else, the server's own code included, stays root's and read-only to it. A
+# chown -R over /srv/colibri also copied node_modules and dist into a layer of their own (17 MB).
+# A named volume mounted here starts out owned by node as well.
+RUN mkdir data && chown node:node data
 
 # Webserver
 EXPOSE 9011

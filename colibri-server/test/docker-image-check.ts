@@ -329,6 +329,12 @@ const main = async function (): Promise<void> {
     const installed = (await dockerOk([ 'run', '--rm', '--entrypoint', 'ls', image, '-A', 'node_modules' ])).split('\n');
     const leaked = UI_ONLY_PACKAGES.filter(name => installed.includes(name));
     check('installs no admin-UI-only packages', leaked.length === 0, leaked.join(', '));
+    // A chown -R over /srv/colibri left the server's own code writable by the user it runs as,
+    // and copied node_modules and dist into a layer of their own.
+    const nodeOwned = (await dockerOk([ 'run', '--rm', '--entrypoint', 'find', image, '/srv/colibri', '-path', DATA_DIR, '-prune', '-o', '-user', 'node', '-print' ])).trim();
+    check('gives the node user nothing outside the data directory', nodeOwned === '', nodeOwned.split('\n').slice(0, 5).join(', '));
+    const dataOwner = (await dockerOk([ 'run', '--rm', '--entrypoint', 'stat', image, '-c', '%U:%G', DATA_DIR ])).trim();
+    check('gives the node user the data directory', dataOwner === 'node:node', dataOwner);
     const size = (await dockerOk([ 'image', 'inspect', '-f', '{{.Size}}', image ])).trim();
     console.log(`  size ${(Number(size) / 1e6).toFixed(1)} MB`);
 
