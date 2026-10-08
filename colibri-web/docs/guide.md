@@ -8,6 +8,7 @@ See [CHANGELOG.md](../CHANGELOG.md) for release notes, including breaking change
 
 - [Installation](#installation)
 - [Configuration](#configuration)
+    - [TLS](#tls)
     - [Protocol version](#protocol-version)
 - [Usage](#usage)
     - [Sending Data between Clients](#sending-data-between-clients)
@@ -71,10 +72,10 @@ new Colibri('app_name', '<your-server>', 9011);
   everyone on the server who uses the same name is in one app and sees the others' messages and objects, so choose a
   name nobody else uses, not a placeholder like `app_name`. `colibri` is taken by the server's admin UI.
 - **Server address:** a host name or IP address, optionally after `http://` or `ws://`, and optionally followed by
-  `:port` and a trailing `/`. `https://` and `wss://` work too and encrypt both the socket and the REST requests, but
-  the Colibri server itself speaks plain HTTP, so they only work behind a proxy that adds TLS. Anything after the host
-  and port, such as the admin UI's `/log` path, a query or a fragment, throws a `ColibriError`, and so does any other
-  scheme. An IPv6 address goes in brackets: `http://[::1]:9011`.
+  `:port` and a trailing `/`. `https://` and `wss://` work too and encrypt both the socket and the REST requests; the
+  server then needs [TLS](#tls). Anything after the host and port, such as the admin UI's `/log` path, a query or a
+  fragment, throws a `ColibriError`, and so does any other scheme. An IPv6 address goes in brackets:
+  `http://[::1]:9011`.
 - **Port:** the one in the address, otherwise the third argument, otherwise 9011. If both have one they must agree,
   otherwise `new Colibri()` throws. The scheme never implies a port: `https://<your-server>` still means port 9011,
   not 443. `colibri.port` tells you which port is used. The third argument is a `number`, so convert a port read
@@ -86,9 +87,24 @@ new Colibri('app_name', '<your-server>', 9011);
   `Colibri.getInstance()` returns it, or `null` before it has been created.
 
 Browsers block plain `ws://` and `http://` connections from a page served over `https://` (mixed content), so such a
-page has to use `wss://` or `https://`.
+page has to use `wss://` or `https://`, which needs [TLS](#tls) on the server or a proxy in front of it.
 
 For server setup, refer to [colibri-server](../../colibri-server/).
+
+### TLS
+
+A colibri-server with TLS turned on (`TLS_CERT` and `TLS_KEY`, see
+[TLS](../../colibri-server/docs/guide.md#tls) in the server guide) serves its web port over HTTPS and WSS only. Connect
+with `https://<your-server>:9011` or `wss://<your-server>:9011`: either one means `wss` for the socket and `https` for
+the REST requests. The admin UI is then at `https://<your-server>:9011` too. `http://<your-server>:9011` gets no answer
+once TLS is on: the connection is closed, not redirected.
+
+- **Self-signed certificate, in a browser:** the browser has to be told once to trust it. Open
+  `https://<your-server>:9011` and accept the certificate, or install it.
+- **Self-signed certificate, under Node** (scripts, tests): start Node with `NODE_EXTRA_CA_CERTS=<cert.pem>`.
+- **A certificate from a certificate authority**, such as Let's Encrypt: nothing to set.
+- **Behind a reverse proxy that adds TLS:** give the proxy's port, such as `wss://<your-server>:443`, since the scheme
+  never implies a port.
 
 ### Protocol version
 
