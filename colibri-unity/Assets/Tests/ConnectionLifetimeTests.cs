@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using HCIKonstanz.Colibri.Core;
@@ -24,6 +25,12 @@ namespace HCIKonstanz.Colibri.E2E
     /// </summary>
     public class ConnectionLifetimeTests
     {
+        private static readonly Regex Attempt = new Regex("^Colibri: connecting to ");
+
+        // What the connection says about an attempt or a session that failed, and about trying again.
+        private static readonly Regex Failure = new Regex("did not answer|failed|retrying|server closed the connection|invalid frame",
+            RegexOptions.IgnoreCase);
+
         private FakeColibriServer _server;
 
         [UnitySetUp]
@@ -395,6 +402,150 @@ namespace HCIKonstanz.Colibri.E2E
 
 
         /*
+         *  Disabling and enabling again in one frame
+         *
+         *  OnEnable starts the next connection loop at once, while the one OnDisable ended is still
+         *  unwinding on a worker thread. That loop's cleanup used to act on what had become the next
+         *  loop's: it closed the new socket in the middle of its connect - on Mono the connect then
+         *  never finished, and a healthy server was reported as not answering within 5 s - and it
+         *  could close the outbox and set Disconnected under a session that was already Connected.
+         *  It also said it was retrying, which it was not.
+         */
+
+        /// <summary>
+        /// The next loop connects with its first attempt, at once, and the loop that was ended
+        /// says nothing.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator DisablingAndEnablingInOneFrameConnectsAgainWithTheFirstAttempt()
+        {
+            _server = StartServer();
+            var connection = ConnectionTo(_server.Port);
+            var events = Record(connection);
+            yield return E2EServer.WaitUntil(() => events.Count == 1, "The client never connected", 10f);
+
+            using (var log = new LogLines())
+            {
+                var clock = System.Diagnostics.Stopwatch.StartNew();
+                connection.enabled = false;
+                connection.enabled = true;
+
+                yield return E2EServer.WaitUntil(() => events.Count == 3, "The client never connected again after it was enabled", 10f);
+                var reconnected = clock.Elapsed.TotalSeconds;
+
+                // Time for anything the ended loop was still going to do.
+                yield return E2EServer.Settle(1f);
+
+                Assert.That(log.Matching(Attempt), Has.Length.EqualTo(1),
+                    $"Enabling the connection again took more than one attempt to connect. Logged:\n{log}");
+                Assert.That(log.Matching(Failure), Is.Empty,
+                    $"Something failed, or said it was retrying, after a disable and enable. Logged:\n{log}");
+                Assert.That(reconnected, Is.LessThan(2), "Connecting again after a disable and enable took too long");
+                Assert.That(_server.Accepted, Is.EqualTo(2));
+                Assert.That(events, Is.EqualTo(new[] { "connected", "disconnected", "connected" }));
+                Assert.That(connection.Status, Is.EqualTo(ConnectionStatus.Connected));
+            }
+        }
+
+        /// <summary>
+        /// What is sent right after the component is enabled again waits for the next session and
+        /// goes out on it, and so does what is sent once that session is up: the session stays
+        /// Connected, and its outbox open, whenever the ended loop gets round to its cleanup.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator WhatIsSentRightAfterADisableAndEnableInOneFrameIsDelivered()
+        {
+            _server = StartServer();
+            var connection = ConnectionTo(_server.Port);
+            var events = Record(connection);
+            yield return E2EServer.WaitUntil(() => events.Count == 1, "The client never connected", 10f);
+
+            connection.enabled = false;
+            connection.enabled = true;
+            var first = connection.SendCommandAsync("toggle-test", "broadcast::int", 1);
+
+            yield return E2EServer.Await(first, "What was sent right after the component was enabled again was not written in time", 3f);
+            Assert.That(first.Result, Is.True);
+
+            // Time for anything the ended loop was still going to do to the session.
+            yield return E2EServer.Settle(1f);
+            Assert.That(connection.Status, Is.EqualTo(ConnectionStatus.Connected));
+
+            var second = connection.SendCommandAsync("toggle-test", "broadcast::int", 2);
+            yield return E2EServer.Await(second, "What was sent once the next session was up was not written", 2f);
+            Assert.That(second.Result, Is.True);
+
+            yield return E2EServer.WaitUntil(() => _server.Received.Count(sent => sent.Frame.Channel == "toggle-test") == 2,
+                "The server did not receive both messages", 2f);
+            Assert.That(_server.Received.Where(sent => sent.Frame.Channel == "toggle-test").Select(sent => sent.Session),
+                Is.EqualTo(new[] { 2, 2 }), "Both messages should have gone out on the session the enable started");
+            Assert.That(events, Is.EqualTo(new[] { "connected", "disconnected", "connected" }));
+            Assert.That(connection.ConnectedSessions, Is.EqualTo(2));
+        }
+
+        /// <summary>
+        /// Twice over: of the two loops started in one frame, the first is ended at once and the
+        /// second connects, and neither the first nor the one before it says or changes anything.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator DisablingAndEnablingTwiceInOneFrameConnectsOnce()
+        {
+            _server = StartServer();
+            var connection = ConnectionTo(_server.Port);
+            var events = Record(connection);
+            yield return E2EServer.WaitUntil(() => events.Count == 1, "The client never connected", 10f);
+
+            using (var log = new LogLines())
+            {
+                connection.enabled = false;
+                connection.enabled = true;
+                connection.enabled = false;
+                connection.enabled = true;
+                connection.SendCommand("rapid-test", "broadcast::int", 1);
+
+                yield return E2EServer.WaitUntil(() => events.Count == 3, "The client never connected again after it was enabled", 10f);
+                yield return E2EServer.WaitUntil(() => _server.Received.Any(sent => sent.Frame.Channel == "rapid-test"),
+                    "What was sent after the second enable never reached the server", 3f);
+                yield return E2EServer.Settle(1f);
+
+                Assert.That(log.Matching(Attempt), Has.Length.EqualTo(2), $"One attempt per enable, and no more. Logged:\n{log}");
+                Assert.That(log.Matching(Failure), Is.Empty, $"Logged:\n{log}");
+                Assert.That(events, Is.EqualTo(new[] { "connected", "disconnected", "connected" }));
+                Assert.That(connection.Status, Is.EqualTo(ConnectionStatus.Connected));
+                Assert.That(_server.Received.Where(sent => sent.Frame.Channel == "rapid-test").Select(sent => sent.Session),
+                    Is.EqualTo(new[] { _server.Accepted }), "The message should have gone out once, on the last session");
+            }
+        }
+
+        /// <summary>
+        /// Destroyed in the frame it was enabled again: no loop is left running, none of them says
+        /// anything, and nothing connects.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator DestroyingTheConnectionRightAfterEnablingItLeavesNothingRunning()
+        {
+            _server = StartServer();
+            var connection = ConnectionTo(_server.Port);
+            yield return E2EServer.WaitUntil(() => connection.Status == ConnectionStatus.Connected, "The client never connected", 10f);
+
+            using (var log = new LogLines())
+            {
+                connection.enabled = false;
+                connection.enabled = true;
+                Object.DestroyImmediate(connection.gameObject);
+
+                // Longer than the shortest reconnect backoff: a loop left running would have tried again.
+                yield return E2EServer.Settle(1.5f);
+
+                Assert.That(log.Matching(Attempt), Has.Length.EqualTo(1), $"Logged:\n{log}");
+                Assert.That(log.Matching(Failure), Is.Empty, $"Logged:\n{log}");
+                Assert.That(log.Matching(new Regex("^Colibri: connected to ")), Is.Empty, $"Logged:\n{log}");
+                Assert.That(_server.Accepted, Is.LessThanOrEqualTo(2));
+            }
+        }
+
+
+        /*
          *  Driving the connection singleton
          */
 
@@ -442,6 +593,43 @@ namespace HCIKonstanz.Colibri.E2E
                 await Task.Delay(releaseAfterMs).ConfigureAwait(false);
                 sendLock.Release();
             });
+        }
+
+        /// <summary>What Colibri logs, from any thread, until this is disposed.</summary>
+        private sealed class LogLines : System.IDisposable
+        {
+            private readonly List<string> _lines = new List<string>();
+
+            public LogLines()
+            {
+                Application.logMessageReceivedThreaded += Record;
+            }
+
+            public string[] Matching(Regex pattern)
+            {
+                lock (_lines)
+                    return _lines.Where(line => pattern.IsMatch(line)).ToArray();
+            }
+
+            public override string ToString()
+            {
+                lock (_lines)
+                    return string.Join("\n", _lines);
+            }
+
+            public void Dispose()
+            {
+                Application.logMessageReceivedThreaded -= Record;
+            }
+
+            private void Record(string message, string stackTrace, LogType type)
+            {
+                if (!message.StartsWith("Colibri:"))
+                    return;
+
+                lock (_lines)
+                    _lines.Add(message);
+            }
         }
 
         private static IEnumerator DestroyConnection()
