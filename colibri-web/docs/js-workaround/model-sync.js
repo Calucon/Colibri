@@ -1,5 +1,5 @@
 /**
- *  JavaScript workaround for projects that are tied to plain JavaScript — please
+ *  JavaScript workaround for projects that are tied to plain JavaScript. Please
  *  read ./README.md first. Colibri targets TypeScript; a workaround is not a
  *  feature and is not covered by the tests.
  *
