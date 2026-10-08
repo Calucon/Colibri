@@ -25,12 +25,14 @@ kinds, to the other clients of the sender's app - Unity and web alike, the sende
   [Model synchronization](#model-synchronization)).
 
 It also answers `model::request`, and handles the messages on its own channels (see
-[Server messages](#server-messages)). Any other message reaches no other client, and nothing is
-logged about it: a command such as `myCommand`, sent with colibri-web's
-`SendMessage(channel, 'myCommand', …)` or colibri-unity's `WebServerConnection.SendCommand`, is
-dropped. To send the other clients a message of your own, give it a command that starts with
-`broadcast::`, e.g. `broadcast::myCommand`, and receive it with colibri-web's `RegisterChannel` or
-colibri-unity's `OnMessageReceived`.
+[Server messages](#server-messages)). Any other message reaches no other client: a command such as
+`myCommand`, sent with colibri-web's `SendMessage(channel, 'myCommand', …)` or colibri-unity's
+`WebServerConnection.SendCommand`, is dropped. The server logs a warning the first time, once per
+app, channel and command: `Client '<name>' (<id>, app '<app>') sent 'myCommand' on channel
+'<channel>', which the server does not handle: it reached no other client. ...`. To send the other
+clients a message of your own, give it a command that starts with `broadcast::`, e.g.
+`broadcast::myCommand`, and receive it with colibri-web's `RegisterChannel` or colibri-unity's
+`OnMessageReceived`.
 
 Under overload, or from a client that sends too fast, the server holds back and merges
 `model::update` messages and drops `broadcast::` messages; see [Inbound limits](#inbound-limits).
@@ -349,17 +351,33 @@ as `Invalid frame length: 1744830464` (`0x68000000`, `'h' << 24`).
 
 ### Backpressure
 
-Before writing a frame to a client's socket, the server checks `socket.writableLength` against a
-1MB high-water mark. If the client's write buffer already exceeds it, the frame is dropped (not
-queued), whatever it carries: a heartbeat, a `broadcast::` message, a `model::update` or
-`model::delete`, a `client::connected`. The server logs a warning when a client starts falling
+Before writing a relayed frame to a TCP client's socket, the server checks how much relayed
+traffic is still waiting in the client's write buffer against a 1 MiB high-water mark. Past it,
+the frame is dropped (not queued), whatever it carries: a `broadcast::` message, a `model::update`
+or `model::delete`, a `client::connected`. The server logs a warning when a client starts falling
 behind, and another, with the number of frames dropped, once it has caught up. That keeps the
 server's memory bounded for a client that cannot keep up, but the client is not told what it
 missed. A continuous `broadcast::` stream gets over a dropped message with the next one, while a
 one-off broadcast is lost. A `model::update` usually carries only the fields that changed, so a
 dropped one can leave a field out of date on that client until it changes again, and a dropped
 `model::delete` leaves the object in place. A client that reconnects asks for the current models
-again (see [Known limits](#known-limits)).
+again (see [After a reconnect](#after-a-reconnect)).
+
+Two kinds of frame are exempt:
+
+- **Answers to the client's own requests are never dropped for being behind**: the `model::update`
+  and `model::delete` frames answering its `model::request`, and the `client::connected` frames
+  answering its `client::request`. Nothing would ever send them again, and the answer to a request
+  for a whole channel is one frame per model, all written at once, so a late joiner on a slow link
+  would otherwise get only part of the store. They are queued, and do not count towards the
+  high-water mark, so a client still reading its answer also gets the updates made meanwhile. Only
+  past 64 MiB of answers waiting for one client are further answers dropped, with a warning naming
+  the client, and another once it takes answers again.
+- **Heartbeats are never dropped either**, and one goes out ahead of the next message once 64 KiB
+  have been written to the client since the last one. A client that sends nothing of its own stays
+  connected by echoing heartbeats, and it can only echo the ones it has read, so this keeps a live
+  client that is still reading a long answer from being disconnected as idle (see
+  [Heartbeat / latency](#heartbeat--latency)).
 
 This is the outgoing side. For what the server does when clients send more than it can process,
 see [Inbound limits](#inbound-limits).
@@ -417,7 +435,12 @@ always goes through at once. Past a limit:
   sent.
 - **`broadcast::` messages are dropped.** There is nothing to merge them into.
 - An update the server could not apply anyway - not a JSON object with a string `id` - is
-  dropped, and so is an update for one more object once 1000 are held for that client.
+  dropped.
+- **An update for one more object once updates for 1000 are held for that client is lost**
+  (`MAX_HELD_OBJECTS`). Unlike a dropped broadcast, that is state nothing sends again: the object
+  reaches the server's copy and the other clients only when it changes again. A client that
+  creates a few thousand objects at once, such as a scene with many synced objects loading, can
+  run into this.
 
 Nothing a client sends overtakes its held updates. They are passed on before the next message
 from that client that is not limited, before a second handshake, and, when it disconnects, before
@@ -426,16 +449,27 @@ same object and bring it back.
 
 Clients are not told. The other clients of the app receive fewer updates, each possibly carrying
 the changes of several, and later; synced objects move less smoothly, and a stream of
-`broadcast::` messages has gaps. The server logs each episode as a warning when it starts and
-again once nothing has been over the limit for a second, with how many updates were held back and
-messages dropped. With the default settings, the warnings read:
+`broadcast::` messages has gaps.
+
+An episode runs from the first message held back or dropped until nothing has been over the limit
+for a second. One that goes on for a second or longer is warned about a second in, and again when
+it is over, with how many updates were held back and messages dropped. A shorter one, such as the
+main thread stalling for a moment on a long garbage collection, is summed up in a single line at
+debug level, which the default `CONSOLE_LOG_LEVEL` does not print, unless it lost updates: then
+that summary is a warning however short the episode was, and says how many were lost. With the
+default settings, the warnings read:
 
 | warning | means |
 | --- | --- |
-| `The main thread has fallen 2000 TCP messages behind (TCP_INBOUND_BACKLOG_LIMIT) ...` | the server as a whole is taking in more than it can process; every Unity client is limited |
+| `The main thread has kept falling 2000 TCP messages behind (TCP_INBOUND_BACKLOG_LIMIT) for a second now: ...` | the server as a whole is taking in more than it can process; every Unity client is limited |
 | `The main thread has caught up with TCP messages again; ...` | that episode is over |
-| `Unity client '<name>' (...) is sending more than 1000 ...`, `Web client <id> (...) is sending more than 1000 ...` | one client is over its rate limit |
+| `Unity client '<name>' (<id>, app '<app>', <address>) has been sending more than 1000 model::update and broadcast::* messages a second (CLIENT_MESSAGE_RATE_LIMIT, bursts up to CLIENT_MESSAGE_RATE_BURST=2000) for a second now. ...`, and the same starting `Web client <id> (app '<app>', <address>)` | one client is over its rate limit |
 | `... is back under the message rate limit; ...`, `... disconnected while over the message rate limit; ...` | that client's episode is over |
+| `The main thread was briefly 2000 TCP messages behind (TCP_INBOUND_BACKLOG_LIMIT) and has caught up; ...`, `... was briefly over the message rate limit; ...` | a short episode; a warning only when it lost updates, a debug line otherwise |
+
+The summary at the end of an episode reads, for example, `held back 1475 model::update(s), merged
+per object and dropped 12 message(s) over 2.5 s`, with `lost 450 model::update(s) for good` added,
+and a sentence on what that means, when updates were lost.
 
 The rate limit is far above what a client needs - one syncing 10 objects 72 times a second sends
 720 updates a second - so it only catches a runaway loop, typically something that sends every
@@ -474,9 +508,9 @@ each other when the channel names match.
 
 | command | payload | what the server does |
 | --- | --- | --- |
-| `model::update` | an object with a string `id`, plus the fields that changed (or all of them) | merges it into its copy - each field sent replaces the stored one, fields not sent are kept - and relays the message unchanged to every other client of the app; past an [inbound limit](#inbound-limits), merged with the sender's later updates first. Without a string `id` it logs an error and drops it. |
-| `model::delete` | `{ "id": "…" }` | removes its copy and relays the message to every other client of the app. Without an `id` it logs a warning and drops it. |
-| `model::request` | `{ "id": "…" }` for one model; anything else (`null`, `{}`) for all of them | answers the requester alone, with one `model::update` per model it has on that channel. Asked for an id it does not have, it answers `{ "id": "…" }`. |
+| `model::update` | an object with a string `id`, plus the fields that changed (or all of them) | merges it into its copy - each field sent replaces the stored one, fields not sent are kept - and relays the message unchanged to every other client of the app; past an [inbound limit](#inbound-limits), merged with the sender's later updates first. Without a string `id` it logs an error and drops it. For an id deleted a moment ago it does neither (see [Deleted models](#deleted-models)). |
+| `model::delete` | `{ "id": "…" }` | removes its copy, remembers for a while that the id was deleted (see [Deleted models](#deleted-models)), and relays the message to every other client of the app. Without an `id` it logs a warning and drops it. |
+| `model::request` | `{ "id": "…" }` for one model, optionally with `"again": true`; anything without a string `id` (`null`, `{}`) for all of them | answers the requester alone (see [Requests](#requests)). |
 
 The merge only looks at top-level fields: a nested object sent in an update replaces the stored
 one as a whole.
@@ -484,6 +518,83 @@ one as a whole.
 The server keeps the models per app and channel, in memory only. It clears an app's models when
 the app's last client disconnects, and has none after a restart. The REST store below is what
 persists.
+
+### Requests
+
+A `model::request` comes in three forms. Any field other than `id` and `again` is ignored.
+
+| payload | means | the server answers, with messages to the requester only |
+| --- | --- | --- |
+| none, `null`, `{}`, or anything else without a string `id` | send me every model of this channel | one `model::update` per model it has on that channel |
+| `{ "id": "…" }`, a **fresh request** | the sender has this object in its scene now, or is creating it | one `model::update` with the model, or, for an id it has no model for, with the bare `{ "id": "…" }`. For an id deleted a moment ago, it first forgets the delete: the id is in use again. |
+| `{ "id": "…", "again": true }`, a **re-request** | the sender held this object before an outage, and asks again after reconnecting | the same as for a fresh request, except for an id deleted a moment ago: `model::delete` `{ "id": "…" }`, and the delete stays remembered |
+
+`again` has to be the JSON value `true`; with any other value, the request is a fresh one.
+
+A **bare `{ "id": "…" }`** means the server has no model for that id, so the requester's copy is
+all there is. The requester then sends its full state as a `model::update`, which creates the
+model on the server and reaches the other clients. A model the server does have wins: the
+requester takes its values. colibri-web then sends the changes made to the model since
+`registerModel`, or since the reconnect, on top of them.
+
+How the two clients use the three forms:
+
+- **colibri-unity.** A `SyncBehaviourManager`, and a `Sync.AddModelUpdateListener` without an id,
+  ask for the whole channel. A `SyncBehaviour` placed in a scene, or created on this client, sends
+  a fresh request for its own id when it wakes up. A copy that a `SyncBehaviourManager` builds
+  because another client created the object sends no fresh request: it is not this client's own
+  object, and a fresh request would bring back one that was deleted a moment ago. After a
+  reconnect, every object is re-requested by id, and every channel a manager listens on is asked
+  for again as a whole.
+- **colibri-web.** `RegisterModelSync` asks for the whole channel, and `registerModel` sends a fresh
+  request for the model it registers. After a reconnect, each registered model that the server
+  had answered for is re-requested by id (one registered while the connection was down is asked
+  for afresh), and the whole channel is asked for once all of them have their answer.
+
+### Deleted models
+
+Each `model::delete` leaves a tombstone: for `MODEL_TOMBSTONE_SECONDS` (600 s by default) the
+server remembers that the id was deleted, per app and channel. Meanwhile:
+
+- **Updates for it are ignored**: neither stored nor relayed, with a line at debug level. Without
+  this, an update another client sent before the delete reached it, one held back under an
+  [inbound limit](#inbound-limits), or one a client queued while it was offline would create the
+  object again, on the server and on every client.
+- **A re-request is answered with `model::delete`**, to the requester only, and the tombstone stays.
+  A client that was away when the delete was relayed removes its copy then, instead of keeping one
+  nobody else has, or sending it to everyone again.
+- **A fresh request lifts the tombstone**, and is answered with the bare id. The requester has the
+  object in its scene again, for example a scene with placed objects of fixed ids that was
+  unloaded and is now loaded again, by the same client or any other. The full state it sends next
+  is stored and relayed as usual.
+
+A tombstone also goes when its time is up, and with the app's models once the app's last client
+has left. One app keeps at most 10,000; past that, the oldest goes first. With
+`MODEL_TOMBSTONE_SECONDS=0` the server keeps none: a re-request for a deleted id is then answered
+with the bare id, the requester sends the object again, and it comes back for everyone.
+
+A tombstone cannot stop an update the server relayed before the delete arrived: one another
+client sent a moment earlier, still on its way to the client that deleted the object. That client
+has to guard against it itself, by ignoring `model::update` for an id it deleted for a while
+afterwards, as colibri-unity does. Otherwise the update builds the object again on that client,
+and from there it can come back for everyone.
+
+### After a reconnect
+
+Both clients ask for the models again after every reconnect, as described under
+[Requests](#requests), and handle each answer for an object they hold:
+
+- **The model**: applied, so what other clients changed during the outage arrives.
+- **The bare id**: the server has forgotten the model, after a restart or because the app's last
+  client had left, which is what a lone client's outage looks like to the server. The client sends
+  its full state again, so the model is back on the server, and clients that join later see it.
+- **`model::delete`**: another client deleted the object during the outage. The client removes its
+  copy.
+
+colibri-unity sends these requests at once, behind the messages it queued during the outage.
+colibri-web asks for the whole channel only once every one of its own models has its answer, so
+that this answer includes what it sent in between. What a reconnect does not catch up on is
+listed under [Known limits](#known-limits).
 
 ## REST store
 
@@ -500,9 +611,13 @@ colibri-unity's `Store` and colibri-web's `getRestObject` / `setRestObject` use 
 | `DELETE /api/store/:app` | `200`, and every value of the app is gone; `404` if the app is unknown |
 | `DELETE /api/store/:app/:name` | `200`; `404` if there is no such value |
 
+Any other request under `/api`, such as a `POST`, or a `PUT` without a value name, answers `404`.
 Errors are JSON, `{ "error": "…" }`, and never carry a stack trace. Any app or value name is
-allowed, `__proto__` and `constructor` included. Every response allows any origin (CORS), so a
-page served from somewhere else can use the store too.
+allowed, `__proto__` and `constructor` included. Each is one segment of the path, so a name with
+`/`, `#`, `?`, `%` or a space in it has to be percent-encoded, as `encodeURIComponent` does;
+colibri-web and colibri-unity's `Store` encode both names, so the two address the same values.
+Every response allows any origin (CORS), so a page served from somewhere else can use the store
+too.
 
 A body sent as form data, `Content-Type: application/x-www-form-urlencoded`, is the exception: it
 is accepted, parsed into an object of its fields with string values (an array for a field given
@@ -527,14 +642,16 @@ cross-transport relay (or a hook that inspects the payload) pays for a conversio
 
 ## Known limits
 
-**A reconnect catches up on updates, not on deletions.** Both clients ask for the current models
-again after every reconnect: colibri-web for each `RegisterModelSync`, and colibri-unity for each
-registered listener - a `SyncBehaviour` for its own id, a `SyncBehaviourManager` or a listener
-without an id for the whole channel - behind the messages it queued during the outage. Two gaps
-remain. A model deleted while a client was away
-stays in that client, since the answer only lists the models that exist. And a model the server no
-longer has - after a restart, or once the app's last client has left - comes back only when a
-client sends an update for it: clients do not send their local models again on reconnect.
+**A reconnect catches up on deletions only for a while.** Both clients ask for the models again
+after every reconnect (see [After a reconnect](#after-a-reconnect)), and a model deleted while a
+client was away is removed from it when its re-request reaches the server within
+`MODEL_TOMBSTONE_SECONDS` of the delete. Later than that, the re-request is answered with the bare
+id, the client sends the model again, and it comes back for everyone. colibri-web re-requests only
+the models it registered itself: one it got from another client and that was deleted while it was
+away stays in its list, since the answer for the whole channel only lists the models that exist.
+A model the server has forgotten comes back in full only from a client that sends it again after
+reconnecting: colibri-unity sends every synced object in its scene, colibri-web only the models it
+registered. Until then, a change to it creates it with only the fields that changed.
 
 **Nobody is authenticated.** Any client that can reach the server can join any app under any name,
 and read and change its models and its REST store. The version check is not access control.
