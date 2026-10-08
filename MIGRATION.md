@@ -121,10 +121,13 @@ shuts down cleanly on `docker stop`), and has a `HEALTHCHECK` on the web port.
 **The server no longer runs as root.** The container starts as root only long enough to hand
 `/srv/colibri/data` to the image's `node` user (uid 1000), then runs the server as `node`. A
 `./data` that Docker creates, or the root-owned one 1.x left behind, therefore works without any
-manual step, but on the host it now belongs to uid 1000. Started with `docker run --user …` (or
-`user:` in compose), the container cannot change ownership: give the directory to that user
-yourself, or use a named volume. If the server cannot write its data directory, it says so on
-stderr at startup, with the fix, and keeps running without saving anything.
+manual step, but on the host it now belongs to uid 1000. That is the only directory it hands
+over, so keep mounting your data there rather than pointing `DATA_ROOT` somewhere else. Started
+with `docker run --user …` (or `user:` in compose), the container cannot change ownership, so the
+data directory has to belong to that user already: give a host directory to it yourself, e.g.
+`sudo chown -R 1001:1001 ./data` for `--user 1001:1001`. A new named volume belongs to uid 1000,
+so it only works as it is with `--user 1000:1000`. If the server cannot write its data directory,
+it says so on stderr at startup, with the fix, and keeps running without saving anything.
 
 **The server's log reaches `docker logs`.** In 1.x its log messages only appeared on the admin
 UI's log page. They are now also printed to stdout, errors and warnings to stderr: the refusals
@@ -132,7 +135,9 @@ and the 1.x-client warning above included, and so are the log lines clients send
 `[RemoteLogger]` prefab or colibri-web's `RemoteLogger`. `CONSOLE_LOG_LEVEL` (`error`, `warn`,
 `info` or `debug`; default `info`) sets how much is printed, and broadcast traffic is only printed
 with `CONSOLE_LOG_BROADCAST_TRAFFIC=true`. The bundled `docker-compose.yml` caps the container log
-at five files of 10 MB.
+at five files of 10 MB. If your compose file came from the 1.x README, remove its `tty: true`:
+with a TTY, `docker logs` has no stderr, and the warnings and errors are mixed into stdout with
+CRLF line endings.
 
 **New limits keep one client, or many clients together, from overloading the server.** Each is an
 environment variable, described in [`.env.example`](colibri-server/.env.example):
@@ -153,10 +158,23 @@ environment variable, described in [`.env.example`](colibri-server/.env.example)
   grows with the square of an app's size; this usually happens when several projects on one server
   use the same app name, such as `test` or the one from an example.
 
-Each stretch of dropping or holding back is logged as one warning when it starts, naming the client
-for the rate limit, and one summary with the counts once it is over. The rate limit's default is
-far above what one client of a typical prototype sends: even ten objects each sending in every frame
-at 72 Hz make 720 updates a second.
+A stretch of dropping or holding back that goes on for a second is logged as one warning then,
+naming the client for the rate limit, and one summary with the counts once it is over. A shorter
+one is only a debug line, unless it lost model updates: one client can have updates held back for
+at most 1000 objects, and an update for one more is lost, which is a warning however short the
+stretch. The rate limit's default is far above what one client of a typical prototype sends: even
+ten objects each sending in every frame at 72 Hz make 720 updates a second.
+
+**The server remembers deleted models for ten minutes** (`MODEL_TOMBSTONE_SECONDS`, default 600,
+`0` for not at all). Meanwhile it ignores updates for a deleted id, so an update another client
+sent before the delete reached it no longer brings the object back for everyone, and it tells a
+client asking for the object again after a reconnect to delete its copy. colibri-unity and
+colibri-web 2.x do their part by themselves. A client of your own that speaks the protocol
+directly has to tell the server which kind of request it sends: `model::request { id }` for an
+object it has in its scene now or is creating, which lifts such a tombstone (without it, the
+updates for an id deleted a moment ago are ignored), and `{ id, again: true }` when it asks again
+after a reconnect for an object it held before. See [Deleted
+models](colibri-server/docs/protocol.md#deleted-models).
 
 ---
 
@@ -389,16 +407,36 @@ console. Calls that used to hang now fail, and say what failed, at which URL, wi
 `413` above 100 kB. A plain number, string, boolean or `null` is now stored too (Unity's
 `Store.Put("score", 42)`, colibri-web's `setRestObject('note', 'text')`), up to 5 MiB.
 
+**Unity's `Store` converts with Newtonsoft JSON instead of `JsonUtility`.** Newtonsoft saves public
+fields and properties, so a private `[SerializeField]` field of a saved class is no longer saved or
+loaded: make it public, or add `[JsonProperty]`. A `Vector2`, `Vector3`, `Vector4`, `Quaternion` or
+`Color` inside the class is saved as an array of its components now, and values that 1.x saved as
+`{"x": …}` still load. A value that cannot be converted, or a saved value that does not fit the type
+asked for, makes `Put` return `false` and `Get` return `default`, with the reason in the console.
+
 **Clients catch up after a reconnect.** Both clients used to ask for the synced models' state only
 when a listener registered, so whatever other clients changed during an outage was missed until the
 next change. Unity and web clients now ask again every time they reconnect, and update the objects
-they have rather than creating duplicates. A model deleted during the outage is not removed, and the
-server still forgets an app's models once its last client disconnects. While a Unity client is
+they have rather than creating duplicates. The server still forgets an app's models once its last
+client disconnects, which is what a lone client's outage looks like to it, and when it restarts; a
+client that finds its objects gone sends them again in full (colibri-web: the models it registered
+itself). An object another client deleted during the outage is deleted on the reconnecting client
+too, if the delete is no more than `MODEL_TOMBSTONE_SECONDS` (ten minutes) old (colibri-web: again
+only for the models it registered; one it got from another client stays). While a Unity client is
 disconnected, what it sends waits in one queue and goes out in order when the connection is back;
 past 256 broadcasts and log lines the oldest are dropped, with one warning per outage, while the
 model updates for one object are merged into one instead. Behind that, the whole queue is capped
 at 10,000 messages, connected or not: past it the oldest broadcasts and log lines go first, then
 the oldest model messages, with a warning.
+
+**colibri-web's `registerModel` takes what the server has.** It used to send the new instance in
+full at once. When the server already held that id (a fixed id such as `'session'`, kept while
+another client stayed connected and the page was reloaded), that overwrote the copy everyone else
+had, while the answer to the request for every model put the old values back on this client only.
+`registerModel` now asks the server for the id first: if the server has the model, its values
+replace the instance's, and changes made after `registerModel` are sent on top of them; if not,
+the instance is sent in full, one round trip later than before. Registering an id that is already
+in the list replaces the listed instance instead of listing the id twice.
 
 **Voice chat binds to an ephemeral port.** The receive socket used to bind port 9014, which capped a
 machine at one Unity client. The server replies to the datagram's source port, so the fixed port
@@ -422,8 +460,8 @@ Unity object the listener belongs to (the component for a method group, the comp
 captured for a lambda) and drops the listener once that object is destroyed. A listener with no such
 object stays registered until `Sync.Unregister`, as in 1.x: a static method, or a lambda that uses
 nothing of its component (only its parameter, `Debug.Log` or a static), because that lambda captures
-nothing. Registering does not check for duplicates, so if `Start` adds one of those, a scene reload
-adds it again and each message then reaches it twice.
+nothing. Registering the same one again on the same channel adds nothing, so a `Start` that runs
+again after a scene reload does not make each message reach it twice.
 
 Your existing `Sync.Unregister` calls in `OnDestroy` are still correct and still worth keeping; for
 listeners that belong to a component they are simply no longer the difference between working and
