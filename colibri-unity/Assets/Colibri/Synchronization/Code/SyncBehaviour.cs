@@ -346,9 +346,13 @@ namespace HCIKonstanz.Colibri.Synchronization
         private Sync.ReconnectRound _round;
 
         // Parallel to _attributeList: the members whose last change the round showed to have been
-        // lost with the connection. Each keeps its value, which goes out again, and takes nothing
-        // more from the round.
+        // lost with the connection, or to be read by the server after what arrived. Each keeps its
+        // value, which goes out again, and takes nothing more from the round.
         private bool[] _keptInRound;
+
+        // Parallel to _attributeList: the members that sent after the requests of the round went
+        // out. The server reads what they sent after everything that arrives in the round.
+        private bool[] _sentInRound;
 
         private bool _isQuitting;
         private bool _hasReceivedDestroyCommand;
@@ -605,6 +609,9 @@ namespace HCIKonstanz.Colibri.Synchronization
                     continue;
 
                 SentValuesOf(attribute).Remember(ToKeep(attribute, property.Value), now, heardAt, answersPending);
+
+                if (answersPending)
+                    (_sentInRound ??= new bool[_attributeList.Count])[attribute.Index] = true;
             }
         }
 
@@ -749,6 +756,13 @@ namespace HCIKonstanz.Colibri.Synchronization
          *  (SentValues.KeepUntilAnswered): what it sends after them cannot be in an answer, and an
          *  object moved on right after the reconnect would push out the values sent into the dead
          *  link, so that the answer holding one was applied.
+         *
+         *  What a member sends after the requests reaches the server after everything that arrives
+         *  in the round, and replaces it there and on every other client. So such a member keeps
+         *  its value whatever arrives, even a value it never held: applied here, that stayed on
+         *  this client alone, and a one-off change such as a switch never mended it. It is treated
+         *  as a lost change, and sent again, so that what arrived is kept as the value held before
+         *  it: if the link drops again before the server has read it, the next round tells.
          */
 
         /// <summary>Told by Sync that the model has just been asked for again after a reconnect.</summary>
@@ -758,6 +772,8 @@ namespace HCIKonstanz.Colibri.Synchronization
 
             if (_keptInRound != null)
                 Array.Clear(_keptInRound, 0, _keptInRound.Length);
+            if (_sentInRound != null)
+                Array.Clear(_sentInRound, 0, _sentInRound.Length);
 
             if (_sentValues != null)
             {
@@ -769,7 +785,7 @@ namespace HCIKonstanz.Colibri.Synchronization
         /// <summary>
         /// Judges one member of what arrived in the round. True when the server's value is not to
         /// be applied: the value this object sent last arrived, or what it sent after the server's
-        /// value was lost, and goes out again now.
+        /// value was lost or went out after the requests, and goes out again now.
         /// </summary>
         private bool KeepsLocalValue(string name, JToken serverValue, Sync.ReconnectRound round)
         {
@@ -793,16 +809,20 @@ namespace HCIKonstanz.Colibri.Synchronization
                     return true;
 
                 case SentValues.Verdict.Lost:
-                    // The server holds this value, and the one sent again goes out after it. Should
-                    // that be lost too, in a link that drops again soon after, the next round tells
-                    // it by this value.
-                    sent.ServerShowed(ToKeep(attribute, serverValue));
-                    KeepAndSendAgain(attribute);
-                    return true;
+                    break;
 
                 default:
-                    return false;
+                    // Sent after the requests, and read by the server after this value.
+                    if (_sentInRound == null || !_sentInRound[attribute.Index])
+                        return false;
+                    break;
             }
+
+            // The server holds this value, and the one sent again goes out after it. Should that be
+            // lost too, in a link that drops again soon after, the next round tells it by this value.
+            sent.ServerShowed(ToKeep(attribute, serverValue));
+            KeepAndSendAgain(attribute);
+            return true;
         }
 
         /// <summary>Keeps the member's local value for the rest of the round, and sends it again.</summary>

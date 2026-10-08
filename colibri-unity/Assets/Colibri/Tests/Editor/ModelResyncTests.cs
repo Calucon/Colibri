@@ -572,6 +572,58 @@ namespace HCIKonstanz.Colibri.Tests
         }
 
         /// <summary>
+        /// A member changed right after the reconnect, once the requests have gone out, takes
+        /// nothing from the round either, not even a value another client set during the outage:
+        /// the server reads the change after everything that arrives before the end of the answers,
+        /// and it replaces that value there and on every other client. Applied here, the other
+        /// client's value stayed on this client alone until the member changed again, which a switch
+        /// may never do.
+        /// </summary>
+        [Test]
+        public void AMemberChangedAfterTheRequestsTakesNothingFromTheAnswers()
+        {
+            var model = SpawnModelThatSent("before");
+            Sync.RequestModelsAgain(disconnectedAt: 103);
+            Change(model, "changed after the reconnect", 103.5);
+
+            model.OnModelUpdate(Answer(model, "set by another client during the outage"));
+            model.OnModelUpdate(Relayed(model, "label", "theirs, sent before the server read ours"));
+
+            Assert.That(model.Label, Is.EqualTo("changed after the reconnect"), "What the server held before it read the change was applied here alone");
+            var sent = SentAt(model, 104);
+            Assert.That(sent, Is.Not.Null, "The change was not sent again");
+            Assert.That((string)sent["label"], Is.EqualTo("changed after the reconnect"));
+            Assert.That(SentAt(model, 105), Is.Null);
+
+            EndOfAnswers();
+            model.OnModelUpdate(Relayed(model, "label", "theirs, sent after"));
+            Assert.That(model.Label, Is.EqualTo("theirs, sent after"), "After the answers, another client's update should be applied as it arrives");
+        }
+
+        /// <summary>
+        /// That change, and the one sent again, are lost with a link that drops again before the
+        /// answers. The answer after the next reconnect still holds the other client's value, which
+        /// the change was sent after, and tells it: the change is kept and goes out once more.
+        /// </summary>
+        [Test]
+        public void AChangeAfterTheRequestsLostWhenTheLinkDropsAgainIsKeptAndSentAgain()
+        {
+            var model = SpawnModelThatSent("before");
+            Sync.RequestModelsAgain(disconnectedAt: 103);
+            Change(model, "changed after the reconnect", 103.5);
+            model.OnModelUpdate(Answer(model, "set by another client during the outage"));
+            Assert.That(SentAt(model, 104), Is.Not.Null, "Precondition: the change goes out again");
+
+            Sync.RequestModelsAgain(disconnectedAt: 106);
+            model.OnModelUpdate(Answer(model, "set by another client during the outage"));
+
+            Assert.That(model.Label, Is.EqualTo("changed after the reconnect"), "The answer after the second reconnect put the other client's value back");
+            var sent = SentAt(model, 107);
+            Assert.That(sent, Is.Not.Null, "The change lost at the second drop was not sent again");
+            Assert.That((string)sent["label"], Is.EqualTo("changed after the reconnect"));
+        }
+
+        /// <summary>
         /// The end of the answers is the answer to the request sent after all the others, however
         /// many answers came before it: one where two were expected, say. An update after it is
         /// applied as it arrives, even long after and even one holding a value this object sent.
