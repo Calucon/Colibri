@@ -37,11 +37,9 @@ rationale, migration steps, and what the Editor verification did and did not cov
 - **`Store` converts values with Newtonsoft instead of `JsonUtility`.** `JsonUtility` saved public
   fields and private `[SerializeField]` fields; Newtonsoft saves public fields and properties. A
   private `[SerializeField]` field is therefore neither saved nor loaded any more: make it public
-  or add `[JsonProperty]`. A `Vector3`, `Quaternion` or `Color` inside the saved class, which
-  `JsonUtility` wrote as `{"x":…}`, now makes `await Store.Put(…)` throw a
-  `JsonSerializationException` (for a `Vector3`, Newtonsoft follows `normalized` into itself).
-  Values 1.x saved that way still load. Store such values as `float` fields or arrays, or save a
-  `JObject` built with Colibri's `ToJson()`.
+  or add `[JsonProperty]`. A `Vector2`, `Vector3`, `Vector4`, `Quaternion` or `Color` inside the
+  saved class goes through `ColibriJson`'s converters and is saved as an array of its components,
+  where `JsonUtility` wrote `{"x":…}`. Values 1.x saved that way still load.
 - **`ObservableModel<T>`, `ObservableManager<T>` and `Samples/ObservableModel` are deleted.**
 - **Vendored `Newtonsoft.Json.dll` is gone**, replaced by the `com.unity.nuget.newtonsoft-json`
   package, which is declared as a real dependency, so installing Colibri is one git URL and nothing
@@ -241,7 +239,22 @@ rationale, migration steps, and what the Editor verification did and did not cov
   channel it listens on (by id for each `SyncBehaviour`, for the whole channel for a
   `SyncBehaviourManager`) behind the messages queued during the outage, so the server answers with
   this client's own offline changes already applied. The manager updates the objects it already
-  has rather than spawning duplicates.
+  has rather than spawning duplicates. A request sent again for an object carries `"again": true`,
+  so the server can tell an object this client held before the outage from one being created now,
+  and answers `model::delete` for one another client deleted meanwhile (model tombstones, see the
+  server's [protocol docs](../colibri-server/docs/protocol.md#deleted-models)).
+- **A large message on a slow link no longer gets a healthy connection dropped.** The heartbeat
+  echo waited for the socket while a long write held it, so the receive loop stopped and the 2 s
+  heartbeat watchdog dropped the connection, again and again, since the message stayed first in
+  line for the next session. The echo no longer waits for the socket, so the message goes out
+  instead of being retried forever.
+- **Strings that look like timestamps arrive exactly as sent.** `"2026-10-08T12:00:00Z"` was turned
+  into a date on the way in, and came out reformatted or moved into the device's time zone (in
+  1.3.1 too). `ColibriJson.CreateSettings`, and with it the `Store`, keeps them as strings as well.
+- **Received messages no longer queue without limit while `Update` does not run** (the app paused,
+  the Editor in the background). Past 1000 waiting messages, an object's model updates are folded
+  into its newest state, and past 10 000 the oldest broadcasts are dropped first, with one warning
+  (in 1.3.1 the queue had no bound either).
 - **One bad message no longer takes the rest of the frame with it.** A payload that cannot be read
   as the type its command names (a malformed `bool`, `int`, `float` or `string`, or an array command
   whose payload is not a JSON array) is reported once, naming the channel, the command and the
@@ -274,7 +287,12 @@ rationale, migration steps, and what the Editor verification did and did not cov
   to the next.
 - **`Store`** serializes with Newtonsoft instead of `JsonUtility`, which cannot handle dictionaries,
   properties, or top-level arrays and so silently disagreed with what `Sync` can carry. What that
-  costs a 1.x project is under Breaking changes.
+  costs a 1.x project is under Breaking changes. A value that cannot be converted, or a saved
+  value that does not fit the type asked for, makes `Put` return `false` and `Get` return
+  `default`, with the reason in the console.
+- **`Store` escapes the app name and the key in its URLs** the way colibri-web does
+  (`encodeURIComponent`), so keys with `/`, `#`, `?`, `%` or spaces address the same entries from
+  Unity and the web client.
 
 ## SyncBehaviour and SyncTransform
 
@@ -309,6 +327,17 @@ rationale, migration steps, and what the Editor verification did and did not cov
   update it sent in between reached the server after the delete, and since the server creates a
   model on its first update, the object came back, on every other client too, with nobody left to
   delete it.
+- **An object built from another client's update does not undo a delete.** An object a
+  `SyncBehaviourManager` builds from a remote `model::update` sends no `model::request { id }` when
+  it registers. That request told the server the object was being created here, which lifted its
+  tombstone of a model deleted meanwhile, and the deleted object came back on every client. The
+  object is still asked for again after a reconnect.
+- **A client that deletes an object does not build it again** from an update another client sent
+  before the server had the delete. The deletes this client sends are remembered for 60 seconds,
+  and creating an object with that id on this client ends that at once.
+- **A manager also finds the objects a script switched off before its `Start` ran** (1.3.1 missed
+  them too). They now send their state, and are not built a second time when the server already
+  holds them.
 - **Showing and hiding.** Deactivating a `SyncTransform`'s GameObject hides its copies on the other
   clients, and reactivating it shows them again, as in 1.3.1: its `Active` member reads
   `activeSelf`, and the poll keeps running while the object is inactive, since being inactive is
@@ -448,6 +477,12 @@ otherwise spend on their prototype, so:
   accessor, or two members whose lowercased names collide are reported when the model type is first
   initialized instead of failing on the first message.
 - Samples and README lead with the cast-free form.
+- The README's Remote Store limitations match the `Store`: Unity types go through `ColibriJson`,
+  failures return `false` or `default` instead of throwing, and names are URL-encoded. Its outage
+  section describes the three answers to a re-request and says that an object changed during the
+  outage is not sent in full again. It also covers the bound on received messages waiting for
+  `Update`, and that loading a scene again does not rebuild placed objects on clients that kept it
+  open.
 - **The samples are no longer magenta under URP.** Their objects used Unity's built-in
   `Default-Material`, whose shader belongs to the built-in render pipeline. They share
   `Materials/ColibriSample.mat` now, whose shader `Colibri/Sample Lit` draws in the built-in pipeline
@@ -724,12 +759,15 @@ The fixes it produced:
   back. Deactivating its GameObject does not pause it, since for a `SyncTransform` the active state
   is itself synced. In 1.3.1, whose change observation ran until the object was destroyed
   (`TakeUntilDestroy`), a disabled component kept syncing.
-- After a reconnect, the re-requested models bring in what other clients changed, but not what they
-  deleted: an object deleted elsewhere during the outage stays on this client.
+- After a reconnect, an object deleted elsewhere during the outage is deleted on this client too
+  only when the server still remembers the delete (`MODEL_TOMBSTONE_SECONDS`, 10 minutes by
+  default). After that, the re-request is answered as for an unknown object, this client sends it
+  again, and it is back for everyone as if it had just been created.
 - The server forgets an app's models when the app's last client disconnects (a single client whose
-  connection drops is that last client) and when it restarts. Clients do not send their objects'
-  full state again afterwards, so the server learns each object again only from its next change,
-  and then only the members that changed.
+  connection drops is that last client) and when it restarts. An object that did not change during
+  the outage sends its full state again when the server answers its re-request with nothing. One
+  that changed is not sent in full: its merged update reaches the server first, so the server has
+  only the members that changed, and learns the others only when they change.
 - `SyncBehaviourManager` must unsubscribe from `SyncBehaviour<T>.ModelCreated` / `ModelDestroyed` in
   `OnDestroy`, since static events do not do it themselves. It does; anything else subscribing to
   them has to as well, or it leaks across Play sessions when domain reload is disabled.
@@ -746,9 +784,6 @@ The fixes it produced:
   member is cheaper as a property. Attribute construction dispatches through an explicit per-type
   `if` chain rather than `MakeGenericMethod`, which keeps every instantiation visible to the AOT
   compiler.
-- `Store` logs and returns `default`/`false` only for a failed request. A value Newtonsoft cannot
-  convert throws out of the `await` instead: on `Put`, a class holding a `Vector3`, `Quaternion` or
-  `Color`; on `Get`, a saved value that does not fit the requested type (a `JsonException`).
 - Every `SyncBehaviour<T>` registers its own listener on its type's channel, so each inbound
   `model::update` is offered to every instance of that type. With every object changing, the cost
   of applying a frame's updates therefore grows with the square of the number of objects. The
