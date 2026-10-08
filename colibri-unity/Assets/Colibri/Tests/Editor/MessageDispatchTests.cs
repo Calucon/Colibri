@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
+using HCIKonstanz.Colibri.Core;
 using HCIKonstanz.Colibri.Networking;
 using HCIKonstanz.Colibri.Synchronization;
 using Newtonsoft.Json.Linq;
@@ -39,7 +40,7 @@ namespace HCIKonstanz.Colibri.Tests
 
             // Registering a listener creates the connection singleton, which in edit mode is an
             // inert component on a GameObject in the open scene. It is not this test's to keep.
-            foreach (var connection in Object.FindObjectsByType<WebServerConnection>(FindObjectsInactive.Include, FindObjectsSortMode.None))
+            foreach (var connection in UnityCompat.FindAll<WebServerConnection>(FindObjectsInactive.Include))
                 Object.DestroyImmediate(connection.gameObject);
         }
 

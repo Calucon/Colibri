@@ -2,6 +2,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
+using HCIKonstanz.Colibri.Core;
 using HCIKonstanz.Colibri.Networking;
 using HCIKonstanz.Colibri.Setup;
 using HCIKonstanz.Colibri.Synchronization;
@@ -657,7 +658,7 @@ namespace HCIKonstanz.Colibri.E2E
         }
 
         private static E2ESyncModel[] Instances(string id)
-            => Object.FindObjectsByType<E2ESyncModel>(FindObjectsInactive.Include, FindObjectsSortMode.None)
+            => UnityCompat.FindAll<E2ESyncModel>(FindObjectsInactive.Include)
                 .Where(m => m.Id == id)
                 .ToArray();
 
@@ -690,7 +691,7 @@ namespace HCIKonstanz.Colibri.E2E
 
         private static IEnumerator DestroyConnection()
         {
-            var existing = Object.FindFirstObjectByType<WebServerConnection>();
+            var existing = Object.FindAnyObjectByType<WebServerConnection>();
             if (existing != null)
             {
                 // OnDisable cancels the loop and closes the socket; the frame after is what lets

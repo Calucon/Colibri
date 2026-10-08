@@ -346,7 +346,7 @@ namespace HCIKonstanz.Colibri.E2E
         }
 
         private static SyncTransform[] Instances(string id)
-            => Object.FindObjectsByType<SyncTransform>(FindObjectsInactive.Include, FindObjectsSortMode.None)
+            => UnityCompat.FindAll<SyncTransform>(FindObjectsInactive.Include)
                 .Where(s => s.Id == id)
                 .ToArray();
 

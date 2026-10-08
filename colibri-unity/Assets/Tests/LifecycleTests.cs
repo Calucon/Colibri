@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Linq;
+using HCIKonstanz.Colibri.Core;
 using HCIKonstanz.Colibri.Synchronization;
 using NUnit.Framework;
 using UnityEngine;
@@ -92,8 +93,7 @@ namespace HCIKonstanz.Colibri.E2E
             SpawnConfigured<E2ESyncModel>("model", _ => { });
             yield return null;
 
-            var connections = Object.FindObjectsByType<Networking.WebServerConnection>(
-                FindObjectsInactive.Include, FindObjectsSortMode.None);
+            var connections = UnityCompat.FindAll<Networking.WebServerConnection>(FindObjectsInactive.Include);
 
             Assert.That(connections.Length, Is.EqualTo(1),
                 $"Expected one WebServerConnection, found {connections.Length}");
@@ -183,7 +183,7 @@ namespace HCIKonstanz.Colibri.E2E
             var next = Spawn<ChannelListener>("next-session");
             next.Listen(channel);
 
-            var connection = Object.FindFirstObjectByType<Networking.WebServerConnection>();
+            var connection = Object.FindAnyObjectByType<Networking.WebServerConnection>();
             Assert.That(connection != null, Is.True,
                 "Registering a listener did not bring the connection back, so this client will never hear anything");
 

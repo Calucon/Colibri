@@ -367,7 +367,7 @@ namespace HCIKonstanz.Colibri.E2E
 
         private static IEnumerator DestroyConnection()
         {
-            var existing = Object.FindFirstObjectByType<WebServerConnection>();
+            var existing = Object.FindAnyObjectByType<WebServerConnection>();
             if (existing != null)
             {
                 // OnDisable cancels the loop and closes the socket; the frame after is what lets

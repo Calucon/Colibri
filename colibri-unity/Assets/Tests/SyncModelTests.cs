@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Linq;
 using System.Text.RegularExpressions;
+using HCIKonstanz.Colibri.Core;
 using HCIKonstanz.Colibri.Synchronization;
 using Newtonsoft.Json.Linq;
 using NUnit.Framework;
@@ -566,12 +567,12 @@ namespace HCIKonstanz.Colibri.E2E
         }
 
         private static E2ESyncModel[] Instances(string id)
-            => UnityEngine.Object.FindObjectsByType<E2ESyncModel>(FindObjectsInactive.Include, FindObjectsSortMode.None)
+            => UnityCompat.FindAll<E2ESyncModel>(FindObjectsInactive.Include)
                 .Where(m => m.Id == id)
                 .ToArray();
 
         private static E2EFragileModel[] FragileInstances(string id)
-            => UnityEngine.Object.FindObjectsByType<E2EFragileModel>(FindObjectsInactive.Include, FindObjectsSortMode.None)
+            => UnityCompat.FindAll<E2EFragileModel>(FindObjectsInactive.Include)
                 .Where(m => m.Id == id)
                 .ToArray();
     }
