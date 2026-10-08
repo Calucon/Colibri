@@ -2,9 +2,17 @@
 
 <img src="img/colibri_header.png" alt="Colibri" width="800"/>
 
-Colibri synchronizes data between Unity and web clients for cross-reality research prototypes.
+Provides easy model synchronization and easy access to data for faster cross reality prototyping for research.
 
 ## Features
+
+Colibri focuses on three key areas:
+
+- **Low Barrier:** Setup and Development is as simple as possible, with little to no configuration/code required.
+- **Multi-Platform:** Colibri (currently) supports synchronization between Unity and Web.
+- **Lab Conditions:** XR Research prototypes often benefit from ideal lab conditions, allowing Colibri to focus on low latency and high throughput (at the cost of potential bandwidth savings and some performance).
+
+Included:
 
 - Pub/sub messages on named channels
 - Synchronized objects: `SyncTransform` and `SyncBehaviour` in Unity, `SyncModel` on the web
@@ -12,7 +20,6 @@ Colibri synchronizes data between Unity and web clients for cross-reality resear
 - Remote logging to the server's admin UI
 - Voice chat between Unity clients
 - TLS for Unity (TCP) and web (HTTPS, WSS) connections, not for voice
-- Optimized for low latency and high throughput on local networks, not for low bandwidth
 
 ## Components
 
