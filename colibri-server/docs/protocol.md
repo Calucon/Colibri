@@ -564,7 +564,7 @@ How the two clients use the three forms:
   because another client created the object sends no fresh request: it is not this client's own
   object, and a fresh request would bring back one that was deleted a moment ago. After a
   reconnect, every object is re-requested by id, and every channel a manager listens on is asked
-  for again as a whole.
+  for again as a whole. One more request then marks the end of their answers (see below).
 - **colibri-web.** `registerModel` sends a fresh request for the model it registers, and
   `RegisterModelSync` asks for the whole channel once the models registered by then have their
   answer. After a reconnect, each registered model that the server had answered for is
@@ -572,6 +572,22 @@ How the two clients use the three forms:
   whole channel is asked for once all of them have their answer. A registered model is also asked
   for once more, with `again: true`, when the changes made while it waited replaced values the
   server had, to see that the server has them.
+
+**The end of the answers.** On the wire, an answer is an ordinary `model::update`, just like an
+update the server relays from another client meanwhile. So when colibri-unity has re-requested
+any synced object after a reconnect, it sends one more request after all the others:
+`{ "id": "<fresh GUID>", "again": true }` on the channel `colibri::reconnect`, where Colibri never
+stores a model. The server answers it like any other, with the bare id, and colibri-unity takes
+that answer as the end of the answers to its re-requests (see
+[After a reconnect](#after-a-reconnect)). Nothing on that channel reaches an application listener.
+The server has no code of its own for this. It works because of two things the server already
+does, which have to stay:
+
+- it handles one client's messages in the order they arrive, and
+- it writes its answers to that client in the same order.
+
+So the bare id comes after the answers to every earlier request. A server that answered one
+client's requests out of order would mark the end too early.
 
 ### Deleted models
 
