@@ -94,7 +94,7 @@ this is the server's full detail.
   server); the runtime image ships `dist/` and the production `node_modules` only, and has a
   `HEALTHCHECK`. The admin UI's build-only packages (Angular, PrimeNG, d3, zone.js,
   socket.io-client, fonts) are dev dependencies now and stay out of it, which shrinks the image
-  from 338 MB to 206 MB.
+  from 338 MB to 189 MB.
 - The `HEALTHCHECK` asks `/api/store` on the `WEBSERVER_HOST` and `WEBSERVER_PORT` the server is
   configured with, read like the server reads them: from the environment, else from a `.env` in
   `/srv/colibri`. A container with another web port, with `WEBSERVER_HOST=localhost` (which Node
@@ -111,6 +111,9 @@ this is the server's full detail.
   system without Unix owners, or without `CAP_CHOWN` - the entrypoint says so and starts the
   server anyway, which then checks whether it can write there. A `DATA_ROOT` outside
   `/srv/colibri/data` is not touched, and `docker exec` opens a root shell by default.
+- Only `/srv/colibri/data` belongs to `node`. The server's own code stays root's, so the user the
+  server runs as cannot change it, and `node_modules` and `dist` are no longer copied into a
+  second layer by a `chown` of the whole directory, which saves about 17 MB.
 - `node` itself is PID 1 (`CMD` is `node --enable-source-maps dist/server/main.js`, not
   `npm start`), so `docker stop`'s `SIGTERM` reaches the server and it shuts down cleanly.
 - The image sets `NODE_ENV=production`.
@@ -138,6 +141,9 @@ this is the server's full detail.
   the only sign that nothing was saved was an `EACCES` in the admin UI's log.
 - **`broadcast::` traffic is logged**, at Debug level and tagged `broadcastTraffic`, so the
   admin UI can show sync traffic between clients when asked to; see [Admin UI](#admin-ui).
+- The shutdown and crash lines (`Received SIGTERM, shutting down...`, a shutdown step that
+  failed, an uncaught exception, an unhandled rejection, a failed startup) are printed in the same
+  format, as `[core/Server]`, and appear in the admin UI's log too.
 - dotenv no longer prints its `injected env ... // tip` line on every start.
 - The `Web server listening on` startup line is printed once the web server is listening. It used
   to be printed before the server had even tried its port, so it appeared when the port was taken
@@ -226,7 +232,9 @@ this is the server's full detail.
   instead of throwing inside the TCP worker.
 - Backpressure: writes are checked against `socket.writableLength`/a high-water mark, and a stale
   update is dropped rather than buffered without bound for a client that can't keep up. Only the
-  start and the end of a dropping spell are logged, with the number dropped.
+  start and the end of a dropping spell are logged, with the number dropped. Heartbeats and the
+  answers to a client's own requests are not dropped; see
+  [Load and lost connections](#load-and-lost-connections).
 - Heartbeat and latency ping merged into a single 100 ms frame (the ping timestamp rides in the type
   `0x00` heartbeat), halving idle TCP packet rate. colibri-unity 2.0.0 echoes it, so the admin UI
   shows the latency of Unity clients too.
@@ -272,9 +280,12 @@ EditMode tests, which `npm run test:vectors` checks in CI.
   `0` turns it off), in bursts of up to `CLIENT_MESSAGE_RATE_BURST` (default 2000, at least 1).
   Beyond that its messages are treated as above. A client syncing 10 objects 72 times a second
   sends 720, so this only catches a runaway send loop.
-- Each episode over either limit is one warning when it starts, naming the setting (and the
-  client), and one when it is over, with the number of updates held back and messages dropped.
-  See [Inbound limits](./protocol.md#inbound-limits).
+- An episode over either limit that lasts a second is one warning a second in, naming the setting
+  (and the client), and one when it is over, with the number of updates held back and messages
+  dropped. A shorter one is summed up in one line at debug level, unless it lost model updates:
+  one client can have updates for at most 1000 objects held back at once, and an update for a
+  further object is lost for good. Then the summary is a warning, however short the burst, and
+  says `lost N model::update(s) for good`. See [Inbound limits](./protocol.md#inbound-limits).
 - **A warning when one app has more clients than a typical app has.** Every message is
   relayed to every other client of the same app, so the server's work grows with the square of an
   app's size, and separate projects that all kept the same app name become one big app with
@@ -289,6 +300,34 @@ EditMode tests, which `npm run test:vectors` checks in CI.
   off) is now disconnected as if it had closed the connection, with a warning naming it, and a
   connection that never handshakes is closed after the same time. Echoing the 100 ms heartbeat
   keeps a client connected. Every TCP connection also has keepalive switched on.
+- **A client still reading a backlog is not taken for gone.** A TCP client that sends nothing of
+  its own can only echo the heartbeats it has read, so one reading a large backlog stayed silent
+  long enough to be disconnected by `TCP_IDLE_TIMEOUT_SECONDS`. The server now writes a heartbeat
+  after every 64 KiB it sends, and never drops a heartbeat for a client that is behind. It queues
+  at most one 100 ms heartbeat at a time for a client that is not reading, so a client that sends
+  but never reads does not grow the server's memory.
+- **A late joiner gets the whole store.** The 1 MiB backpressure drop applies to what is relayed
+  from other clients, not to the server's answers to a TCP client's own requests: the models a
+  `model::request` asks for, the client list, a `model::delete` answer. Those are queued however
+  far behind the client is, up to 64 MiB per client, with a warning past that. Without this, a
+  client joining on a link slower than loopback got only about the first MiB of a larger store,
+  and nothing told it the rest was missing.
+
+### Model synchronization
+
+- **A deleted model stays deleted.** For `MODEL_TOMBSTONE_SECONDS` after a `model::delete`
+  (default 600, `0` turns it off) the server keeps a tombstone for the id, per app and channel, at
+  most 10,000 per app. An update for that id is meanwhile neither stored nor relayed, so an update
+  another client sent just before the delete, or queued while it was offline, cannot create the
+  object again for everyone.
+- **Three forms of `model::request`.** `{}` asks for every model of the channel, as before. A
+  fresh `{ id }`, from a client that has the object in its scene now or is creating it, lifts the
+  tombstone and is answered with the bare `{ id }`. So any client can load a scene with placed
+  objects of fixed ids again within that time, the client that unloaded it too, and also after a
+  reconnect. A re-request after a reconnect, `{ id, again: true }`, is answered with
+  `model::delete`, to the requester only, for a model that was deleted while the client was away,
+  and the tombstone stays. colibri-unity and colibri-web 2.0.0 send the re-request form. See
+  [Deleted models](./protocol.md#deleted-models).
 
 ### Correctness & robustness
 
@@ -313,6 +352,14 @@ EditMode tests, which `npm run test:vectors` checks in CI.
     growable `Int16Array` instead of a boxed-number array, and saved with `fs/promises` and a
     recursive `mkdir`. A recording is no longer saved twice when saving takes longer than the
     disconnect check's 1 s tick.
+  - With `VOICE_RECORDING=true`, stopping the server (`docker stop`, a restart, a crash) saves
+    every recording still in progress and logs each save. A recording used to be written only
+    once its client had been quiet for 2 s, so stopping the server while anyone was talking lost
+    their audio without a word. Saves are logged at info level with the client, the length and
+    the file path.
+  - Saving a recording does not block the server: the `.wav` header is written directly and the
+    samples are written asynchronously, so relaying is not held up for seconds when a long
+    recording is saved.
 - **Admin log**: a malformed `colibri::log` `requestLog` payload (e.g. `{ levels: 1 }`) from any
   client no longer crashes the server; invalid fields fall back to their defaults. The index that
   merges repeated log lines is bounded by the 20,000-entry history instead of growing forever.
@@ -342,6 +389,9 @@ EditMode tests, which `npm run test:vectors` checks in CI.
   carries the CORS headers, so a browser client sees the error rather than a network failure.
 - Overwriting an existing value answers 200 for a falsy value (`0`, `false`, `''`, `null`) too;
   it used to answer 201.
+- **A request under `/api` that no API route handles gets 404**, with a JSON error, instead of 200
+  and the admin UI page. A wrong method or path, such as `POST /api/store/app/name`, stored nothing
+  and looked successful.
 - **A `PUT` without a JSON body is refused.** With no body, an empty one, or a `Content-Type`
   other than JSON or form data (`text/plain`, say), `PUT /api/store/:app/:name` answers 400 with
   an error that names `Content-Type: application/json`, and stores nothing. It used to store
@@ -425,21 +475,31 @@ The endpoints are documented under [REST store](./protocol.md#rest-store).
 
 - Added `docs/protocol.md`: which messages the server relays, the v3 framing, version checking and
   detecting an out-of-date server, the payload shape of every `broadcast::` command, size limits,
-  the inbound limits, the server's own channels, model synchronization and the REST store.
+  the inbound limits with the warnings as the server prints them, the server's own channels,
+  model synchronization and the REST store. For models it covers the three `model::request` forms
+  (`{}`, a fresh `{ id }`, a re-request `{ id, again: true }`), tombstones, and what each client
+  does after a reconnect; under backpressure, that answers and heartbeats are not dropped at the
+  1 MiB mark, and that the 100 ms heartbeat is skipped while one still waits. Its known limits
+  say that a colibri-unity object that changed during an outage reaches a server that forgot it
+  with only the changed fields.
 - README updated for the Node 24 requirement, the v3 protocol, a Docker setup that works outside a
-  checkout, the configuration variables, where logs go, the load limits, and the npm scripts.
+  checkout, the configuration variables (`MODEL_TOMBSTONE_SECONDS` included), where logs go, the
+  load limits, and the npm scripts. Its Docker example does not set `tty: true`, which left
+  `docker logs` without stderr, and it says to mount data at `/srv/colibri/data` rather than move
+  `DATA_ROOT`.
 
 ### Known limits
 
 - The TCP read buffer compacts after every `data` event that leaves a partial frame behind (a copy
   of that partial frame), rather than only past a threshold, and it never shrinks: a connection
   that once received a large frame keeps a buffer of up to 8 MiB until it closes.
-- A client that falls more than 1 MB behind on TCP misses messages without being told; see
-  [Backpressure](./protocol.md#backpressure).
+- A client that falls more than 1 MB behind on TCP misses messages relayed from other clients
+  without being told; see [Backpressure](./protocol.md#backpressure).
 - A client over an inbound limit is not told either that its updates were held back or its
   broadcasts dropped; only the server's log says so. See
   [Inbound limits](./protocol.md#inbound-limits).
-- After a reconnect, clients catch up on model updates but not on deletions; see
+- After a reconnect, clients catch up on deletions only within `MODEL_TOMBSTONE_SECONDS` of the
+  delete, and colibri-web only for the models it registered itself; see
   [Known limits](./protocol.md#known-limits) in the protocol docs.
 
 ### Deferred work
