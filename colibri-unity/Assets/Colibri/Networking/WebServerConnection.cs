@@ -8,7 +8,9 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Net.Security;
 using System.Net.Sockets;
+using System.Security.Authentication;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -30,6 +32,10 @@ namespace HCIKonstanz.Colibri.Networking
     /// Requires colibri-server >= 2.0.0. There is no version negotiation: the server accepts
     /// exactly one protocol version and refuses anything else, so both sides have to be
     /// upgraded together.
+    ///
+    /// With <see cref="ColibriConfig.IsSSL"/> the connection is TLS: the same frames, inside an
+    /// encrypted stream. Which server certificates it accepts is up to
+    /// <see cref="ServerCertificatePolicy"/>.
     /// </summary>
     [DefaultExecutionOrder(-100)]
     public class WebServerConnection : SingletonBehaviour<WebServerConnection>
@@ -74,7 +80,8 @@ namespace HCIKonstanz.Colibri.Networking
         /// nothing answers on - a server switched off on another subnet, a mistyped IP - used to
         /// hold the attempt in Connecting for the OS's own SYN timeout, about two minutes on
         /// Android, without a retry or a word in the log. On a local network a connection opens in
-        /// milliseconds; 5 s still leaves room for two lost SYNs on bad Wi-Fi.
+        /// milliseconds; 5 s still leaves room for two lost SYNs on bad Wi-Fi. With TLS the
+        /// handshake has to finish within the same time: a server without TLS may never answer it.
         /// </summary>
         private const int CONNECT_TIMEOUT_MS = 5000;
 
@@ -177,8 +184,8 @@ namespace HCIKonstanz.Colibri.Networking
         // disabled and would leave a second play session talking to a dead socket.
         //
         // volatile: written by the connection loop off the main thread, read by Update()'s
-        // heartbeat watchdog and by OnDisable. Closing it is what ends a session. The send path
-        // uses _outboxSession instead.
+        // heartbeat watchdog and by OnDisable. Closing it is what ends a session, TLS or not. The
+        // send path uses _outboxSession instead.
         private volatile Socket _socket;
 
         /// <remarks>Internal for the tests, which shrink its send buffer to stand in for a slow link.</remarks>
@@ -189,8 +196,8 @@ namespace HCIKonstanz.Colibri.Networking
 
         // Serializes every write to the socket - the outbox's messages and the receive loop's
         // heartbeat echoes. Concurrent writes used to interleave their bytes and corrupt the
-        // framing for everything that followed. The receive loop never waits for it: see
-        // EchoHeartbeat.
+        // framing for everything that followed, and an SslStream takes only one write at a time.
+        // The receive loop never waits for it: see EchoHeartbeat.
         private readonly SemaphoreSlim _sendLock = new SemaphoreSlim(1, 1);
 
         /// <remarks>Internal for the tests, which hold it to stand in for a slow write.</remarks>
@@ -208,8 +215,9 @@ namespace HCIKonstanz.Colibri.Networking
 
         /// <summary>
         /// One connection to the server: its socket, and the stream every frame is read from and
-        /// written to, the socket's own <see cref="NetworkStream"/>. Closing the socket is what
-        /// ends a session: it fails whatever is reading or writing at that moment.
+        /// written to - the socket's own <see cref="NetworkStream"/>, or with TLS an
+        /// <see cref="SslStream"/> over it. Closing the socket is what ends a session: it fails
+        /// whatever is reading or writing at that moment, encrypted or not.
         /// </summary>
         internal sealed class Session
         {
@@ -222,7 +230,7 @@ namespace HCIKonstanz.Colibri.Networking
                 Stream = stream;
             }
 
-            /// <summary>A session on a connected socket. For the EditMode tests.</summary>
+            /// <summary>A session without TLS on a connected socket. For the EditMode tests.</summary>
             internal static Session Plain(Socket socket) => new Session(socket, new NetworkStream(socket, false));
 
             public void Close() => CloseSocket(Socket);
@@ -301,11 +309,28 @@ namespace HCIKonstanz.Colibri.Networking
         private bool _hasReportedMissingConfig;
         private string _reportedSanitizedApp;
 
+        // Connection loop only: the TLS failure last logged as an error, so that a server that
+        // keeps failing the same way says so once rather than at every attempt. Cleared by a
+        // connection, and by enabling the component.
+        private string _reportedTlsFailure;
+
+        // Cleared by enabling the component: a certificate accepted only because self-signed ones
+        // are allowed is said once per session, not at every reconnect.
+        private volatile bool _hasWarnedAboutUntrustedCertificate;
+
         // ColibriConfig.Load() goes through Resources.Load, which is main-thread only, so the
         // connection loop reads this snapshot instead of the ScriptableObject.
         private volatile string _serverAddress;
         private volatile string _appName;
         private volatile int _tcpPort;
+        private volatile bool _useTls;
+        private volatile bool _allowSelfSignedCertificate;
+        private volatile string _serverCertificateSha256;
+
+        // Set by each TLS handshake, for the Status window: the certificate the server presented,
+        // and how it was accepted. Null until a TLS connection has been made.
+        private volatile string _presentedCertificateSha256;
+        private volatile string _certificateAcceptance;
 
         // Gate that `await Connected` waits on, replacing the UniRx IObservable<bool> awaiter.
         // Only user code awaits it now - the send path queues in the outbox instead of waiting
@@ -375,6 +400,10 @@ namespace HCIKonstanz.Colibri.Networking
         // Connection loop only (the receive loop is part of it), except for the test accessor.
         private int _consecutiveEarlyFrameFailures;
         private volatile string _suspectedProtocolMismatch;
+
+        // Whether the current session uses TLS, read from the configuration when it started.
+        // Written by the connection loop, read by UsesTls on any thread.
+        private volatile bool _sessionUsesTls;
 
         // Session-scoped: set once the TCP connection is up and this client has sent its
         // handshake. Without it, a session that never got that far - "connection refused" because
@@ -469,6 +498,9 @@ namespace HCIKonstanz.Colibri.Networking
                 _hasWarnedAboutRefusal = false;
             }
 
+            _hasWarnedAboutUntrustedCertificate = false;
+            _reportedTlsFailure = null;
+
             _lifetime = new CancellationTokenSource();
             _ = RunConnectionLoop(_lifetime.Token);
         }
@@ -482,6 +514,9 @@ namespace HCIKonstanz.Colibri.Networking
             _serverAddress = config.ServerAddress;
             _appName = config.AppName;
             _tcpPort = config.TcpServerPort;
+            _useTls = config.IsSSL;
+            _allowSelfSignedCertificate = config.AllowSelfSignedCertificate;
+            _serverCertificateSha256 = config.ServerCertificateSha256;
         }
 
         private void OnDisable()
@@ -910,7 +945,8 @@ namespace HCIKonstanz.Colibri.Networking
                 {
                     _decodedAnyFrame = false;
                     _reachedHandshake = false;
-                    await RunSession(address, _tcpPort, handshakeApp, token)
+                    _sessionUsesTls = _useTls;
+                    await RunSession(address, _tcpPort, handshakeApp, _sessionUsesTls, token)
                         .ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
@@ -936,6 +972,10 @@ namespace HCIKonstanz.Colibri.Networking
                     // the wrong address, or a device on another network than the server.
                     Debug.Log($"Colibri: {e.Message}. Check the server address, and that this device is on the same network as the server. Retrying...");
                 }
+                catch (TlsHandshakeException e)
+                {
+                    ReportTlsFailure(e);
+                }
                 catch (SocketException e)
                 {
                     Debug.Log($"Colibri: connection to {address} failed ({e.SocketErrorCode}), retrying...");
@@ -944,11 +984,11 @@ namespace HCIKonstanz.Colibri.Networking
                 {
                     // Socket closed underneath us by OnDisable or the heartbeat watchdog.
                 }
-                catch (IOException e)
+                catch (Exception e) when (e is IOException || e is AuthenticationException)
                 {
-                    // How a stream reports the socket failing under it: NetworkStream wraps what
-                    // the socket threw, which is told apart here as it was before the connection
-                    // went through a stream.
+                    // How a stream reports the socket failing under it: NetworkStream and SslStream
+                    // wrap what the socket threw, which is told apart here as it was before the
+                    // connection went through a stream.
                     if (FindCause<ObjectDisposedException>(e) == null)
                     {
                         var socketError = FindCause<SocketException>(e);
@@ -1054,27 +1094,37 @@ namespace HCIKonstanz.Colibri.Networking
         /// </summary>
         internal int ConsecutiveEarlyFrameFailures => Volatile.Read(ref _consecutiveEarlyFrameFailures);
 
-        private async Task RunSession(string host, int port, string app, CancellationToken token)
+        private async Task RunSession(string host, int port, string app, bool useTls, CancellationToken token)
         {
             bool firstAttempt;
             lock (_statusLock)
                 firstAttempt = _connectAttempts == 0;
 
             Status = firstAttempt ? ConnectionStatus.Connecting : ConnectionStatus.Reconnecting;
-            Debug.Log($"Colibri: connecting to {host}:{port}");
+            Debug.Log($"Colibri: connecting to {host}:{port}{(useTls ? " (TLS)" : "")}");
 
             var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
             _socket = socket;
 
-            // Closing the socket is what unblocks an in-flight read or write; there is no
-            // cancellation token overload for either on this API surface.
+            var certificateCheck = useTls
+                ? new ServerCertificateCheck(host, _allowSelfSignedCertificate, _serverCertificateSha256)
+                : null;
+
+            // Closing the socket is what unblocks an in-flight read or write, plain or TLS; there
+            // is no cancellation token overload for either on this API surface.
             using (token.Register(() => CloseSocket(socket)))
             {
+                Stream stream;
                 try
                 {
-                    await ConnectAsync(socket, host, port, CONNECT_TIMEOUT_MS, token).ConfigureAwait(false);
+                    stream = await OpenStreamAsync(socket, host, port, certificateCheck, CONNECT_TIMEOUT_MS, token).ConfigureAwait(false);
                 }
                 catch (TimeoutException e)
+                {
+                    _lastConnectFailure = e.Message;
+                    throw;
+                }
+                catch (TlsHandshakeException e)
                 {
                     _lastConnectFailure = e.Message;
                     throw;
@@ -1085,25 +1135,203 @@ namespace HCIKonstanz.Colibri.Networking
                     throw;
                 }
 
-                token.ThrowIfCancellationRequested();
-                _lastConnectFailure = null;
+                try
+                {
+                    token.ThrowIfCancellationRequested();
+                    _lastConnectFailure = null;
 
-                // Not owning the socket: closing the socket stays the one way to end a session, and
-                // it is closed by whoever ends it.
-                var session = new Session(socket, new NetworkStream(socket, false));
+                    if (certificateCheck != null)
+                        NoteCertificate(certificateCheck, host, port);
 
-                // Accepted, but nothing is known about what accepted it yet. The watchdog gives
-                // it as long to say something as a connected server gets between heartbeats.
-                StampLiveness();
-                _isWatchdogArmed = true;
+                    var session = new Session(socket, stream);
 
-                await SendFrame(session, FrameCodec.EncodeHandshake(CLIENT_VERSION, app, _hostname), token)
-                    .ConfigureAwait(false);
-                // Past this point the connection was accepted and this client has spoken, so a
-                // session that now ends without a frame is a statement about the server.
-                _reachedHandshake = true;
+                    // Accepted, but nothing is known about what accepted it yet. The watchdog gives
+                    // it as long to say something as a connected server gets between heartbeats.
+                    StampLiveness();
+                    _isWatchdogArmed = true;
 
-                await ReceiveLoop(session, host, port, app, token).ConfigureAwait(false);
+                    await SendFrame(session, FrameCodec.EncodeHandshake(CLIENT_VERSION, app, _hostname), token)
+                        .ConfigureAwait(false);
+                    // Past this point the connection was accepted and this client has spoken, so a
+                    // session that now ends without a frame is a statement about the server.
+                    _reachedHandshake = true;
+
+                    await ReceiveLoop(session, host, port, app, token).ConfigureAwait(false);
+                }
+                finally
+                {
+                    ReleaseStream(stream);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Opens the TCP connection and, with <paramref name="tls"/>, a TLS session over it, both
+        /// within <paramref name="timeoutMs"/>: a stream on which the v3 frames are read and
+        /// written, encrypted or not. Without TLS it is the socket's own stream.
+        /// </summary>
+        /// <param name="tls">The certificate check of the handshake, or null for no TLS.</param>
+        /// <exception cref="TimeoutException">Nothing answered the connection in time.</exception>
+        /// <exception cref="TlsHandshakeException">The TLS handshake failed or did not finish in time.</exception>
+        /// <exception cref="OperationCanceledException"><paramref name="token"/> was cancelled first.</exception>
+        /// <exception cref="SocketException">The connection failed before the time was up - refused, say.</exception>
+        /// <remarks>Internal for the EditMode tests.</remarks>
+        internal static async Task<Stream> OpenStreamAsync(Socket socket, string host, int port, ServerCertificateCheck tls, int timeoutMs, CancellationToken token)
+        {
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            await ConnectAsync(socket, host, port, timeoutMs, token).ConfigureAwait(false);
+
+            // Not owning the socket: closing the socket stays the one way to end a session, and
+            // it is closed by whoever ends it.
+            var plain = new NetworkStream(socket, false);
+            if (tls == null)
+                return plain;
+
+            var remaining = (int)Math.Max(0, timeoutMs - clock.ElapsedMilliseconds);
+            return await AuthenticateAsync(socket, plain, host, port, tls, remaining, timeoutMs, token).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// The TLS handshake, as a client: SNI and the certificate's name are the configured
+        /// server address, and <paramref name="check"/> decides about the certificate. The TLS
+        /// versions are the runtime's own default: TLS 1.2 on Unity's TLS backend, 1.2 or 1.3
+        /// elsewhere. colibri-server accepts nothing older than 1.2.
+        /// </summary>
+        private static async Task<Stream> AuthenticateAsync(Socket socket, NetworkStream plain, string host, int port,
+            ServerCertificateCheck check, int timeoutMs, int totalTimeoutMs, CancellationToken token)
+        {
+            var tls = new SslStream(plain, false, check.Validate);
+            var handshake = tls.AuthenticateAsClientAsync(host);
+
+            using (var timer = CancellationTokenSource.CreateLinkedTokenSource(token))
+            {
+                if (await Task.WhenAny(handshake, Task.Delay(timeoutMs, timer.Token)).ConfigureAwait(false) == handshake)
+                {
+                    timer.Cancel();
+                    try
+                    {
+                        await handshake.ConfigureAwait(false);
+                        return tls;
+                    }
+                    catch (Exception e)
+                    {
+                        // Nothing else uses the stream yet, so it can go at once.
+                        tls.Dispose();
+                        token.ThrowIfCancellationRequested();
+
+                        if (check.Rejection != null)
+                        {
+                            throw new TlsHandshakeException(TlsHandshakeException.Failure.CertificateRejected,
+                                $"rejected the certificate of {host}:{port}: {check.Rejection}", e);
+                        }
+
+                        throw new TlsHandshakeException(TlsHandshakeException.Failure.NoTlsAnswer,
+                            $"{host}:{port} did not answer the TLS handshake ({e.Message})", e);
+                    }
+                }
+            }
+
+            // As with a connect: closing the socket is what abandons the handshake. The stream is
+            // let go of once the handshake has failed with it, and its exception observed then -
+            // on the thread pool, not inline in the stream's own completion of the handshake.
+            CloseSocket(socket);
+            _ = handshake.ContinueWith(attempt =>
+            {
+                _ = attempt.Exception;
+                tls.Dispose();
+            }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
+
+            token.ThrowIfCancellationRequested();
+            throw new TlsHandshakeException(TlsHandshakeException.Failure.NoTlsAnswer,
+                $"{host}:{port} accepted the connection but did not answer the TLS handshake within "
+                + $"{(totalTimeoutMs / 1000f).ToString("0.#", CultureInfo.InvariantCulture)} s");
+        }
+
+        /// <summary>
+        /// Lets go of a session's stream once it has ended. An SslStream holds the TLS state, which
+        /// closing the socket does not free, so it is disposed, but only once nothing is writing to
+        /// it: a write of this session may still be on its way out of the outbox or the heartbeat
+        /// echo, and those take the send lock. Not waited for, so that the end of a session never
+        /// waits for a write.
+        /// </summary>
+        private void ReleaseStream(Stream stream)
+        {
+            if (!(stream is SslStream))
+                return;
+
+            _ = Task.Run(async () =>
+            {
+                await _sendLock.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    stream.Dispose();
+                }
+                catch (Exception)
+                {
+                    // The socket under it is closed already; there is nothing left to tidy.
+                }
+                finally
+                {
+                    ReleaseSendLock();
+                }
+            });
+        }
+
+        /// <summary>
+        /// Keeps what the handshake decided about the server's certificate for the Status window,
+        /// and says once per session that one was accepted only because self-signed certificates
+        /// are allowed: the connection is encrypted, but nothing has checked whose server it is.
+        /// </summary>
+        private void NoteCertificate(ServerCertificateCheck check, string host, int port)
+        {
+            _presentedCertificateSha256 = check.Fingerprint;
+            _certificateAcceptance = DescribeAcceptance(check.Verdict);
+
+            if (check.Verdict != ServerCertificatePolicy.Verdict.AcceptedUntrusted || _hasWarnedAboutUntrustedCertificate)
+                return;
+
+            _hasWarnedAboutUntrustedCertificate = true;
+            Debug.LogWarning($"Colibri: accepted the certificate of {host}:{port} although {check.Problems}, because "
+                + "'Allow self-signed certificate' is on. The connection is encrypted, but nothing checks that it goes to your server. "
+                + $"To accept only this certificate, enter its fingerprint as 'Server certificate SHA-256': {check.Fingerprint}. "
+                + "Said once per session.");
+        }
+
+        private static string DescribeAcceptance(ServerCertificatePolicy.Verdict verdict)
+        {
+            switch (verdict)
+            {
+                case ServerCertificatePolicy.Verdict.Trusted: return "trusted by this device";
+                case ServerCertificatePolicy.Verdict.Pinned: return "matches 'Server certificate SHA-256'";
+                case ServerCertificatePolicy.Verdict.AcceptedUntrusted: return "not trusted, accepted because 'Allow self-signed certificate' is on";
+                default: return null;
+            }
+        }
+
+        /// <summary>
+        /// Logs a failed TLS handshake: as an error the first time it fails that way, since it
+        /// will not go away until a setting changes, and after that only as a note, as a refused
+        /// connection is. The connection keeps being retried, so a server that is switched to TLS,
+        /// or given another certificate, is picked up without a restart.
+        /// </summary>
+        private void ReportTlsFailure(TlsHandshakeException e)
+        {
+            var advice = e.Kind == TlsHandshakeException.Failure.NoTlsAnswer
+                ? " 'Server supports SSL/TLS' is ticked in the Colibri configuration, so this client uses TLS on the TCP port too: "
+                    + "turn TLS on at the server (TLS_CERT and TLS_KEY), or untick the setting."
+                : "";
+
+            // Keyed on the kind for a server that does not speak TLS, whose wording varies with how
+            // it failed, and on the reason for a rejected certificate, which says what to change.
+            var key = e.Kind == TlsHandshakeException.Failure.NoTlsAnswer ? e.Kind.ToString() : e.Message;
+            if (key != _reportedTlsFailure)
+            {
+                _reportedTlsFailure = key;
+                Debug.LogError($"Colibri: {e.Message}.{advice} Retrying...");
+            }
+            else
+            {
+                Debug.Log($"Colibri: {e.Message}, retrying...");
             }
         }
 
@@ -1174,6 +1402,9 @@ namespace HCIKonstanz.Colibri.Networking
 
             lock (_queuedCommandsLock)
                 _hasWarnedAboutReceivedBacklog = false;
+
+            // A TLS failure after this one is news again.
+            _reportedTlsFailure = null;
 
             // The app name is named explicitly: a typo in it produces a perfectly healthy
             // connection on which no other client is ever seen.
@@ -1397,12 +1628,28 @@ namespace HCIKonstanz.Colibri.Networking
 
         /// <summary>
         /// Why the last attempt to open the TCP connection failed - "192.168.0.10:9012 did not
-        /// answer within 5 s", say, or a refusal - or null once one has opened. For showing why the
-        /// client is still not connected; each failure is logged as well. Unaffected by anything
-        /// that happens after the connection opened.
+        /// answer within 5 s", say, a refusal, or with TLS a failed handshake or a rejected
+        /// certificate - or null once one has opened. For showing why the client is still not
+        /// connected; each failure is logged as well. Unaffected by anything that happens after the
+        /// connection opened.
         /// </summary>
         public string LastConnectFailure => _lastConnectFailure;
         private volatile string _lastConnectFailure;
+
+        /// <summary>
+        /// Whether the connection uses TLS: <see cref="ColibriConfig.IsSSL"/> as it was when the
+        /// current connection, or the attempt in progress, started.
+        /// </summary>
+        public bool UsesTls => _sessionUsesTls;
+
+        /// <summary>
+        /// The SHA-256 fingerprint of the certificate the server presented on the last TLS
+        /// connection, as colibri-server logs it, or null before one has been made.
+        /// </summary>
+        internal string ServerCertificateSha256 => _presentedCertificateSha256;
+
+        /// <summary>Why that certificate was accepted, in words, for the Status window; null before a TLS connection.</summary>
+        internal string CertificateAcceptance => _certificateAcceptance;
 
 
         /*
@@ -1431,7 +1678,7 @@ namespace HCIKonstanz.Colibri.Networking
         }
 
         // Under _sendLock. A stream write completes only once the whole frame has been handed to
-        // the socket, so a frame is never cut short.
+        // the socket - encrypted first, with TLS - so a frame is never cut short.
         private static Task WriteAll(Session session, byte[] frame)
             => session.Stream.WriteAsync(frame, 0, frame.Length);
 
