@@ -47,13 +47,13 @@ Colibri component from 1.x.
   `protocol::rejected` message before disconnecting. `Colibri` handles that itself: it turns
   off Socket.IO reconnection (a mismatch cannot resolve itself, and retrying only buries the
   diagnostic), logs what both sides speak, and emits a `ProtocolMismatchError` on
-  `Colibri.protocolMismatch`. The rejection is deliberately kept off `Colibri.messages` — it
+  `Colibri.protocolMismatch`. The rejection is deliberately kept off `Colibri.messages`: it
   is Colibri's own plumbing, not an application message.
 - **A warning when the server predates the version check.** That check is server-side, so a
   server too old to have it can neither refuse this client nor announce itself. A 2.0.0+ server
   says `colibri`/`protocol::accepted` on connect; five seconds without it emits a
-  `ProtocolMismatchError` on `Colibri.protocolMismatch` with `serverVersion: '1'` — inferred
-  rather than received, since every release before 2.0.0 speaks protocol v1. It **stays
+  `ProtocolMismatchError` on `Colibri.protocolMismatch` with `serverVersion: '1'` (inferred
+  rather than received, since every release before 2.0.0 speaks protocol v1). It **stays
   connected**: the Socket.IO envelope did not change between v1 and v2, so the connection
   genuinely works and hanging up over this would turn a warning into an outage. Ordinary
   traffic deliberately does not count as proof of life: a 1.x server relays broadcasts and
@@ -69,7 +69,7 @@ Colibri component from 1.x.
 - `PROTOCOL_VERSION` (exported): the version announced in the handshake query.
 - **`Sync.sendVector2` / `sendVector2Array` / `receiveVector2` / `receiveVector2Array`.** The
   README has listed `Vector2` as a supported type since 1.x and it was never implemented, so a
-  `broadcast::vector2` from a Unity client — which Unity has always been able to send — was
+  `broadcast::vector2` from a Unity client, which Unity has always been able to send, was
   dropped here without a word.
 - **`toHexColor()` and `toRgbaColor()` (exported), plus the `ColorValue` type.** Normalize a
   received colour to whichever shape you want. They warn and fall back to opaque black on a
@@ -127,6 +127,6 @@ Colibri component from 1.x.
   got the ES module build. An `exports` map now gives `import` and `require()` each their own
   build and type declarations (`.d.ts`/`.d.cts`).
 - The published npm package now includes a `LICENSE` file.
-- `Sync.sendInt` is now documented as emitting `broadcast::float` — JavaScript has one number
+- `Sync.sendInt` is now documented as emitting `broadcast::float`: JavaScript has one number
   type, so it cannot do otherwise, and a Unity peer must listen with `Sync.Receive<float>`. The
   alias stays for API symmetry.
