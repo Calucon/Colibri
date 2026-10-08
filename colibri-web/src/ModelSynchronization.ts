@@ -74,13 +74,6 @@ const askForEnd = (colibri: Colibri) => {
     return id;
 };
 
-// How long an own model asked for again after its held changes were sent (see takeAnswer) waits
-// for an update that shows them, before the changes held since go out anyway. The answer always
-// shows them, unless the server took the request ahead of the update: its limit on the updates a
-// client may send a second (CLIENT_MESSAGE_RATE_LIMIT) holds updates back, but never a request.
-// Nothing else for the model may come after that, and waiting on would hold its changes for good.
-const ASK_AGAIN_TIMEOUT_MS = 5000;
-
 // How much of what an own model's fields were is kept, to tell whether the last change this client
 // sent for one reached the server (see lostChanges). Per field, the newest value, and of the ones
 // before it this many from each side of when this client last heard from the server: the latest
@@ -128,21 +121,21 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
     const changesToSend = new WeakMap<T, Set<string>>();
 
     // Own models asked for again after sending the changes held back for them (see takeAnswer),
-    // until an answer shows that the server has those changes: by id, the fields sent as they are
-    // sent (JSON), the properties they were sent for, how many updates have come since, and the
-    // timer that stops the wait (see ASK_AGAIN_TIMEOUT_MS).
+    // until the answers to that are over: by id, the fields sent that replaced a value the server
+    // showed, as they were sent (JSON), and that value (JSON, or none); the properties the changes
+    // were sent for; the last value an update showed for each of those fields since; and the id
+    // asked for by the request sent after it (see askForEnd).
     interface Confirmation {
         sent: Map<string, string>;
+        replaced: Map<string, string | undefined>;
         props: string[];
-        seen: number;
-        timer: ReturnType<typeof setTimeout>;
+        shown: Map<string, unknown>;
+        end: string;
     }
     const confirming = new Map<string, Confirmation>();
 
     const endConfirmation = (id: string) => {
         const confirmation = confirming.get(id);
-        if (!confirmation) return undefined;
-        clearTimeout(confirmation.timer);
         confirming.delete(id);
         return confirmation;
     };
@@ -313,14 +306,17 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
     });
 
     // The answer to a request that tells when the answers to the earlier ones are over (see
-    // askForEnd): after a reconnect (see takeAnswer), or to stop keeping fields out (see guardFrom).
-    // Every RegisterModelSync receives each one sent on this connection, and takes only its own.
+    // askForEnd): after a reconnect or asking an own model again (see takeAnswer), or to stop keeping
+    // fields out (see guardFrom). Every RegisterModelSync receives each one sent on this connection,
+    // and takes only its own.
     RegisterChannel(END_CHANNEL, (message: Message) => {
         if (message.command !== 'model::update') return;
         const id = (message.payload as { id?: unknown } | undefined)?.id;
         if (id === undefined) return;
         if (id === roundEnd) endRound();
         if (id === guardEnd) endGuard();
+        const confirmed = [...confirming].find(([, confirmation]) => confirmation.end === id);
+        if (confirmed) endWait(confirmed[0]);
     });
 
     // Handle updates
@@ -355,15 +351,11 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
     // client made is relayed as it comes. The answer itself then follows, made before the server
     // had the changes sent in between, and put the old values back here only: this client showed
     // them while the server and every other client had its own. So when changes are sent in place
-    // of values the server had, the model is asked for again, the changes held back from then on
-    // too, and what was sent is kept out of every update until one shows that the server has it.
-    // The answer to the second request is such an update: it was made after the server had the
-    // changes. When the changes are what the server had anyway, nothing is asked: an answer still
-    // on its way has the same values, and applying them changes nothing.
-    //
-    // Should another client change one of the same fields meanwhile, no update may ever show what
-    // was sent. At most one answer made before the server had it can still be on its way, the one
-    // to the first request, so the second update since asking again is taken as the answer anyway.
+    // of values the server had, the model is asked for again, with one more request after that
+    // (see askForEnd); the changes made from then on are held back too, and what was sent is kept
+    // out of every update until the answer to that one, when every answer made before the server
+    // had it has come (see endWait). When the changes are what the server had anyway, nothing is
+    // asked: an answer still on its way has the same values, and applying them changes nothing.
     //
     // After a reconnect, what the server answers for a model it had answered for before may also
     // show that a change this client sent before the outage never reached the server (see
@@ -406,13 +398,12 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
 
         const confirmation = confirming.get(id);
         if (confirmation) {
-            confirmation.seen += 1;
-            if (confirmation.seen < 2 && !shows(modelData, confirmation.sent)) {
-                const held = [...(heldChanges.get(model) ?? [])];
-                applyUpdate(model, withoutKeys(withoutChanges(modelData, model, held), confirmation.sent.keys()));
-                return;
+            for (const key of confirmation.sent.keys()) {
+                if (key in modelData) confirmation.shown.set(key, modelData[key as keyof T]);
             }
-            endConfirmation(id);
+            const held = [...(heldChanges.get(model) ?? [])];
+            applyUpdate(model, withoutKeys(withoutChanges(modelData, model, held), confirmation.sent.keys()));
+            return;
         }
 
         awaitingAnswer.delete(id);
@@ -465,26 +456,52 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
             if (!(key in shown) || JSON.stringify(shown[key as keyof T]) !== json) differs.set(key, json);
         }
         if (differs.size === 0) return false;
-        const timer = setTimeout(() => {
-            stopWaiting(id);
-        }, ASK_AGAIN_TIMEOUT_MS);
-        confirming.set(id, { sent: differs, props: held, seen: 0, timer });
+        const replaced = new Map<string, string | undefined>();
+        for (const key of differs.keys()) {
+            replaced.set(key, key in shown ? JSON.stringify(shown[key as keyof T]) : undefined);
+        }
         askFor(asker, model);
+        confirming.set(id, { sent: differs, replaced, props: held, shown: new Map(), end: askForEnd(asker) });
         return true;
     };
 
-    // See ASK_AGAIN_TIMEOUT_MS: the changes held since asking again go out, without an answer. Not
-    // while disconnected: Socket.IO would send them on the reconnect ahead of asking for the model
-    // again, and a server that had forgotten the model took them for all of it. The reconnect holds
-    // them again, to go out with the answer.
-    const stopWaiting = (id: string) => {
-        if (disconnected) return;
+    // The answers to asking an own model again are over (see takeAnswer): every one made before the
+    // server had what was sent has come, and the last update that showed a field sent has what the
+    // server has for it. The value sent means it arrived. Another value is another client's, set
+    // since, and is applied. The value it replaced, or none, means it has not arrived yet: the
+    // server holds back the updates of a client over its limit (CLIENT_MESSAGE_RATE_LIMIT), but
+    // never a request. Or another client set it back meanwhile. Either way it is sent again.
+    //
+    // Then the changes made meanwhile go out, without asking once more: nothing made before the
+    // server had them can come any more. Asked again, a model that changes all the time, a tracked
+    // pose say, stayed asked for, one update a round trip went out, and everything else was never
+    // asked for.
+    const endWait = (id: string) => {
+        const confirmation = endConfirmation(id);
         const asker = awaitingAnswer.get(id);
-        if (!endConfirmation(id) || !asker) return;
-        awaitingAnswer.delete(id);
         const model = models.value.find(m => m.id === id);
-        const held = model ? releaseHeldChanges(model) : [];
-        if (model && held.length > 0) sendUpdate(asker, model, model.toJson(held));
+        // Settled already, by the bare id or model::delete.
+        if (!confirmation || !asker || !model) return;
+
+        awaitingAnswer.delete(id);
+        const held = releaseHeldChanges(model);
+        const theirs: Record<string, unknown> = { id };
+        const again: string[] = [];
+        for (const [key, json] of confirmation.sent) {
+            const shown = confirmation.shown.has(key)
+                ? (JSON.stringify(confirmation.shown.get(key)) as string | undefined)
+                : undefined;
+            if (shown === json) continue;
+            if (shown === undefined || shown === confirmation.replaced.get(key)) again.push(key);
+            else theirs[key] = confirmation.shown.get(key);
+        }
+        applyUpdate(model, withoutChanges(theirs as Partial<T>, model, held));
+
+        const current = model.toJson() as Record<string, unknown>;
+        const update: Record<string, unknown> = held.length > 0 ? model.toJson(held) : { id };
+        for (const key of again) update[key] = current[key];
+        // Not for a model whose delete() was called since: that ended what it sends.
+        if (ownModels.has(model) && Object.keys(update).length > 1) sendUpdate(asker, model, update as Partial<T>);
         catchUpOnceAnswered();
     };
 
@@ -566,10 +583,6 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
             })
             .map(([key]) => key);
     };
-
-    // Whether `modelData` has every field in `sent` with the value sent (as JSON).
-    const shows = (modelData: Partial<T>, sent: Map<string, string>) =>
-        [...sent].every(([key, json]) => key in modelData && JSON.stringify(modelData[key as keyof T]) === json);
 
     const withoutKeys = (modelData: Partial<T>, keys: Iterable<string>): Partial<T> => {
         const drop = new Set(keys);

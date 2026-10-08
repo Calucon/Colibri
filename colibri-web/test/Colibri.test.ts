@@ -4,7 +4,6 @@ vi.mock('socket.io-client', () => ({
     connect: vi.fn()
 }));
 
-import { setTimeout as realTimeout } from 'node:timers/promises';
 import { firstValueFrom, type Observable } from 'rxjs';
 import { connect } from 'socket.io-client';
 import { Sync } from '../src/Broadcasting';
@@ -572,10 +571,11 @@ const deliver = (channel: string, msg: { command: string; payload?: unknown }) =
 };
 
 // The server's answer to each request a RegisterModelSync sent on 'colibri::reconnect' and that was
-// not answered yet: one sent after asking again for its own models on a reconnect, or after asking
-// for every model. The answers to the requests sent before those are all in.
-const endOfAnswers = () => {
-    for (const id of fakeSocket.endMarkers.splice(0)) {
+// not answered yet, or to the first `count` of them: one sent after asking again for its own models
+// on a reconnect, after asking for one again, or after asking for every model. The answers to the
+// requests sent before those are all in.
+const endOfAnswers = (count = Infinity) => {
+    for (const id of fakeSocket.endMarkers.splice(0, count)) {
         deliver('colibri::reconnect', { command: 'model::update', payload: { id } });
     }
 };
@@ -1074,10 +1074,12 @@ describe('sending its own models again after a reconnect', () => {
             ['model::request', { id: 'p1', again: true }],
             endRequest,
             ['model::update', { id: 'p1', a: 'A2' }],
-            ['model::request', { id: 'p1', again: true }]
+            ['model::request', { id: 'p1', again: true }],
+            endRequest
         ]);
         deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A2', b: 'B2' } });
-        expect(sentInOrder().slice(4)).toEqual(everything);
+        endOfAnswers();
+        expect(sentInOrder().slice(5)).toEqual(everything);
 
         // Answered, so from now on a change goes out as it is made.
         fakeSocket.emit.mockClear();
@@ -1384,10 +1386,12 @@ describe('registering a model whose id the server may already have', () => {
         expect(sentInOrder()).toEqual([
             ['model::request', { id: 'p1' }],
             ['model::update', { id: 'p1', a: 'changed' }],
-            ['model::request', { id: 'p1', again: true }]
+            ['model::request', { id: 'p1', again: true }],
+            endRequest
         ]);
 
         deliver('reg', { command: 'model::update', payload: { id: 'p1', a: 'changed', b: 'server-b' } });
+        endOfAnswers();
         fakeSocket.emit.mockClear();
         pair.b = 'changed too';
         await settle();
@@ -1549,6 +1553,12 @@ describe('keeping a change made after registerModel', () => {
     const sentInOrder = () =>
         fakeSocket.emit.mock.calls.map(([, msg]) => [(msg as Message).command, (msg as Message).payload]);
 
+    /** The same, without the requests on 'colibri::reconnect' (see endOfAnswers). */
+    const sentOnChannel = () =>
+        fakeSocket.emit.mock.calls
+            .filter(([channel]) => channel !== 'colibri::reconnect')
+            .map(([, msg]) => [(msg as Message).command, (msg as Message).payload]);
+
     // Long enough for a change a model reported to have been sent: SyncModel buffers for 1ms.
     const settle = () => new Promise(resolve => setTimeout(resolve, 10));
 
@@ -1596,11 +1606,14 @@ describe('keeping a change made after registerModel', () => {
         expect(sentInOrder()).toEqual([
             ['model::request', { id: 'p1' }],
             ['model::update', { id: 'p1', a: 'changed' }],
-            ['model::request', { id: 'p1', again: true }]
+            ['model::request', { id: 'p1', again: true }],
+            endRequest
         ]);
 
-        // The answer to asking again has it: from now on a change goes out as it is made.
+        // The answer to asking again has it, and the answers are over: from now on a change goes out
+        // as it is made.
         deliver('reg', { command: 'model::update', payload: { ...server, a: 'changed' } });
+        endOfAnswers();
         fakeSocket.emit.mockClear();
         pair.b = 'changed too';
         await settle();
@@ -1620,12 +1633,14 @@ describe('keeping a change made after registerModel', () => {
         expect(sentInOrder()).toEqual([
             ['model::request', { id: 'p1' }],
             ['model::update', { id: 'p1', a: 'changed' }],
-            ['model::request', { id: 'p1', again: true }]
+            ['model::request', { id: 'p1', again: true }],
+            endRequest
         ]);
 
         deliver('reg', { command: 'model::update', payload: { ...server, a: 'changed' } });
+        endOfAnswers();
         await settle();
-        expect(sentInOrder()).toHaveLength(3);
+        expect(sentInOrder()).toHaveLength(4);
         expect([pair.a, pair.b]).toEqual(['changed', 'server-b']);
     });
 
@@ -1644,11 +1659,13 @@ describe('keeping a change made after registerModel', () => {
         await settle();
         expect(sentInOrder().slice(1)).toEqual([
             ['model::update', { id: 'p1', a: 'changed' }],
-            ['model::request', { id: 'p1', again: true }]
+            ['model::request', { id: 'p1', again: true }],
+            endRequest
         ]);
 
         deliver('reg', { command: 'model::update', payload: { ...server, a: 'changed' } });
-        expect(sentInOrder().slice(3)).toEqual(everything);
+        endOfAnswers();
+        expect(sentInOrder().slice(4)).toEqual(everything);
         // What that request is answered with has the change in it.
         deliver('reg', { command: 'model::update', payload: { ...server, a: 'changed' } });
         expect([pair.a, pair.b]).toEqual(['changed', 'server-b']);
@@ -1668,20 +1685,23 @@ describe('keeping a change made after registerModel', () => {
         expect(sentInOrder().slice(1)).toEqual([['model::update', { id: 'p1', a: 'mine', b: '' }], ...everything]);
     });
 
-    // Not every update for the id is an answer: another client may change the same field meanwhile,
-    // and then no update ever shows the change this client sent.
-    it('takes the second update since asking again as the answer, whatever it has', async () => {
+    // Another client may change the same field meanwhile, after this client's change: what the
+    // server has then is what the last update before the end of the answers showed.
+    it('takes a value another client set after the change once the answers are over', async () => {
         const { pair } = await registeredLate();
         pair.a = 'mine';
         // The answer to the request for every model, and the end of its answers.
         deliver('reg', { command: 'model::update', payload: server });
-        endOfAnswers();
+        endOfAnswers(1);
         await settle();
 
-        // Another client's change, relayed: the server had this client's first.
+        // The answer to the request for the id, made before the server had the change, then the one to
+        // asking again, and another client's change, relayed.
+        deliver('reg', { command: 'model::update', payload: server });
+        deliver('reg', { command: 'model::update', payload: { ...server, a: 'mine' } });
         deliver('reg', { command: 'model::update', payload: { id: 'p1', a: 'theirs' } });
         expect(pair.a).toBe('mine');
-        deliver('reg', { command: 'model::update', payload: { ...server, a: 'theirs' } });
+        endOfAnswers();
         expect(pair.a).toBe('theirs');
 
         fakeSocket.emit.mockClear();
@@ -1690,21 +1710,18 @@ describe('keeping a change made after registerModel', () => {
         expect(sentInOrder()).toEqual([['model::update', { id: 'p1', b: 'mine' }]]);
     });
 
-    it('holds back a change made while it asks again, and sends it once the server has the first', async () => {
+    it('holds back a change made while it asks again, and sends it once the answers are over', async () => {
         const { pair } = await registeredLate();
         pair.a = 'mine';
         deliver('reg', { command: 'model::update', payload: server });
         pair.b = 'mine too';
         await settle();
-        expect(sentInOrder()).toHaveLength(3);
+        expect(sentInOrder()).toHaveLength(4);
 
         deliver('reg', { command: 'model::update', payload: { ...server, a: 'mine' } });
+        endOfAnswers();
         await settle();
-        expect(sentInOrder().slice(3)).toEqual([
-            ['model::update', { id: 'p1', b: 'mine too' }],
-            ['model::request', { id: 'p1', again: true }]
-        ]);
-        deliver('reg', { command: 'model::update', payload: { id: 'p1', a: 'mine', b: 'mine too' } });
+        expect(sentInOrder().slice(4)).toEqual([['model::update', { id: 'p1', b: 'mine too' }]]);
         expect([pair.a, pair.b]).toEqual(['mine', 'mine too']);
     });
 
@@ -1725,89 +1742,120 @@ describe('keeping a change made after registerModel', () => {
         expect(pair.a).toBe('mine');
         expect(sentInOrder()).toEqual([
             ['model::update', { id: 'p1', a: 'mine' }],
-            ['model::request', { id: 'p1', again: true }]
+            ['model::request', { id: 'p1', again: true }],
+            endRequest
         ]);
     });
 
-    // The server takes a request ahead of an update it holds back under its rate limit
-    // (CLIENT_MESSAGE_RATE_LIMIT). The answer to asking again then lacks the change, and nothing
-    // else may come for the model: waiting on would hold back every later change for good.
-    it('stops waiting for an update that shows the change after a while, and sends what it held since', async () => {
-        // Only the timeouts: SyncModel's buffer runs on intervals, one for every model still around
-        // from earlier tests, and on a fake clock 5 seconds of them take as long as real ones.
-        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-        // The 5 seconds also pass for the server identifying itself, which it does not do here.
-        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-        try {
-            new Colibri('app', 'localhost', 9011);
-            const [, registerModel] = RegisterModelSync({ name: 'reg', type: Pair });
-            connectSocket();
-            await vi.advanceTimersByTimeAsync(1);
-            fakeSocket.emit.mockClear();
-            const pair = new Pair('p1');
-            registerModel(pair);
+    // A model that changes all the time from the start, a tracked pose say, changed again before
+    // every answer: the changes made meanwhile went out with one more request each time, so the
+    // model stayed asked for, one update a round trip went out, and everything else was never asked
+    // for.
+    it('asks for every model after asking again once, though the model changed before every answer', async () => {
+        new Colibri('app', 'localhost', 9011);
+        connectSocket();
+        const [, registerModel] = RegisterModelSync({ name: 'reg', type: Pair });
+        const pair = new Pair('p1');
+        registerModel(pair);
+        pair.a = 'a1';
+        await settle();
+        deliver('reg', { command: 'model::update', payload: server });
+        pair.a = 'a2';
+        await settle();
+        expect(sentOnChannel()).toEqual([
+            ['model::request', { id: 'p1' }],
+            ['model::update', { id: 'p1', a: 'a1' }],
+            ['model::request', { id: 'p1', again: true }]
+        ]);
 
-            pair.a = 'mine';
-            deliver('reg', { command: 'model::update', payload: server });
-            await vi.advanceTimersByTimeAsync(10);
-            deliver('reg', { command: 'model::update', payload: server });
-            pair.b = 'later';
-            await vi.advanceTimersByTimeAsync(4900);
-            expect(sentInOrder()).toHaveLength(3);
-            expect([pair.a, pair.b]).toEqual(['mine', 'later']);
-
-            await vi.advanceTimersByTimeAsync(100);
-            expect(sentInOrder().slice(3)).toEqual([['model::update', { id: 'p1', b: 'later' }]]);
-
-            fakeSocket.emit.mockClear();
-            pair.b = 'now';
-            await realTimeout(10);
-            expect(sentInOrder()).toEqual([['model::update', { id: 'p1', b: 'now' }]]);
-        } finally {
-            warnSpy.mockRestore();
-            vi.useRealTimers();
-        }
+        deliver('reg', { command: 'model::update', payload: { ...server, a: 'a1' } });
+        endOfAnswers();
+        pair.a = 'a3';
+        await settle();
+        expect(sentOnChannel().slice(3)).toEqual([
+            ['model::update', { id: 'p1', a: 'a2' }],
+            ['model::request', {}],
+            ['model::update', { id: 'p1', a: 'a3' }]
+        ]);
     });
 
-    // Run out while the connection was down, the wait sent what was held into Socket.IO's buffer,
-    // which sends it on the reconnect ahead of asking for the model again: a server that had forgotten
-    // the model took that one change for all of it, and the rest was never sent.
-    it('sends nothing when the wait runs out while disconnected, and sends it all after the reconnect', async () => {
-        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-        try {
-            new Colibri('app', 'localhost', 9011);
-            const [, registerModel] = RegisterModelSync({ name: 'reg', type: Pair });
-            connectSocket();
-            await vi.advanceTimersByTimeAsync(1);
-            fakeSocket.emit.mockClear();
-            const pair = new Pair('p1');
-            registerModel(pair);
+    // Two updates from another client that changes the model all the time too came before the answer
+    // to asking again, and the second was taken for it: the same again, every round trip.
+    it('sends every change after asking again once, while another client changes the model all the time', async () => {
+        const { pair } = await registeredLate();
+        pair.a = 'a1';
+        deliver('reg', { command: 'model::update', payload: server });
+        // The end of the answers to the request for every model.
+        endOfAnswers(1);
+        pair.a = 'a2';
+        await settle();
+        expect(sentOnChannel()).toHaveLength(3);
 
-            pair.a = 'mine';
-            deliver('reg', { command: 'model::update', payload: server });
-            await vi.advanceTimersByTimeAsync(10);
-            expect(sentInOrder()).toHaveLength(3);
-            disconnectSocket();
-            pair.b = 'later';
-            await vi.advanceTimersByTimeAsync(5000);
-            expect(sentInOrder()).toHaveLength(3);
+        deliver('reg', { command: 'model::update', payload: { id: 'p1', b: 'b1' } });
+        deliver('reg', { command: 'model::update', payload: { id: 'p1', b: 'b2' } });
+        deliver('reg', { command: 'model::update', payload: { ...server, a: 'a1', b: 'b2' } });
+        deliver('reg', { command: 'model::update', payload: { id: 'p1', b: 'b3' } });
+        endOfAnswers();
+        pair.a = 'a3';
+        await settle();
 
-            connectSocket();
-            // The server restarted meanwhile.
-            deliver('reg', { command: 'model::update', payload: { id: 'p1' } });
-            endOfAnswers();
-            await vi.advanceTimersByTimeAsync(10);
-            expect(sentInOrder().slice(3)).toEqual([
-                ['model::request', { id: 'p1', again: true }],
-                ['model::request', { id: endId, again: true }],
-                ['model::update', { id: 'p1', a: 'mine', b: 'later' }],
-                ...everything
-            ]);
-        } finally {
-            warnSpy.mockRestore();
-            vi.useRealTimers();
-        }
+        expect([pair.a, pair.b]).toEqual(['a3', 'b3']);
+        expect(sentOnChannel().slice(3)).toEqual([
+            ['model::update', { id: 'p1', a: 'a2' }],
+            ['model::update', { id: 'p1', a: 'a3' }]
+        ]);
+    });
+
+    // The server holds back the updates of a client over its limit (CLIENT_MESSAGE_RATE_LIMIT), but
+    // never a request, so the answer to asking again may come without the change. Taken for the
+    // answer, it undid the change here, while the server had it once it handled the update.
+    it('sends the change again when the answers are over without it, with what it held since', async () => {
+        const { pair } = await registeredLate();
+        pair.a = 'mine';
+        deliver('reg', { command: 'model::update', payload: server });
+        await settle();
+        deliver('reg', { command: 'model::update', payload: server });
+        pair.b = 'later';
+        await settle();
+        expect(sentInOrder()).toHaveLength(4);
+        expect([pair.a, pair.b]).toEqual(['mine', 'later']);
+
+        endOfAnswers();
+        await settle();
+        expect([pair.a, pair.b]).toEqual(['mine', 'later']);
+        expect(sentInOrder().slice(4)).toEqual([['model::update', { id: 'p1', a: 'mine', b: 'later' }]]);
+
+        fakeSocket.emit.mockClear();
+        pair.b = 'now';
+        await settle();
+        expect(sentInOrder()).toEqual([['model::update', { id: 'p1', b: 'now' }]]);
+    });
+
+    // Sent while the connection was down, a change goes into Socket.IO's buffer, which sends it on
+    // the reconnect ahead of asking for the model again: a server that had forgotten the model took
+    // that one change for all of it, and the rest was never sent.
+    it('holds a change made while disconnected as it asks again, and sends it all after the reconnect', async () => {
+        const { pair } = await registeredLate();
+        pair.a = 'mine';
+        deliver('reg', { command: 'model::update', payload: server });
+        await settle();
+        expect(sentInOrder()).toHaveLength(4);
+        disconnectSocket();
+        pair.b = 'later';
+        await settle();
+        expect(sentInOrder()).toHaveLength(4);
+
+        connectSocket();
+        // The server restarted meanwhile.
+        deliver('reg', { command: 'model::update', payload: { id: 'p1' } });
+        endOfAnswers();
+        await settle();
+        expect(sentInOrder().slice(4)).toEqual([
+            ['model::request', { id: 'p1', again: true }],
+            endRequest,
+            ['model::update', { id: 'p1', a: 'mine', b: 'later' }],
+            ...everything
+        ]);
     });
 
     // A field set to undefined is left out of what is sent, so no update could ever show it.
@@ -1845,10 +1893,11 @@ describe('keeping a change made after registerModel', () => {
 
         deliver('reg', { command: 'model::delete', payload: { id: 'p1' } });
         pair.b = 'after the delete';
+        endOfAnswers();
         await settle();
 
         expect(latest(models$)).toEqual([]);
-        expect(sentInOrder()).toHaveLength(3);
+        expect(sentInOrder()).toHaveLength(4);
     });
 });
 
@@ -1956,8 +2005,39 @@ describe('sending again a change lost in a connection that died', () => {
         ]);
 
         deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A3', b: 'B' } });
+        endOfAnswers();
         expect(sentInOrder().slice(2)).toEqual([['model::request', {}]]);
         expect(pair.a).toBe('A3');
+    });
+
+    // A model that changes all the time, a tracked pose say, changed again before every answer: the
+    // changes made meanwhile went out with one more request each time, so the model stayed asked
+    // for, one update a round trip went out, and everything else was never asked for.
+    it('asks for every model after asking again once, though the model changed before every answer', async () => {
+        const { pair } = await connectedWithOwnPair();
+        await sendAndDie(pair, 'A2');
+        pair.b = 'B1';
+        await settle();
+        deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A', b: 'B' } });
+        endOfAnswers();
+        await settle();
+        expect(sentInOrder()).toEqual([
+            ['model::update', { id: 'p1', a: 'A2', b: 'B1' }],
+            ['model::request', { id: 'p1', again: true }]
+        ]);
+
+        pair.b = 'B2';
+        await settle();
+        deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A2', b: 'B1' } });
+        endOfAnswers();
+        pair.b = 'B3';
+        await settle();
+        expect([pair.a, pair.b]).toEqual(['A2', 'B3']);
+        expect(sentInOrder().slice(2)).toEqual([
+            ['model::update', { id: 'p1', b: 'B2' }],
+            ['model::request', {}],
+            ['model::update', { id: 'p1', b: 'B3' }]
+        ]);
     });
 
     // The value the server last showed this client counts as one from before the change, too.
