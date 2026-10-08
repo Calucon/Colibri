@@ -125,13 +125,30 @@ namespace HCIKonstanz.Colibri.Tests
             LocallyDeletedModels.Remember("channel", "created here again", 200.7);
             LocallyDeletedModels.Forget("channel", "created here again");
 
-            Assert.That(LocallyDeletedModels.Since(199.0), Is.EqualTo(new[]
+            Assert.That(LocallyDeletedModels.Since(199.0, now: 202.0), Is.EqualTo(new[]
             {
                 ("channel", "at the drop"),
                 ("other-channel", "just after"),
                 ("channel", "deleted twice"),
             }));
-            Assert.That(LocallyDeletedModels.Since(300.0), Is.Null);
+            Assert.That(LocallyDeletedModels.Since(300.0, now: 302.0), Is.Null);
+        }
+
+        /// <summary>
+        /// Only the deletes remembered still: one older than the window, or one made before the
+        /// clock started again, is left out, as in Contains, even while nothing has been remembered
+        /// since to drop it. Sent again, it would delete an object another client has created under
+        /// the id in the meantime.
+        /// </summary>
+        [Test]
+        public void TheDeletesSinceATimeLeaveOutThoseNoLongerRemembered()
+        {
+            LocallyDeletedModels.Remember("channel", "older than the window", 100.0);
+            LocallyDeletedModels.Remember("channel", "within the window", 150.0);
+
+            Assert.That(LocallyDeletedModels.Since(0.0, now: 100.0 + LocallyDeletedModels.WindowSeconds + 1.0),
+                Is.EqualTo(new[] { ("channel", "within the window") }));
+            Assert.That(LocallyDeletedModels.Since(0.0, now: 5.0), Is.Null, "Both were made before the clock started again");
         }
 
         /// <summary>A clock behind a delete has started again since, which no delete outlives.</summary>

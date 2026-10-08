@@ -141,7 +141,7 @@ namespace HCIKonstanz.Colibri.Synchronization
         {
             _disconnectedAt = now;
 
-            var deletes = LocallyDeletedModels.Since(LastHeardAt(now) - 1);
+            var deletes = LocallyDeletedModels.Since(LastHeardAt(now) - 1, now);
             if (deletes == null)
                 return;
 

@@ -85,17 +85,23 @@ namespace HCIKonstanz.Colibri.Synchronization
         internal static int Count => _deletedAt.Count;
 
         /// <summary>
-        /// The deletes made at or after <paramref name="since"/> and remembered still, oldest first;
-        /// null if there are none. See Sync's OnDisconnected, which sends them again.
+        /// The deletes made at or after <paramref name="since"/> and remembered still at
+        /// <paramref name="now"/>, oldest first; null if there are none. See Sync's OnDisconnected,
+        /// which sends them again.
         /// </summary>
-        internal static List<(string Channel, string Id)> Since(double since)
+        internal static List<(string Channel, string Id)> Since(double since, double now)
         {
             List<(string Channel, string Id)> deletes = null;
             foreach (var (key, at) in _byAge)
             {
+                // As in Contains: one older than the window, or one a clock behind it has been reset
+                // since, is not remembered any more, though it stays queued until the next Remember.
+                if (at < since || now - at >= WindowSeconds || now < at)
+                    continue;
+
                 // A delete remembered again later has an entry of its own, and a forgotten one has
                 // none left.
-                if (at >= since && _deletedAt.TryGetValue(key, out var latest) && latest == at)
+                if (_deletedAt.TryGetValue(key, out var latest) && latest == at)
                     (deletes ??= new List<(string Channel, string Id)>()).Add(key);
             }
             return deletes;
