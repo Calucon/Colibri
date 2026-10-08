@@ -6,9 +6,9 @@ it moves on everyone else's screen. That is the whole idea; everything below is 
 This guide is written for Unity, because that is where most prototypes start. There is a short
 section at the end on [talking to a browser](#talking-to-a-browser), which works the same way.
 
-**You need two things before you start:** the address of a running colibri-server 2.x — your own
-(see [colibri-server](../colibri-server/README.md#setup)) or a shared one — and an app name, which
-you choose yourself.
+**You need two things before you start:** the address of a running colibri-server 2.x, either your
+own (see [colibri-server](../colibri-server/README.md#setup)) or a shared one, and an app name,
+which you choose yourself.
 
 ---
 
@@ -28,7 +28,7 @@ a 2.0 server either. Remove it, and install it again with a 2.x release tag appe
 above, e.g. `#v2.0.0`; the [Releases page](https://github.com/hcigroupkonstanz/Colibri/releases)
 lists the tags.
 
-You need **Unity 2022.3 or newer**, and the server has to be **version 2.0 or newer** — a 2.0
+You need **Unity 2022.3 or newer**, and the server has to be **version 2.0 or newer**: a 2.0
 client and a 1.x server cannot talk to each other at all.
 
 ---
@@ -40,16 +40,16 @@ A configuration window opens by itself after installing. You can reopen it any t
 
 ### 1. The app name must be identical everywhere
 
-Enter an **App Name** and press *Save Config*. Any word you like — but **every client that should
-see each other has to use exactly the same one.**
+Enter an **App Name** and press *Save Config*. Any word you like, but **every client that should see
+each other has to use exactly the same one.**
 
 This is the single most common reason two clients ignore each other. Both say *Connected*, both
 look perfectly healthy, and nothing crosses between them, because the server keeps each app name
 completely separate.
 
 It works the other way round too: **every project needs its own app name.** Two projects on one
-server that pick the same one — both use `test`, or both keep the name from an example — end up in
-the same app. Each sees the other's objects and messages, and the server sends every message to the
+server that pick the same one (both use `test`, or both keep the name from an example) end up in the
+same app. Each sees the other's objects and messages, and the server sends every message to the
 clients of both, which slows it down for everyone using it. Choose a name nobody else on the server
 uses: `museum-ar-prototype`, not `test`. The configuration window warns about the names people try
 first, such as `test`, `demo` or `myAppName`, but it cannot know which names other projects on the
@@ -95,15 +95,15 @@ private void OnTemperature(float value)
 }
 ```
 
-That is the whole thing — there is no matching line to write in `OnDestroy`. Colibri notices when
-the component a listener belongs to is destroyed and stops calling it. A listener belongs to a
-component when it is one of the component's methods, like `OnTemperature` here, or a lambda that
-uses something of it: a field, a method, `transform`.
+That is the whole thing: there is no matching line to write in `OnDestroy`. Colibri notices when the
+component a listener belongs to is destroyed and stops calling it. A listener belongs to a component
+when it is one of the component's methods, like `OnTemperature` here, or a lambda that uses
+something of it: a field, a method, `transform`.
 
 A listener that uses nothing of a component belongs to none: a static method, or a lambda that only
 works with its parameter, `Debug.Log` or a static such as `GameManager.Instance`. It stays
-registered until you call `Sync.Unregister`. Every time `Start` runs again — after a scene reload,
-say — it is added once more, and each message then reaches it once per registration. When in
+registered until you call `Sync.Unregister`. Every time `Start` runs again (after a scene reload,
+say), it is added once more, and each message then reaches it once per registration. When in
 doubt, use a method of the component, as above.
 
 Three things worth knowing straight away:
@@ -115,12 +115,12 @@ Three things worth knowing straight away:
   replay.
 - **You never receive your own messages.** Only the other clients do.
 
-If you want to stop listening while the object is still alive — say, only while a menu is open —
+If you want to stop listening while the object is still alive (say, only while a menu is open),
 `Sync.Unregister<float>("Temperature", OnTemperature)` does exactly that.
 
 ### What you can send
 
-`bool`, `int`, `float`, `string`, `Vector2`, `Vector3`, `Quaternion`, `Color` — and arrays of all of
+`bool`, `int`, `float`, `string`, `Vector2`, `Vector3`, `Quaternion`, `Color`, and arrays of all of
 them.
 
 For anything else, send JSON:
@@ -153,12 +153,12 @@ Drop the **`SyncTransform`** component onto any GameObject. Its position, rotati
 active state now follow the same object on every other client.
 
 The server remembers where things are, so a client that joins later gets the current positions
-rather than starting from the scene's defaults — for as long as at least one client of your app is
+rather than starting from the scene's defaults, for as long as at least one client of your app is
 connected. Once the last one disconnects, the server forgets them; anything that has to outlast that
 belongs in the [Store](#keep-data-between-sessions).
 
 Each of the four is a separate tick box on the component. Only values that change are sent, so
-turning off the ones you do not need saves little traffic — but it stops a stray rotation from
+turning off the ones you do not need saves little traffic, but it stops a stray rotation from
 fighting with someone else's: with the box unticked, this client neither reads that value from its
 transform nor applies one that arrives.
 
@@ -176,7 +176,7 @@ client spawns one, everyone else builds a copy from that template.
 
 ## Sync your own fields
 
-Same idea, for your own data. Derive from `SyncBehaviour<T>` — where `T` is the class itself — and
+Same idea, for your own data. Derive from `SyncBehaviour<T>` (where `T` is the class itself) and
 mark the fields you want shared:
 
 ```csharp
@@ -265,7 +265,7 @@ Two things the window cannot check for you:
 *Window → Package Manager → Colibri → Samples → Import*. Each one is imported into
 `Assets/Samples/` and can be edited freely.
 
-They are not in your project until you import them — that is deliberate, so you do not ship code you
+They are not in your project until you import them. That is deliberate, so you do not ship code you
 never asked for.
 
 | Sample | Shows |
@@ -277,13 +277,13 @@ never asked for.
 | **Voice Chat** | Talking to the other clients |
 | **Network Stress** | Putting Colibri under load and measuring throughput, latency and dropped messages |
 
-Four of them — SendData, SyncTransform, Remote Store and Voice Chat — show their instructions as
+Four of them (SendData, SyncTransform, Remote Store and Voice Chat) show their instructions as
 TextMeshPro text, which stays invisible until the *TMP Essential Resources* are in your project.
 Unity usually offers to import them the first time you open such a scene; if it does not, use
 *Window → TextMeshPro → Import TMP Essential Resources*. On Unity 2022.3 that menu comes with the
 *TextMeshPro* package, so install that from the Package Manager first if it is missing.
 
-The `[RemoteLogger]` and `[SyncTransformManager]` prefabs are *not* samples — they are always there,
+The `[RemoteLogger]` and `[SyncTransformManager]` prefabs are *not* samples: they are always there,
 in `Packages/Colibri/Prefabs/`.
 
 ---
@@ -311,15 +311,15 @@ Sync.receiveNumber('Temperature', value => console.log(value));
 The server address can be just the host (`'192.168.0.10'`), the host and port
 (`'192.168.0.10:9011'`), or the same `http://<your-server>:9011` you open in a browser to see the
 log. Use `https://…`, as in `'https://colibri.example.org:9011'`, only if your server is reached
-over HTTPS. Without a port in the address it is 9011. Anything after the host and port — a path
-such as `/log` — is refused with a `ColibriError`.
+over HTTPS. Without a port in the address it is 9011. Anything after the host and port (a path
+such as `/log`) is refused with a `ColibriError`.
 
 Same app name, same channel names, same rules. Two differences to watch:
 
 - **Vectors and colours are plain arrays in TypeScript**, not objects: `Sync.sendVector3('pos', [1,
   2, 3])` and `Sync.sendColor('tint', [1, 0, 0, 1])`, where Unity would use a `Vector3` and a
   `Color`. A colour therefore reaches a web listener as `"#RRGGBBAA"` from Unity but as `[r, g, b,
-  a]` from another web client — run it through `toHexColor()` or `toRgbaColor()` to get one form
+  a]` from another web client: run it through `toHexColor()` or `toRgbaColor()` to get one form
   regardless of the sender. (Unity does the same for you: `ToColor` takes either.)
 - **JavaScript has one number type.** A web client sending `5` reaches Unity as a `float`, so listen
   for it with `Sync.Receive<float>` on the Unity side, not `int`.
@@ -337,20 +337,20 @@ what type each expects, and the most recent messages in and out.
 
 | What you see | What it usually is |
 | --- | --- |
-| Two clients ignore each other, both connected | Different app names. The Status window shows the one in use — compare them. |
+| Two clients ignore each other, both connected | Different app names. The Status window shows the one in use; compare them. |
 | Objects or messages you did not create show up | Another project on the server uses the same app name. Pick one nobody else uses. |
 | Works in the Editor, nothing happens on the Quest | See [Building for Meta Quest](#building-for-meta-quest): Internet Access, plain HTTP, and the server address. |
 | A message never arrives, no errors | The listener expects a different type than the sender sent. Check the console; Colibri names both. |
 | One client goes quiet when you click away | *Run In Background* is off on that client. |
-| Nothing connects at all | Console says `Colibri is not configured yet` — open *Window → Colibri Configuration* and set an app name. |
+| Nothing connects at all | Console says `Colibri is not configured yet`. Open *Window → Colibri Configuration* and set an app name. |
 | Status window says *did not answer within 5 s* | The server address is wrong, or this device is on a different network than the server. |
 | Status window says *ended before a single frame could be read* | The server runs Colibri 1.x, and this client needs 2.0 or newer. Or the TCP port is not Colibri's. |
 | A `[Sync]` field never syncs | Its type is not one Colibri can send. It is reported in the console when the game starts. |
 | `Store.Get` or `Put` fails | The log names the object, the URL, and the HTTP status. Usually the server address. |
 
 If the console is empty and the Status window says *Connected* with the right app name, the message
-really is being sent — so the problem is at the receiving end. That is nearly always the channel
-name or the type.
+really is being sent, so the problem is at the receiving end. That is nearly always the channel name
+or the type.
 
 ---
 
@@ -362,7 +362,7 @@ name or the type.
    component it uses is destroyed. A static method, or a lambda that uses nothing of its component,
    stays registered until `Sync.Unregister`.
 3. **One client owns each object.** Shared control of the same thing fights with itself.
-4. **Watch the console.** Colibri reports the common mistakes by name instead of failing quietly —
+4. **Watch the console.** Colibri reports the common mistakes by name instead of failing quietly,
    but only if you are looking.
 
 ---
