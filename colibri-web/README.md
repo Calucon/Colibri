@@ -9,9 +9,12 @@ This page is the short version. The [full guide](docs/guide.md) has every option
 
 ## Requirements
 
-- **colibri-server 2.x.** A 2.x server refuses 1.x web clients, and this client warns about a 1.x server.
-- **TypeScript 5.0 or newer**, with standard decorators: `experimentalDecorators` must not be set in `tsconfig.json`.
-- **rxjs 7.8.1 or a newer 7.x**, a peer dependency. npm 7 and newer install it for you.
+- **A running colibri-server 2.x** ([how to start one](../colibri-server/)). A 2.x server refuses 1.x web clients,
+  and this client warns about a 1.x server.
+- **TypeScript 5.0 or newer**, with standard decorators: `experimentalDecorators` off (unset or `false`) in
+  `tsconfig.json`.
+- **rxjs 7.8.1 or a newer 7.x**, a peer dependency. npm 7 and newer install it for you; otherwise add it to your
+  project yourself.
 
 ## Install
 
@@ -22,8 +25,8 @@ yarn add @hcikn/colibri@2
 ```
 
 Keep the `@2`, so that you never get a 1.x release by accident. If npm answers
-`No matching version found for @hcikn/colibri@2`, build the package from a checkout of this repository instead
-([how](docs/guide.md#installation)).
+`No matching version found for @hcikn/colibri@2` (yarn: `Couldn't find any versions`), build the package from a
+checkout of this repository instead ([how](docs/guide.md#installation)).
 
 ## Quick start
 
@@ -32,7 +35,7 @@ Keep the `@2`, so that you never get a 1.x release by accident. If npm answers
 ```ts
 import { Colibri, Sync } from '@hcikn/colibri';
 
-// the server's address as your browser shows it for the admin UI, without the '/log' at the end
+// your colibri-server; 9011 is its default port
 new Colibri('your-app-name', 'http://<your-server>:9011');
 
 Sync.receiveNumber('temperature', value => console.log('temperature', value));
