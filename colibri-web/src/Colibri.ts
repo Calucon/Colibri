@@ -1,7 +1,7 @@
 import { Subject } from 'rxjs';
 import { Socket, connect } from 'socket.io-client';
 import { ColibriError, ProtocolMismatchError } from './ColibriError';
-import { colibriCreated, colibriDisconnected, colibriReconnected } from './lifecycle';
+import { colibriCreated, colibriDisconnected, colibriHeardFrom, colibriReconnected } from './lifecycle';
 
 /**
  * The wire protocol this client speaks, announced in the Socket.IO handshake query. Must
@@ -366,6 +366,7 @@ export class Colibri {
     }
 
     private onSocketAny(channel: string, msg: unknown) {
+        colibriHeardFrom(this);
         const { command, payload } = msg as Pick<Message, 'command' | 'payload'>;
 
         if (channel === COLIBRI_CHANNEL && command === PROTOCOL_REJECTED_COMMAND) {

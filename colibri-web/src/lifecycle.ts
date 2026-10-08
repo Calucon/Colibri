@@ -6,7 +6,9 @@ import type { Colibri } from './Colibri';
  *  Internal, and deliberately not exported from index.ts. RegisterModelSync and RemoteLogger
  *  can be called before `new Colibri()`, and this is how they find out when it happens - and how
  *  RegisterModelSync finds out about a disconnect, after which it holds its own models' changes
- *  back, and a reconnect, after which it has catching up to do.
+ *  back, and a reconnect, after which it has catching up to do. It also asks when an instance last
+ *  heard from the server, which tells it when a connection that died without closing stopped
+ *  working.
  *
  *  Only a type is imported from Colibri, so the two modules do not depend on each other at
  *  runtime. That is also why nothing here checks whether an instance already exists: callers
@@ -88,3 +90,18 @@ export const onColibriDisconnected = (colibri: Colibri, action: InstanceAction):
 export const colibriDisconnected = (colibri: Colibri): void => {
     runActions(disconnectActions, colibri, 'Colibri: handling a disconnect failed.');
 };
+
+const lastHeard = new WeakMap<Colibri, number>();
+
+/** Notes that `colibri` has just received something from the server. Called by Colibri. */
+export const colibriHeardFrom = (colibri: Colibri): void => {
+    lastHeard.set(colibri, Date.now());
+};
+
+/**
+ * When `colibri` last received anything from the server (as `Date.now()`), or undefined if it never
+ * has. While the connection works that is never much more than 100 ms ago, since the server's
+ * latency probe comes that often: Socket.IO itself may take most of a minute to notice that a
+ * connection died without closing, and this is when it actually stopped working.
+ */
+export const lastHeardFrom = (colibri: Colibri): number | undefined => lastHeard.get(colibri);

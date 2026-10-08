@@ -1659,6 +1659,275 @@ describe('keeping a change made after registerModel', () => {
     });
 });
 
+// A connection that dies without closing (Wi-Fi dropping out, say) is noticed by Socket.IO only once
+// its ping timeout has run out, and a change sent until then is lost. The answer to asking for the
+// model again after the reconnect then had the value from before it, and applying it undid the
+// change on this client alone: the server and every other client never saw it.
+describe('sending again a change lost in a connection that died', () => {
+    const connectSocket = () => {
+        for (const [event, handler] of fakeSocket.on.mock.calls) {
+            if (event === 'connect') handler();
+        }
+    };
+
+    const disconnectSocket = () => {
+        for (const [event, handler] of fakeSocket.on.mock.calls) {
+            if (event === 'disconnect') handler('ping timeout');
+        }
+    };
+
+    // What every message from the server goes through, the latency probe that comes every 100 ms
+    // included: it is how the client knows when it last heard from the server.
+    const hearFromServer = () => {
+        getAnyHandler(fakeSocket.onAny)('colibri', { command: 'latency', payload: '1' });
+    };
+
+    /** Everything emitted on 'own', as [command, payload], in the order it was. */
+    const sentInOrder = () =>
+        fakeSocket.emit.mock.calls
+            .filter(([channel]) => channel === 'own')
+            .map(([, msg]) => [(msg as Message).command, (msg as Message).payload]);
+
+    // Long enough for a change a model reported to have been sent: SyncModel buffers for 1ms.
+    const settle = () => new Promise(resolve => setTimeout(resolve, 10));
+
+    class Pair extends SyncModel<Pair> {
+        @Synced() accessor a = '';
+        @Synced() accessor b = '';
+    }
+
+    let clock = 1_000_000;
+    let debugSpy: ReturnType<typeof vi.spyOn>;
+    let nowSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+        clock = 1_000_000;
+        debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => undefined);
+        nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    });
+
+    afterEach(() => {
+        debugSpy.mockRestore();
+        nowSpy.mockRestore();
+    });
+
+    /**
+     * A Colibri with an own Pair 'p1' that the server had nothing for, so it was sent in full
+     * (a: 'A', b: 'B'), and then the request for every model answered with it.
+     */
+    const connectedWithOwnPair = async () => {
+        new Colibri('app', 'localhost', 9011);
+        const [models$, registerModel] = RegisterModelSync({ name: 'own', type: Pair });
+        const pair = new Pair('p1');
+        pair.a = 'A';
+        pair.b = 'B';
+        registerModel(pair);
+        connectSocket();
+        deliver('own', { command: 'model::update', payload: { id: 'p1' } });
+        deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A', b: 'B' } });
+        await settle();
+        fakeSocket.emit.mockClear();
+        return { models$, pair };
+    };
+
+    /** Changes `a` while connected, so that it is sent, and the connection then dies. */
+    const sendAndDie = async (pair: Pair, a: string) => {
+        fakeSocket.emit.mockClear();
+        pair.a = a;
+        await settle();
+        expect(sentInOrder()).toEqual([['model::update', { id: 'p1', a }]]);
+        hearFromServer();
+        disconnectSocket();
+        connectSocket();
+        fakeSocket.emit.mockClear();
+    };
+
+    it('keeps and sends again a change when the answer has the value from before it', async () => {
+        const { models$, pair } = await connectedWithOwnPair();
+        pair.a = 'A2';
+        await settle();
+        await sendAndDie(pair, 'A3');
+
+        deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A2', b: 'B' } });
+        await settle();
+
+        expect([pair.a, pair.b]).toEqual(['A3', 'B']);
+        expect(latest(models$)).toEqual([pair]);
+        // Sent again, and asked for again to see that the server has it now.
+        expect(sentInOrder()).toEqual([
+            ['model::update', { id: 'p1', a: 'A3' }],
+            ['model::request', { id: 'p1', again: true }]
+        ]);
+
+        deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A3', b: 'B' } });
+        expect(sentInOrder().slice(2)).toEqual([['model::request', {}]]);
+        expect(pair.a).toBe('A3');
+    });
+
+    // The value the server last showed this client counts as one from before the change, too.
+    it('does so for the first change made after the server last showed the field', async () => {
+        const { pair } = await connectedWithOwnPair();
+        await sendAndDie(pair, 'A2');
+
+        deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A', b: 'B' } });
+        await settle();
+
+        expect(pair.a).toBe('A2');
+        expect(sentInOrder()).toEqual([
+            ['model::update', { id: 'p1', a: 'A2' }],
+            ['model::request', { id: 'p1', again: true }]
+        ]);
+    });
+
+    it('sends it in one update with a change made while disconnected', async () => {
+        const { pair } = await connectedWithOwnPair();
+        pair.a = 'A2';
+        await settle();
+        hearFromServer();
+        disconnectSocket();
+        pair.b = 'B2';
+        await settle();
+        connectSocket();
+        fakeSocket.emit.mockClear();
+
+        deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A', b: 'B' } });
+        await settle();
+
+        expect([pair.a, pair.b]).toEqual(['A2', 'B2']);
+        expect(sentInOrder()).toEqual([
+            ['model::update', { id: 'p1', a: 'A2', b: 'B2' }],
+            ['model::request', { id: 'p1', again: true }]
+        ]);
+    });
+
+    it('sends nothing when the answer has the last change sent', async () => {
+        const { pair } = await connectedWithOwnPair();
+        await sendAndDie(pair, 'A2');
+
+        deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A2', b: 'B' } });
+        await settle();
+
+        expect(pair.a).toBe('A2');
+        expect(sentInOrder()).toEqual([['model::request', {}]]);
+    });
+
+    it('takes a value it never had: another client set it while this one was away', async () => {
+        const { pair } = await connectedWithOwnPair();
+        await sendAndDie(pair, 'A2');
+
+        deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'theirs', b: 'B' } });
+        await settle();
+
+        expect(pair.a).toBe('theirs');
+        expect(sentInOrder()).toEqual([['model::request', {}]]);
+    });
+
+    // The server showed that it had moved on from the change, so the older value is another
+    // client's, set again.
+    it('takes a value from before the change when the server showed a newer one since', async () => {
+        const { pair } = await connectedWithOwnPair();
+        pair.a = 'A2';
+        await settle();
+        deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'theirs' } });
+        hearFromServer();
+        disconnectSocket();
+        connectSocket();
+        fakeSocket.emit.mockClear();
+
+        deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A', b: 'B' } });
+        await settle();
+
+        expect(pair.a).toBe('A');
+        expect(sentInOrder()).toEqual([['model::request', {}]]);
+    });
+
+    // A change followed by more than KNOWN_VALUES_MS of a working connection arrived for certain:
+    // the server answering with the value from before it means another client set that again.
+    it('takes a value from before a change sent long before the connection stopped working', async () => {
+        const { pair } = await connectedWithOwnPair();
+        pair.a = 'A2';
+        await settle();
+        clock += 11_000;
+        hearFromServer();
+        disconnectSocket();
+        // However long Socket.IO took to notice.
+        clock += 60_000;
+        connectSocket();
+        fakeSocket.emit.mockClear();
+
+        deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A', b: 'B' } });
+        await settle();
+
+        expect(pair.a).toBe('A');
+        expect(sentInOrder()).toEqual([['model::request', {}]]);
+    });
+
+    it('counts back from when it last heard from the server, not from when it noticed', async () => {
+        const { pair } = await connectedWithOwnPair();
+        pair.a = 'A2';
+        await settle();
+        clock += 9_000;
+        hearFromServer();
+        // The default ping timeout, 25 s and 20 s, before Socket.IO noticed.
+        clock += 45_000;
+        disconnectSocket();
+        connectSocket();
+        fakeSocket.emit.mockClear();
+
+        deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A', b: 'B' } });
+        await settle();
+
+        expect(pair.a).toBe('A2');
+        expect(sentInOrder()[0]).toEqual(['model::update', { id: 'p1', a: 'A2' }]);
+    });
+
+    // Only the answer to asking again after a reconnect: an update relayed from another client is
+    // that client's change, made after this one's.
+    it('applies an update another client made as it comes, whatever value it has', async () => {
+        const { pair } = await connectedWithOwnPair();
+        pair.a = 'A2';
+        await settle();
+        fakeSocket.emit.mockClear();
+
+        deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A' } });
+        await settle();
+
+        expect(pair.a).toBe('A');
+        expect(sentInOrder()).toEqual([]);
+    });
+
+    it('still drops the model when the answer is model::delete', async () => {
+        const { models$, pair } = await connectedWithOwnPair();
+        await sendAndDie(pair, 'A2');
+
+        deliver('own', { command: 'model::delete', payload: { id: 'p1' } });
+        await settle();
+
+        expect(latest(models$)).toEqual([]);
+        expect(sentInOrder()).toEqual([['model::request', {}]]);
+    });
+
+    it('sends it again after another reconnect when the update sending it again was lost too', async () => {
+        const { pair } = await connectedWithOwnPair();
+        await sendAndDie(pair, 'A2');
+        deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A', b: 'B' } });
+        await settle();
+        hearFromServer();
+        disconnectSocket();
+        connectSocket();
+        fakeSocket.emit.mockClear();
+
+        deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A', b: 'B' } });
+        await settle();
+
+        expect(pair.a).toBe('A2');
+        expect(sentInOrder()).toEqual([
+            ['model::update', { id: 'p1', a: 'A2' }],
+            ['model::request', { id: 'p1', again: true }]
+        ]);
+    });
+});
+
 // Socket.IO retries a connection that fails, for as long as it takes, and a wrong address or a
 // server that is down used to look like nothing more than a slow connection.
 describe('reporting a server that cannot be reached', () => {

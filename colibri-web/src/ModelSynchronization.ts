@@ -1,6 +1,6 @@
 import { BehaviorSubject, Observable } from 'rxjs';
 import { Colibri, Message, RegisterChannel, SendMessage } from './Colibri';
-import { onColibriDisconnected, onColibriReconnected, whenColibriCreated } from './lifecycle';
+import { lastHeardFrom, onColibriDisconnected, onColibriReconnected, whenColibriCreated } from './lifecycle';
 import { SyncModel } from './SyncModel';
 
 interface ModelSyncMsg<T extends SyncModel<T>> extends Message {
@@ -65,6 +65,14 @@ const ownOnChannel = new Map<string, Set<(id: string) => boolean>>();
 // Nothing else for the model may come after that, and waiting on would hold its changes for good.
 const ASK_AGAIN_TIMEOUT_MS = 5000;
 
+// How much of what an own model's fields were is kept, to tell whether the last change this client
+// sent for one reached the server (see lostChanges): this many values per field at most, and of
+// those only the ones still the latest at most this long before the connection stopped working. A
+// change sent any earlier arrived for certain, so the server showing the value it replaced means
+// another client set that again.
+const KNOWN_VALUES_KEPT = 8;
+const KNOWN_VALUES_MS = 10_000;
+
 export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyncRegistration<T>): ModelSync<T> => {
     const name = registration.name || registration.type.name.toLowerCase();
     if (!registration.name) warnIfMinified(registration.type.name, name);
@@ -120,6 +128,23 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
         confirming.delete(id);
         return confirmation;
     };
+
+    // For each field of an own model, by the name it is sent under, the values it had, oldest first:
+    // the last one the server showed this client (see applyUpdate), then each one this client sent
+    // since (see sendUpdate) - as JSON, with when, and whether it was this client's. See lostChanges.
+    interface KnownValue {
+        json: string;
+        at: number;
+        sent: boolean;
+    }
+    const knownValues = new WeakMap<T, Map<string, KnownValue[]>>();
+
+    // Own models asked for again on a reconnect, until the answer comes: it is checked for changes
+    // lost in the connection that died (see lostChanges).
+    const askedAfterOutage = new Set<string>();
+
+    // When this client last heard from the server before the connection was lost (see lastHeardFrom).
+    let lastHeardBeforeOutage = 0;
 
     // From a disconnect until the next connect.
     let disconnected = false;
@@ -182,6 +207,7 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
         setTimeout(catchUpOnceAnswered, 0);
         onColibriDisconnected(colibri, () => {
             disconnected = true;
+            lastHeardBeforeOutage = lastHeardFrom(colibri) ?? Date.now();
         });
         onColibriReconnected(colibri, () => {
             disconnected = false;
@@ -190,6 +216,7 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
             // they are held back again, to go out with the answer.
             awaitingAnswer.clear();
             deletedWhileAwaited.clear();
+            askedAfterOutage.clear();
             for (const id of [...confirming.keys()]) {
                 const confirmation = endConfirmation(id);
                 const model = models.value.find(m => m.id === id);
@@ -197,7 +224,9 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
             }
             catchingUpThrough = colibri;
             for (const model of models.value) {
-                if (ownModels.has(model)) askFor(colibri, model);
+                if (!ownModels.has(model)) continue;
+                if (answered.has(model)) askedAfterOutage.add(model.id);
+                askFor(colibri, model);
             }
             catchUpOnceAnswered();
         });
@@ -255,8 +284,13 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
     // Should another client change one of the same fields meanwhile, no update may ever show what
     // was sent. At most one answer made before the server had it can still be on its way, the one
     // to the first request, so the second update since asking again is taken as the answer anyway.
+    //
+    // The answer to asking again after a reconnect may also show that a change this client sent
+    // before the outage never reached the server (see lostChanges). Such a field is not applied
+    // either: it is sent again, with what was held back, and waited for in the same way.
     const takeAnswer = (id: string, asker: Colibri, model: T | undefined, modelData: Partial<T>) => {
         if (model) answered.add(model);
+        const afterOutage = askedAfterOutage.delete(id);
 
         if (!model || isBare(modelData)) {
             awaitingAnswer.delete(id);
@@ -264,7 +298,7 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
             if (model) {
                 heldChanges.delete(model);
                 // Not for a model whose delete() was called since: that ended what it sends.
-                if (ownModels.has(model)) asker.sendMessage(name, 'model::update', model.toJson());
+                if (ownModels.has(model)) sendUpdate(asker, model, model.toJson());
             } else if (!isBare(modelData)) {
                 applyUpdate(model, modelData);
             }
@@ -285,10 +319,14 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
 
         awaitingAnswer.delete(id);
         const held = releaseHeldChanges(model);
-        applyUpdate(model, withoutChanges(modelData, model, held));
-        if (held.length > 0) {
-            const sent = model.toJson(held) as Record<string, unknown>;
-            asker.sendMessage(name, 'model::update', sent);
+        const lost = afterOutage ? lostChanges(model, modelData, held) : [];
+        applyUpdate(model, withoutKeys(withoutChanges(modelData, model, held), lost));
+        if (held.length > 0 || lost.length > 0) {
+            // toJson() with no properties named is all of them.
+            const current = model.toJson() as Record<string, unknown>;
+            const sent: Record<string, unknown> = held.length > 0 ? model.toJson(held) : { id };
+            for (const key of lost) sent[key] = current[key];
+            sendUpdate(asker, model, sent as Partial<T>);
 
             // A field without a JSON value (undefined) is not sent at all, so no update shows it.
             const differs = new Map<string, string>();
@@ -316,8 +354,66 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
         awaitingAnswer.delete(id);
         const model = models.value.find(m => m.id === id);
         const held = model ? releaseHeldChanges(model) : [];
-        if (model && held.length > 0) asker.sendMessage(name, 'model::update', model.toJson(held));
+        if (model && held.length > 0) sendUpdate(asker, model, model.toJson(held));
         catchUpOnceAnswered();
+    };
+
+    // Sends an update for an own model, and remembers the values it sent (see lostChanges).
+    const sendUpdate = (colibri: Colibri, model: T, update: Partial<T>) => {
+        colibri.sendMessage(name, 'model::update', update);
+        remember(model, update, true);
+    };
+
+    // Remembers the values `fields` has for an own model (see knownValues): sent by this client,
+    // after what it knew of each field before; or shown by the server, in place of that. A field
+    // without a JSON value (undefined) is not sent at all, so there is nothing to remember for it.
+    const remember = (model: T, fields: Partial<T>, sent: boolean) => {
+        let known = knownValues.get(model);
+        if (!known) knownValues.set(model, (known = new Map<string, KnownValue[]>()));
+        const at = Date.now();
+        for (const [key, value] of Object.entries(fields)) {
+            const json = JSON.stringify(value) as string | undefined;
+            if (key === 'id' || json === undefined) continue;
+            const before = sent ? (known.get(key) ?? []) : [];
+            known.set(key, [...before, { json, at, sent }].slice(-KNOWN_VALUES_KEPT));
+        }
+    };
+
+    // The fields of an own model that the answer to asking for it again after a reconnect shows with
+    // a value they had before the last change this client sent for them: that change never reached
+    // the server. Socket.IO notices a connection that died without closing (Wi-Fi dropping out, say)
+    // only once its ping timeout has run out, and whatever is sent until then is lost. Applied, the
+    // answer undid the change on this client alone, and nobody else ever saw it; so for these fields,
+    // the value this client has is kept and sent again instead.
+    //
+    // Any other value is applied as it always was: one the field never had here is another client's,
+    // set while this one was away, and so is one the server showed again after this client's last
+    // change for the field. An earlier value counts only while it was still the latest at most
+    // KNOWN_VALUES_MS before the outage, counted back from when this client last heard from the
+    // server rather than from now, since Socket.IO may take most of a minute to notice that it no
+    // longer does: the change that replaced it any earlier arrived for certain, so the server showing
+    // it again means another client set it again.
+    const lostChanges = (model: T, modelData: Partial<T>, held: string[]): string[] => {
+        const known = knownValues.get(model);
+        if (!known) return [];
+        const since = lastHeardBeforeOutage - KNOWN_VALUES_MS;
+        const heldKeys = new Set(held.length > 0 ? Object.keys(model.toJson(held)) : []);
+        const current = model.toJson() as Record<string, unknown>;
+        return Object.entries(modelData)
+            .filter(([key, value]) => {
+                const values = known.get(key) ?? [];
+                const last = values.at(-1);
+                if (!last?.sent || heldKeys.has(key) || !(key in current)) return false;
+                const json = JSON.stringify(value) as string | undefined;
+                const earlier = values.filter((_, i) => i + 1 < values.length && values[i + 1].at >= since);
+                return (
+                    json !== last.json &&
+                    earlier.some(v => v.json === json) &&
+                    // Nothing to send when this client has what the server has anyway.
+                    JSON.stringify(current[key]) !== json
+                );
+            })
+            .map(([key]) => key);
     };
 
     // Whether `modelData` has every field in `sent` with the value sent (as JSON).
@@ -331,6 +427,8 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
 
     const applyUpdate = (model: T | undefined, modelData: Partial<T>) => {
         if (model) {
+            if (ownModels.has(model)) remember(model, modelData, false);
+
             // Update existing model
             model.update(modelData);
             models.next([...models.value]);
@@ -370,6 +468,7 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
     const onDelete = (id: string) => {
         const model = models.value.find(m => m.id === id);
         if (model) heldChanges.delete(model);
+        askedAfterOutage.delete(id);
         model?.delete();
         models.next(models.value.filter(m => m.id !== id));
 
@@ -436,7 +535,7 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
 
                 const colibri = Colibri.getInstance(false);
                 if (!colibri || mustHold()) holdChanges(model, changes);
-                else colibri.sendMessage(name, 'model::update', model.toJson(changes));
+                else sendUpdate(colibri, model, model.toJson(changes));
             },
             // delete() ends the stream: this client sends nothing more for the model - so neither
             // a held change, nor the whole model again after a reconnect.
@@ -450,6 +549,7 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
         ownModels.add(model);
         if (listed) {
             endConfirmation(model.id);
+            askedAfterOutage.delete(model.id);
             listed.delete();
             models.next(models.value.map(m => (m === listed ? model : m)));
         } else {

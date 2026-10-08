@@ -4,14 +4,17 @@ import { filter, take, timeout, toArray } from 'rxjs/operators';
 import {
     connectAsAdminUi,
     createClient,
+    createClientThrough,
     createPeer,
     createSingletonWithPeer,
     disconnectAll,
     dropConnection,
     dropConnectionUntilReleased,
     isConnected,
+    nextConnect,
     nextMessage,
     resetSingleton,
+    startLinkProxy,
     uniqueApp
 } from './helpers';
 import type { Colibri } from '../src/Colibri';
@@ -473,6 +476,134 @@ describe('RegisterModelSync own models after a reconnect', () => {
             ['theirs-1', 'missed'],
             ['theirs-2', 'created']
         ]);
+    });
+});
+
+// A network that drops out (Wi-Fi, say) closes nothing, so Socket.IO notices only once its ping
+// timeout has run out, and whatever this client sends until then is written into the dead link and
+// lost: Socket.IO holds back only what is sent while it knows it is disconnected. After the
+// reconnect, the server answered the request for the model with what it had before, and the client
+// applied it: the change was undone on the client that made it, and never reached anyone else.
+describe('RegisterModelSync own models after a change lost in a dead link', () => {
+    class Item extends SyncModel<Item> {
+        @Synced()
+        accessor value = '';
+    }
+
+    // Longer than SyncModel's 1ms buffer, so a change has been reported - and sent, or not - by then.
+    const reported = () => new Promise(resolve => setTimeout(resolve, 20));
+
+    /**
+     * Registers `model` through `client` and resolves once `peer` has it, and `client` has the answer
+     * to the request for every model that followed it.
+     */
+    const registeredOn = async (
+        client: Colibri,
+        peer: Colibri,
+        channel: string,
+        model: Item,
+        registerModel: (m: Item) => void
+    ) => {
+        const arrived = nextMessage(peer, { channel, command: 'model::update' });
+        registerModel(model);
+        expect((await arrived).payload).toEqual({ id: model.id, value: model.value });
+        await roundTrip(client);
+    };
+
+    /** Cuts the link `client` reaches the server through, and resolves once it is back and caught up. */
+    const cutAndCatchUp = async (client: Colibri, link: { cut(): void }) => {
+        const reconnected = nextConnect(client);
+        link.cut();
+        await reconnected;
+        // The answer to asking for the model again, then to whatever the client sent in reply,
+        // then to the request for every model.
+        for (let i = 0; i < 3; i++) await roundTrip(client);
+    };
+
+    it('sends a change lost in the dead link again when the server answers with a value sent before it', async () => {
+        const app = uniqueApp('modelsync-own-lost');
+        const channel = uniqueApp('own');
+        // Stays connected throughout, directly, so the server keeps the app's models.
+        const peer = await createClient(app);
+        const link = await startLinkProxy();
+        const singleton = await createClientThrough(app, link);
+
+        const [models$, registerModel] = RegisterModelSync<Item>({ name: channel, type: Item });
+        const model = new Item('lost-1');
+        model.value = 'A';
+        await registeredOn(singleton, peer, channel, model, registerModel);
+        const arrived = nextMessage(peer, { channel, command: 'model::update' });
+        model.value = 'B';
+        expect((await arrived).payload).toEqual({ id: 'lost-1', value: 'B' });
+
+        link.freeze();
+        model.value = 'C';
+        await reported();
+        expect(await storedOn(peer, channel, 'lost-1')).toEqual({ id: 'lost-1', value: 'B' });
+
+        const peerSaw = await updatesDuring(peer, channel, async () => {
+            await cutAndCatchUp(singleton, link);
+            await roundTrip(peer);
+        });
+
+        expect(model.value).toBe('C');
+        expect(latest(models$)).toEqual([model]);
+        expect(peerSaw).toEqual([{ id: 'lost-1', value: 'C' }]);
+        expect(await storedOn(peer, channel, 'lost-1')).toEqual({ id: 'lost-1', value: 'C' });
+    });
+
+    // The server keeps an app's models for as long as one of its clients is connected - and that
+    // includes this client's old connection, which the server has not noticed is dead either.
+    it('does so when it is alone in its app, kept alive by its own old connection', async () => {
+        const app = uniqueApp('modelsync-own-lost-alone');
+        const channel = uniqueApp('own');
+        const link = await startLinkProxy();
+        const singleton = await createClientThrough(app, link);
+
+        const [, registerModel] = RegisterModelSync<Item>({ name: channel, type: Item });
+        const model = new Item('lost-2');
+        model.value = 'A';
+        registerModel(model);
+        // The server's answer for the model, and then the model, which the client sent in reply.
+        await roundTrip(singleton);
+        await roundTrip(singleton);
+
+        link.freeze();
+        model.value = 'B';
+        await reported();
+        await cutAndCatchUp(singleton, link);
+
+        expect(model.value).toBe('B');
+        const late = await createPeer(app);
+        expect(await storedOn(late, channel, 'lost-2')).toEqual({ id: 'lost-2', value: 'B' });
+    });
+
+    it('takes the value another client set meanwhile, and sends nothing over it', async () => {
+        const app = uniqueApp('modelsync-own-lost-overtaken');
+        const channel = uniqueApp('own');
+        const peer = await createClient(app);
+        const link = await startLinkProxy();
+        const singleton = await createClientThrough(app, link);
+
+        const [, registerModel] = RegisterModelSync<Item>({ name: channel, type: Item });
+        const model = new Item('lost-3');
+        model.value = 'A';
+        await registeredOn(singleton, peer, channel, model, registerModel);
+
+        link.freeze();
+        model.value = 'B';
+        await reported();
+        peer.sendMessage(channel, 'model::update', { id: 'lost-3', value: 'theirs' });
+        expect(await storedOn(peer, channel, 'lost-3')).toEqual({ id: 'lost-3', value: 'theirs' });
+
+        const peerSaw = await updatesDuring(peer, channel, async () => {
+            await cutAndCatchUp(singleton, link);
+            await roundTrip(peer);
+        });
+
+        expect(model.value).toBe('theirs');
+        expect(peerSaw).toEqual([]);
+        expect(await storedOn(peer, channel, 'lost-3')).toEqual({ id: 'lost-3', value: 'theirs' });
     });
 });
 
