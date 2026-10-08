@@ -689,12 +689,12 @@ The fixes it produced:
   `HideFlags.DontSave` exempts an object from Play-mode teardown as well as from being saved, and
   `DontDestroyOnLoad` was already covering the saving half by itself. The stale object is not the
   real cost: every ticker drives the same static `_tickables` list, so the n-th Play session ran
-  `PollChanges` and `FlushUpdate` n times per frame, duplicate `model::update` messages on the wire
-  and a sync cost that grew each time someone pressed Play, which is the direct contradiction of the
-  one-`Update`-for-the-whole-application claim above. The flag is gone and `ResetState` destroys
-  strays first, so an Editor that already accumulated them recovers on the next Play. Afterwards:
-  zero tickers alive outside Play mode, three cycles holding steady, and the 52 EditMode tests still
-  green.
+  `PollChanges` and `FlushUpdate` n times per frame, with duplicate `model::update` messages on the
+  wire and a sync cost that grew each time someone pressed Play, which is the direct contradiction
+  of the one-`Update`-for-the-whole-application claim above. The flag is gone and `ResetState`
+  destroys strays first, so an Editor that already accumulated them recovers on the next Play.
+  Afterwards: zero tickers alive outside Play mode, three cycles holding steady, and the 52 EditMode
+  tests still green.
 
   ```
   LEAK syncedBehaviours=4 connections=1 tickerObjects=1 tickables=4
