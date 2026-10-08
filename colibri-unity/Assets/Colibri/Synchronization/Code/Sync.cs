@@ -98,6 +98,10 @@ namespace HCIKonstanz.Colibri.Synchronization
                     _reconnectRound.IsOver = true;
                     _reconnectRound = null;
                 }
+
+                // Nor has this one heard from the server yet.
+                _heardStamps = 0;
+                _heardAt = double.NegativeInfinity;
             }
             return _connection;
         }
@@ -129,9 +133,12 @@ namespace HCIKonstanz.Colibri.Synchronization
         /// it would for a delete made during the outage.
         /// </para>
         /// </remarks>
-        private static void OnDisconnected()
+        private static void OnDisconnected() => OnDisconnected(Time.unscaledTimeAsDouble);
+
+        /// <summary><see cref="OnDisconnected()"/>, with the outage noticed at <paramref name="now"/>.</summary>
+        /// <remarks>Internal for the EditMode tests, which set the time of the outage with it.</remarks>
+        internal static void OnDisconnected(double now)
         {
-            var now = Time.unscaledTimeAsDouble;
             _disconnectedAt = now;
 
             var deletes = LocallyDeletedModels.Since(LastHeardAt(now) - 1);
@@ -143,15 +150,40 @@ namespace HCIKonstanz.Colibri.Synchronization
         }
 
         /// <summary>
+        /// When this client last heard from the server, on SyncTicker's clock, and how many times
+        /// the connection had heard from it then (see <see cref="LastHeardAt"/>).
+        /// </summary>
+        private static double _heardAt = double.NegativeInfinity;
+        private static long _heardStamps;
+
+        /// <summary>
         /// When this client last heard from the server, on SyncTicker's clock, as of
         /// <paramref name="now"/>: any bytes count, and the server heartbeats every 100 ms, so
         /// while the connection works that was a moment ago. What is sent after it may be going
-        /// into a link that has died (see SentValues). <paramref name="now"/> without a connection.
+        /// into a link that has died (see SentValues). <paramref name="now"/> without a connection;
+        /// negative infinity before this connection has heard from the server at all.
         /// </summary>
+        /// <remarks>
+        /// The first <paramref name="now"/> at which the connection had heard from the server again,
+        /// which SyncTicker asks for once a frame. The connection times the heartbeats on the system
+        /// clock, which Unity's clock need not keep pace with: the system clock is set now and then,
+        /// and may run on while a headset sleeps. Subtracted from <paramref name="now"/>, its time
+        /// since the last heartbeat could put the last-heard time minutes back, and the deletes made
+        /// in those minutes went out again.
+        /// </remarks>
         internal static double LastHeardAt(double now)
         {
             var connection = _connection;
-            return connection == null ? now : now - connection.MillisSinceLastHeartbeat() / 1000.0;
+            if (connection == null)
+                return now;
+
+            var stamps = connection.LivenessStamps;
+            if (stamps != _heardStamps)
+            {
+                _heardStamps = stamps;
+                _heardAt = now;
+            }
+            return _heardAt;
         }
 
         /// <summary>
@@ -733,10 +765,13 @@ namespace HCIKonstanz.Colibri.Synchronization
             // listeners.
             ChannelListenerRegistry.Clear();
 
-            // The previous session's outage, on a clock that has gone on running since, and its
-            // round of answers, which no object of this session is part of.
+            // The previous session's outage, on a clock that has gone on running since, its round
+            // of answers, which no object of this session is part of, and when its connection last
+            // heard from the server.
             _disconnectedAt = double.NegativeInfinity;
             _reconnectRound = null;
+            _heardStamps = 0;
+            _heardAt = double.NegativeInfinity;
         }
 
         // `track` is off for the model channels: they are Colibri's own SyncBehaviour plumbing,

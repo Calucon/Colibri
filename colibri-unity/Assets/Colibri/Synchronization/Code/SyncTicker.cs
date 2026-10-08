@@ -151,7 +151,8 @@ namespace HCIKonstanz.Colibri.Synchronization
         private void LateUpdate()
         {
             // Read once per frame, so every object is flushed against the same clock and limit,
-            // and against the same moment the server was last heard from.
+            // and against the same moment the server was last heard from, which Sync notes on this
+            // clock as it is asked here.
             // Unscaled, or a game paused with timeScale = 0 would stop sending; and the double,
             // which still resolves milliseconds after the app has been running for days.
             var now = Time.unscaledTimeAsDouble;

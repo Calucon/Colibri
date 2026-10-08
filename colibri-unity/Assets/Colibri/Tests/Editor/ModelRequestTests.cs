@@ -24,6 +24,9 @@ namespace HCIKonstanz.Colibri.Tests
     /// object: a fresh request brings the id back into use, a request again is answered with the
     /// delete. Sent fresh after a reconnect, it used to bring back an object deleted while this
     /// client was offline.
+    ///
+    /// Also the deletes sent again when an outage is noticed: those made around when this client
+    /// last heard from the server may have gone into the dead link.
     /// </summary>
     public class ModelRequestTests
     {
@@ -32,9 +35,19 @@ namespace HCIKonstanz.Colibri.Tests
         private readonly List<IDisposable> _disposables = new List<IDisposable>();
         private readonly List<Action> _cleanup = new List<Action>();
 
+        /// <summary>An earlier test's outage, round of answers or deletes would count as this test's.</summary>
+        [SetUp]
+        public void StartASession()
+        {
+            Sync.ResetListeners();
+            LocallyDeletedModels.Reset();
+        }
+
         [TearDown]
         public void Cleanup()
         {
+            LocallyDeletedModels.Reset();
+
             foreach (var undo in _cleanup)
                 undo();
             _cleanup.Clear();
@@ -132,6 +145,56 @@ namespace HCIKonstanz.Colibri.Tests
 
 
         /*
+         *  The deletes sent again when the outage is noticed.
+         */
+
+        /// <summary>
+        /// The server heard from, as the receive loop notes it, and seen by SyncTicker in the frame at
+        /// <paramref name="time"/>, on its clock.
+        /// </summary>
+        private static void HeardFromTheServerAt(double time)
+        {
+            WebServerConnection.Instance.StampLiveness();
+            Sync.LastHeardAt(time);
+        }
+
+        /// <summary>
+        /// When this client last heard from the server is the frame that saw it, on Unity's clock,
+        /// however far the system clock, which times the heartbeats, has moved since: the two need
+        /// not keep pace. Here the system clock hardly moves while Unity's runs on for a minute.
+        /// </summary>
+        [Test]
+        public void TheServerWasLastHeardFromInTheFrameThatSawIt()
+        {
+            Listen(NewChannel(), _ => { });
+            HeardFromTheServerAt(200);
+
+            Assert.That(Sync.LastHeardAt(260), Is.EqualTo(200), "Nothing was heard from the server since the frame at 200");
+
+            HeardFromTheServerAt(261);
+            Assert.That(Sync.LastHeardAt(262), Is.EqualTo(261));
+        }
+
+        /// <summary>
+        /// A delete made after this client last heard from the server may have gone into the dead
+        /// link, and goes out again when the outage is noticed, counted on Unity's clock.
+        /// </summary>
+        [Test]
+        public void ADeleteMadeAfterTheServerWasLastHeardFromGoesOutAgain()
+        {
+            var channel = NewChannel();
+            Listen(channel, _ => { });
+            LocallyDeletedModels.Remember(channel, "destroyed long before", 150);
+            HeardFromTheServerAt(200);
+            LocallyDeletedModels.Remember(channel, "destroyed at the drop", 200.5);
+
+            Sync.OnDisconnected(now: 203);
+
+            Assert.That(Deletes(channel), Is.EqualTo(new[] { "destroyed at the drop" }));
+        }
+
+
+        /*
          *  Helpers
          */
 
@@ -147,7 +210,17 @@ namespace HCIKonstanz.Colibri.Tests
         /// The model::requests sent on any of <paramref name="channels"/> so far, in order, with
         /// their channels. See the overload above.
         /// </summary>
-        private List<(string Channel, string Payload)> Requests(string[] channels)
+        private List<(string Channel, string Payload)> Requests(string[] channels) => Sent(channels, "model::request");
+
+        /// <summary>The ids of the model::deletes sent on <paramref name="channel"/> so far, in order. See <see cref="Requests(string)"/>.</summary>
+        private List<string> Deletes(string channel)
+            => Sent(new[] { channel }, "model::delete").Select(delete => (string)JObject.Parse(delete.Payload)["id"]).ToList();
+
+        /// <summary>
+        /// The messages with <paramref name="command"/> sent on any of <paramref name="channels"/> so
+        /// far, in order, with their channels. See <see cref="Requests(string)"/>.
+        /// </summary>
+        private List<(string Channel, string Payload)> Sent(string[] channels, string command)
         {
             var connection = WebServerConnection.Instance;
             connection.SendCommand("model-request-test-end", "end", null);
@@ -186,7 +259,7 @@ namespace HCIKonstanz.Colibri.Tests
             }
 
             return frames
-                .Where(frame => channels.Contains(frame.Channel) && frame.Command == "model::request")
+                .Where(frame => channels.Contains(frame.Channel) && frame.Command == command)
                 .Select(frame => (frame.Channel, frame.Payload == null || frame.Payload.Length == 0 ? "null" : Encoding.UTF8.GetString(frame.Payload)))
                 .ToList();
         }

@@ -282,6 +282,7 @@ namespace HCIKonstanz.Colibri.Networking
         private readonly List<InPacket> _delivering = new List<InPacket>();
 
         private long _lastHeartbeatTime;
+        private long _livenessStamps;
 
         // Main thread only: the OnMessageReceived delegate last delivered to, and its handlers.
         private MessageAction _deliveringTo;
@@ -1582,7 +1583,20 @@ namespace HCIKonstanz.Colibri.Networking
             }
         }
 
-        private void StampLiveness() => Interlocked.Exchange(ref _lastHeartbeatTime, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        /// <remarks>Internal for the EditMode tests, which stand in for hearing from the server with it.</remarks>
+        internal void StampLiveness()
+        {
+            Interlocked.Exchange(ref _lastHeartbeatTime, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            Interlocked.Increment(ref _livenessStamps);
+        }
+
+        /// <summary>
+        /// How many times the server has been heard from: it changes whenever
+        /// <see cref="MillisSinceLastHeartbeat"/> starts again from zero. Sync notes on Unity's clock
+        /// when it last changed (see Sync.LastHeardAt), which the system clock that times the
+        /// heartbeats need not keep pace with.
+        /// </summary>
+        internal long LivenessStamps => Interlocked.Read(ref _livenessStamps);
 
         /// <summary>
         /// How long ago the server was last heard from. Not a round-trip latency: the server's
