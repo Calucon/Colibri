@@ -10,7 +10,9 @@
 // Exit codes: 0 connected and heartbeated, 1 something is wrong with the server (no heartbeat,
 // or a frame this client cannot decode), 2 the server refused this client's protocol version -
 // the expected outcome of `npm run test:tcpclient -- 1`.
-import * as net from 'net';
+//
+// With TLS on the server: `npm run test:tcpclient -- --tls`, plus --insecure for a self-signed
+// certificate, and --host <name> for another server than this one; see tcp-probe-connection.ts.
 import { Config } from '../src/server/configuration.js';
 import {
     COLIBRI_CHANNEL,
@@ -23,20 +25,21 @@ import {
     encodeHeartbeatFrame,
     encodeMessageFrame,
 } from '../src/server/modules/networking/protocol.js';
+import { PLAIN_PROBE_CLOSED_HINT, connectProbe, parseProbeArgs, probeErrorHint } from './tcp-probe-connection.js';
 
 const EXIT_REFUSED = 2;
 
-const address = '127.0.0.1';
+const options = parseProbeArgs(process.argv.slice(2));
 const port = Config.TCP_PORT;
 const app = 'TEST';
 // Overridable so this doubles as the manual probe for the version check:
 // `npm run test:tcpclient -- 1` should be refused with a colibri/protocol::rejected frame
 // and an immediate close, instead of connecting.
-const version = process.argv[2] || PROTOCOL_VERSION;
+const version = options.args[0] || PROTOCOL_VERSION;
 const hostname = `tcp-client-test-${process.pid}`;
 const runMillis = 3000;
 
-const onError = (err: Error | undefined) => {
+const onError = (err?: Error | null) => {
     if (err) console.error(err);
 };
 
@@ -49,6 +52,10 @@ let refusal: Partial<ProtocolRejection> | undefined;
 // Set when the server sent something this client cannot decode. That used to end the connection
 // and nothing else, so after a heartbeat had arrived the script exited 0 as if all was well.
 let undecodable = false;
+// Whether the connection, and with --tls its handshake, was made at all, and how many bytes the
+// server sent: a server that refuses a client without TLS closes without sending any.
+let ready = false;
+let received = 0;
 
 const readRefusal = function (payload: Buffer): Partial<ProtocolRejection> {
     try {
@@ -60,9 +67,29 @@ const readRefusal = function (payload: Buffer): Partial<ProtocolRejection> {
     return {};
 };
 
-const client = new net.Socket();
+let endTimer: NodeJS.Timeout | undefined;
 
-client.on('data', (data) => {
+const client = connectProbe(options, port, () => {
+    ready = true;
+    console.log('Sending handshake');
+    client.write(encodeHandshakeFrame(version, app, hostname), onError);
+
+    // One real message, so the server's ingress path is exercised too and anything the
+    // server relays back to this app shows up in the log above.
+    client.write(
+        encodeMessageFrame({
+            channel: `${app}::test`,
+            command: 'ping',
+            payload: Buffer.from(JSON.stringify({ from: hostname }), 'utf8'),
+        }),
+        onError
+    );
+
+    endTimer = setTimeout(() => client.end(), runMillis);
+});
+
+client.on('data', (data: Buffer) => {
+    received += data.length;
     let frames;
     try {
         frames = reader.append(data);
@@ -102,9 +129,11 @@ client.on('data', (data) => {
     }
 });
 
-client.on('error', (err) => console.error(err));
-
-let endTimer: NodeJS.Timeout | undefined;
+client.on('error', (err) => {
+    console.error(err);
+    const hint = ready ? undefined : probeErrorHint(options, err);
+    if (hint) console.error(hint);
+});
 
 client.on('close', () => {
     clearTimeout(endTimer);
@@ -122,26 +151,12 @@ client.on('close', () => {
         );
         console.error(`         ${refusal.reason ?? '(no reason given)'}`);
         process.exitCode = EXIT_REFUSED;
+    } else if (!ready) {
+        console.error(`FAILED: could not connect${options.tls ? ' with TLS' : ''} (see above)`);
+        process.exitCode = 1;
     } else if (heartbeats === 0) {
         console.error('No heartbeat received - the server is not sending v3 heartbeat frames');
+        if (received === 0 && !options.tls) console.error(PLAIN_PROBE_CLOSED_HINT);
         process.exitCode = 1;
     }
-});
-
-client.connect(port, address, () => {
-    console.log(`Connected to ${address}:${port}, sending handshake`);
-    client.write(encodeHandshakeFrame(version, app, hostname), onError);
-
-    // One real message, so the server's ingress path is exercised too and anything the
-    // server relays back to this app shows up in the log above.
-    client.write(
-        encodeMessageFrame({
-            channel: `${app}::test`,
-            command: 'ping',
-            payload: Buffer.from(JSON.stringify({ from: hostname }), 'utf8'),
-        }),
-        onError
-    );
-
-    endTimer = setTimeout(() => client.end(), runMillis);
 });
