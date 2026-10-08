@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using HCIKonstanz.Colibri.Networking;
 using UnityEditor;
 using UnityEditor.Callbacks;
@@ -29,10 +30,14 @@ namespace HCIKonstanz.Colibri.Setup
         private ColibriConfig Config;
 
         /// <summary>
-        /// What the fields show and change: a copy of <see cref="Config"/>, which gets a change only
-        /// if it passes the checks (see <see cref="ApplyIfValid"/>).
+        /// What the fields show and change: <see cref="Config"/>'s settings, but for those in
+        /// <see cref="_refused"/>. A change reaches Config only if it passes the checks (see
+        /// <see cref="ApplyValidSettings"/>).
         /// </summary>
         private ColibriConfig _edited;
+
+        /// <summary>The settings whose value in <see cref="_edited"/> the checks refused, so Config does not have it.</summary>
+        private List<string> _refused = new List<string>();
 
         private Vector2 _scroll;
 
@@ -100,12 +105,13 @@ namespace HCIKonstanz.Colibri.Setup
                 SaveConfig();
             }
 
+            // OnGUI fills it.
             _edited = CreateInstance<ColibriConfig>();
             _edited.hideFlags = HideFlags.HideAndDontSave;
-            CopySettings(Config, _edited);
+            _refused.Clear();
         }
 
-        // Before every domain reload too, entering Play mode's included. OnEnable then copies the
+        // Before every domain reload too, entering Play mode's included. OnEnable then shows the
         // configuration in use again, so a value the checks refused does not survive one.
         private void OnDisable()
         {
@@ -128,6 +134,10 @@ namespace HCIKonstanz.Colibri.Setup
 
         private void OnGUI()
         {
+            // Every time, so that a change made elsewhere, such as in the asset's Inspector or by
+            // an Undo, shows here, and the next change here does not write the old value back.
+            ShowSettings(Config, _edited, _refused);
+
             var labelWidth = EditorGUIUtility.labelWidth;
             EditorGUIUtility.labelWidth = Mathf.Max(labelWidth, TlsLabelWidth());
 
@@ -160,7 +170,6 @@ namespace HCIKonstanz.Colibri.Setup
             EditorGUILayout.HelpBox("Choose an App Name unique to this project. Every client that should share objects and messages "
                 + "must use the same App Name.", MessageType.Info);
 
-            EditorGUI.BeginChangeCheck();
             _edited.AppName = EditorGUILayout.TextField("App Name: ", _edited.AppName);
 
             var sharedAppName = ColibriConfig.SharedAppNameWarning(_edited.AppName);
@@ -203,18 +212,17 @@ namespace HCIKonstanz.Colibri.Setup
                 EditorGUILayout.EndVertical();
             }
 
-            if (EditorGUI.EndChangeCheck())
-                ApplyIfValid(_edited, Config);
+            // Also when nothing changed here: a change elsewhere can make a refused value valid.
+            _refused = ApplyValidSettings(_edited, Config);
 
             var errors = ConfigurationErrors(_edited);
 
             GUILayout.Space(15f);
 
             EditorGUI.BeginDisabledGroup(errors.Count != 0);
+            // Enabled only when nothing shown has an error, so everything shown has been applied.
             if (GUILayout.Button("Save Config"))
             {
-                // What the window shows, even if the asset was changed elsewhere after the last edit here.
-                ApplyIfValid(_edited, Config);
                 EditorUtility.SetDirty(Config);
                 SaveConfig();
                 Close();
@@ -256,29 +264,47 @@ namespace HCIKonstanz.Colibri.Setup
         }
 
         /// <summary>
-        /// Copies the settings as edited to the configuration in use, if they pass the checks that
-        /// Save makes, and otherwise leaves it as it was. So a valid change takes effect at once, as
-        /// it always has, while one that Save refuses is neither used in Play mode nor written to
-        /// disk by whatever saves the project's assets next. Writing the fields straight into the
-        /// configuration did both, though Save was disabled.
+        /// The settings: every public field Unity serializes, so that one added later is not left
+        /// behind; not the name or the hide flags, which belong to the asset.
         /// </summary>
-        /// <returns>Whether the settings were copied.</returns>
-        /// <remarks>Internal for the EditMode tests.</remarks>
-        internal static bool ApplyIfValid(ColibriConfig edited, ColibriConfig config)
-        {
-            if (ConfigurationErrors(edited).Count != 0)
-                return false;
+        private static readonly FieldInfo[] Settings = typeof(ColibriConfig)
+            .GetFields(BindingFlags.Public | BindingFlags.Instance)
+            .Where(field => !field.IsNotSerialized)
+            .ToArray();
 
-            CopySettings(edited, config);
-            return true;
+        /// <summary>
+        /// Copies <paramref name="config"/>'s settings to <paramref name="shown"/>, but for the
+        /// <paramref name="refused"/> ones, which keep the value typed in.
+        /// </summary>
+        /// <remarks>Internal for the EditMode tests.</remarks>
+        internal static void ShowSettings(ColibriConfig config, ColibriConfig shown, ICollection<string> refused)
+        {
+            foreach (var setting in Settings)
+                if (!refused.Contains(setting.Name))
+                    setting.SetValue(shown, setting.GetValue(config));
         }
 
         /// <summary>
-        /// Every serialized field, so that a setting added later is not left behind; not the name
-        /// or the hide flags, which belong to the asset.
+        /// Copies to <paramref name="config"/>, the configuration in use, each setting in which
+        /// <paramref name="shown"/> differs from it, if they pass the checks that Save makes, and
+        /// otherwise none. So a valid change takes effect at once, as it always has, while one that
+        /// Save refuses is neither used in Play mode nor written to disk by whatever saves the
+        /// project's assets next. Writing the fields straight into the configuration did both,
+        /// though Save was disabled. Copying only those settings leaves a change made elsewhere to
+        /// any other in place.
         /// </summary>
-        internal static void CopySettings(ColibriConfig from, ColibriConfig to)
-            => JsonUtility.FromJsonOverwrite(JsonUtility.ToJson(from), to);
+        /// <returns>The settings it did not copy, by name.</returns>
+        /// <remarks>Internal for the EditMode tests.</remarks>
+        internal static List<string> ApplyValidSettings(ColibriConfig shown, ColibriConfig config)
+        {
+            var changed = Settings.Where(setting => !Equals(setting.GetValue(shown), setting.GetValue(config))).ToList();
+            if (ConfigurationErrors(shown).Count != 0)
+                return changed.Select(setting => setting.Name).ToList();
+
+            foreach (var setting in changed)
+                setting.SetValue(config, setting.GetValue(shown));
+            return new List<string>();
+        }
 
         /// <summary>What keeps the configuration from being saved; empty if nothing does.</summary>
         internal static List<string> ConfigurationErrors(ColibriConfig config)
