@@ -18,6 +18,13 @@ namespace HCIKonstanz.Colibri.Setup
         private static bool _waitingToLoad;
         private static bool _portSettings = false;
 
+        // The two longest labels, both indented one level under "Server supports SSL/TLS?".
+        private const string AllowSelfSignedLabel = "Allow self-signed certificate";
+        private const string CertificateSha256Label = "Server certificate SHA-256";
+
+        /// <summary>How far EditorGUI indents per indentLevel; it does not expose the figure.</summary>
+        private const float IndentPerLevel = 15f;
+
         /// <summary>The configuration asset, which Play mode and builds use.</summary>
         private ColibriConfig Config;
 
@@ -121,6 +128,9 @@ namespace HCIKonstanz.Colibri.Setup
 
         private void OnGUI()
         {
+            var labelWidth = EditorGUIUtility.labelWidth;
+            EditorGUIUtility.labelWidth = Mathf.Max(labelWidth, TlsLabelWidth());
+
             // The Android section at the bottom can run past the edge of the window.
             _scroll = EditorGUILayout.BeginScrollView(_scroll);
 
@@ -172,10 +182,10 @@ namespace HCIKonstanz.Colibri.Setup
                 {
                     // Only meaningful with TLS, so only shown with it.
                     EditorGUI.indentLevel++;
-                    _edited.AllowSelfSignedCertificate = EditorGUILayout.Toggle(new GUIContent("Allow self-signed certificate",
+                    _edited.AllowSelfSignedCertificate = EditorGUILayout.Toggle(new GUIContent(AllowSelfSignedLabel,
                         "Also accept a server certificate this device does not trust, such as a self-signed one. The connection "
                         + "is still encrypted, but nothing checks that it goes to your server."), _edited.AllowSelfSignedCertificate);
-                    _edited.ServerCertificateSha256 = EditorGUILayout.TextField(new GUIContent("Server certificate SHA-256",
+                    _edited.ServerCertificateSha256 = EditorGUILayout.TextField(new GUIContent(CertificateSha256Label,
                         "Optional. The fingerprint of the one certificate to accept, trusted or not, as colibri-server logs it "
                         + "when it starts; every other certificate is rejected. Leave it empty for a certificate from Let's Encrypt, "
                         + "which changes with every renewal."), _edited.ServerCertificateSha256);
@@ -226,6 +236,23 @@ namespace HCIKonstanz.Colibri.Setup
             DrawAndroidIssues();
 
             EditorGUILayout.EndScrollView();
+
+            EditorGUIUtility.labelWidth = labelWidth;
+        }
+
+        /// <summary>
+        /// A label column wide enough for the two TLS labels, the longest ones, with their indent.
+        /// Unity's default of 150 px cut them off, as "Allow self-signed certifi" and "Server
+        /// certificate SHA-2". Measured rather than fixed, so it follows the editor's font.
+        /// </summary>
+        private static float TlsLabelWidth()
+        {
+            var widest = Mathf.Max(
+                EditorStyles.label.CalcSize(new GUIContent(AllowSelfSignedLabel)).x,
+                EditorStyles.label.CalcSize(new GUIContent(CertificateSha256Label)).x);
+
+            // Their indent, and a few pixels between the text and the field.
+            return IndentPerLevel + widest + 4f;
         }
 
         /// <summary>
