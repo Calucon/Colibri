@@ -4,7 +4,7 @@
 
 Provides easy model synchronization and easy access to data for faster cross reality prototyping for research.
 
-**New to Colibri?** Start with [Getting started](docs/getting-started.md) — install it, connect two
+**New to Colibri?** Start with [Getting started](docs/getting-started.md): install it, connect two
 clients, and share your first value.
 
 **Coming from Colibri 1.x?** [MIGRATION.md](MIGRATION.md) covers what changed across all three
