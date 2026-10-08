@@ -210,7 +210,10 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
         setTimeout(catchUpOnceAnswered, 0);
         onColibriDisconnected(colibri, () => {
             disconnected = true;
-            lastHeardBeforeOutage = lastHeardFrom(colibri) ?? Date.now();
+            // Not while an answer to asking again after the last reconnect is still to come: the
+            // connection died again before it, and a change lost in the one before is still in
+            // question, so it is judged from when this client last heard from the server then.
+            if (askedAfterOutage.size === 0) lastHeardBeforeOutage = lastHeardFrom(colibri) ?? Date.now();
         });
         onColibriReconnected(colibri, () => {
             disconnected = false;
@@ -323,6 +326,11 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
         awaitingAnswer.delete(id);
         const held = releaseHeldChanges(model);
         const lost = afterOutage ? lostChanges(model, modelData, held) : [];
+        // What the answer has for those is what the server still holds. Should the value sent
+        // again below be lost as well, in a connection that dies soon after, the next answer is
+        // told by it, however long before the change itself was made.
+        if (lost.length > 0)
+            remember(model, Object.fromEntries(lost.map(key => [key, modelData[key as keyof T]])) as Partial<T>);
         applyUpdate(model, withoutKeys(withoutChanges(modelData, model, held), lost));
         if (held.length > 0 || lost.length > 0) {
             // toJson() with no properties named is all of them.

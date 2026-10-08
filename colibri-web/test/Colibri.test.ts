@@ -1927,6 +1927,52 @@ describe('sending again a change lost in a connection that died', () => {
         ]);
     });
 
+    // The connection died again before the answer to asking again came, long after the change: the
+    // change is still judged from when this client last heard from the server before the first.
+    it('sends it again when the connection dies again before the answer comes', async () => {
+        const { pair } = await connectedWithOwnPair();
+        await sendAndDie(pair, 'A2');
+        clock += 15_000;
+        hearFromServer();
+        disconnectSocket();
+        connectSocket();
+        fakeSocket.emit.mockClear();
+
+        deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A', b: 'B' } });
+        await settle();
+
+        expect(pair.a).toBe('A2');
+        expect(sentInOrder()).toEqual([
+            ['model::update', { id: 'p1', a: 'A2' }],
+            ['model::request', { id: 'p1', again: true }]
+        ]);
+    });
+
+    // The answer came only after a while, and the update sending the change again was lost in a
+    // connection that died soon after: the value that answer had tells, however long before the
+    // change itself was made.
+    it('sends it again when the update sending it again is lost long after the change', async () => {
+        const { pair } = await connectedWithOwnPair();
+        await sendAndDie(pair, 'A2');
+        clock += 15_000;
+        deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A', b: 'B' } });
+        await settle();
+        expect(sentInOrder()[0]).toEqual(['model::update', { id: 'p1', a: 'A2' }]);
+        hearFromServer();
+        disconnectSocket();
+        connectSocket();
+        fakeSocket.emit.mockClear();
+
+        deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A', b: 'B' } });
+        await settle();
+
+        expect(pair.a).toBe('A2');
+        expect(sentInOrder()).toEqual([
+            ['model::update', { id: 'p1', a: 'A2' }],
+            ['model::request', { id: 'p1', again: true }]
+        ]);
+    });
+
     /** Changes `a` to each of `values` in turn, `apart` ms apart, hearing nothing from the server. */
     const changeWithoutHearing = async (pair: Pair, values: string[], apart: number) => {
         for (const a of values) {
