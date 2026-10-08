@@ -32,7 +32,7 @@ npm pack
 because `package.json` refers to the file by its path. In a download without Git history, the `.git can't be found`
 message these commands print is harmless.
 
-> **Colibri targets TypeScript as of 2.0** — TypeScript 5.0 or newer, with standard
+> **Colibri targets TypeScript as of 2.0**: TypeScript 5.0 or newer, with standard
 > (non-`experimentalDecorators`) decorators. `@Synced()` is a TypeScript decorator, and the
 > documentation, samples and tests all assume a TypeScript project.
 
@@ -173,7 +173,7 @@ Limitations:
   connected
 - Data goes to the _other_ clients with the same app name; the sender does not receive its own data
 - Type and channel _must_ match between Listener and Sender. JavaScript has one number type, so
-  everything this library sends is tagged `float` — including `sendInt`, which exists only for API
+  everything this library sends is tagged `float`, including `sendInt`, which exists only for API
   symmetry with Unity. **Unity clients must receive numbers sent from web with `Sync.Receive<float>`,
   never `Sync.Receive<int>`.** The other direction is handled: `receiveNumber` accepts both.
 - Remember to unregister your listener where necessary!
@@ -203,7 +203,7 @@ export class SampleClass extends SyncModel<SampleClass> {
 }
 ```
 
-`@Synced()` requires TypeScript's standard decorators, the default since TypeScript 5.0 — make sure `experimentalDecorators` is **not** set (or is `false`) in your `tsconfig.json`, and declare every synced member with the `accessor` keyword.
+`@Synced()` requires TypeScript's standard decorators, the default since TypeScript 5.0. Make sure `experimentalDecorators` is **not** set (or is `false`) in your `tsconfig.json`, and declare every synced member with the `accessor` keyword.
 
 Any `accessor` member marked with `@Synced()` will be synchronized across all network clients.
 
