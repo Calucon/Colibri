@@ -1,6 +1,8 @@
 using System.Collections;
 using System.Collections.Generic;
+using HCIKonstanz.Colibri.Core;
 using HCIKonstanz.Colibri.Networking;
+using HCIKonstanz.Colibri.Synchronization;
 using NUnit.Framework;
 using UnityEngine;
 using UnityEngine.TestTools;
@@ -24,6 +26,9 @@ namespace HCIKonstanz.Colibri.E2E
 
         private readonly List<GameObject> _spawned = new List<GameObject>();
 
+        /// <summary>The synced objects already in the scene when the test started.</summary>
+        private HashSet<GameObject> _syncedBefore = new HashSet<GameObject>();
+
         [UnitySetUp]
         public IEnumerator ConnectBothEnds()
         {
@@ -45,6 +50,8 @@ namespace HCIKonstanz.Colibri.E2E
             // there is no ordering between them. Without this the server can relay the message
             // before it has put the peer on the app, and it is lost for good.
             yield return E2EServer.Settle(0.3f);
+
+            _syncedBefore = new HashSet<GameObject>(SyncedObjects());
         }
 
         [UnityTearDown]
@@ -60,6 +67,20 @@ namespace HCIKonstanz.Colibri.E2E
                 }
             }
             _spawned.Clear();
+
+            // And every synced object that appeared during the test without being spawned by it:
+            // the objects a manager built from the server's answer, which on the shared model
+            // channels includes models earlier tests left behind. Left in the scene, they were
+            // found by the next test's manager - which takes switched-off objects too since
+            // 06d5943 - and their state went out into that test's peer.
+            foreach (var synced in SyncedObjects())
+            {
+                if (!_syncedBefore.Contains(synced))
+                {
+                    Object.Destroy(synced);
+                    destroyed = true;
+                }
+            }
 
             // Destruction is what sends model::delete, and that has to leave before the peer does.
             yield return null;
@@ -109,5 +130,23 @@ namespace HCIKonstanz.Colibri.E2E
         }
 
         protected static void AssertNoErrors() => LogAssert.NoUnexpectedReceived();
+
+        /// <summary>Every GameObject in the scene with a SyncBehaviour of any model type on it.</summary>
+        private static IEnumerable<GameObject> SyncedObjects()
+        {
+            var found = new HashSet<GameObject>();
+            foreach (var behaviour in UnityCompat.FindAll<MonoBehaviour>(FindObjectsInactive.Include))
+            {
+                for (var type = behaviour.GetType(); type != null; type = type.BaseType)
+                {
+                    if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(SyncBehaviour<>))
+                    {
+                        found.Add(behaviour.gameObject);
+                        break;
+                    }
+                }
+            }
+            return found;
+        }
     }
 }
