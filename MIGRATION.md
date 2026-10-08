@@ -61,17 +61,17 @@ with a 2.0 server, and from the moment it runs, the server's log names every cli
 ## Read this first: the server and Unity move together
 
 colibri-unity 2.0.0 speaks a [new binary TCP protocol](colibri-server/docs/protocol.md) and
-**requires colibri-server ≥ 2.0.0**. There is no version negotiation: both sides have to be
-upgraded together. A 1.x Unity client cannot talk to a 2.0.0 server, and a 2.0.0 Unity client
-cannot talk to a 1.x server.
+**requires colibri-server ≥ 2.0.0**. There is no version negotiation: a 1.x Unity client cannot
+talk to a 2.0.0 server, nor a 2.0.0 Unity client to a 1.x server, so both sides have to be upgraded
+together.
 
 The failure is at least diagnosable now. The server's log (the admin UI's log page, and since 2.0
 also the server's console output, so `docker logs` for a container) says what is wrong:
 
-- **A 1.x Unity client** cannot even send the server a handshake it can read, so the server cannot
-  check its version or tell it anything. It recognizes the 1.x wire format instead and logs a
-  warning that names the client's address and says to upgrade the Colibri Unity package
-  (`de.uni.kn.colibri`) to 2.x, at most once a minute per address. The client is never told why: a
+- **A 1.x Unity client** cannot even send a handshake the server can read, so the server can
+  neither check its version nor tell it anything. It recognizes the 1.x wire format instead and
+  logs a warning, at most once a minute per address, that names the client's address and says to
+  upgrade the Colibri Unity package (`de.uni.kn.colibri`) to 2.x. The client is never told why: a
   1.3.1 client typically shows no error at all, so the server's log is where to look.
 - **A client whose handshake the server can read, but whose protocol version it does not speak**,
   is refused: the server logs the client and both versions, and tells the client why on the
@@ -82,29 +82,31 @@ See [Version checking](colibri-server/docs/protocol.md#version-checking).
 
 **Web clients are covered by the same check**, even though Socket.IO itself did not change.
 `colibri-web` 1.x announces `version: '1'` in its handshake query, so a 2.0.0 server refuses it.
-This is the one place the version check is a breaking change for web.
+This is the one place the version check is a breaking change for web, and the symptom is quiet. No
+1.x release of `colibri-web` (the last is 1.3.2) knows `protocol::rejected`, so the client receives
+the rejection as an ordinary message on `Colibri.messages`, which nothing is listening for, and is
+then disconnected. Socket.IO does not reconnect after a server-side disconnect, so **it connects
+once and then stops, with no error on the client at all**. The server's log line (which names the
+client, its address and both versions) is the diagnostic. `colibri-web` 2.0.0 logs a refusal
+itself and exposes it on `Colibri.protocolMismatch`.
 
-The symptom on a stale web client is quiet, because no 1.x release of `colibri-web` (the last is
-1.3.2) knows `protocol::rejected`. It receives the rejection as an ordinary message on
-`Colibri.messages`, which nothing is listening for, and is then disconnected; Socket.IO does not
-reconnect after a server-side disconnect, so **it connects once and then stops, with no error on the
-client at all**. The server's log line (which names the client, its address and both versions) is
-the diagnostic. `colibri-web` 2.0.0 logs a refusal itself and exposes it on
-`Colibri.protocolMismatch`.
+**Upgrading in the other order (clients first) is noticed too, though only as a suspicion.** The
+version check lives on the server, and a 1.x server has none, so neither client can be *told* it is
+talking to one. A 2.0.0+ server therefore announces itself to web clients on connect, and its
+silence is the signal:
 
-Upgrading in the other order (clients first, server later) is now noticed too, though only ever
-as a suspicion. Neither client can be *told* it is talking to a 1.x server, because the version
-check lives on the server and a 1.x server has none. A 2.0.0+ server therefore announces itself to
-web clients on connect, and its silence is the signal: a current web client warns after five
-seconds and **stays connected** (it works: the Socket.IO envelope did not change, verified against
-real 1.1.1 and 1.3.1 servers with traffic flowing both ways). A current Unity client cannot connect
-to a 1.x server at all; it reports a likely protocol mismatch after three connections that were
-accepted and then ended before a frame could be read, and keeps retrying. Details in
+- A current web client warns after five seconds and **stays connected**. It works: the Socket.IO
+  envelope did not change, verified against real 1.1.1 and 1.3.1 servers with traffic flowing both
+  ways.
+- A current Unity client cannot connect to a 1.x server at all. It reports a likely protocol
+  mismatch after three connections that were accepted and then ended before a frame could be read,
+  and keeps retrying.
+
+Details in
 [Detecting an out-of-date server](colibri-server/docs/protocol.md#detecting-an-out-of-date-server).
 
 So the safe order is: **upgrade the server first** (from then on its log names every client that is
-still on 1.x), then Unity, then the web clients. A 2.0.0 server refuses 1.x web clients, so they
-have to be upgraded too; they cannot be left running.
+still on 1.x), then Unity, then the web clients, which cannot be left on 1.x either.
 
 ---
 
@@ -114,7 +116,7 @@ have to be upgraded too; they cannot be left running.
 
 **Node 24.** The runtime moved from `node:20-alpine` (end of life) to `node:24-alpine`, and
 `src/server` is native ESM: `"type": "module"`, explicit `.js` import extensions, no `__filename`.
-If you have forked or patched the server, that is the change that will touch every file.
+If you have forked or patched the server, that is the change that touches every file.
 
 **The v3 TCP protocol.** The old FlatBuffers framing with its ASCII length header is gone,
 replaced by a fixed binary format:
@@ -127,13 +129,14 @@ replaced by a fixed binary format:
 ```
 
 Anything you wrote that speaks TCP to Colibri has to be rewritten against
-[`docs/protocol.md`](colibri-server/docs/protocol.md). Socket.IO clients are unaffected.
+[`docs/protocol.md`](colibri-server/docs/protocol.md). Socket.IO clients are unaffected. Two of
+the server's rules matter to such a client:
 
-Two of the server's rules matter to such a client. It sends nothing, not even a heartbeat, until it
-has accepted the handshake, so the client has to send its handshake first; a refused client gets
-the refusal and nothing else. And it disconnects a TCP client that has sent nothing for 10 seconds
-(`TCP_IDLE_TIMEOUT_SECONDS`), one that never handshakes included; echoing every heartbeat, as
-colibri-unity does, keeps a client well inside that.
+- It sends nothing, not even a heartbeat, until it has accepted the handshake, so the client has to
+  send its handshake first. A refused client gets the refusal and nothing else.
+- It disconnects a TCP client that has sent nothing for 10 seconds (`TCP_IDLE_TIMEOUT_SECONDS`),
+  one that never handshakes included. Echoing every heartbeat, as colibri-unity does, keeps a
+  client well inside that.
 
 **The `flatbuffers` dependency is gone**, along with `body-parser`, `uuid` and
 `source-map-support`.
@@ -151,23 +154,26 @@ shuts down cleanly on `docker stop`), and has a `HEALTHCHECK` on the web port.
 **The server no longer runs as root.** The container starts as root only long enough to hand
 `/srv/colibri/data` to the image's `node` user (uid 1000), then runs the server as `node`. A
 `./data` that Docker creates, or the root-owned one 1.x left behind, therefore works without any
-manual step, but on the host it now belongs to uid 1000. That is the only directory it hands
-over, so keep mounting your data there rather than pointing `DATA_ROOT` somewhere else. Started
-with `docker run --user …` (or `user:` in compose), the container cannot change ownership, so the
-data directory has to belong to that user already: give a host directory to it yourself, e.g.
-`sudo chown -R 1001:1001 ./data` for `--user 1001:1001`. A new named volume belongs to uid 1000,
-so it only works as it is with `--user 1000:1000`. If the server cannot write its data directory,
-it says so on stderr at startup, with the fix, and keeps running without saving anything.
+manual step, but on the host it now belongs to uid 1000. That is the only directory it hands over,
+so keep mounting your data there rather than pointing `DATA_ROOT` somewhere else.
+
+- Started with `docker run --user …` (or `user:` in compose), the container cannot change
+  ownership, so the data directory has to belong to that user already: give a host directory to
+  it yourself, e.g. `sudo chown -R 1001:1001 ./data` for `--user 1001:1001`. A new named volume
+  belongs to uid 1000, so it only works as it is with `--user 1000:1000`.
+- If the server cannot write its data directory, it says so on stderr at startup, with the fix,
+  and keeps running without saving anything.
 
 **The server's log reaches `docker logs`.** In 1.x its log messages only appeared on the admin
-UI's log page. They are now also printed to stdout, errors and warnings to stderr: the refusals
-and the 1.x-client warning above included, and so are the log lines clients send through Unity's
-`[RemoteLogger]` prefab or colibri-web's `RemoteLogger`. `CONSOLE_LOG_LEVEL` (`error`, `warn`,
-`info` or `debug`; default `info`) sets how much is printed, and broadcast traffic is only printed
-with `CONSOLE_LOG_BROADCAST_TRAFFIC=true`. The bundled `docker-compose.yml` caps the container log
-at five files of 10 MB. If your compose file came from the 1.x README, remove its `tty: true`:
-with a TTY, `docker logs` has no stderr, and the warnings and errors are mixed into stdout with
-CRLF line endings.
+UI's log page. They are now also printed to stdout, errors and warnings to stderr, including the
+refusals and the 1.x-client warning above and the log lines clients send through Unity's
+`[RemoteLogger]` prefab or colibri-web's `RemoteLogger`.
+
+- `CONSOLE_LOG_LEVEL` (`error`, `warn`, `info` or `debug`; default `info`) sets how much is
+  printed, and broadcast traffic is only printed with `CONSOLE_LOG_BROADCAST_TRAFFIC=true`.
+- The bundled `docker-compose.yml` caps the container log at five files of 10 MB.
+- If your compose file came from the 1.x README, remove its `tty: true`: with a TTY, `docker logs`
+  has no stderr, and the warnings and errors are mixed into stdout with CRLF line endings.
 
 **New limits keep one client, or many clients together, from overloading the server.** Each is an
 environment variable, described in [`.env.example`](colibri-server/.env.example):
@@ -199,12 +205,13 @@ ten objects each sending in every frame at 72 Hz make 720 updates a second.
 `0` for not at all). Meanwhile it ignores updates for a deleted id, so an update another client
 sent before the delete reached it no longer brings the object back for everyone, and it tells a
 client asking for the object again after a reconnect to delete its copy. colibri-unity and
-colibri-web 2.x do their part by themselves. A client of your own that speaks the protocol
-directly has to tell the server which kind of request it sends: `model::request { id }` for an
-object it has in its scene now or is creating, which lifts such a tombstone (without it, the
-updates for an id deleted a moment ago are ignored), and `{ id, again: true }` when it asks again
-after a reconnect for an object it held before. See [Deleted
-models](colibri-server/docs/protocol.md#deleted-models).
+colibri-web 2.x do their part by themselves.
+
+A client of your own that speaks the protocol directly has to tell the server which kind of
+request it sends: `model::request { id }` for an object it has in its scene now or is creating,
+which lifts such a tombstone (without it, the updates for an id deleted a moment ago are ignored),
+and `{ id, again: true }` when it asks again after a reconnect for an object it held before. See
+[Deleted models](colibri-server/docs/protocol.md#deleted-models).
 
 ---
 
@@ -267,26 +274,24 @@ unchanged.
 
 ### Fixed
 
-`import { ColibriError } from '@hcikn/colibri'` works. It was a default export, which `export *`
-does not re-export, so it silently imported `undefined`. `require()` consumers now get their own
-`.d.cts` declarations. A stray `console.log` on every model registration is gone, which for anyone
-using `RemoteLogger` was also a stream of pointless network traffic.
-
-The server address can be written the way a browser shows it:
-`new Colibri('my-app', 'http://192.168.0.10:9011')` works, as do `https://`, `ws://` and `wss://`,
-a port in the address and a trailing slash. The port is the one in the address, else the third
-argument, else 9011, for `https://` too. An address that 1.x turned into a URL that could never
-connect now throws a `ColibriError` instead: a path after the host (the admin UI's own `…/log`,
-say), an unknown scheme, a port that is not a whole number, or a port in the address that disagrees
-with the port argument.
-
-`Sync.receive*`, `RegisterChannel`, `RegisterModelSync` and `new RemoteLogger()` may come before
-`new Colibri()`; they take effect once it is constructed.
-
-`RegisterModelSync` names its channel after the class unless you pass `name`, and a minifier
-renames classes, so a minified build can end up on a different channel from Unity and from other
-builds, without any error. It now warns when the class name looks minified. Pass `name` for
-anything you bundle: `RegisterModelSync({ name: 'player', type: Player })`.
+- `import { ColibriError } from '@hcikn/colibri'` works. It was a default export, which `export *`
+  does not re-export, so it silently imported `undefined`.
+- `require()` consumers now get their own `.d.cts` declarations.
+- A stray `console.log` on every model registration is gone, which for anyone using
+  `RemoteLogger` was also a stream of pointless network traffic.
+- The server address can be written the way a browser shows it:
+  `new Colibri('my-app', 'http://192.168.0.10:9011')` works, as do `https://`, `ws://` and
+  `wss://`, a port in the address and a trailing slash. The port is the one in the address, else
+  the third argument, else 9011, for `https://` too. An address that 1.x turned into a URL that
+  could never connect now throws a `ColibriError` instead: a path after the host (the admin UI's
+  own `…/log`, say), an unknown scheme, a port that is not a whole number, or a port in the address
+  that disagrees with the port argument.
+- `Sync.receive*`, `RegisterChannel`, `RegisterModelSync` and `new RemoteLogger()` may come before
+  `new Colibri()`; they take effect once it is constructed.
+- `RegisterModelSync` names its channel after the class unless you pass `name`, and a minifier
+  renames classes, so a minified build can end up on a different channel from Unity and from other
+  builds, without any error. It now warns when the class name looks minified. Pass `name` for
+  anything you bundle: `RegisterModelSync({ name: 'player', type: Player })`.
 
 ---
 
@@ -403,21 +408,21 @@ These are the ones to watch: your project builds, and then behaves differently.
 `SyncBehaviour<T>`, sent an update in every frame in which one of its values changed: 72 to 120 a
 second for each moving object on a headset, a rate that one server and one Wi-Fi network cannot
 sustain for dozens of headsets. Each synced object now sends at most *Max Send Rate* updates a
-second, 30 by default, projects configured with 1.x included. The first change after a quiet spell
-goes out at once, later changes within the interval are merged, and their latest values go out when
-it is up, so only the values in between are skipped. Switching an object off or on, and destroying
-it, go out at once. Other clients therefore see a moving object take 30 steps a second rather than
-one per frame. *Window → Colibri Configuration → Optional Config → Max Send Rate* sets the limit,
-`SyncSettings.MaxSendRate` changes it from code for the running app, and `0` brings back the 1.x
-behaviour. `Sync.Send` is not limited.
+second, 30 by default, projects configured with 1.x included.
+
+- The first change after a quiet spell goes out at once. Later changes within the interval are
+  merged, and their latest values go out when it is up, so only the values in between are skipped.
+- Switching an object off or on, and destroying it, go out at once.
+- Other clients therefore see a moving object take 30 steps a second rather than one per frame.
+- *Window → Colibri Configuration → Optional Config → Max Send Rate* sets the limit,
+  `SyncSettings.MaxSendRate` changes it from code for the running app, and `0` brings back the 1.x
+  behaviour. `Sync.Send` is not limited.
 
 **Strings finally round-trip.** 1.x wrote string payloads *unquoted*, which is not valid JSON, so
 the server fell back to a different reader. A Unity `Sync.Send(channel, "hello")` and a web client's
 version of the same message did not arrive identically. Both now go out as JSON. If you had a
-workaround for that asymmetry, it is now the bug.
-
-The `log` channel is the deliberate exception and still carries raw text, because the admin UI reads
-it as a string.
+workaround for that asymmetry, it is now the bug. The `log` channel is the deliberate exception and
+still carries raw text, because the admin UI reads it as a string.
 
 **Colours cross between Unity and the web in both directions.** Unity writes `#RRGGBBAA`;
 colibri-web's `sendColor` writes `[r, g, b, a]` when given an array. Unity used to throw an
@@ -437,30 +442,34 @@ console. Calls that used to hang now fail, and say what failed, at which URL, wi
 `413` above 100 kB. A plain number, string, boolean or `null` is now stored too (Unity's
 `Store.Put("score", 42)`, colibri-web's `setRestObject('note', 'text')`), up to 5 MiB.
 
-**Unity's `Store` converts with Newtonsoft JSON instead of `JsonUtility`.** Newtonsoft saves public
-fields and properties, so a private `[SerializeField]` field of a saved class is no longer saved or
-loaded: make it public, or add `[JsonProperty]`. A `Vector2`, `Vector3`, `Vector4`, `Quaternion` or
-`Color` inside the class is saved as an array of its components now, and values that 1.x saved as
-`{"x": …}` still load. A value that cannot be converted, or a saved value that does not fit the type
-asked for, makes `Put` return `false` and `Get` return `default`, with the reason in the console.
+**Unity's `Store` converts with Newtonsoft JSON instead of `JsonUtility`.**
+
+- Newtonsoft saves public fields and properties, so a private `[SerializeField]` field of a saved
+  class is no longer saved or loaded: make it public, or add `[JsonProperty]`.
+- A `Vector2`, `Vector3`, `Vector4`, `Quaternion` or `Color` inside the class is saved as an array
+  of its components now, and values that 1.x saved as `{"x": …}` still load.
+- A value that cannot be converted, or a saved value that does not fit the type asked for, makes
+  `Put` return `false` and `Get` return `default`, with the reason in the console.
 
 **Clients catch up after a reconnect.** Both clients used to ask for the synced models' state only
 when a listener registered, so whatever other clients changed during an outage was missed until the
 next change. Unity and web clients now ask again every time they reconnect, and update the objects
-they have rather than creating duplicates. The server still forgets an app's models once its last
-client disconnects, which is what a lone client's outage looks like to it, and when it restarts; a
-client that finds its objects gone sends them again in full (colibri-web: the models it registered
-itself). A Unity object that changed during the outage is the exception: its changes reach the
-server first, and until its other members change, the server and every client that joins later have
-only those (see [Known limits](colibri-server/docs/protocol.md#known-limits)). An object another
-client deleted during the outage is deleted on the reconnecting client too, if the delete is no more
-than `MODEL_TOMBSTONE_SECONDS` (ten minutes) old (colibri-web: again only for the models it
-registered; one it got from another client stays). While a Unity client is disconnected, what it
-sends waits in one queue and goes out in order when the connection is back; past 256 broadcasts and
-log lines the oldest are dropped, with one warning per outage, while the model updates for one
-object are merged into one instead. Behind that, the whole queue is capped at 10,000 messages,
-connected or not: past it the oldest broadcasts and log lines go first, then the oldest model
-messages, with a warning.
+they have rather than creating duplicates.
+
+- The server still forgets an app's models once its last client disconnects, which is what a lone
+  client's outage looks like to it, and when it restarts. A client that finds its objects gone sends
+  them again in full (colibri-web: the models it registered itself). A Unity object that changed
+  during the outage is the exception: its changes reach the server first, and until its other
+  members change, the server and every client that joins later have only those (see
+  [Known limits](colibri-server/docs/protocol.md#known-limits)).
+- An object another client deleted during the outage is deleted on the reconnecting client too, if
+  the delete is no more than `MODEL_TOMBSTONE_SECONDS` (ten minutes) old (colibri-web: again only
+  for the models it registered; one it got from another client stays).
+- While a Unity client is disconnected, what it sends waits in one queue and goes out in order when
+  the connection is back. Past 256 broadcasts and log lines the oldest are dropped, with one
+  warning per outage, while the model updates for one object are merged into one instead. Behind
+  that, the whole queue is capped at 10,000 messages, connected or not: past it the oldest
+  broadcasts and log lines go first, then the oldest model messages, with a warning.
 
 **colibri-web's `registerModel` takes what the server has.** It used to send the new instance in
 full at once. When the server already held that id (a fixed id such as `'session'`, kept while
@@ -496,12 +505,12 @@ nothing of its component (only its parameter, `Debug.Log` or a static), because 
 nothing. Registering the same one again on the same channel adds nothing, so a `Start` that runs
 again after a scene reload does not make each message reach it twice.
 
-Your existing `Sync.Unregister` calls in `OnDestroy` are still correct and still worth keeping; for
-listeners that belong to a component they are simply no longer the difference between working and
-not. What changes silently is the failure they used to cause: a forgotten `Unregister` meant the
-destroyed component kept being called, `MissingReferenceException` came out of
-`WebServerConnection.Update`, and every message queued behind it that frame was lost. If your
-project had unexplained gaps in delivery, this is a strong candidate.
+Your existing `Sync.Unregister` calls in `OnDestroy` are still correct and worth keeping; for
+listeners that belong to a component they are just no longer the difference between working and
+not. What changes silently is the failure a forgotten one used to cause: the destroyed component
+kept being called, `MissingReferenceException` came out of `WebServerConnection.Update`, and every
+message queued behind it that frame was lost. If your project had unexplained gaps in delivery,
+this is a strong candidate.
 
 Note the asymmetry with the point above: **this covers `Sync.Receive` only.** `SyncBehaviour<T>`'s
 static `ModelCreated` / `ModelDestroyed` events are plain C# events and still need their `-=`.
