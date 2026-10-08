@@ -41,6 +41,10 @@ namespace HCIKonstanz.Colibri.Tests
 
         private readonly List<GameObject> _gameObjects = new List<GameObject>();
 
+        /// <summary>A round of answers an earlier test left open would count as one this test's reconnect follows.</summary>
+        [SetUp]
+        public void StartASession() => Sync.ResetListeners();
+
         [TearDown]
         public void Cleanup()
         {
@@ -488,6 +492,50 @@ namespace HCIKonstanz.Colibri.Tests
 
             Assert.That(model.Label, Is.EqualTo("lost at the drop"));
             Assert.That((string)SentAt(model, 105)["label"], Is.EqualTo("lost at the drop"));
+        }
+
+        /// <summary>
+        /// The link drops again soon after the reconnect, before the answers to its requests have
+        /// arrived. The next round still counts from the first outage: counted from the second, the
+        /// change lost at the first drop lay before the window, and the answer, which still holds
+        /// the value from before it, was applied.
+        /// </summary>
+        [Test]
+        public void AChangeLostAtTheDropIsKeptWhenTheLinkDropsAgainBeforeTheAnswers()
+        {
+            var model = SpawnModelThatSent("on");
+            Change(model, "off", 200);
+
+            Sync.RequestModelsAgain(disconnectedAt: 202);
+            Assert.That(200, Is.LessThan(211 - SentValues.WindowSeconds), "Precondition: the change lies before the second outage's window");
+            Sync.RequestModelsAgain(disconnectedAt: 211);
+            model.OnModelUpdate(Answer(model, "on"));
+
+            Assert.That(model.Label, Is.EqualTo("off"), "The answer after the second reconnect put the value from before the first drop back");
+            var sent = SentAt(model, 212);
+            Assert.That(sent, Is.Not.Null, "The value lost at the first drop was not sent again");
+            Assert.That((string)sent["label"], Is.EqualTo("off"));
+        }
+
+        /// <summary>
+        /// Once the answers to a reconnect are all in, the next outage has a window of its own: a
+        /// value sent long before it arrived for certain, and another client set the one before it
+        /// again.
+        /// </summary>
+        [Test]
+        public void AfterTheAnswersAreInTheNextRoundCountsFromItsOwnOutage()
+        {
+            var model = SpawnModelThatSent("first");
+            Change(model, "second", 101);
+            Sync.RequestModelsAgain(disconnectedAt: 103);
+            model.OnModelUpdate(Answer(model, "second"));
+            EndOfAnswers();
+
+            Sync.RequestModelsAgain(disconnectedAt: 101 + SentValues.WindowSeconds + 1);
+            model.OnModelUpdate(Answer(model, "first"));
+
+            Assert.That(model.Label, Is.EqualTo("first"), "The answer after the second outage was judged against values from before the first");
+            Assert.That(SentAt(model, 200), Is.Null);
         }
 
         /// <summary>

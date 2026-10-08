@@ -90,6 +90,14 @@ namespace HCIKonstanz.Colibri.Synchronization
                 _connection.OnMessageReceived += OnServerMessage;
                 _connection.OnConnected += OnConnected;
                 _connection.OnDisconnected += OnDisconnected;
+
+                // The answers of a round still open were asked for on the connection replaced
+                // here, and never come on this one.
+                if (_reconnectRound != null)
+                {
+                    _reconnectRound.IsOver = true;
+                    _reconnectRound = null;
+                }
             }
             return _connection;
         }
@@ -133,7 +141,11 @@ namespace HCIKonstanz.Colibri.Synchronization
         /// </remarks>
         internal sealed class ReconnectRound
         {
-            /// <summary>When this client noticed the outage, on SyncTicker's clock.</summary>
+            /// <summary>
+            /// When this client noticed the outage, on SyncTicker's clock: the one before this
+            /// reconnect, or an earlier one if the link dropped again before that one's round was
+            /// over.
+            /// </summary>
             internal readonly double DisconnectedAt;
 
             /// <summary>The id the last request asks for, whose answer ends the round.</summary>
@@ -242,10 +254,19 @@ namespace HCIKonstanz.Colibri.Synchronization
             if (toTell == null)
                 return;
 
+            // A round still open lost its answers to this outage: the link dropped again soon after
+            // the last reconnect. A change lost at the drop before that is still in question, so
+            // the new round counts from that earlier outage. Counted from this one, the lost
+            // change could lie before the window, and the answer, which still holds the value from
+            // before it, would be applied after all.
+            if (_reconnectRound != null)
+            {
+                disconnectedAt = Math.Min(disconnectedAt, _reconnectRound.DisconnectedAt);
+                _reconnectRound.IsOver = true;
+            }
+
             // After every other request, on every channel: its answer comes after all of theirs.
             var round = new ReconnectRound(disconnectedAt);
-            if (_reconnectRound != null)
-                _reconnectRound.IsOver = true;
             _reconnectRound = round;
             SendCommand(ReconnectRoundChannel, "model::request", new JObject { { "id", round.EndMarkerId }, { "again", true } });
 
