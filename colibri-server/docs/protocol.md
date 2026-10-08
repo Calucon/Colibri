@@ -616,6 +616,7 @@ Errors are JSON, `{ "error": "…" }`, and never carry a stack trace. Any app or
 allowed, `__proto__` and `constructor` included. Each is one segment of the path, so a name with
 `/`, `#`, `?`, `%` or a space in it has to be percent-encoded, as `encodeURIComponent` does;
 colibri-web and colibri-unity's `Store` encode both names, so the two address the same values.
+Only `.` and `..` cannot be reached: a URL resolves them as a step in the path, encoded or not.
 Every response allows any origin (CORS), so a page served from somewhere else can use the store
 too.
 
