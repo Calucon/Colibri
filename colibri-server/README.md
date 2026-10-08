@@ -174,8 +174,8 @@ messages behind what the Unity clients sent, or one client sends more than
 per object - the latest value of every field still arrives, only later - and `broadcast::`
 messages are dropped. Nothing else is ever held back or dropped. Synced objects then move less
 smoothly for the other clients. Updates are held for at most 1000 objects per client: an update
-for one more object is lost, and that object reaches the store and the other clients only when it
-changes again.
+for one more object is lost, and that object reaches the server's copy of the app's models and the
+other clients only when it changes again.
 
 An episode that goes on for a second is logged as a warning then, naming
 `TCP_INBOUND_BACKLOG_LIMIT`, or `CLIENT_MESSAGE_RATE_LIMIT` and the client, and again when it
