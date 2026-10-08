@@ -494,6 +494,68 @@ namespace HCIKonstanz.Colibri.E2E
         }
 
         /// <summary>
+        /// An object placed in the scene that a script switches off before the manager's Start
+        /// runs, as one that is hidden until a session begins is. The manager only looked for
+        /// objects that were switched on: it never had this one send its state, so the other
+        /// clients never heard of it, and once it was shown they built it at the template's values.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator AnObjectSwitchedOffBeforeTheManagerStartedStillSendsItsState()
+        {
+            var placed = SpawnConfigured<E2ESyncModel>("placed-and-hidden", m => m.Label = "placed");
+            placed.gameObject.SetActive(false);
+            Spawn<E2ESyncModelManager>("manager-for-placed-objects");
+
+            yield return E2EServer.WaitUntil(
+                () => Peer.Received.Any(f => f.Channel == Channel && f.Command == "model::update"
+                    && (string)TcpPeer.Json(f)["id"] == placed.Id && (string)TcpPeer.Json(f)["label"] == "placed"),
+                "The object switched off before the manager started never sent its state", 5f);
+        }
+
+        /// <summary>
+        /// The same object when the server holds its model already: its fixed id is in the store,
+        /// say, since another client placed it first. Not known to the manager, the model in the
+        /// answer to the manager's own request was built a second time, next to the object.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator AnObjectSwitchedOffBeforeTheManagerStartedIsNotBuiltASecondTime()
+        {
+            var id = Guid.NewGuid().ToString();
+            Peer.Send(Channel, "model::update", new JObject { { "id", id }, { "label", "on the server" } });
+            yield return E2EServer.Settle(0.5f);
+
+            var templateObject = Spawn("inactive-template");
+            templateObject.SetActive(false);
+            var template = templateObject.AddComponent<E2ESyncModel>();
+
+            var placed = SpawnConfigured<E2ESyncModel>("placed-and-hidden", m => m.Id = id);
+            yield return E2EServer.WaitUntil(() => placed.Label == "on the server", "The placed object never received the model the server holds");
+            placed.gameObject.SetActive(false);
+
+            var manager = Spawn<E2ESyncModelManager>("manager");
+            manager.Template = template;
+
+            // Start, and the answer to the manager's request for every model on the channel.
+            yield return null;
+            yield return E2EServer.Settle(1.5f);
+
+            var instances = Instances(id);
+            try
+            {
+                Assert.That(instances, Is.EqualTo(new[] { placed }),
+                    $"{instances.Length} objects carry the id of the one object placed in the scene");
+            }
+            finally
+            {
+                foreach (var instance in instances)
+                {
+                    if (instance != placed)
+                        UnityEngine.Object.Destroy(instance.gameObject);
+                }
+            }
+        }
+
+        /// <summary>
         /// Only the deletes this client sent itself keep a manager from building a model. One
         /// another client deleted and then created again under the same id is built again here.
         /// </summary>

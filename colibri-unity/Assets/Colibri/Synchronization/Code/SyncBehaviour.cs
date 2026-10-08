@@ -345,6 +345,12 @@ namespace HCIKonstanz.Colibri.Synchronization
         private int _tickIndex = -1;
         int SyncTicker.ITickable.TickIndex { get => _tickIndex; set => _tickIndex = value; }
 
+        /// <summary>
+        /// Whether Awake has run, which is where the object registers: false for one that has been
+        /// switched off since its scene loaded. The change trackers are made there.
+        /// </summary>
+        internal bool HasAwoken => _trackers != null;
+
 
         /// <summary>
         /// Whether the [Sync] member named <paramref name="memberName"/> (its C# name) is switched

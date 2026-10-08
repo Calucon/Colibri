@@ -21,8 +21,18 @@ namespace HCIKonstanz.Colibri.Synchronization
 
         private void Start()
         {
-            var existingBehaviours = UnityCompat.FindAll<T>()
-                .Where(o => o.ModelId == Template?.ModelId || (Template == null && String.IsNullOrEmpty(o.ModelId)));
+            // Switched-off objects too. Each one raised ModelCreated in its Awake, before this
+            // manager listened, and a script that hides an object in its own Awake or Start may
+            // run before this Start. Left out, such an object never sent its state, so no other
+            // client knew it, and they built it at the template's values once it was shown; and if
+            // the server held its model already, the answer to this manager's request below built
+            // a second object of its id here. Only objects that have woken, though: one switched off
+            // since its scene loaded runs Awake once it is switched on, and comes to OnModelCreated
+            // then, like any new object.
+            var existingBehaviours = UnityCompat.FindAll<T>(FindObjectsInactive.Include)
+                .Where(o => o.HasAwoken)
+                .Where(o => o.ModelId == Template?.ModelId || (Template == null && String.IsNullOrEmpty(o.ModelId)))
+                .ToArray();
             _existingObjects.AddRange(existingBehaviours);
 
             foreach (var existingBehaviour in existingBehaviours)
