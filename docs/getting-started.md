@@ -1,16 +1,12 @@
 # Getting started with Colibri
 
-Colibri connects several running programs so they share data. One person moves a cube in Unity, and
-it moves on everyone else's screen. That is the whole idea; everything below is detail.
+Colibri connects running programs so they share data: move a cube in Unity, and it moves on
+everyone else's screen. This guide uses Unity, where most prototypes start;
+[talking to a browser](#talking-to-a-browser) works the same way.
 
-This guide is written for Unity, because that is where most prototypes start. There is a short
-section at the end on [talking to a browser](#talking-to-a-browser), which works the same way.
-
-**You need two things before you start:** the address of a running colibri-server 2.x, either your
-own (see [colibri-server](../colibri-server/README.md#setup)) or a shared one, and an app name,
-which you choose yourself.
-
----
+**You need** the address of a running colibri-server 2.x (your own, see
+[colibri-server](../colibri-server/README.md#setup), or a shared one) and an app name you choose
+yourself.
 
 ## Install it
 
@@ -20,55 +16,38 @@ which you choose yourself.
 https://github.com/hcigroupkonstanz/Colibri.git?path=colibri-unity/Assets/Colibri
 ```
 
-That is the whole installation. Unity pulls in the one library Colibri needs by itself.
+That is all; Unity pulls in the one library Colibri needs. You need **Unity 2022.3 or newer** and
+a **2.0 or newer server**: a 2.0 client and a 1.x server cannot talk to each other at all.
 
-Package Manager should now list **Colibri 2.0.0** or newer. If it shows a 1.x version, you have the
-old Colibri: it does not compile without extra packages (UniRx and UniTask), and it cannot talk to
-a 2.0 server either. Remove it, and install it again with a 2.x release tag appended to the URL
-above, e.g. `#v2.0.0`; the [Releases page](https://github.com/hcigroupkonstanz/Colibri/releases)
-lists the tags.
-
-You need **Unity 2022.3 or newer**, and the server has to be **version 2.0 or newer**: a 2.0
-client and a 1.x server cannot talk to each other at all.
-
----
+Package Manager should now list **Colibri 2.0.0** or newer. A 1.x version is the old Colibri, which
+needs UniRx and UniTask to compile and cannot talk to a 2.0 server: remove it, and install again
+with a 2.x [release tag](https://github.com/hcigroupkonstanz/Colibri/releases) appended to the URL,
+e.g. `#v2.0.0`.
 
 ## Two settings decide whether anything works
 
-A configuration window opens by itself after installing. You can reopen it any time from
-*Window → Colibri Configuration*.
+A configuration window opens after installing; reopen it from *Window → Colibri Configuration*.
 
 ### 1. The app name must be identical everywhere
 
-Enter an **App Name** and press *Save Config*. Any word you like, but **every client that should see
-each other has to use exactly the same one.**
+Enter an **App Name** and press *Save Config*. **Every client that should see each other needs
+exactly the same one**: the server keeps app names completely separate. A mismatch is the most
+common reason two clients ignore each other while both say *Connected*.
 
-This is the single most common reason two clients ignore each other. Both say *Connected*, both
-look perfectly healthy, and nothing crosses between them, because the server keeps each app name
-completely separate.
-
-It works the other way round too: **every project needs its own app name.** Two projects on one
-server that pick the same one (both use `test`, or both keep the name from an example) end up in the
-same app. Each sees the other's objects and messages, and the server sends every message to the
-clients of both, which slows it down for everyone using it. Choose a name nobody else on the server
-uses: `museum-ar-prototype`, not `test`. The configuration window warns about the names people try
-first, such as `test`, `demo` or `myAppName`, but it cannot know which names other projects on the
-server already use.
+**Every project also needs its own.** Two projects on one server with the same name (both `test`,
+or both the one from an example) share one app: each sees the other's objects and messages, and
+every message goes to the clients of both, slowing the server down for everyone. Pick a name nobody
+else there uses: `museum-ar-prototype`, not `test`. The window warns about common picks such as
+`test`, `demo` or `myAppName`, but cannot know what other projects use.
 
 ### 2. Turn on Run In Background
 
-*Project Settings → Player → Resolution and Presentation → **Run In Background***.
+*Project Settings → Player → Resolution and Presentation → **Run In Background***: turn it on.
 
-Check that it is on. With it **off**, the Editor stops running your game the moment its window loses
-focus. The connection stays up. The status window still says *Connected*. But
-nothing is sent and nothing that arrived is delivered, because none of that happens until `Update`
-runs again.
-
-If you are testing two clients on one machine, one of them is always in the background. Turn it
-on now. (On a Quest this setting does nothing; see
-[Building for Meta Quest](#building-for-meta-quest).)
-
----
+When it is off, the Editor stops running your game as soon as its window loses focus. The
+connection stays up and the status still says *Connected*, but nothing is sent or delivered until
+`Update` runs again. With two clients on one machine, one is always in the background. (On a Quest
+it does nothing; see [Building for Meta Quest](#building-for-meta-quest).)
 
 ## Your first message
 
@@ -81,7 +60,7 @@ float temperature = 21.5f;
 Sync.Send("Temperature", temperature);
 ```
 
-Receiving means registering a listener, and saying what type you expect:
+Receiving means registering a listener for the type you expect:
 
 ```csharp
 private void Start()
@@ -95,34 +74,24 @@ private void OnTemperature(float value)
 }
 ```
 
-That is the whole thing: there is no matching line to write in `OnDestroy`. Colibri notices when the
-component a listener belongs to is destroyed and stops calling it. A listener belongs to a component
-when it is one of the component's methods, like `OnTemperature` here, or a lambda that uses
-something of it: a field, a method, `transform`.
+There is nothing to write in `OnDestroy`. A listener that is a method of your component, like
+`OnTemperature`, or a lambda that uses something of it (a field, a method, `transform`), is dropped
+when that component is destroyed. A static method, or a lambda that only uses its parameter,
+`Debug.Log` or a static such as `GameManager.Instance`, stays registered until `Sync.Unregister`.
+Registering the same listener again, as `Start` does after a scene reload, adds nothing.
 
-A listener that uses nothing of a component belongs to none: a static method, or a lambda that only
-works with its parameter, `Debug.Log` or a static such as `GameManager.Instance`. It stays
-registered until you call `Sync.Unregister`. Registering it again, as `Start` does after a scene
-reload, adds nothing, so each message still reaches it once.
-
-Three things worth knowing straight away:
-
-- **The channel *and* the type both have to match.** `"Temperature"` sent as a `float` will not
-  reach a listener registered for `string` on the same channel. Colibri says so in the console when
-  it happens, so watch for that warning rather than assuming the network is broken.
+- **The channel *and* the type both have to match.** `"Temperature"` sent as a `float` does not
+  reach a `string` listener. Colibri says so in the console; look there before blaming the network.
 - **Register before anyone sends.** A message that arrives with no listener is gone; there is no
   replay.
-- **You never receive your own messages.** Only the other clients do.
-
-If you want to stop listening while the object is still alive (say, only while a menu is open),
-`Sync.Unregister<float>("Temperature", OnTemperature)` does exactly that.
+- **You never receive your own messages.**
+- **To stop listening early** (say, while a menu is open), call
+  `Sync.Unregister<float>("Temperature", OnTemperature)`.
 
 ### What you can send
 
 `bool`, `int`, `float`, `string`, `Vector2`, `Vector3`, `Quaternion`, `Color`, and arrays of all of
-them.
-
-For anything else, send JSON:
+them. For anything else, send JSON:
 
 ```csharp
 using Newtonsoft.Json.Linq;
@@ -144,39 +113,29 @@ private void OnReading(JToken token)
 }
 ```
 
----
-
 ## Move an object on every client, with no code
 
-Drop the **`SyncTransform`** component onto any GameObject. Its position, rotation, scale and
-active state now follow the same object on every other client.
+Drop the **`SyncTransform`** component onto a GameObject: its position, rotation, scale and active
+state now follow on every other client.
 
-The server remembers where things are, so a client that joins later gets the current positions
-rather than starting from the scene's defaults, for as long as at least one client of your app is
-connected. Once the last one disconnects, the server forgets them; anything that has to outlast that
-belongs in the [Store](#keep-data-between-sessions).
+- **Late joiners** get the current positions, not the scene's defaults, while at least one client
+  of your app is connected. After the last one leaves, the server forgets them; use the
+  [Store](#keep-data-between-sessions) for anything that must outlast that.
+- **Each of the four has a tick box.** Unticked, this client neither reads that value from its
+  transform nor applies one that arrives, so a stray rotation cannot fight someone else's.
+- **Destroying** a synced object, or unloading its scene, removes it on every client. Leaving Play
+  mode or quitting does not: the object stays on the server for everyone else.
+- **For objects created at runtime**, drag the **`[SyncTransformManager]`** prefab from
+  `Packages/Colibri/Prefabs/` into your scene, with a prefab in its `Template` field. When any
+  client spawns one, the others build a copy from that template.
 
-Each of the four is a separate tick box on the component. Only values that change are sent, so
-turning off the ones you do not need saves little traffic, but it stops a stray rotation from
-fighting with someone else's: with the box unticked, this client neither reads that value from its
-transform nor applies one that arrives.
-
-Destroying a synced object, or unloading its scene, removes it on every client. Leaving Play mode
-or quitting the app does not: the object stays on the server for everyone else.
-
-For objects you create at runtime, drag the **`[SyncTransformManager]`** prefab out of
-`Packages/Colibri/Prefabs/` into your scene and give it a prefab in its `Template` field. When any
-client spawns one, everyone else builds a copy from that template.
-
-> One rule: only one client should be moving a given object at a time. Two clients dragging the
-> same cube will fight, and the cube will jitter between them.
-
----
+> Only one client should move a given object at a time. Two clients dragging the same cube make it
+> jitter between them.
 
 ## Sync your own fields
 
-Same idea, for your own data. Derive from `SyncBehaviour<T>` (where `T` is the class itself) and
-mark the fields you want shared:
+Same idea for your own data: derive from `SyncBehaviour<T>` (`T` is the class itself) and mark the
+fields to share:
 
 ```csharp
 using HCIKonstanz.Colibri.Synchronization;
@@ -195,16 +154,13 @@ public class PlayerManager : SyncBehaviourManager<Player> { }
 Put `PlayerManager` in the scene with a `Player` prefab in its `Template` field. Now `Score = 10` on
 one client is `Score == 10` on all of them, and a `Player` created anywhere appears everywhere.
 
-`[Sync]` works on fields and properties, public or private, of the types listed under
-[What you can send](#what-you-can-send) (for your own classes, a `JObject`). Only the members that
-actually changed are sent, so assigning a field in `Update` every frame costs nothing while its
-value stays the same.
-
----
+`[Sync]` works on public or private fields and properties of the types in
+[What you can send](#what-you-can-send) (a `JObject` for your own classes). Only changed members are
+sent, so assigning an unchanged value every frame costs nothing.
 
 ## Keep data between sessions
 
-The **Store** saves objects on the server, so they survive everyone closing Unity:
+The **Store** keeps objects on the server, so they survive everyone closing Unity:
 
 ```csharp
 using HCIKonstanz.Colibri.Store;
@@ -214,58 +170,46 @@ await Store.Put("highscores", myScores);
 var scores = await Store.Get<ScoreTable>("highscores");
 ```
 
-Anything Json.NET can serialize works, a plain number or string included, up to 5 MiB.
-
-If the server cannot be reached, the call fails after ten seconds and the console says what went
-wrong, at which URL. It will not hang forever waiting.
-
-Colibri has no passwords: anyone who can reach the server can read, change and delete what is
-stored there. Keep personal data, such as what you record from study participants, out of it.
-
----
+- Anything Json.NET can serialize works, plain numbers and strings included, up to 5 MiB.
+- If the server cannot be reached, the call fails after ten seconds, and the console says what
+  went wrong, at which URL.
+- There are no passwords: anyone who can reach the server can read, change and delete what is
+  stored. Keep personal data, such as what you record from study participants, out of it.
 
 ## See the console on a device without one
 
-Building to a headset or a phone, where there is no console to read? Drag the **`[RemoteLogger]`**
-prefab out of `Packages/Colibri/Prefabs/` into your scene, then open `http://<your-server>:9011` in
-a browser. Your `Debug.Log` output appears there.
-
----
+Drag the **`[RemoteLogger]`** prefab from `Packages/Colibri/Prefabs/` into your scene and open
+`http://<your-server>:9011` in a browser: your `Debug.Log` output appears there, from a headset or
+a phone too.
 
 ## Building for Meta Quest
 
 A Quest app is an Android build: *File → Build Settings* (*Build Profiles* in Unity 6) *→ Android →
-Switch Platform*. Quest builds use the IL2CPP scripting backend and ARM64 (*Project Settings →
-Player → Other Settings*), and Colibri works with both; `[Sync]` members survive code stripping
-without any extra step.
+Switch Platform*. Colibri works with the IL2CPP backend and ARM64 that Quest builds use (*Project
+Settings → Player → Other Settings*), and `[Sync]` members survive code stripping without extra
+steps.
 
-Then open *Window → Colibri Configuration* again. With the Android target active, it has an
-**Android / Meta Quest** section for two settings that let a build install and start normally and
-then fail on the headset, where there is no console to tell you. Each comes with a button that fixes
-it, and the console warns about them too:
+With the Android target active, *Window → Colibri Configuration* has an **Android / Meta Quest**
+section for two settings that let a build install and start, then fail on the headset with no
+console to tell you. Each has a button that fixes it, and the console warns about them too:
 
-- **Internet Access** has to be *Require*. On *Auto*, the app may be built without permission to
-  open a network connection, and it never connects.
-- **Allow downloads over HTTP** has to let plain HTTP through (the button sets *Always allowed*),
+- **Internet Access** has to be *Require*. On *Auto* the app may be built without permission to
+  open a network connection, and never connects.
+- **Allow downloads over HTTP** has to let plain HTTP through (the button sets *Always allowed*)
   unless your server uses SSL. Otherwise every `Store` call fails on the headset with "Insecure
   connection not allowed".
 
-Two things the window cannot check for you:
+The window cannot check two more:
 
-- **The server address has to be one the headset can reach**: the server's IP address or host name
-  on your network. `localhost` on a headset is the headset itself.
-- ***Run In Background* has no effect on Android.** While the app is paused, none of your scripts
+- **The server address has to be reachable from the headset**: its IP address or host name on your
+  network. `localhost` on a headset is the headset itself.
+- ***Run In Background* has no effect on Android.** While the app is paused none of your scripts
   run, so nothing is sent or delivered until it resumes.
-
----
 
 ## The samples
 
-*Window → Package Manager → Colibri → Samples → Import*. Each one is imported into
-`Assets/Samples/` and can be edited freely.
-
-They are not in your project until you import them. That is deliberate, so you do not ship code you
-never asked for.
+*Window → Package Manager → Colibri → Samples → Import* copies a sample into `Assets/Samples/`,
+where it is yours to edit. None is in your project until you import it.
 
 | Sample | Shows |
 | --- | --- |
@@ -276,16 +220,13 @@ never asked for.
 | **Voice Chat** | Talking to the other clients |
 | **Network Stress** | Putting Colibri under load and measuring throughput, latency and dropped messages |
 
-Four of them (SendData, SyncTransform, Remote Store and Voice Chat) show their instructions as
-TextMeshPro text, which stays invisible until the *TMP Essential Resources* are in your project.
-Unity usually offers to import them the first time you open such a scene; if it does not, use
-*Window → TextMeshPro → Import TMP Essential Resources*. On Unity 2022.3 that menu comes with the
-*TextMeshPro* package, so install that from the Package Manager first if it is missing.
+SendData, SyncTransform, Remote Store and Voice Chat show their instructions as TextMeshPro text,
+invisible until the *TMP Essential Resources* are in your project. Unity usually offers them when
+you first open such a scene; if not, use *Window → TextMeshPro → Import TMP Essential Resources*
+(on Unity 2022.3, install the *TextMeshPro* package first if that menu is missing).
 
-The `[RemoteLogger]` and `[SyncTransformManager]` prefabs are *not* samples: they are always there,
-in `Packages/Colibri/Prefabs/`.
-
----
+The `[RemoteLogger]` and `[SyncTransformManager]` prefabs are *not* samples: they are always in
+`Packages/Colibri/Prefabs/`.
 
 ## Talking to a browser
 
@@ -295,8 +236,8 @@ A web page can join the same app as your Unity clients and exchange the same mes
 npm install @hcikn/colibri@^2
 ```
 
-The `@^2` makes sure you get version 2. A 2.0 server refuses a 1.x web client, and the client shows
-no error when that happens: it connects once and then goes quiet.
+The `@^2` matters: a 2.0 server refuses a 1.x web client, which shows no error. It connects once
+and then goes quiet.
 
 ```ts
 import { Colibri, Sync } from '@hcikn/colibri';
@@ -307,64 +248,51 @@ Sync.sendNumber('Temperature', 21.5);
 Sync.receiveNumber('Temperature', value => console.log(value));
 ```
 
-The server address can be just the host (`'192.168.0.10'`), the host and port
-(`'192.168.0.10:9011'`), or the same `http://<your-server>:9011` you open in a browser to see the
-log. Use `https://…`, as in `'https://colibri.example.org:9011'`, only if your server is reached
-over HTTPS. Without a port in the address it is 9011. Anything after the host and port (a path
-such as `/log`) is refused with a `ColibriError`.
+The server address can be the host (`'192.168.0.10'`), host and port (`'192.168.0.10:9011'`), or
+the `http://<your-server>:9011` you open to see the log; `https://…` only if your server is reached
+over HTTPS. The port defaults to 9011. A path after the host and port (such as `/log`) is refused
+with a `ColibriError`.
 
-Same app name, same channel names, same rules. Two differences to watch:
+Same app name, channel names and rules, with two differences:
 
-- **Vectors and colours are plain arrays in TypeScript**, not objects: `Sync.sendVector3('pos', [1,
-  2, 3])` and `Sync.sendColor('tint', [1, 0, 0, 1])`, where Unity would use a `Vector3` and a
-  `Color`. A colour therefore reaches a web listener as `"#RRGGBBAA"` from Unity but as `[r, g, b,
-  a]` from another web client: run it through `toHexColor()` or `toRgbaColor()` to get one form
-  regardless of the sender. (Unity does the same for you: `ToColor` takes either.)
-- **JavaScript has one number type.** A web client sending `5` reaches Unity as a `float`, so listen
-  for it with `Sync.Receive<float>` on the Unity side, not `int`.
+- **Vectors and colours are plain arrays in TypeScript**: `Sync.sendVector3('pos', [1, 2, 3])`,
+  `Sync.sendColor('tint', [1, 0, 0, 1])`. A colour therefore reaches a web listener as
+  `"#RRGGBBAA"` from Unity but as `[r, g, b, a]` from another web client; `toHexColor()` or
+  `toRgbaColor()` gives you one form whoever sent it. (Unity's `ToColor` takes either.)
+- **JavaScript has one number type.** A `5` from a web client reaches Unity as a `float`, so listen
+  with `Sync.Receive<float>` there, not `int`.
 
-The web client needs TypeScript 5 or newer. Full details in
+The web client needs TypeScript 5 or newer. Details:
 [colibri-web/README.md](../colibri-web/README.md).
-
----
 
 ## When nothing happens
 
-**Open *Window → Colibri Status* while the game is running.** It answers most of it at a glance:
-whether you are connected, to which server, **as which app name**, which channels have listeners and
-what type each expects, and the most recent messages in and out.
+**Open *Window → Colibri Status* while the game is running.** It shows whether you are connected,
+to which server, **as which app name**, the channels with listeners and their types, and the latest
+messages in and out.
 
 | What you see | What it usually is |
 | --- | --- |
-| Two clients ignore each other, both connected | Different app names. The Status window shows the one in use; compare them. |
-| Objects or messages you did not create show up | Another project on the server uses the same app name. Pick one nobody else uses. |
-| Works in the Editor, nothing happens on the Quest | See [Building for Meta Quest](#building-for-meta-quest): Internet Access, plain HTTP, and the server address. |
-| A message never arrives, no errors | The listener expects a different type than the sender sent. Check the console; Colibri names both. |
+| Two clients ignore each other, both connected | Different app names. Compare them in the Status window. |
+| Objects or messages you did not create show up | Another project on the server uses your app name. Pick one nobody else uses. |
+| Works in the Editor, nothing happens on the Quest | [Building for Meta Quest](#building-for-meta-quest): Internet Access, plain HTTP, the server address. |
+| A message never arrives, no errors | The listener expects a different type than was sent. The console names both. |
 | One client goes quiet when you click away | *Run In Background* is off on that client. |
-| Nothing connects at all | Console says `Colibri is not configured yet`. Open *Window → Colibri Configuration* and set an app name. |
-| Status window says *did not answer within 5 s* | The server address is wrong, or this device is on a different network than the server. |
-| Status window says *ended before a single frame could be read* | The server runs Colibri 1.x, and this client needs 2.0 or newer. Or the TCP port is not Colibri's. |
-| A `[Sync]` field never syncs | Its type is not one Colibri can send. It is reported in the console when the game starts. |
-| `Store.Get` or `Put` fails | The log names the object, the URL, and the HTTP status. Usually the server address. |
+| Nothing connects at all | Console says `Colibri is not configured yet`. Set an app name in *Window → Colibri Configuration*. |
+| Status window says *did not answer within 5 s* | Wrong server address, or this device is on another network than the server. |
+| Status window says *ended before a single frame could be read* | The server runs Colibri 1.x and this client needs 2.0 or newer, or the TCP port is not Colibri's. |
+| A `[Sync]` field never syncs | Its type is not one Colibri can send. The console says so when the game starts. |
+| `Store.Get` or `Put` fails | The log names the object, the URL and the HTTP status. Usually the server address. |
 
-If the console is empty and the Status window says *Connected* with the right app name, the message
-really is being sent, so the problem is at the receiving end. That is nearly always the channel name
-or the type.
-
----
+Console empty, and the Status window says *Connected* with the right app name? Then the message is
+sent, and the problem is at the receiving end: nearly always the channel name or the type.
 
 ## Rules of thumb
 
-1. **Same app name everywhere, and one nobody else uses.** Check it in the Status window before
-   debugging anything else.
-2. **Register listeners in `Start`, before anyone sends.** Colibri unregisters a listener when the
-   component it uses is destroyed. A static method, or a lambda that uses nothing of its component,
-   stays registered until `Sync.Unregister`.
-3. **One client owns each object.** Shared control of the same thing fights with itself.
-4. **Watch the console.** Colibri reports the common mistakes by name instead of failing quietly,
-   but only if you are looking.
+1. **Same app name everywhere, and one nobody else uses.** Check it in the Status window first.
+2. **Register listeners in `Start`, before anyone sends.**
+3. **One client owns each object.**
+4. **Watch the console.** Colibri reports the common mistakes by name instead of failing quietly.
 
----
-
-Full reference: [colibri-unity/README.md](../colibri-unity/README.md). Upgrading a project from
-Colibri 1.x: [MIGRATION.md](../MIGRATION.md).
+Next: [colibri-unity/README.md](../colibri-unity/README.md) for the Unity client in depth, and
+[MIGRATION.md](../MIGRATION.md) for upgrading a project from Colibri 1.x.
