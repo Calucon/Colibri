@@ -12,8 +12,15 @@ services:
       options:
         max-size: "10m"
         max-file: "5"
+    # TLS on the TCP port (Unity) and the web port: uncomment these lines and the certificates
+    # volume below, and put the certificate with its chain and its private key into ./certs/,
+    # readable for uid 1000. See TLS_CERT in .env.example.
+    # environment:
+    #   TLS_CERT: /srv/colibri/certs/fullchain.pem
+    #   TLS_KEY: /srv/colibri/certs/privkey.pem
     volumes:
         - ./data/:/srv/colibri/data
+    #     - ./certs/:/srv/colibri/certs:ro
     ports:
       - 9011:9011 # web interface / web sockets
       - 9012:9012 # tcp (unity)
