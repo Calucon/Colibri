@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -17,7 +18,8 @@ namespace HCIKonstanz.Colibri.E2E
     /// What happens to a connection is decided when it is accepted, by <see cref="Mode"/>, so a
     /// test walks the client through a sequence of sessions by changing it between attempts - the
     /// reconnect backoff leaves at least half a second for that. It speaks the v3 framing through
-    /// the package's own <see cref="FrameCodec"/>, like <see cref="TcpPeer"/> does.
+    /// the package's own <see cref="FrameCodec"/>, like <see cref="TcpPeer"/> does, over plain TCP
+    /// or, started with TLS, inside TLS with the certificate of <see cref="TestTls"/>.
     /// </summary>
     public sealed class FakeColibriServer : IDisposable
     {
@@ -68,6 +70,7 @@ namespace HCIKonstanz.Colibri.E2E
         private int _echoes;
         private volatile Behaviour _mode;
         private readonly int _readBytesPerSecond;
+        private readonly bool _useTls;
 
         public int Port { get; }
 
@@ -109,11 +112,12 @@ namespace HCIKonstanz.Colibri.E2E
             }
         }
 
-        private FakeColibriServer(TcpListener listener, Behaviour mode, int readBytesPerSecond)
+        private FakeColibriServer(TcpListener listener, Behaviour mode, int readBytesPerSecond, bool useTls)
         {
             _listener = listener;
             _mode = mode;
             _readBytesPerSecond = readBytesPerSecond;
+            _useTls = useTls;
             Port = ((IPEndPoint)listener.LocalEndpoint).Port;
         }
 
@@ -122,8 +126,17 @@ namespace HCIKonstanz.Colibri.E2E
         /// the operating system buffers only a little on the way in, so a client writing more than
         /// that waits for the link. 0 reads as fast as the client writes.
         /// </param>
-        public static FakeColibriServer Start(Behaviour mode, int readBytesPerSecond = 0)
+        /// <param name="useTls">
+        /// Whether each connection is TLS, with <see cref="TestTls.Certificate"/>: what a client
+        /// with "Server supports SSL/TLS" ticked and that certificate pinned can connect to.
+        /// </param>
+        public static FakeColibriServer Start(Behaviour mode, int readBytesPerSecond = 0, bool useTls = false)
         {
+            // Here rather than at the first connection, so that a certificate that cannot be loaded
+            // fails the test that asked for it, saying why.
+            if (useTls)
+                _ = TestTls.Certificate;
+
             var listener = new TcpListener(IPAddress.Loopback, 0);
 
             // Before Start: the accepted connections inherit it, and the receive window is agreed
@@ -133,7 +146,7 @@ namespace HCIKonstanz.Colibri.E2E
 
             listener.Start();
 
-            var server = new FakeColibriServer(listener, mode, readBytesPerSecond);
+            var server = new FakeColibriServer(listener, mode, readBytesPerSecond, useTls);
             _ = server.AcceptLoop();
             return server;
         }
@@ -210,10 +223,13 @@ namespace HCIKonstanz.Colibri.E2E
         private async Task Serve(TcpClient client, int session, Behaviour mode)
         {
             var token = _lifetime.Token;
+            Stream stream = null;
             try
             {
                 client.NoDelay = true;
-                var stream = client.GetStream();
+                stream = client.GetStream();
+                if (_useTls)
+                    stream = await TestTls.AcceptAsync(stream).ConfigureAwait(false);
 
                 switch (mode)
                 {
@@ -263,10 +279,23 @@ namespace HCIKonstanz.Colibri.E2E
                 lock (_open)
                     _open.Remove(client);
                 client.Close();
+                CloseQuietly(stream);
             }
         }
 
-        private static async Task<DecodedFrame?> ReadHandshake(NetworkStream stream, CancellationToken token)
+        private static void CloseQuietly(Stream stream)
+        {
+            try
+            {
+                stream?.Dispose();
+            }
+            catch (Exception)
+            {
+                // The connection under it is gone already.
+            }
+        }
+
+        private static async Task<DecodedFrame?> ReadHandshake(Stream stream, CancellationToken token)
         {
             var reader = new FrameReader();
             var buffer = new byte[4096];
@@ -284,7 +313,7 @@ namespace HCIKonstanz.Colibri.E2E
             }
         }
 
-        private async Task Refuse(TcpClient client, NetworkStream stream, DecodedFrame? handshake, CancellationToken token)
+        private async Task Refuse(TcpClient client, Stream stream, DecodedFrame? handshake, CancellationToken token)
         {
             var refusal = FrameCodec.EncodeMessage("colibri", "protocol::rejected", Encoding.UTF8.GetBytes(
                 $"{{\"serverVersion\":\"{RefusingServerVersion}\",\"clientVersion\":\"{handshake?.Version}\","
@@ -297,7 +326,7 @@ namespace HCIKonstanz.Colibri.E2E
         /// FIN first, then wait for the client to close its side. Closing outright with the client's
         /// bytes still unread would send an RST instead, and an RST can overtake data still in flight.
         /// </summary>
-        private static async Task HangUp(TcpClient client, NetworkStream stream, CancellationToken token)
+        private static async Task HangUp(TcpClient client, Stream stream, CancellationToken token)
         {
             client.Client.Shutdown(SocketShutdown.Send);
             using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(token))
@@ -307,7 +336,7 @@ namespace HCIKonstanz.Colibri.E2E
             }
         }
 
-        private static async Task Drain(NetworkStream stream, CancellationToken token)
+        private static async Task Drain(Stream stream, CancellationToken token)
         {
             var buffer = new byte[4096];
             while (await stream.ReadAsync(buffer, 0, buffer.Length, token).ConfigureAwait(false) > 0)
@@ -315,7 +344,7 @@ namespace HCIKonstanz.Colibri.E2E
             }
         }
 
-        private async Task Heartbeat(NetworkStream stream, CancellationToken token)
+        private async Task Heartbeat(Stream stream, CancellationToken token)
         {
             for (ulong beat = 1; !token.IsCancellationRequested; beat++)
             {
@@ -325,7 +354,7 @@ namespace HCIKonstanz.Colibri.E2E
             }
         }
 
-        private async Task Record(NetworkStream stream, int session, TaskCompletionSource<bool> handshakeRead, CancellationToken token)
+        private async Task Record(Stream stream, int session, TaskCompletionSource<bool> handshakeRead, CancellationToken token)
         {
             var reader = new FrameReader();
             var buffer = new byte[16 * 1024];

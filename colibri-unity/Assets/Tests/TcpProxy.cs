@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
@@ -15,7 +16,9 @@ namespace HCIKonstanz.Colibri.E2E
     /// <c>colibri-server/test/tcp-wire-tap.ts</c>.
     ///
     /// It also records every message the client sends, by connection, which is what lets a test
-    /// see what went out on the session after a reconnect and in which order.
+    /// see what went out on the session after a reconnect and in which order. Over TLS it either
+    /// passes the encrypted bytes on as they are, recording nothing, or ends the client's TLS
+    /// itself, with the certificate of <see cref="TestTls"/>, and speaks TLS on to the server.
     /// </summary>
     public sealed class TcpProxy : IDisposable
     {
@@ -23,6 +26,7 @@ namespace HCIKonstanz.Colibri.E2E
         private readonly string _upstreamHost;
         private readonly int _upstreamPort;
         private readonly bool _recordMessages;
+        private readonly bool _terminateTls;
         private readonly CancellationTokenSource _lifetime = new CancellationTokenSource();
         private readonly List<TcpClient> _open = new List<TcpClient>();
         private readonly List<(int Session, DecodedFrame Frame)> _fromClient = new List<(int, DecodedFrame)>();
@@ -56,25 +60,36 @@ namespace HCIKonstanz.Colibri.E2E
             }
         }
 
-        private TcpProxy(TcpListener listener, string upstreamHost, int upstreamPort, bool recordMessages)
+        private TcpProxy(TcpListener listener, string upstreamHost, int upstreamPort, bool recordMessages, bool terminateTls)
         {
             _listener = listener;
             _upstreamHost = upstreamHost;
             _upstreamPort = upstreamPort;
             _recordMessages = recordMessages;
+            _terminateTls = terminateTls;
             Port = ((IPEndPoint)listener.LocalEndpoint).Port;
         }
 
         /// <param name="recordMessages">
-        /// False for a TLS connection, whose bytes cannot be read here: they are passed on as they
-        /// are, and <see cref="FromClient"/> stays empty.
+        /// False for a TLS connection passed through, whose bytes cannot be read here: they are
+        /// passed on as they are, and <see cref="FromClient"/> stays empty.
         /// </param>
-        public static TcpProxy Start(string upstreamHost, int upstreamPort, bool recordMessages = true)
+        /// <param name="terminateTls">
+        /// True for a client that speaks TLS to a server that does too: the proxy is the TLS server
+        /// for the client, with <see cref="TestTls.Certificate"/>, which the client then has to
+        /// accept, and a TLS client to the server. What it passes on in between, it can record.
+        /// </param>
+        public static TcpProxy Start(string upstreamHost, int upstreamPort, bool recordMessages = true, bool terminateTls = false)
         {
+            // Here rather than at the first connection, so that a certificate that cannot be loaded
+            // fails the test that asked for it, saying why.
+            if (terminateTls)
+                _ = TestTls.Certificate;
+
             var listener = new TcpListener(IPAddress.Loopback, 0);
             listener.Start();
 
-            var proxy = new TcpProxy(listener, upstreamHost, upstreamPort, recordMessages);
+            var proxy = new TcpProxy(listener, upstreamHost, upstreamPort, recordMessages, terminateTls);
             _ = proxy.AcceptLoop();
             return proxy;
         }
@@ -134,15 +149,26 @@ namespace HCIKonstanz.Colibri.E2E
                 _open.Add(upstream);
             }
 
+            Stream client = null;
+            Stream server = null;
             try
             {
+                client = downstream.GetStream();
+                if (_terminateTls)
+                    client = await TestTls.AcceptAsync(client).ConfigureAwait(false);
+
+                // Held after the client's TLS, if any: what the client sees while it is held is a
+                // connection that has been accepted and says nothing, with or without TLS.
                 while (_isHolding)
                     await Task.Delay(10, _lifetime.Token).ConfigureAwait(false);
 
                 await upstream.ConnectAsync(_upstreamHost, _upstreamPort).ConfigureAwait(false);
+                server = upstream.GetStream();
+                if (_terminateTls)
+                    server = await TestTls.ConnectAsync(server, _upstreamHost).ConfigureAwait(false);
 
-                var toServer = Pump(downstream.GetStream(), upstream.GetStream(), _recordMessages ? session : 0);
-                var toClient = Pump(upstream.GetStream(), downstream.GetStream(), 0);
+                var toServer = Pump(client, server, _recordMessages ? session : 0);
+                var toClient = Pump(server, client, 0);
 
                 // Either direction ending ends the session, as a broken link would.
                 await Task.WhenAny(toServer, toClient).ConfigureAwait(false);
@@ -161,11 +187,13 @@ namespace HCIKonstanz.Colibri.E2E
 
                 Reset(downstream);
                 Reset(upstream);
+                CloseQuietly(client);
+                CloseQuietly(server);
             }
         }
 
         /// <param name="recordAs">The session to record decoded messages under, or 0 not to.</param>
-        private async Task Pump(NetworkStream from, NetworkStream to, int recordAs)
+        private async Task Pump(Stream from, Stream to, int recordAs)
         {
             var reader = recordAs > 0 ? new FrameReader() : null;
             var buffer = new byte[16 * 1024];
@@ -193,6 +221,18 @@ namespace HCIKonstanz.Colibri.E2E
 
                 lock (_fromClient)
                     _fromClient.Add((session, frame));
+            }
+        }
+
+        private static void CloseQuietly(Stream stream)
+        {
+            try
+            {
+                stream?.Dispose();
+            }
+            catch (Exception)
+            {
+                // The connection under it is gone already.
             }
         }
 

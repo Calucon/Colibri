@@ -18,7 +18,9 @@ namespace HCIKonstanz.Colibri.E2E
     /// and what happens when it is disabled, destroyed, or torn down with the app.
     ///
     /// Like <see cref="ProtocolMismatchDetectionTests"/>, these point the connection singleton at a
-    /// <see cref="FakeColibriServer"/>, so they own its lifetime and put it back afterwards.
+    /// <see cref="FakeColibriServer"/>, so they own its lifetime and put it back afterwards. In a run
+    /// over TLS (<see cref="E2EServer.OverTls"/>) that server speaks TLS, so the writes these drive
+    /// through a slow link, a held send lock and the end of the app go through TLS as well.
     /// </summary>
     public class ConnectionLifetimeTests
     {
@@ -58,7 +60,7 @@ namespace HCIKonstanz.Colibri.E2E
         [UnityTest]
         public IEnumerator AnAppNameOfSpacesIsNotConfiguredAndConnectsNowhere()
         {
-            _server = FakeColibriServer.Start(FakeColibriServer.Behaviour.Heartbeat);
+            _server = StartServer();
 
             var notConfigured = 0;
             Application.LogCallback countNotConfigured = (message, stackTrace, type) =>
@@ -111,7 +113,7 @@ namespace HCIKonstanz.Colibri.E2E
         [UnityTest]
         public IEnumerator WhatIsStillBeingWrittenWhenTheAppQuitsReachesTheServer()
         {
-            _server = FakeColibriServer.Start(FakeColibriServer.Behaviour.Heartbeat);
+            _server = StartServer();
             var connection = ConnectionTo(_server.Port);
             yield return E2EServer.WaitUntil(() => connection.Status == ConnectionStatus.Connected,
                 "The client never connected", 10f);
@@ -140,7 +142,7 @@ namespace HCIKonstanz.Colibri.E2E
         [UnityTest]
         public IEnumerator QuittingWaitsOnlyBrieflyForAWriteThatDoesNotFinish()
         {
-            _server = FakeColibriServer.Start(FakeColibriServer.Behaviour.Heartbeat);
+            _server = StartServer();
             var connection = ConnectionTo(_server.Port);
             yield return E2EServer.WaitUntil(() => connection.Status == ConnectionStatus.Connected,
                 "The client never connected", 10f);
@@ -170,7 +172,7 @@ namespace HCIKonstanz.Colibri.E2E
         [UnityTest]
         public IEnumerator AnOrdinaryDisableDoesNotWaitAndSendsWhatWasQueuedAfterTheNextEnable()
         {
-            _server = FakeColibriServer.Start(FakeColibriServer.Behaviour.Heartbeat);
+            _server = StartServer();
             var connection = ConnectionTo(_server.Port);
             yield return E2EServer.WaitUntil(() => connection.Status == ConnectionStatus.Connected,
                 "The client never connected", 10f);
@@ -208,7 +210,7 @@ namespace HCIKonstanz.Colibri.E2E
         [UnityTest]
         public IEnumerator HoldingTheSocketPastTheWatchdogDoesNotDropAHealthyConnection()
         {
-            _server = FakeColibriServer.Start(FakeColibriServer.Behaviour.Heartbeat);
+            _server = StartServer();
             var connection = ConnectionTo(_server.Port);
             var events = Record(connection);
             yield return E2EServer.WaitUntil(() => events.Count == 1, "The client never connected", 10f);
@@ -241,7 +243,7 @@ namespace HCIKonstanz.Colibri.E2E
         [UnityTest]
         public IEnumerator ALargeMessageOnASlowLinkArrivesWithoutTheConnectionBeingDropped()
         {
-            _server = FakeColibriServer.Start(FakeColibriServer.Behaviour.Heartbeat, readBytesPerSecond: 256 * 1024);
+            _server = StartServer(readBytesPerSecond: 256 * 1024);
             var connection = ConnectionTo(_server.Port);
             var events = Record(connection);
             yield return E2EServer.WaitUntil(() => events.Count == 1, "The client never connected", 10f);
@@ -276,7 +278,7 @@ namespace HCIKonstanz.Colibri.E2E
         [UnityTest]
         public IEnumerator DestroyingTheConnectionWhileConnectedRaisesOnDisconnected()
         {
-            _server = FakeColibriServer.Start(FakeColibriServer.Behaviour.Heartbeat);
+            _server = StartServer();
             var connection = ConnectionTo(_server.Port);
             var events = Record(connection);
             yield return E2EServer.WaitUntil(() => events.Count == 1, "The client never connected", 10f);
@@ -294,7 +296,7 @@ namespace HCIKonstanz.Colibri.E2E
         [UnityTest]
         public IEnumerator AConnectionNotYetReportedIsReportedAndEndedWhenTheComponentIsDestroyed()
         {
-            _server = FakeColibriServer.Start(FakeColibriServer.Behaviour.Heartbeat);
+            _server = StartServer();
             var connection = ConnectionTo(_server.Port);
             var events = Record(connection);
 
@@ -318,7 +320,7 @@ namespace HCIKonstanz.Colibri.E2E
         [UnityTest]
         public IEnumerator DisablingTheConnectionWhileConnectedRaisesOnDisconnectedAtOnce()
         {
-            _server = FakeColibriServer.Start(FakeColibriServer.Behaviour.Heartbeat);
+            _server = StartServer();
             var connection = ConnectionTo(_server.Port);
             var events = Record(connection);
             yield return E2EServer.WaitUntil(() => events.Count == 1, "The client never connected", 10f);
@@ -344,7 +346,7 @@ namespace HCIKonstanz.Colibri.E2E
         [UnityTest]
         public IEnumerator AHandlerThatDisablesTheConnectionOnConnectedLeavesTheOtherHandlersTheEventsInOrder()
         {
-            _server = FakeColibriServer.Start(FakeColibriServer.Behaviour.Heartbeat);
+            _server = StartServer();
             var connection = ConnectionTo(_server.Port);
 
             var disabling = new List<string>();
@@ -373,7 +375,7 @@ namespace HCIKonstanz.Colibri.E2E
         [UnityTest]
         public IEnumerator TheEndOfTheAppRaisesNoConnectionEvents()
         {
-            _server = FakeColibriServer.Start(FakeColibriServer.Behaviour.Heartbeat);
+            _server = StartServer();
             var connection = ConnectionTo(_server.Port);
             var events = Record(connection);
             yield return E2EServer.WaitUntil(() => events.Count == 1, "The client never connected", 10f);
@@ -396,6 +398,10 @@ namespace HCIKonstanz.Colibri.E2E
          *  Driving the connection singleton
          */
 
+        /// <summary>A server that heartbeats, over TLS in a run over TLS.</summary>
+        private static FakeColibriServer StartServer(int readBytesPerSecond = 0)
+            => FakeColibriServer.Start(FakeColibriServer.Behaviour.Heartbeat, readBytesPerSecond, useTls: E2EServer.OverTls);
+
         private static List<string> Record(WebServerConnection connection)
         {
             var events = new List<string>();
@@ -410,9 +416,8 @@ namespace HCIKonstanz.Colibri.E2E
         /// </summary>
         private static WebServerConnection ConnectionTo(int tcpPort, string appName = null)
         {
-            E2EServer.Configure();
+            E2EServer.ConfigureInProcess(tcpPort);
             var config = ColibriConfig.Load();
-            config.TcpServerPort = tcpPort;
             if (appName != null)
                 config.AppName = appName;
 

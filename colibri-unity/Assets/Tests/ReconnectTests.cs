@@ -4,7 +4,6 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using HCIKonstanz.Colibri.Core;
 using HCIKonstanz.Colibri.Networking;
-using HCIKonstanz.Colibri.Setup;
 using HCIKonstanz.Colibri.Synchronization;
 using Newtonsoft.Json.Linq;
 using NUnit.Framework;
@@ -19,6 +18,8 @@ namespace HCIKonstanz.Colibri.E2E
     ///
     /// The Unity client talks to the server through a <see cref="TcpProxy"/> that the test can
     /// cut, while the raw peer stays connected directly, as the rest of a session's clients would.
+    /// In a run over TLS (<see cref="E2EServer.OverTls"/>) the proxy ends the client's TLS and
+    /// speaks TLS on to the server, so it can still see what the client sends.
     /// Like <see cref="ProtocolMismatchDetectionTests"/>, these point the connection singleton
     /// somewhere other than the real server, so they own its lifetime and put it back afterwards.
     /// </summary>
@@ -35,10 +36,8 @@ namespace HCIKonstanz.Colibri.E2E
             E2EServer.RequireReachable();
             yield return DestroyConnection();
 
-            _proxy = TcpProxy.Start(E2EServer.Host, E2EServer.TcpPort);
-
-            E2EServer.Configure();
-            ColibriConfig.Load().TcpServerPort = _proxy.Port;
+            _proxy = TcpProxy.Start(E2EServer.Host, E2EServer.TcpPort, terminateTls: E2EServer.OverTls);
+            E2EServer.ConfigureInProcess(_proxy.Port);
 
             // OnEnable is what reads the config, so the port only takes effect on a fresh
             // instance - which touching Instance after the teardown above creates.

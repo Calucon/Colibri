@@ -4,7 +4,6 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Net.Security;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
@@ -49,8 +48,8 @@ namespace HCIKonstanz.Colibri.E2E
         private Stream _stream;
         private int _heartbeats;
 
-        /// <summary>A peer on the test server, without TLS.</summary>
-        public TcpPeer() : this(E2EServer.TcpPort, false)
+        /// <summary>A peer on the test server, over TLS when the suite runs over TLS (<see cref="E2EServer.OverTls"/>).</summary>
+        public TcpPeer() : this(E2EServer.TcpPort, E2EServer.OverTls)
         {
         }
 
@@ -97,11 +96,7 @@ namespace HCIKonstanz.Colibri.E2E
 
             Stream stream = _client.GetStream();
             if (_useTls)
-            {
-                var tls = new SslStream(stream, false, (sender, certificate, chain, errors) => true);
-                await tls.AuthenticateAsClientAsync(E2EServer.Host);
-                stream = tls;
-            }
+                stream = await TestTls.ConnectAsync(stream, E2EServer.Host);
 
             _stream = stream;
 

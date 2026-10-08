@@ -20,15 +20,41 @@ namespace HCIKonstanz.Colibri.E2E
     {
         public static string Host => Env("COLIBRI_E2E_SERVER", "127.0.0.1");
 
-        /// <summary>HTTP and Socket.IO, which the Store's REST calls go through.</summary>
-        public static int WebPort => EnvPort("COLIBRI_E2E_PORT", 9011);
+        /// <summary>
+        /// Whether the suite runs over TLS: COLIBRI_E2E_TLS=1. Every connection the tests make is
+        /// TLS then: the Unity client's, to the TLS test server and pinned to its certificate, the
+        /// raw peers', and the ones to <see cref="FakeColibriServer"/> and <see cref="TcpProxy"/>,
+        /// which serve TLS in this process. A fixture whose subject is plain TCP skips itself
+        /// (<see cref="RequirePlainTcp"/>).
+        /// </summary>
+        public static bool OverTls
+        {
+            get
+            {
+                var value = Env("COLIBRI_E2E_TLS", "");
+                return value == "1" || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
+            }
+        }
 
-        /// <summary>The binary v3 port, which is the one Unity actually speaks.</summary>
-        public static int TcpPort => EnvPort("COLIBRI_E2E_TCP_PORT", 9012);
+        /// <summary>HTTP and Socket.IO, which the Store's REST calls go through: the plain server's, or with <see cref="OverTls"/> the TLS server's.</summary>
+        public static int WebPort => OverTls ? TlsWebPort : PlainWebPort;
+
+        /// <summary>The binary v3 port, which is the one Unity actually speaks: the plain server's, or with <see cref="OverTls"/> the TLS server's.</summary>
+        public static int TcpPort => OverTls ? TlsTcpPort : PlainTcpPort;
+
+        /// <summary>Where the Store's REST calls go: http, or with <see cref="OverTls"/> https.</summary>
+        public static string WebUrl => $"{(OverTls ? "https" : "http")}://{Host}:{WebPort}";
+
+        /// <summary>The plain test server's web port, whether or not the suite runs over TLS.</summary>
+        public static int PlainWebPort => EnvPort("COLIBRI_E2E_PORT", 9011);
+
+        /// <summary>The plain test server's binary port, whether or not the suite runs over TLS.</summary>
+        public static int PlainTcpPort => EnvPort("COLIBRI_E2E_TCP_PORT", 9012);
 
         /// <summary>
-        /// The binary port of a second server, with TLS turned on, for <see cref="TlsTests"/>: the
-        /// one in <c>colibri-unity/tls-test-server</c>, which run-tests.mjs starts. Same host.
+        /// The binary port of a second server, with TLS turned on, for <see cref="TlsTests"/> and for
+        /// a run over TLS: the one in <c>colibri-unity/tls-test-server</c>, which run-tests.mjs
+        /// starts. Same host.
         /// </summary>
         public static int TlsTcpPort => EnvPort("COLIBRI_E2E_TLS_TCP_PORT", 9112);
 
@@ -40,7 +66,16 @@ namespace HCIKonstanz.Colibri.E2E
         /// from the project directory, which is the Editor's working directory.
         /// </summary>
         public static string TlsCertificatePath
-            => Env("COLIBRI_E2E_TLS_CERT", Path.Combine(Directory.GetCurrentDirectory(), "tls-test-server", "cert.pem"));
+            => Env("COLIBRI_E2E_TLS_CERT", Path.Combine(TlsTestServerDirectory, "cert.pem"));
+
+        /// <summary>
+        /// The TLS test server's certificate with its key, as PKCS#12, for the TLS that
+        /// <see cref="TestTls"/> serves in this process. By default the one in <c>tls-test-server</c>.
+        /// </summary>
+        public static string TlsCertificatePfxPath
+            => Env("COLIBRI_E2E_TLS_PFX", Path.Combine(TlsTestServerDirectory, "cert.pfx"));
+
+        private static string TlsTestServerDirectory => Path.Combine(Directory.GetCurrentDirectory(), "tls-test-server");
 
         /// <summary>
         /// One app name for the whole run, not one per test.
@@ -65,12 +100,34 @@ namespace HCIKonstanz.Colibri.E2E
         /// </summary>
         public static void RequireReachable()
         {
-            if (IsReachable())
+            if (OverTls)
+                RequireTlsServer();
+            else
+                RequirePlainServer();
+        }
+
+        /// <summary>
+        /// Skips rather than fails when there is no plain test server, as <see cref="RequireReachable"/>
+        /// does, for a test that needs it even when the suite runs over TLS.
+        /// </summary>
+        public static void RequirePlainServer()
+        {
+            if (IsReachable(PlainTcpPort))
                 return;
 
             Assert.Ignore(
-                $"No colibri-server on {Host}:{TcpPort}. Start one with `docker compose up -d` in colibri-server, "
+                $"No colibri-server on {Host}:{PlainTcpPort}. Start one with `docker compose up -d` in colibri-server, "
                 + "or point the suite at a running one with COLIBRI_E2E_SERVER / COLIBRI_E2E_TCP_PORT.");
+        }
+
+        /// <summary>
+        /// Skips a test whose subject is plain TCP when the suite runs over TLS (<see cref="OverTls"/>).
+        /// </summary>
+        /// <param name="why">What makes it plain TCP only, for the skip message.</param>
+        public static void RequirePlainTcp(string why)
+        {
+            if (OverTls)
+                Assert.Ignore($"Plain TCP only, so skipped in a run over TLS: {why}");
         }
 
         /// <summary>
@@ -111,8 +168,6 @@ namespace HCIKonstanz.Colibri.E2E
             }
         }
 
-        private static bool IsReachable() => IsReachable(TcpPort);
-
         private static bool IsReachable(int port)
         {
             try
@@ -127,7 +182,8 @@ namespace HCIKonstanz.Colibri.E2E
         }
 
         /// <summary>
-        /// Points Colibri at the test server.
+        /// Points Colibri at the test server: the plain one, or with <see cref="OverTls"/> the TLS
+        /// one, with TLS on and its certificate pinned.
         /// </summary>
         /// <remarks>
         /// Mutates the object <see cref="ColibriConfig.Load"/> hands back rather than writing a
@@ -149,9 +205,24 @@ namespace HCIKonstanz.Colibri.E2E
             config.ServerAddress = Host;
             config.WebServerPort = WebPort;
             config.TcpServerPort = TcpPort;
-            config.IsSSL = false;
+            config.IsSSL = OverTls;
             config.AllowSelfSignedCertificate = false;
-            config.ServerCertificateSha256 = "";
+            config.ServerCertificateSha256 = OverTls ? TlsCertificateSha256 : "";
+        }
+
+        /// <summary>
+        /// Points Colibri's TCP connection at a server in this process on <paramref name="tcpPort"/>:
+        /// a <see cref="FakeColibriServer"/>, or a <see cref="TcpProxy"/>. With <see cref="OverTls"/>
+        /// that one serves TLS too (see <see cref="TestTls"/>), and its certificate is the one pinned.
+        /// </summary>
+        public static void ConfigureInProcess(int tcpPort)
+        {
+            Configure();
+
+            var config = ColibriConfig.Load();
+            config.TcpServerPort = tcpPort;
+            if (OverTls)
+                config.ServerCertificateSha256 = TestTls.CertificateSha256;
         }
 
         /// <summary>

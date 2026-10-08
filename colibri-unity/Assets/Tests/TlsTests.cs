@@ -171,12 +171,12 @@ namespace HCIKonstanz.Colibri.E2E
         [UnityTest]
         public IEnumerator TlsAgainstAServerWithoutTlsSaysSoAndKeepsRetryingWithBackoff()
         {
-            E2EServer.RequireReachable();
+            E2EServer.RequirePlainServer();
             LogAssert.Expect(LogType.Error, new Regex(
                 @"^Colibri: \S+ (accepted the connection but )?did not answer the TLS handshake.*'Server supports SSL/TLS' is ticked in the Colibri configuration.*"
                 + @"turn TLS on at the server \(TLS_CERT and TLS_KEY\), or untick the setting\. Retrying\.\.\.$", RegexOptions.Singleline));
 
-            ConnectionTo(allowSelfSigned: true, pin: "", tcpPort: E2EServer.TcpPort);
+            ConnectionTo(allowSelfSigned: true, pin: "", tcpPort: E2EServer.PlainTcpPort);
 
             // Up to the connect timeout per attempt, if the server waits for more of what it takes
             // to be a frame, plus 500 ms and 1000 ms of backoff.
@@ -208,7 +208,10 @@ namespace HCIKonstanz.Colibri.E2E
                 RegexOptions.Singleline));
 
             E2EServer.Configure();
-            ColibriConfig.Load().TcpServerPort = E2EServer.TlsTcpPort;
+            var config = ColibriConfig.Load();
+            config.TcpServerPort = E2EServer.TlsTcpPort;
+            config.IsSSL = false;
+            config.ServerCertificateSha256 = "";
             Assert.That(Connection, Is.Not.Null);
 
             yield return E2EServer.WaitUntil(() => Connection.SuspectedProtocolMismatch != null,

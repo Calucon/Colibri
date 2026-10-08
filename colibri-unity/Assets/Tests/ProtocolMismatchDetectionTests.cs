@@ -36,6 +36,8 @@ namespace HCIKonstanz.Colibri.E2E
         [UnitySetUp]
         public IEnumerator ReplaceTheConnection()
         {
+            E2EServer.RequirePlainTcp("the servers here that speak another protocol, or none, are plain TCP; "
+                + "TlsTests cover a server that does not speak TLS, and a client that does not");
             E2EServer.RequireReachable();
             yield return DestroyConnection();
         }

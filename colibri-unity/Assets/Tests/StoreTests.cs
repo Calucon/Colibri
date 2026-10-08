@@ -105,8 +105,10 @@ namespace HCIKonstanz.Colibri.E2E
             }
 
             // The names the server keeps the app's entries under.
-            using (var request = UnityWebRequest.Get($"http://{E2EServer.Host}:{E2EServer.WebPort}/api/store/{Uri.EscapeDataString(E2EServer.App)}"))
+            using (var request = UnityWebRequest.Get($"{E2EServer.WebUrl}/api/store/{Uri.EscapeDataString(E2EServer.App)}"))
             {
+                // Over TLS, the pinned certificate; otherwise none.
+                request.certificateHandler = HCIKonstanz.Colibri.Store.ServerCertificateHandler.For(ColibriConfig.Load());
                 yield return request.SendWebRequest();
                 Assert.That(request.responseCode, Is.EqualTo(200), $"Listing the app's entries failed: {request.error}");
 
