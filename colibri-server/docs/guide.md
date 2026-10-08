@@ -414,7 +414,11 @@ its address and the package to upgrade, at most once a minute per address. See
 - `npm run build`: Compile.
 - `npm start`: Start the server; compile first.
 - `npm run lint`: Lint the server and admin UI sources.
-- `npm test`: Run the vitest unit suite.
+- `npm test`: Run the vitest unit suite. The TLS tests make their certificates with `openssl`, so
+  it has to be on `PATH` (Git for Windows ships it in `usr/bin`). In a test,
+  `createTestCertificate(dir, name, { commonName, keyType: 'ec' | 'rsa', signedBy, serverOnly })`
+  from [`test/tls-test-certificate.ts`](../test/tls-test-certificate.ts) makes a certificate valid
+  for 2 days, self-signed or signed by another test certificate.
 - `npm run gui:test`: Run the admin UI's unit tests.
 - `npm run bench`: Run the vitest benchmark harness. Results are machine- and runtime-specific,
   so they are reported in the pull request that claims them rather than committed here; always
@@ -428,7 +432,12 @@ its address and the package to upgrade, at most once a minute per address. See
   0 when it connected and was heartbeated, 2 when the server refused its protocol version, after
   printing the server's reason, and 1 when something is wrong with the server: no heartbeat
   arrived, or the server sent a frame it cannot decode, which is printed as
-  `Malformed frame from server` and ends the run.
+  `Malformed frame from server` and ends the run. Against a server with TLS:
+  `TCP_PORT=<port> npm run test:tcpclient -- --tls`, plus `--insecure` for a certificate that is
+  not trusted here, such as a self-signed one, and `--host <name>` for a server on another machine.
+  It prints the SHA-256 fingerprint of the server's certificate. The manual probe
+  `tsx test/tcp-crosstalk-check.ts [app] [ms] --tls [--insecure] [--host <name>]` takes the same
+  options.
 - `npm run test:stressecho`: A raw TCP client that answers the probes of colibri-unity's Network
   Stress sample, so a single Unity editor can measure round trips
   (`npm run test:stressecho -- [app] [seconds]`).
@@ -436,9 +445,12 @@ its address and the package to upgrade, at most once a minute per address. See
   it with a fresh bind mount, a root-owned 1.x data directory, a named volume, as
   `--user 1000:1000` on a named volume and on a root-owned directory, with the 1.x data mounted
   read-only, without `CAP_CHOWN`, with `WEBSERVER_PORT` set in the environment and in a mounted
-  `.env`, and with `WEBSERVER_HOST=localhost`. It checks that each one becomes healthy and stops
-  cleanly, and all but the last that it saves data and keeps it across a restart, or, where it
-  cannot save, that it says so loudly, with advice that fits. It removes each container once its
-  deployment is done, and everything else it created at the end. Pass deployment names to run
-  only those; `COLIBRI_DOCKER_PREFIX`, `COLIBRI_DOCKER_PORT` and `COLIBRI_DOCKER_TMPDIR` are
-  described at the top of [`test/docker-image-check.ts`](../test/docker-image-check.ts).
+  `.env`, with `WEBSERVER_HOST=localhost`, and with TLS on both ports. It checks that each one
+  becomes healthy and stops cleanly, and that it saves data and keeps it across a restart, or,
+  where it cannot save, that it says so loudly, with advice that fits. With TLS, it also checks the
+  certificate both ports serve, that a client without TLS is refused, and that a renewed
+  certificate is taken up without a restart; like `npm test`, it needs `openssl` on `PATH` for
+  that. It removes each container once its deployment is done, and everything else it created at
+  the end. Pass deployment names to run only those; `COLIBRI_DOCKER_PREFIX`,
+  `COLIBRI_DOCKER_PORT` and `COLIBRI_DOCKER_TMPDIR` are described at the top of
+  [`test/docker-image-check.ts`](../test/docker-image-check.ts).
