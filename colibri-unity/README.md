@@ -297,10 +297,23 @@ private void MyListener(JToken jtoken) {
 }
 ```
 
-Unity's own types are the exception: Newtonsoft cannot convert a `Vector3`, `Quaternion` or `Color`
-inside your class, so `JToken.FromObject` throws a `JsonSerializationException` (for a `Vector3`:
-`Self referencing loop detected for property 'normalized'`). Keep such values as `float` fields or
-arrays, or build the `JObject` yourself with Colibri's conversions:
+Unity's own types need Colibri's help: Newtonsoft on its own cannot convert a `Vector3`,
+`Quaternion` or `Color` inside your class, so a plain `JToken.FromObject` throws a
+`JsonSerializationException` (for a `Vector3`: `Self referencing loop detected for property
+'normalized'`). Pass `ColibriJson.Serializer`, which converts a `Vector2`, `Vector3`, `Vector4`,
+`Quaternion` or `Color` to an array of its components and back:
+
+```c#
+using HCIKonstanz.Colibri.Synchronization; // ColibriJson
+
+Sync.Send("example", JToken.FromObject(exampleObject, ColibriJson.Serializer));
+
+private void MyListener(JToken jtoken) {
+    ExampleClass exampleObject = jtoken.ToObject<ExampleClass>(ColibriJson.Serializer);
+}
+```
+
+Or build the `JObject` yourself with Colibri's conversions:
 
 ```c#
 using HCIKonstanz.Colibri.Synchronization; // ToJson(), ToVector3(), ToQuaternion(), ToColor()
@@ -342,7 +355,8 @@ Showing, hiding and deleting:
 
 - Deactivating the GameObject (`SetActive(false)`) hides its copies on the other clients, and reactivating it shows them again. Only the object's own active flag (`activeSelf`) is synced: deactivating a parent changes nothing elsewhere. Turn `SyncActive` off to keep the active state local.
 - Disabling only the `SyncTransform` component pauses its syncing without hiding anything. Changes made meanwhile are sent once it is enabled again.
-- Destroying the object, or unloading its scene (including loading another scene in its place), deletes it on the server and on every client.
+- Destroying the object, or unloading its scene (including loading another scene in its place), deletes it on the server and on every client. It stays deleted: an update another client sent just before the delete reached it is ignored, by the server and by this client, and does not bring it back.
+- Loading the scene again, on this client or any other, brings its placed objects back for everyone, with the state the loading client has.
 - Leaving Play mode, quitting the app, or the app being killed deletes nothing, whether the object is shown or hidden. It stays on the server for the other clients, until the app's last client disconnects (see [Connection and outages](#connection-and-outages)).
 
 `SyncTransform` also supports physics. `PhysicsAuthority` defines which client is currently controlling the physics. Only one client can control the physics of an object at a time. If the `PhysicsAuthority` is set to `true` on one client it is automatically set to `false` on all other clients. If the `PhysicsAuthority` is checked by default, the first client receives the physics authority. The `isKinematic` field of the attached `Rigidbody` will be overwritten by the `isKinematic` field of the `SyncTransform`. Therefore, if you want to change this field, always (additionally) set the `isKinematic` field of the `SyncTransform`.
@@ -453,7 +467,7 @@ configuration window warns about it. A configuration saved before this setting e
 
 ### Remote Store
 
-Colibri offers persistent data storage on the server, so that data can be saved easily between sessions. Anything Newtonsoft JSON can serialize, such as an object of your own class (without Unity types in it, see below), a list, or a plain number or string, can be uploaded via a RESTful interface of the `Store` object, up to 5 MiB of JSON per name. Data is kept per *app name*:
+Colibri offers persistent data storage on the server, so that data can be saved easily between sessions. Anything Newtonsoft JSON can serialize, such as an object of your own class (with `Vector3`, `Quaternion` or `Color` fields in it too), a list, or a plain number or string, can be uploaded via a RESTful interface of the `Store` object, up to 5 MiB of JSON per name. Data is kept per *app name*:
 
 ```c#
 // Create example object
@@ -486,8 +500,9 @@ Limitations:
 
 - Data fetching happens manually (data won’t be automatically updated!)
 - Values are converted with Newtonsoft JSON, which saves the public fields and properties of your class; `[Serializable]` is not needed, and a private `[SerializeField]` field is not saved
-- A `Vector3`, `Quaternion` or `Color` inside your class cannot be converted (see [Sending Data between Clients](#sending-data-between-clients)): `await Store.Put(…)` throws a `JsonSerializationException` instead of returning `false`. Save a `JObject` built with `ToJson()` instead, and load it with `Store.Get<JObject>`
-- `await Store.Get<T>(…)` throws a Newtonsoft `JsonException` when the saved value does not fit `T`. It returns `default`, and logs why, only when the request itself fails: for a name that was never saved, for example
+- A `Vector2`, `Vector3`, `Vector4`, `Quaternion` or `Color` inside your class is converted with [`ColibriJson`](#sending-data-between-clients) and saved as an array of its components. Values Colibri 1.x saved as `{"x": …}` still load
+- Neither call throws for a failure: `await Store.Put(…)` returns `false` when the value cannot be converted or the server did not store it, and `await Store.Get<T>(…)` returns `default` when the request fails, when nothing is saved under that name, or when the saved value does not fit `T`. Each logs why. A saved `null` also comes back as `null`, and an exception your own class throws, from its constructor for example, still comes through
+- The app name and the name you save under are URL-encoded, so a name with `/`, `#`, `?`, `%` or a space in it works, and addresses the same value as in colibri-web
 
 ### Connection and outages
 
@@ -525,13 +540,22 @@ soon as the connection is back, ahead of anything sent afterwards:
   see. The console says so once per connection: `Colibri: more than 10000 messages are waiting to be
   sent…`.
 
-After reconnecting, Colibri asks the server again for every synced object it listens to, so what
-other clients changed in the meantime arrives. It does not catch up on everything:
+After reconnecting, Colibri asks the server again for every synced object in the scene, and for
+everything on the channels of its `SyncBehaviourManager`s, so what other clients changed in the
+meantime arrives. For each object, the server's answer is one of:
 
-- An object that another client deleted during the outage stays on this client.
-- The server forgets an app's synced objects when the app's last client disconnects, and when it
-  restarts. A single client whose connection drops is that last client. Afterwards the server learns
-  each object again only when it changes, and then only the members that changed.
+- **The object's current state**, which is applied.
+- **Nothing for it.** The server forgets an app's synced objects when the app's last client
+  disconnects, and when it restarts, and a single client whose connection drops is that last
+  client. Colibri then sends the object's full state again, so the server has it back, and clients
+  that join later see it.
+- **A delete**: another client deleted the object during the outage. It is deleted on this client
+  too.
+
+The server remembers a delete for `MODEL_TOMBSTONE_SECONDS`, 10 minutes by default. An object
+that another client deleted longer ago than that, while this client was away, is answered with
+nothing, so this client sends it again and it comes back for everyone. See
+[After a reconnect](../colibri-server/docs/protocol.md#after-a-reconnect) in the protocol docs.
 
 A refused protocol version is final: `Status` becomes `ProtocolMismatch`, the client stops
 reconnecting, and whatever was queued or is sent afterwards is dropped, with a one-time warning.
