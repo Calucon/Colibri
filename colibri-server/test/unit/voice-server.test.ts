@@ -7,7 +7,7 @@ import { tmpdir } from 'os';
 import * as path from 'path';
 import { Subscription } from 'rxjs';
 import wavefile from 'wavefile';
-import { VoiceServer } from '../../src/server/modules/web/voice-server.js';
+import { VoiceServer, wavHeader } from '../../src/server/modules/web/voice-server.js';
 import { ConsoleLog, LogLevel, LogMessage, Service } from '../../src/server/modules/core/index.js';
 
 const { WaveFile } = wavefile;
@@ -508,5 +508,65 @@ describe('VoiceServer recordings', () => {
         expect(failed[0]!.message).toContain('EISDIR');
         expect((await recordings()).filter(name => name.endsWith('_ID_8.wav'))).toHaveLength(1);
         expect(savedLogs()).toHaveLength(1);
+    });
+
+    // wavefile's fromScratch and toBuffer re-encoded every sample on the main thread: about
+    // 1 to 4 s for a 10-minute recording, during which no TCP or Socket.IO message was relayed.
+    it('saves a 10-minute recording without holding up the event loop', async () => {
+        const samples = new Int16Array(SAMPLING_RATE * 600);
+        for (let i = 0; i < samples.length; i++) samples[i] = (i * 31) % 20000 - 10000;
+        internals.clients.set('127.0.0.1:9', {
+            ip: '127.0.0.1', port: 9, userId: 9, lastSequence: 0, lastHeartbeat: Date.now(),
+            frameSize: 480, frameSizeMillis: 10, codec: 0, recordingStartDate: new Date(),
+            recordingData: { length: samples.length, toTypedArray: () => samples },
+        });
+
+        let longestGap = 0;
+        let last = performance.now();
+        const ticker = setInterval(() => {
+            const now = performance.now();
+            longestGap = Math.max(longestGap, now - last);
+            last = now;
+        }, 5);
+        try {
+            await server.stop();
+        } finally {
+            clearInterval(ticker);
+        }
+        longestGap = Math.max(longestGap, performance.now() - last);
+
+        expect(longestGap).toBeLessThan(500);
+        const files = await recordings();
+        expect(files).toHaveLength(1);
+        const bytes = await readFile(path.join(dir, files[0]!));
+        expect(bytes.length).toBe(44 + samples.byteLength);
+        expect(bytes.subarray(44).equals(Buffer.from(samples.buffer))).toBe(true);
+    });
+});
+
+describe('wavHeader', () => {
+    // The format the recordings had when wavefile wrote them, byte for byte.
+    it.each([ 48000, 44100, 16000 ])('makes the same file as wavefile at %i Hz', (rate) => {
+        const samples = new Int16Array([ 0, 1, -1, 32767, -32768, 1234, -4321 ]);
+        const wav = new WaveFile();
+        wav.fromScratch(1, rate, '16', samples);
+
+        const ours = Buffer.concat([ wavHeader(rate, samples.byteLength), Buffer.from(samples.buffer) ]);
+
+        expect(ours.equals(Buffer.from(wav.toBuffer()))).toBe(true);
+    });
+
+    it('makes the same header as wavefile for an empty recording', () => {
+        const wav = new WaveFile();
+        wav.fromScratch(1, 48000, '16', new Int16Array(0));
+
+        expect(wavHeader(48000, 0).equals(Buffer.from(wav.toBuffer()))).toBe(true);
+    });
+
+    it('marks the sizes "up to the end of the file" past the 4 GiB they can hold, instead of throwing', () => {
+        const header = wavHeader(48000, 5 * 1024 ** 3);
+
+        expect(header.readUInt32LE(4)).toBe(0xFFFFFFFF);
+        expect(header.readUInt32LE(40)).toBe(0xFFFFFFFF);
     });
 });

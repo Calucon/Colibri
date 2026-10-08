@@ -1,9 +1,8 @@
 import { Service } from '../core/index.js';
 import * as dgram from 'dgram';
 import { AddressInfo } from 'net';
-import wavefile from 'wavefile';
-const { WaveFile } = wavefile;
 import { mkdir, writeFile } from 'fs/promises';
+import { endianness } from 'os';
 import * as path from 'path';
 
 // Recordings can run for minutes at 48kHz, so a plain number[] would mean millions of
@@ -55,6 +54,42 @@ enum Codec {
 
 // |userId(2)|sequence(2)|frameSize(2)|codec(1)|, see the message handler.
 const HEADER_LENGTH = 7;
+
+const WAV_HEADER_LENGTH = 44;
+
+/**
+ * The 44-byte RIFF header of a mono, 16-bit PCM .wav file holding `dataBytes` bytes of samples.
+ *
+ * Written by hand because it is all a recording needs: building the file with wavefile
+ * (fromScratch, then toBuffer) re-encoded every sample on the main thread, which held up all
+ * TCP and Socket.IO relaying for seconds when a long recording was saved.
+ */
+export const wavHeader = function (samplingRate: number, dataBytes: number): Buffer {
+    // The sizes are 32-bit. Past 4 GiB (12 h at 48 kHz) they say "as much as there is", which
+    // players read to the end of the file, instead of failing the save and losing it all.
+    const size = (value: number) => Math.min(value, 0xFFFFFFFF);
+    const header = Buffer.alloc(WAV_HEADER_LENGTH);
+    header.write('RIFF', 0, 'ascii');
+    header.writeUInt32LE(size(WAV_HEADER_LENGTH - 8 + dataBytes), 4);
+    header.write('WAVE', 8, 'ascii');
+    header.write('fmt ', 12, 'ascii');
+    header.writeUInt32LE(16, 16); // fmt chunk size
+    header.writeUInt16LE(1, 20); // PCM
+    header.writeUInt16LE(1, 22); // mono
+    header.writeUInt32LE(samplingRate, 24);
+    header.writeUInt32LE(samplingRate * 2, 28); // bytes per second
+    header.writeUInt16LE(2, 32); // bytes per sample frame
+    header.writeUInt16LE(16, 34); // bits per sample
+    header.write('data', 36, 'ascii');
+    header.writeUInt32LE(size(dataBytes), 40);
+    return header;
+};
+
+/** The samples as the little-endian bytes a .wav file holds, without copying them where it can. */
+const littleEndianBytes = function (samples: Int16Array): Buffer {
+    const bytes = Buffer.from(samples.buffer, samples.byteOffset, samples.byteLength);
+    return endianness() === 'LE' ? bytes : Buffer.from(bytes).swap16();
+};
 
 // A source sending malformed packets, or a peer that can't be relayed to, fails at packet rate
 // (up to ~50/s per voice client), so each is reported at most once per this interval rather
@@ -328,17 +363,16 @@ export class VoiceServer extends Service {
         }
     }
 
-    // Never throws: a failed save is logged.
+    // Never throws: a failed save is logged. Nothing here re-encodes the samples on the main
+    // thread (see wavHeader): writeFile hands their bytes to the file system in chunks.
     private async saveRecording(client: VoiceClient): Promise<void> {
         const samples = client.recordingData.toTypedArray();
         const dateString = client.recordingStartDate.toISOString().replace(/:/g, '_');
         const filename = path.join(this.voiceRecordingPath, `rec_${dateString}_ID_${client.userId}.wav`);
         const seconds = (samples.length / this.samplingRate).toFixed(1);
         try {
-            const wav = new WaveFile();
-            wav.fromScratch(1, this.samplingRate, '16', samples);
             await mkdir(this.voiceRecordingPath, { recursive: true });
-            await writeFile(filename, wav.toBuffer());
+            await writeFile(filename, [ wavHeader(this.samplingRate, samples.byteLength), littleEndianBytes(samples) ]);
             this.logInfo(`Voice recording of client ID ${client.userId} (${client.ip}:${client.port}, ${seconds} s) saved to ${filename}`);
         } catch (err) {
             // An fs error names the file itself.
