@@ -300,12 +300,12 @@ describe('ModelSynchronization', () => {
 
         it('asked afresh lifts the tombstone on its own channel and app only', () => {
             const deleter = server.connect(makeClient('deleter'));
-            server.connect(makeClient('other', 'appB'));
+            const otherApp = server.connect(makeClient('other', 'appB'));
             send(deleter, 'model::delete', { id: 'door' });
             send(deleter, 'model::delete', { id: 'door' }, 'others');
 
             send(deleter, 'model::request', { id: 'door' }, 'others');
-            send(server.clients[1], 'model::request', { id: 'door' });
+            send(otherApp, 'model::request', { id: 'door' });
 
             expect(store.deletion('appA', 'objects', 'door')).toBeDefined();
             expect(store.deletion('appA', 'others', 'door')).toBeUndefined();
