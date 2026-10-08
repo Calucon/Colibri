@@ -27,13 +27,21 @@ namespace HCIKonstanz.Colibri.Synchronization
             /// </summary>
             public readonly string FetchId;
 
+            /// <summary>
+            /// A SyncBehaviour's model listener only: told each time the request for
+            /// <see cref="FetchId"/> is made again after a reconnect. See
+            /// <see cref="RequestModelsAgain(double)"/> for what it is told.
+            /// </summary>
+            public readonly Action<bool, double> RequestedAgain;
+
             private readonly UnityEngine.Object _owner;
             private readonly bool _isOwned;
 
-            public Listener(Action<T> callback, string fetchId = null)
+            public Listener(Action<T> callback, string fetchId = null, Action<bool, double> requestedAgain = null)
             {
                 Callback = callback;
                 FetchId = fetchId;
+                RequestedAgain = requestedAgain;
                 _owner = ListenerOwner.Of(callback);
                 // Resolved once, here: after the owner is destroyed, `_owner == null` can no
                 // longer tell "belongs to a destroyed object" from "belongs to nothing at all".
@@ -81,9 +89,18 @@ namespace HCIKonstanz.Colibri.Synchronization
 
                 _connection.OnMessageReceived += OnServerMessage;
                 _connection.OnConnected += OnConnected;
+                _connection.OnDisconnected += OnDisconnected;
             }
             return _connection;
         }
+
+        /// <summary>
+        /// When this client last noticed that its connection was gone, on SyncTicker's clock
+        /// (<c>Time.unscaledTimeAsDouble</c>); negative infinity before it ever has.
+        /// </summary>
+        private static double _disconnectedAt = double.NegativeInfinity;
+
+        private static void OnDisconnected() => _disconnectedAt = Time.unscaledTimeAsDouble;
 
         /// <summary>
         /// After a reconnect, every model this client holds may be stale: whatever other clients
@@ -114,7 +131,19 @@ namespace HCIKonstanz.Colibri.Synchronization
         /// created, and makes the server forget such a delete: the id is in use again.
         /// </summary>
         /// <remarks>Internal for the EditMode tests, which stand in for a reconnect with it.</remarks>
-        internal static void RequestModelsAgain()
+        internal static void RequestModelsAgain() => RequestModelsAgain(_disconnectedAt);
+
+        /// <summary>
+        /// <see cref="RequestModelsAgain()"/>, and then each SyncBehaviour whose object was asked
+        /// for is told so: whether a request for the whole channel went out as well, and when the
+        /// connection was lost (<paramref name="disconnectedAt"/>, on SyncTicker's clock). The
+        /// answer to the request for the whole channel carries the object too, if the server holds
+        /// it, so it gets two answers then - and both hold what the server had before this client's
+        /// last changes, if those were lost with the connection. See
+        /// <see cref="SyncBehaviour{T}.OnModelUpdate"/>.
+        /// </summary>
+        /// <remarks>Internal for the EditMode tests, which set the time of the outage with it.</remarks>
+        internal static void RequestModelsAgain(double disconnectedAt)
         {
             foreach (var entry in _modelUpdateListeners.ToArray())
             {
@@ -146,6 +175,14 @@ namespace HCIKonstanz.Colibri.Synchronization
                     {
                         SendCommand(channel, "model::request", new JObject { { "id", listener.FetchId }, { "again", true } });
                     }
+                }
+
+                // Only once every request is out is it known whether one for the whole channel
+                // was among them.
+                foreach (var listener in channelListeners)
+                {
+                    if (listener.FetchId != null)
+                        listener.RequestedAgain?.Invoke(requestedAll, disconnectedAt);
                 }
             }
         }
@@ -539,13 +576,16 @@ namespace HCIKonstanz.Colibri.Synchronization
             // The per-channel counts behind the type-mismatch warning, which describe the same
             // listeners.
             ChannelListenerRegistry.Clear();
+
+            // The previous session's outage, on a clock that has gone on running since.
+            _disconnectedAt = double.NegativeInfinity;
         }
 
         // `track` is off for the model channels: they are Colibri's own SyncBehaviour plumbing,
         // they never go through Invoke<T>, and listing them would only bury the channels the
         // application code actually registered.
         private static void AddListener<T>(string channel, Dictionary<string, List<Listener<T>>> listeners, Action<T> listener,
-            bool track = true, string fetchId = null)
+            bool track = true, string fetchId = null, Action<bool, double> requestedAgain = null)
         {
             // Ensures the connection is in the scene and that this class is subscribed to it - on
             // every registration, not only a channel's first. A channel's entry below can outlive
@@ -579,7 +619,7 @@ namespace HCIKonstanz.Colibri.Synchronization
                 }
             }
 
-            channelListeners.Add(new Listener<T>(listener, fetchId));
+            channelListeners.Add(new Listener<T>(listener, fetchId, requestedAgain));
 
             if (track)
                 ChannelListenerRegistry.Add(channel, typeof(T));
@@ -666,8 +706,17 @@ namespace HCIKonstanz.Colibri.Synchronization
         }
 
         public static void AddModelUpdateListener(string channel, Action<JObject> listener, string fetchInitialStateId)
+            => AddModelUpdateListener(channel, listener, fetchInitialStateId, requestedAgain: null);
+
+        /// <summary>
+        /// The overload above, for a SyncBehaviour: <paramref name="requestedAgain"/> is told each
+        /// time the model is asked for again after a reconnect (see
+        /// <see cref="RequestModelsAgain(double)"/>).
+        /// </summary>
+        internal static void AddModelUpdateListener(string channel, Action<JObject> listener, string fetchInitialStateId,
+            Action<bool, double> requestedAgain)
         {
-            AddListener(channel, _modelUpdateListeners, listener, track: false, fetchId: fetchInitialStateId);
+            AddListener(channel, _modelUpdateListeners, listener, track: false, fetchId: fetchInitialStateId, requestedAgain: requestedAgain);
             SendCommand(channel, "model::request", new JObject { { "id", fetchInitialStateId } });
         }
 
@@ -677,10 +726,11 @@ namespace HCIKonstanz.Colibri.Synchronization
         /// carries the model's state already: the request the overload above sends says that this
         /// client has the object in its scene now, or is creating it, and the server lifts the
         /// tombstone of a model of that id deleted a moment ago. After a reconnect the model is
-        /// asked for again like every other one (see <see cref="RequestModelsAgain"/>).
+        /// asked for again like every other one (see <see cref="RequestModelsAgain()"/>).
         /// </summary>
-        internal static void AddModelUpdateListenerWithoutRequest(string channel, Action<JObject> listener, string id)
-            => AddListener(channel, _modelUpdateListeners, listener, track: false, fetchId: id);
+        internal static void AddModelUpdateListenerWithoutRequest(string channel, Action<JObject> listener, string id,
+            Action<bool, double> requestedAgain)
+            => AddListener(channel, _modelUpdateListeners, listener, track: false, fetchId: id, requestedAgain: requestedAgain);
 
         public static void RemoveModelUpdateListener(string channel, Action<JObject> listener) => RemoveListener(channel, _modelUpdateListeners, listener, track: false);
 

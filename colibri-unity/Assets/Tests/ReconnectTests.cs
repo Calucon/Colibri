@@ -296,6 +296,266 @@ namespace HCIKonstanz.Colibri.E2E
         }
 
         /// <summary>
+        /// The other half of asking again: what this client changed in the moment its Wi-Fi dropped.
+        /// That change is written into a link that is already dead, and lost; the client only notices
+        /// when the server's heartbeats stop. The server's answer after the reconnect then holds the
+        /// value from before the change, and was applied: the object went back on the very client
+        /// that had changed it, and every other client kept the old value too - for good, unless the
+        /// member changed again. The answer holds a value this client sent before its last one, so
+        /// the last one was lost: it is kept, and sent again.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator AChangeLostWithTheConnectionIsSentAgainRatherThanUndone()
+        {
+            const string channel = "e2esyncmodel";
+            var spawned = new List<GameObject>();
+            var checker = new TcpPeer();
+            var answers = new List<JObject>();
+            E2ESyncModel model = null;
+            System.Action<JObject> recordAnswers = update =>
+            {
+                if (model != null && (string)update["id"] == model.Id)
+                    answers.Add(update);
+            };
+
+            // Asks for the whole channel, as a SyncBehaviourManager does - again after the reconnect
+            // too, so the model gets two answers then, both from before the change.
+            Sync.AddModelUpdateListener(channel, recordAnswers);
+            try
+            {
+                model = Spawn<E2ESyncModel>(spawned, "changed-at-the-drop");
+                yield return E2EServer.Settle(1.5f);
+
+                model.Label = "before the outage";
+                yield return _peer.Expect(channel, "model::update",
+                    frame => Assert.That((string)TcpPeer.Json(frame)["id"], Is.EqualTo(model.Id)));
+
+                // The link dies in the frame the model changes: the label it had, and the count it
+                // never had before.
+                _proxy.Unplug();
+                model.Label = "changed at the drop";
+                model.Count = 7;
+
+                yield return E2EServer.WaitUntil(() => Swallowed(channel, model.Id).Any(),
+                    "The change was never written into the dead connection");
+                Assert.That((string)Swallowed(channel, model.Id)[0]["label"], Is.EqualTo("changed at the drop"));
+
+                yield return E2EServer.WaitUntil(() => Connection.Status != ConnectionStatus.Connected,
+                    "The client never noticed that its connection had died", 10f);
+                answers.Clear();
+
+                yield return E2EServer.WaitUntil(() => answers.Count >= 2,
+                    "The requests made again after the reconnect were never answered", 20f);
+                Assert.That(answers.Select(a => (string)a["label"]), Is.All.EqualTo("before the outage"),
+                    "Precondition: the server should still hold the label from before the outage");
+
+                // Long enough for the lost change to have gone out again, and for it to go out twice
+                // if it is going to.
+                yield return E2EServer.Settle(1f);
+
+                Assert.That(model.Label, Is.EqualTo("changed at the drop"),
+                    "The answer to the request made again after the reconnect put the label from before the outage back");
+                Assert.That(model.Count, Is.EqualTo(7));
+
+                var sentAgain = SecondSession()
+                    .Where(f => f.Channel == channel && f.Command == "model::update" && (string)TcpPeer.Json(f)["id"] == model.Id)
+                    .Select(f => (JObject)TcpPeer.Json(f))
+                    .ToArray();
+                Assert.That(sentAgain.Length, Is.EqualTo(1),
+                    $"The lost change should go out again once: {string.Join(", ", sentAgain.Select(u => u.ToString(Newtonsoft.Json.Formatting.None)))}");
+                Assert.That((string)sentAgain[0]["label"], Is.EqualTo("changed at the drop"));
+                Assert.That((int)sentAgain[0]["_count"], Is.EqualTo(7), "The member the server never had a value for was not sent again");
+
+                // The peer, connected all along, and the server's copy.
+                yield return _peer.Expect(channel, "model::update",
+                    frame => Assert.That((string)TcpPeer.Json(frame)["label"], Is.EqualTo("changed at the drop")));
+                yield return checker.Connect("lost-change-checker");
+                yield return E2EServer.Settle(0.3f);
+                checker.Send(channel, "model::request", new JObject { { "id", model.Id } });
+                yield return checker.Expect(channel, "model::update", frame =>
+                {
+                    var payload = (JObject)TcpPeer.Json(frame);
+                    Assert.That((string)payload["label"], Is.EqualTo("changed at the drop"), $"The server holds {payload}");
+                    Assert.That((int?)payload["_count"], Is.EqualTo(7), $"The server holds {payload}");
+                });
+            }
+            finally
+            {
+                checker.Dispose();
+                Sync.RemoveModelUpdateListener(channel, recordAnswers);
+
+                // Immediately, while this test's connection is still there: see the tests below.
+                foreach (var gameObject in spawned)
+                {
+                    if (gameObject)
+                        Object.DestroyImmediate(gameObject);
+                }
+            }
+        }
+
+        /// <summary>
+        /// A value the server holds that this client never sent is another client's, set while this
+        /// one was away, and newer than anything this one sent before the outage - a change lost at
+        /// the drop included. It is applied, and nothing goes back.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator AValueAnotherClientSetDuringTheOutageWinsOverOneLostAtTheDrop()
+        {
+            const string channel = "e2esyncmodel";
+            var spawned = new List<GameObject>();
+            var witness = new TcpPeer();
+            var checker = new TcpPeer();
+            var answers = new List<JObject>();
+            E2ESyncModel model = null;
+            System.Action<JObject> recordAnswers = update =>
+            {
+                if (model != null && (string)update["id"] == model.Id)
+                    answers.Add(update);
+            };
+
+            Sync.AddModelUpdateListener(channel, recordAnswers);
+            try
+            {
+                model = Spawn<E2ESyncModel>(spawned, "changed-on-both-sides");
+                yield return E2EServer.Settle(1.5f);
+
+                model.Label = "mine";
+                yield return _peer.Expect(channel, "model::update",
+                    frame => Assert.That((string)TcpPeer.Json(frame)["id"], Is.EqualTo(model.Id)));
+
+                yield return witness.Connect("both-sides-witness");
+                _proxy.HoldNewConnections = true;
+                _proxy.Unplug();
+                model.Label = "mine, lost at the drop";
+
+                yield return E2EServer.WaitUntil(() => Swallowed(channel, model.Id).Any(),
+                    "The change was never written into the dead connection");
+                yield return E2EServer.WaitUntil(() => Connection.Status != ConnectionStatus.Connected,
+                    "The client never noticed that its connection had died", 10f);
+
+                _peer.Send(channel, "model::update", new JObject { { "id", model.Id }, { "label", "theirs" } });
+                yield return witness.Expect(channel, "model::update");
+                answers.Clear();
+                _proxy.HoldNewConnections = false;
+
+                yield return E2EServer.WaitUntil(() => answers.Count >= 2,
+                    "The requests made again after the reconnect were never answered", 20f);
+                yield return E2EServer.Settle(1f);
+
+                Assert.That(model.Label, Is.EqualTo("theirs"), "The other client's change made during the outage was not applied");
+                var sentAgain = SecondSession()
+                    .Where(f => f.Channel == channel && f.Command == "model::update" && (string)TcpPeer.Json(f)["id"] == model.Id)
+                    .Select(f => TcpPeer.Text(f))
+                    .ToArray();
+                Assert.That(sentAgain, Is.Empty, "The client sent its own value over the other client's newer one");
+
+                yield return checker.Connect("both-sides-checker");
+                yield return E2EServer.Settle(0.3f);
+                checker.Send(channel, "model::request", new JObject { { "id", model.Id } });
+                yield return checker.Expect(channel, "model::update",
+                    frame => Assert.That((string)TcpPeer.Json(frame)["label"], Is.EqualTo("theirs")));
+            }
+            finally
+            {
+                witness.Dispose();
+                checker.Dispose();
+                Sync.RemoveModelUpdateListener(channel, recordAnswers);
+
+                foreach (var gameObject in spawned)
+                {
+                    if (gameObject)
+                        Object.DestroyImmediate(gameObject);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Values sent long before the outage do not count: another client setting the member back
+        /// to one of them while this one was away would look exactly like a lost change, and be
+        /// undone. The answer is applied, as it always was.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator AnAnswerAboutChangesFromLongBeforeTheOutageIsAppliedAsItWas()
+        {
+            const string channel = "e2esyncmodel";
+            var spawned = new List<GameObject>();
+            var witness = new TcpPeer();
+            var checker = new TcpPeer();
+            var answers = new List<JObject>();
+            var window = SentValues.WindowSeconds;
+            E2ESyncModel model = null;
+            System.Action<JObject> recordAnswers = update =>
+            {
+                if (model != null && (string)update["id"] == model.Id)
+                    answers.Add(update);
+            };
+
+            // "Long before" is the window, shortened here from its ten seconds.
+            SentValues.WindowSeconds = 1;
+            Sync.AddModelUpdateListener(channel, recordAnswers);
+            try
+            {
+                model = Spawn<E2ESyncModel>(spawned, "changed-long-before");
+                yield return E2EServer.Settle(1.5f);
+
+                model.Label = "first";
+                yield return _peer.Expect(channel, "model::update",
+                    frame => Assert.That((string)TcpPeer.Json(frame)["label"], Is.EqualTo("first")));
+                model.Label = "second";
+                model.Count = 3;
+                yield return _peer.Expect(channel, "model::update",
+                    frame => Assert.That((string)TcpPeer.Json(frame)["label"], Is.EqualTo("second")));
+
+                // Longer ago than the window when the connection goes.
+                yield return E2EServer.Settle(1.5f);
+
+                yield return witness.Connect("long-before-witness");
+                _proxy.HoldNewConnections = true;
+                yield return CutTheConnection();
+
+                _peer.Send(channel, "model::update", new JObject { { "id", model.Id }, { "label", "first" } });
+                yield return witness.Expect(channel, "model::update");
+                answers.Clear();
+                _proxy.HoldNewConnections = false;
+
+                yield return E2EServer.WaitUntil(() => answers.Count >= 2,
+                    "The requests made again after the reconnect were never answered", 20f);
+                yield return E2EServer.Settle(1f);
+
+                Assert.That(model.Label, Is.EqualTo("first"), "The other client's change made during the outage was not applied");
+                Assert.That(model.Count, Is.EqualTo(3));
+                var sentAgain = SecondSession()
+                    .Where(f => f.Channel == channel && f.Command == "model::update" && (string)TcpPeer.Json(f)["id"] == model.Id)
+                    .Select(f => TcpPeer.Text(f))
+                    .ToArray();
+                Assert.That(sentAgain, Is.Empty, "A value sent long before the outage was taken for a lost one, and sent over the other client's");
+
+                yield return checker.Connect("long-before-checker");
+                yield return E2EServer.Settle(0.3f);
+                checker.Send(channel, "model::request", new JObject { { "id", model.Id } });
+                yield return checker.Expect(channel, "model::update", frame =>
+                {
+                    var payload = (JObject)TcpPeer.Json(frame);
+                    Assert.That((string)payload["label"], Is.EqualTo("first"), $"The server holds {payload}");
+                    Assert.That((int?)payload["_count"], Is.EqualTo(3), $"The server holds {payload}");
+                });
+            }
+            finally
+            {
+                SentValues.WindowSeconds = window;
+                witness.Dispose();
+                checker.Dispose();
+                Sync.RemoveModelUpdateListener(channel, recordAnswers);
+
+                foreach (var gameObject in spawned)
+                {
+                    if (gameObject)
+                        Object.DestroyImmediate(gameObject);
+                }
+            }
+        }
+
+        /// <summary>
         /// The same through SyncBehaviourManager, which builds objects from what the server sends:
         /// the model asked for again after a reconnect is one this client already has, and it has
         /// to update that object rather than build a second one.
@@ -703,6 +963,14 @@ namespace HCIKonstanz.Colibri.E2E
         /// <summary>What the client sent on the connection after the first reconnect, in order.</summary>
         private List<Networking.Protocol.DecodedFrame> SecondSession()
             => _proxy.FromClient.Where(sent => sent.Session == 2).Select(sent => sent.Frame).ToList();
+
+        /// <summary>The updates of one model the client wrote into the connection after <see cref="TcpProxy.Unplug"/>.</summary>
+        private JObject[] Swallowed(string channel, string id)
+            => _proxy.Swallowed
+                .Where(sent => sent.Frame.Channel == channel && sent.Frame.Command == "model::update")
+                .Select(sent => TcpPeer.Json(sent.Frame) as JObject)
+                .Where(update => update != null && (string)update["id"] == id)
+                .ToArray();
 
         private static T Spawn<T>(List<GameObject> spawned, string name) where T : Component
         {

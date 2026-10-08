@@ -336,6 +336,20 @@ namespace HCIKonstanz.Colibri.Synchronization
         private bool _wasActive;
         private bool _sendAtOnce;
 
+        // Parallel to _attributeList, each made when its member is first sent: the values the member
+        // sent most recently. Null for an object that has never sent anything.
+        private SentValues[] _sentValues;
+
+        // How many answers to the request made again after the last reconnect are still to come,
+        // at most, and how recently a value must have been sent to count against them, on
+        // SyncTicker's clock. See OnRequestedAgain.
+        private int _answersAwaited;
+        private double _judgeSince;
+
+        // Parallel to _attributeList: the members sent again for those answers. Both answers hold
+        // the same stale value, and one send is enough.
+        private bool[] _resent;
+
         private bool _isQuitting;
         private bool _hasReceivedDestroyCommand;
         private bool _hasReceivedFirstUpdate;
@@ -399,14 +413,14 @@ namespace HCIKonstanz.Colibri.Synchronization
             // had sent before the delete then created it afresh on the server and on every client.
             if (RemoteModelBeingBuilt != null && RemoteModelBeingBuilt == Id)
             {
-                Sync.AddModelUpdateListenerWithoutRequest(Channel, OnModelUpdate, Id);
+                Sync.AddModelUpdateListenerWithoutRequest(Channel, OnModelUpdate, Id, OnRequestedAgain);
             }
             else
             {
                 // In this client's scene again, so updates for it are no longer ones that were on
                 // their way when this client deleted it.
                 LocallyDeletedModels.Forget(Channel, Id);
-                Sync.AddModelUpdateListener(Channel, OnModelUpdate, Id);
+                Sync.AddModelUpdateListener(Channel, OnModelUpdate, Id, OnRequestedAgain);
             }
             Sync.AddModelDeleteListener(Channel, OnModelDelete);
 
@@ -571,7 +585,30 @@ namespace HCIKonstanz.Colibri.Synchronization
 
             var update = _nextUpdate;
             _nextUpdate = null;
+            RememberSent(update, now);
             return update;
+        }
+
+        /// <summary>
+        /// Keeps the values of an update that is going out, for the answers to the request made
+        /// again after a reconnect. See <see cref="KeepsLocalValue"/>.
+        /// </summary>
+        private void RememberSent(JObject update, double now)
+        {
+            // Walked by hand: Properties() would allocate an enumerator for every update sent.
+            for (var token = update.First; token != null; token = token.Next)
+            {
+                var property = (JProperty)token;
+                if (!_syncedAttributes.TryGetValue(property.Name, out var attribute))
+                    continue;
+
+                _sentValues ??= new SentValues[_attributeList.Count];
+                var sent = _sentValues[attribute.Index] ??= new SentValues();
+
+                // Every other value is made afresh for each update, but a JObject member's is the
+                // application's own object, which it may change in place later.
+                sent.Remember(attribute.PropertyType == typeof(JObject) ? property.Value.DeepClone() : property.Value, now);
+            }
         }
 
 
@@ -588,11 +625,30 @@ namespace HCIKonstanz.Colibri.Synchronization
                 var isFirstUpdate = !_hasReceivedFirstUpdate;
                 _hasReceivedFirstUpdate = true;
 
+                // An answer to the request made again after the last reconnect, as far as can be
+                // told: on the wire an answer is an update like any other. Expected are one to the
+                // request for this object and, if the server holds the model, one to a request for
+                // the whole channel (see Sync.RequestModelsAgain); a bare { id } says it does not,
+                // and is the last. An update another client happens to send in between is taken for
+                // one of them, and judged the same way: it is still applied, unless it holds one of
+                // this object's own recent values.
+                var isAnswer = _answersAwaited > 0;
+                if (isAnswer)
+                    _answersAwaited = data.Count == 1 ? 0 : _answersAwaited - 1;
+
                 foreach (var prop in data)
                 {
-                    if (prop.Key != "id")
-                        UpdateAttribute(prop.Key, prop.Value);
+                    if (prop.Key == "id")
+                        continue;
+
+                    if (isAnswer && KeepsLocalValue(prop.Key, prop.Value))
+                        continue;
+
+                    UpdateAttribute(prop.Key, prop.Value);
                 }
+
+                if (isAnswer && data.Count > 1)
+                    SendAgainWhatTheAnswerLacks(data);
 
                 _isReady.TrySetResult(true);
 
@@ -647,6 +703,110 @@ namespace HCIKonstanz.Colibri.Synchronization
                 if (IsSynced(attribute.MemberName))
                     AddUpdate(attribute, attribute.GetBoxed(self));
             }
+        }
+
+
+        /*
+         *  The answers to the request made again after a reconnect.
+         *
+         *  A change made the moment the connection dropped was written into a dead link and lost,
+         *  and the server answers with what it held before that change. Applied like any other
+         *  update, the answer put the object back on the very client that had changed it, and
+         *  every other client kept the old value too. So each member of an answer is compared with
+         *  the values that member sent recently (SentValues):
+         *
+         *  - the value sent last: it arrived, and there is nothing to do;
+         *  - a value sent before that: what followed it was lost. The local value stays and goes
+         *    out again, as an ordinary update under the send-rate limit;
+         *  - any other value: another client set it while this one was away, and it is applied,
+         *    as it always was. So is a member that was not sent recently at all.
+         *
+         *  An object that has never sent anything - one a manager built from another client's
+         *  update, say - applies its answers exactly as before, and so does every object once its
+         *  answers are in: an update from another client is applied as it arrives.
+         */
+
+        /// <summary>Told by Sync that the model has just been asked for again after a reconnect.</summary>
+        /// <param name="requestedWholeChannel">
+        /// Whether the whole channel was asked for as well, whose answer carries this model too if
+        /// the server holds it.
+        /// </param>
+        /// <param name="disconnectedAt">When this client noticed the outage, on SyncTicker's clock.</param>
+        private void OnRequestedAgain(bool requestedWholeChannel, double disconnectedAt)
+        {
+            _answersAwaited = requestedWholeChannel ? 2 : 1;
+            _judgeSince = disconnectedAt - SentValues.WindowSeconds;
+
+            if (_resent != null)
+                Array.Clear(_resent, 0, _resent.Length);
+        }
+
+        /// <summary>
+        /// Judges one member of an answer. True when the server's value is not to be applied: the
+        /// value this object sent last arrived, or what it sent after the server's value was lost,
+        /// and goes out again now.
+        /// </summary>
+        private bool KeepsLocalValue(string name, JToken serverValue)
+        {
+            if (_sentValues == null || !_syncedAttributes.TryGetValue(name, out var attribute))
+                return false;
+
+            // A member that is switched off reads a placeholder, which is no value to keep or send.
+            var sent = _sentValues[attribute.Index];
+            if (sent == null || !IsSynced(attribute.MemberName))
+                return false;
+
+            switch (sent.Judge(serverValue, _judgeSince))
+            {
+                case SentValues.Verdict.Arrived:
+                    return true;
+
+                case SentValues.Verdict.Lost:
+                    SendAgain(attribute);
+                    return true;
+
+                default:
+                    return false;
+            }
+        }
+
+        /// <summary>
+        /// The members an answer does not hold at all although they were sent recently: the first
+        /// value such a member ever sent is the one that was lost, and nobody has set it since.
+        /// </summary>
+        private void SendAgainWhatTheAnswerLacks(JObject answer)
+        {
+            if (_sentValues == null)
+                return;
+
+            for (var i = 0; i < _sentValues.Length; i++)
+            {
+                var sent = _sentValues[i];
+                var attribute = _attributeList[i];
+
+                if (sent != null && sent.HasSentSince(_judgeSince) && !answer.ContainsKey(attribute.Name) && IsSynced(attribute.MemberName))
+                    SendAgain(attribute);
+            }
+        }
+
+        /// <summary>
+        /// Sends the member's local value again, once per reconnect: the server's answer to the
+        /// request for the whole channel and to the one for this object hold the same stale value.
+        /// </summary>
+        private void SendAgain(SyncedAttribute attribute)
+        {
+            if (_hasReceivedDestroyCommand)
+                return;
+
+            _resent ??= new bool[_attributeList.Count];
+            if (_resent[attribute.Index])
+                return;
+            _resent[attribute.Index] = true;
+
+            // Latched, as the poll would have: what goes out now is not a change to report again.
+            var self = this as T;
+            _trackers?[attribute.Index].Latch(self);
+            AddUpdate(attribute, attribute.GetBoxed(self));
         }
 
 
@@ -743,6 +903,11 @@ namespace HCIKonstanz.Colibri.Synchronization
             // inactive; Awake then latches every current value anyway.
             if (_trackers != null)
                 _trackers[attribute.Index].Latch(self);
+
+            // The member holds another client's value now, and what it sent before that says
+            // nothing about the server any more: an answer after the next reconnect holding one of
+            // those values again was set back to it by someone else.
+            _sentValues?[attribute.Index]?.Clear();
 
             // A local change of the same member that is still waiting to be sent - polled earlier
             // this frame, or held by the send-rate limit - has just been overwritten here by the

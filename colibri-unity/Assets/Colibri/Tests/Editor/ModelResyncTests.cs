@@ -77,6 +77,12 @@ namespace HCIKonstanz.Colibri.Tests
         private static JObject Sent<T>(SyncBehaviour<T> model) where T : SyncBehaviour<T>
             => model.TakeDueUpdate(100.0, interval: 0);
 
+        /// <summary>Whatever the model would send at <paramref name="time"/>, on SyncTicker's clock.</summary>
+        private static JObject SentAt<T>(SyncBehaviour<T> model, double time) where T : SyncBehaviour<T>
+            => model.TakeDueUpdate(time, interval: 0);
+
+        private static void Poll(object model) => ((SyncTicker.ITickable)model).PollChanges();
+
         private static string[] Members(JObject update)
             => update.Properties().Select(p => p.Name).OrderBy(n => n).ToArray();
 
@@ -159,6 +165,239 @@ namespace HCIKonstanz.Colibri.Tests
             Assert.That(sent, Is.Not.Null);
             Assert.That(Members(sent), Does.Not.Contain("position"), $"The unticked position went out: {sent}");
             Assert.That(Members(sent), Does.Contain("rotation"));
+        }
+
+
+        /*
+         *  An answer holding what the server had before this client's last changes, which were
+         *  written into the connection as it died and lost. See SentValuesTests for the comparison.
+         */
+
+        /// <summary>The model, answered once and with a label that reached the server at 100.</summary>
+        private ResyncModel SpawnModelThatSent(string label)
+        {
+            var model = SpawnModel();
+            model.OnModelUpdate(Bare(model.Id));
+
+            model.Label = label;
+            Poll(model);
+            Assert.That((string)SentAt(model, 100)["label"], Is.EqualTo(label), "Precondition: the change goes out");
+            return model;
+        }
+
+        /// <summary>A change polled and sent at <paramref name="time"/>, into a connection that may be dead.</summary>
+        private static void Change(ResyncModel model, string label, double time)
+        {
+            model.Label = label;
+            Poll(model);
+            Assert.That(SentAt(model, time), Is.Not.Null, "Precondition: the change goes out");
+        }
+
+        private static JObject Answer(ResyncModel model, string label, int count = 0)
+            => new JObject { { "id", model.Id }, { "label", label }, { "count", count } };
+
+        /// <summary>The bug: the answer put the value from before the outage back, and nothing went out.</summary>
+        [Test]
+        public void AValueLostWithTheConnectionIsKeptAndSentAgain()
+        {
+            var model = SpawnModelThatSent("before");
+            Change(model, "lost at the drop", 101);
+
+            Sync.RequestModelsAgain(disconnectedAt: 103);
+            model.OnModelUpdate(Answer(model, "before"));
+
+            Assert.That(model.Label, Is.EqualTo("lost at the drop"), "The answer put the value from before the outage back");
+            var sent = SentAt(model, 104);
+            Assert.That(sent, Is.Not.Null, "The value that was lost was not sent again");
+            Assert.That(Members(sent), Is.EqualTo(new[] { "id", "label" }), $"Only what was lost goes out again: {sent}");
+            Assert.That((string)sent["label"], Is.EqualTo("lost at the drop"));
+        }
+
+        /// <summary>The trace that found it: a SyncTransform moved at the drop, answered in the server's own number format.</summary>
+        [Test]
+        public void APositionLostWithTheConnectionIsKeptAndSentAgain()
+        {
+            var sync = Spawn<ResyncTransform>("resync-transform");
+            sync.Wake();
+            sync.OnModelUpdate(Bare(sync.Id));
+
+            sync.transform.position = new Vector3(0, -3, 0);
+            Poll(sync);
+            Assert.That(SentAt(sync, 100), Is.Not.Null);
+            sync.transform.position = new Vector3(7, 0, 7);
+            Poll(sync);
+            Assert.That(SentAt(sync, 101), Is.Not.Null);
+
+            Sync.RequestModelsAgain(disconnectedAt: 103);
+            sync.OnModelUpdate(JObject.Parse($"{{\"id\":\"{sync.Id}\",\"active\":true,\"position\":[0,-3,0],\"scale\":[1,1,1]}}"));
+
+            Assert.That(sync.transform.position, Is.EqualTo(new Vector3(7, 0, 7)), "The answer put the position from before the outage back");
+            var sent = SentAt(sync, 104);
+            Assert.That(sent, Is.Not.Null, "The position that was lost was not sent again");
+            Assert.That(Members(sent), Is.EqualTo(new[] { "id", "position" }), $"Only what was lost goes out again: {sent}");
+            Assert.That(sent["position"].ToVector3(), Is.EqualTo(new Vector3(7, 0, 7)));
+        }
+
+        /// <summary>
+        /// The other side: what the server holds is no value of this client's, so another client set
+        /// it while this one was away - and that is the newer change.
+        /// </summary>
+        [Test]
+        public void AValueAnotherClientSetDuringTheOutageIsApplied()
+        {
+            var model = SpawnModelThatSent("mine");
+            Change(model, "mine, lost at the drop", 101);
+
+            Sync.RequestModelsAgain(disconnectedAt: 103);
+            model.OnModelUpdate(Answer(model, "theirs"));
+
+            Assert.That(model.Label, Is.EqualTo("theirs"));
+            Assert.That(SentAt(model, 104), Is.Null);
+        }
+
+        /// <summary>
+        /// What was sent last arrived: nothing to do, and nothing to undo either - a change made here
+        /// since then stays and goes out as usual.
+        /// </summary>
+        [Test]
+        public void AnAnswerHoldingTheValueSentLastLeavesTheObjectAlone()
+        {
+            var model = SpawnModelThatSent("mine");
+
+            model.Label = "changed since";
+            Sync.RequestModelsAgain(disconnectedAt: 103);
+            model.OnModelUpdate(Answer(model, "mine"));
+
+            Assert.That(model.Label, Is.EqualTo("changed since"));
+            Poll(model);
+            var sent = SentAt(model, 104);
+            Assert.That(Members(sent), Is.EqualTo(new[] { "id", "label" }));
+            Assert.That((string)sent["label"], Is.EqualTo("changed since"));
+        }
+
+        /// <summary>
+        /// A member whose first value ever was the one lost: the answer does not hold it at all, and
+        /// nobody has set it, so it goes out again, together with what else was lost.
+        /// </summary>
+        [Test]
+        public void AMemberTheServerNeverGotIsSentAgainWithTheRest()
+        {
+            var model = SpawnModelThatSent("before");
+            model.Label = "lost at the drop";
+            model.Count = 5;
+            Poll(model);
+            Assert.That(SentAt(model, 101), Is.Not.Null);
+
+            Sync.RequestModelsAgain(disconnectedAt: 103);
+            model.OnModelUpdate(new JObject { { "id", model.Id }, { "label", "before" } });
+
+            var sent = SentAt(model, 104);
+            Assert.That(sent, Is.Not.Null);
+            Assert.That(Members(sent), Is.EqualTo(new[] { "count", "id", "label" }), $"All that was lost should go out as one update: {sent}");
+            Assert.That((int)sent["count"], Is.EqualTo(5));
+            Assert.That((string)sent["label"], Is.EqualTo("lost at the drop"));
+        }
+
+        /// <summary>
+        /// A manager on the channel asks for every model on it again too, and the answer to that
+        /// carries this model as well: two answers, both from before the lost change. Both are
+        /// judged, the lost value goes out once - and then the next update is applied as it
+        /// arrives, even one holding a value this object sent before.
+        /// </summary>
+        [Test]
+        public void BothAnswersAreJudgedWhenTheWholeChannelIsAskedForToo()
+        {
+            var model = SpawnModelThatSent("before");
+            System.Action<JObject> manager = _ => { };
+            Sync.AddModelUpdateListener(model.Channel, manager);
+            try
+            {
+                Change(model, "lost at the drop", 101);
+                Sync.RequestModelsAgain(disconnectedAt: 103);
+
+                model.OnModelUpdate(Answer(model, "before"));
+                Assert.That((string)SentAt(model, 104)["label"], Is.EqualTo("lost at the drop"));
+
+                model.OnModelUpdate(Answer(model, "before"));
+                Assert.That(model.Label, Is.EqualTo("lost at the drop"), "The second answer put the value from before the outage back");
+                Assert.That(SentAt(model, 105), Is.Null, "The second answer sent the lost value a second time");
+
+                model.OnModelUpdate(Answer(model, "before"));
+                Assert.That(model.Label, Is.EqualTo("before"), "An update after the answers should be applied as it arrives");
+                Assert.That(SentAt(model, 106), Is.Null);
+            }
+            finally
+            {
+                Sync.RemoveModelUpdateListener(model.Channel, manager);
+            }
+        }
+
+        [Test]
+        public void AnUpdateAfterTheAnswerIsAppliedAsItArrives()
+        {
+            var model = SpawnModelThatSent("before");
+            Change(model, "lost at the drop", 101);
+            Sync.RequestModelsAgain(disconnectedAt: 103);
+            model.OnModelUpdate(Answer(model, "before"));
+            Assert.That(SentAt(model, 104), Is.Not.Null);
+
+            model.OnModelUpdate(Answer(model, "before"));
+
+            Assert.That(model.Label, Is.EqualTo("before"));
+            Assert.That(SentAt(model, 105), Is.Null);
+        }
+
+        /// <summary>
+        /// An object that never sent anything - one a manager built from another client's update -
+        /// takes the answer as it always did.
+        /// </summary>
+        [Test]
+        public void AnObjectThatNeverSentAnythingAppliesTheAnswer()
+        {
+            var model = SpawnModel();
+            model.OnModelUpdate(Answer(model, "theirs"));
+
+            Sync.RequestModelsAgain(disconnectedAt: 103);
+            model.OnModelUpdate(Answer(model, "theirs, changed offline", 4));
+
+            Assert.That(model.Label, Is.EqualTo("theirs, changed offline"));
+            Assert.That(model.Count, Is.EqualTo(4));
+            Assert.That(SentAt(model, 104), Is.Null);
+        }
+
+        /// <summary>
+        /// Changed long before the outage: another client setting the member back to one of those
+        /// values during the outage looks the same as a lost change, so they do not count.
+        /// </summary>
+        [Test]
+        public void ValuesSentLongBeforeTheOutageDoNotCount()
+        {
+            var model = SpawnModelThatSent("first");
+            Change(model, "second", 101);
+
+            Sync.RequestModelsAgain(disconnectedAt: 101 + SentValues.WindowSeconds + 1);
+            model.OnModelUpdate(Answer(model, "first"));
+
+            Assert.That(model.Label, Is.EqualTo("first"));
+            Assert.That(SentAt(model, 200), Is.Null);
+        }
+
+        /// <summary>
+        /// Once the member has taken another client's value, what it sent before says nothing about
+        /// the server: set back to one of those values during the outage, it is that client's change.
+        /// </summary>
+        [Test]
+        public void ValuesSentBeforeTakingAnotherClientsValueDoNotCount()
+        {
+            var model = SpawnModelThatSent("first");
+            Change(model, "second", 101);
+            model.OnModelUpdate(Answer(model, "theirs"));
+
+            Sync.RequestModelsAgain(disconnectedAt: 103);
+            model.OnModelUpdate(Answer(model, "first"));
+
+            Assert.That(model.Label, Is.EqualTo("first"));
+            Assert.That(SentAt(model, 104), Is.Null);
         }
     }
 }
