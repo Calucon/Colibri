@@ -111,7 +111,7 @@ Upon installation, a configuration window should show up:
 - Choose a unique *app name*. Though a server supports multiple clients, data is only synchronized between clients with identical *app names*!
 - Unique means that nobody else on the server uses it. Everyone with the same app name is in one app: they see each other's objects and messages, and since every update goes to every other client in the app, the server's work grows with the square of their number. The window warns about names many people use: `myAppName`, which the web client's samples use, and names such as `test`, `demo`, `app` or `colibri`.
 - To adjust the Colibri Configuration you can reopen the window in Unity under "Window" -> "Colibri Configuration" 
-- All changes are saved to `Resources/ColibriConfig`
+- *Save Config* saves the configuration to `Resources/ColibriConfig`. A valid change takes effect at once, so Play mode uses it even before you save. A change the window marks as an error, such as port 0, is neither used nor saved: the configuration keeps its last valid settings until you correct it.
 
 ### Advanced Configuration
 
@@ -163,7 +163,8 @@ call the first one 'Server supports SSL/TLS', without the question mark.
 - **Self-signed:** paste the server's fingerprint into *Server certificate SHA-256*
   (`ColibriConfig.ServerCertificateSha256`). Then only that certificate is accepted, trusted or
   not, and its names are ignored, so a certificate for an IP address works too. Case and colons do
-  not matter; anything but 64 hexadecimal digits (or nothing) is not saved.
+  not matter; anything but 64 hexadecimal digits (or nothing) is an error in the Setup window, and
+  is neither used nor saved.
 - **Self-signed, without a fingerprint:** *Allow self-signed certificate*
   (`ColibriConfig.AllowSelfSignedCertificate`) accepts a certificate the device does not trust.
   The connection is still encrypted, but nothing checks that it goes to your server, and the
