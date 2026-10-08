@@ -1305,7 +1305,9 @@ Editor.
 **`[Sync]` derives from `PreserveAttribute`.** A `[Sync]` member is only ever reached through
 reflection, so nothing references it, which is exactly what managed code stripping removes above
 the *Minimal* level. The Unity linker honours subclasses of `PreserveAttribute`, and on a property
-it keeps the getter and setter too.
+it keeps the getter and setter too. That keeps the members but not the attribute itself: the linker
+leaves Preserve attributes out of what it writes, so from *Medium* up the members lost their
+`[Sync]`. `SyncAttribute` therefore also carries `[RequireAttributeUsages]`.
 
 **Registration in `Awake`/`OnDestroy`, not `OnEnable`/`OnDisable`.** The base class already declares
 `Awake` and `OnDestroy` as `protected virtual`, so subclasses that shadow them get a compiler

@@ -383,12 +383,15 @@ rationale, migration steps, and what the Editor verification did and did not cov
   2022.3 project with the Android target active failed to compile (1.3.1 included). The
   subscription is now limited to 2023.1 and newer; a refused microphone permission is still logged
   on 2022.3.
-- **Android build check.** With the Android target active, Colibri warns in the console after every
-  domain reload, and *Window → Colibri Configuration* gets an *Android / Meta Quest* section with a
-  one-click fix per problem: *Internet Access* left at *Auto*, which may leave the INTERNET
-  permission out of the build, and *Allow downloads over HTTP* blocking plain HTTP to a server that
-  is not `localhost` while SSL is off, which fails every `Store` call on the headset. The Setup
-  window's body now scrolls.
+- **Build settings check.** Colibri warns about two player settings that break a build without a
+  word, and *Window → Colibri Configuration* offers a one-click fix for each: *Internet Access* left
+  at *Auto* (Android only), which may leave the INTERNET permission out of the build, and *Allow
+  downloads over HTTP* blocking plain HTTP to a server that is not `localhost` while SSL is off,
+  which fails every `Store` call in the built app on every player platform, Windows and Linux
+  players included. The warnings appear at the first editor update after a domain reload, so also
+  while the editor is in the background (Unity holds `EditorApplication.delayCall` until the editor
+  has focus), and an `IPreprocessBuildWithReport` logs them again at the start of every build.
+  Neither stops a build. The Setup window's body now scrolls.
 - **No expression trees on IL2CPP.** The `[Sync]` accessors were built with
   `Expression.Compile()` (in 1.3.1 too), which IL2CPP does not compile but interprets: slowly, and
   for value types through generic code IL2CPP may not have generated. Under `ENABLE_IL2CPP` a
@@ -398,8 +401,11 @@ rationale, migration steps, and what the Editor verification did and did not cov
   cannot be built is reported per member instead of escaping from `Awake`.
 - **`[Sync]` members survive managed code stripping.** Nothing references them except through
   reflection, which is exactly what stripping removes above the *Minimal* level. `SyncAttribute`
-  now derives from `UnityEngine.Scripting.PreserveAttribute`, which the linker honours, and on a
-  property it keeps the getter and setter too.
+  derives from `UnityEngine.Scripting.PreserveAttribute`, which keeps the members (on a property,
+  its getter and setter too), and carries `[RequireAttributeUsages]`: the linker treats Preserve
+  attributes as its own markers and leaves them out of what it writes, so from *Medium* up the
+  members survived without their `[Sync]` and nothing synced. Checked in stripped IL2CPP players at
+  Low, Medium and High.
 
 ## Getting started
 
@@ -576,7 +582,7 @@ otherwise spend on their prototype, so:
   throws; `OutboxTests` the outage queue's folding rules and that queued messages arrive in order
   over a real loopback socket; `RemoteLoggingTests` logging from many threads at once and the
   1000-line bound; `SyncAccessorTests` the IL2CPP accessor path, run in the Editor;
-  `SyncStrippingTests` that `[Sync]` is a `PreserveAttribute`; `WireNameTests` the wire names under
+  `SyncStrippingTests` that `[Sync]` is a `PreserveAttribute` and carries `[RequireAttributeUsages]`; `WireNameTests` the wire names under
   a Turkish culture; `AndroidSettingsCheckTests` the Android build check; and
   `VoiceServerAddressTests` the choice of the server's IPv4 address. `FrameCodecTests` also covers
   the colon at either end of a handshake field.
