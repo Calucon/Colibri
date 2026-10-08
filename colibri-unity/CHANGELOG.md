@@ -285,21 +285,23 @@ rationale, migration steps, and what the Editor verification did and did not cov
   one it sent last, the member keeps its value and sends it again, once, as an ordinary update. That
   includes the value it held at that point, so an object switched off at the drop after a minute
   switched on stays off. The value sent last means nothing to do, and any other value is another
-  client's change during the outage, which is applied. If the connection drops again before the
-  answers are in, the next reconnect still counts from the first outage, and a value sent again and
-  lost in that second drop is recognised by the answer's value. After every reconnect, `Sync` sends
-  one more `model::request` after the others, on the channel `colibri::reconnect`, whose answer
-  tells when the answers are over; the server needs no change.
-  Objects that never sent anything are not affected. See
+  client's change during the outage, which is applied, unless the member changed after the requests
+  went out: the server reads that change after all of the answers, so the member keeps its value and
+  sends it again. If the connection drops again before the answers are in, the next reconnect still
+  counts from the first outage, and a value sent again and lost in that second drop is recognised by
+  the answer's value. After every reconnect, `Sync` sends one more `model::request` after the
+  others, on the channel `colibri::reconnect`, whose answer tells when the answers are over; the
+  server needs no change. Objects that never sent anything are not affected. See
   [Connection and outages](docs/guide.md#connection-and-outages).
 - **An object destroyed as the Wi-Fi drops is now deleted for everyone after the reconnect.** Its
   `model::delete` went into the dead connection, and nothing sent it again, so the server and every
   other client kept the object. When the outage is noticed, the deletes made since the client last
   heard from the server, or in the second before, now go out again on the next connection, ahead of
-  the requests made again, and once more if the connection drops again before the answers to those
-  are in. A delete 60 s old or more is not sent again. When the server was last heard from is noted
-  on Unity's clock, since the system clock that times the heartbeats may be set, or run on while a
-  headset sleeps.
+  the requests made again, unless 60 s old or more. If the connection drops again before the answers
+  to those are in, they go out once more, however old, with the deletes made since the outage was
+  noticed. When the server was last heard from is taken from the system clock that times the
+  heartbeats, but kept between the frame that sees it and the one before, on Unity's clock: the
+  system clock may be set, or run on while a headset sleeps, and a frame may take seconds.
 - **A large message on a slow link no longer gets a healthy connection dropped.** The heartbeat
   echo waited for the socket while a long write held it, so the receive loop stopped and the 2 s
   heartbeat watchdog dropped the connection, again and again, since the message stayed first in
@@ -678,7 +680,8 @@ otherwise spend on their prototype, so:
   are not taken for answers. `SentValuesTests` cover which values are kept and which count,
   including the one a member held 10 s before the outage, and how they are compared as JSON on the
   wire, and `ModelResyncTests` what an object does with them, also when the connection drops again
-  before the answers or before the value sent again arrives. `ProtocolMismatchDetectionTests` walk the client through scripted
+  before the answers or before the value sent again arrives, and when the object changes right
+  after the reconnect. `ProtocolMismatchDetectionTests` walk the client through scripted
   sessions against a `FakeColibriServer` that hangs up, stays silent, heartbeats or refuses: the
   growing backoff, the suspected mismatch and what clears it, the watchdog before the first frame,
   a refusal in the first frame, and the pairing of `OnConnected` and `OnDisconnected`.
