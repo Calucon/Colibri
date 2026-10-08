@@ -664,19 +664,22 @@ values from the scene.
 
 A change made as the Wi-Fi drops goes into a connection that is already dead, and is lost: the
 client notices only 2 s later, when the server's heartbeats stop. The answer then holds the value
-from before that change. So each `[Sync]` member remembers the last 8 values it sent, and until all
-the answers are in, everything that arrives for the object, other clients' updates included, is
-compared with those sent in the 10 s before the outage was noticed, or since. The value sent last
-means it arrived. One sent before it means the change after it was lost: the member keeps its
-value and sends it again, once. Any other value is another client's change during the outage and is
-applied, as is everything for an object that has never sent anything. This goes by values, so two
-cases come out wrong:
+from before that change. So each `[Sync]` member remembers the last 8 values it sent, and the one
+it held before them: the last one dropped from those 8, or the one it last took from another
+client. Until all the answers are in, everything that arrives for the object, other clients'
+updates included, is compared with the values the member held from 10 s before the outage was
+noticed: those it sent since, and the one it held at that point, such as `true` for an object
+switched on a minute ago. The value sent last means it arrived. An earlier one means the change
+after it was lost: the member keeps its value and sends it again, once. A value the member did not
+hold is another client's change during the outage and is applied, as is everything for a member
+that sent nothing in those 10 s and for an object that has never sent anything. This goes by
+values, so some cases come out wrong:
 
-- A lost change is recognised only by an earlier value the member sent in those 10 s, and since it
-  last took one from another client. Otherwise the answer undoes it, and a member whose very first
-  value was lost is not sent again.
-- Another client that sets a member back during the outage, to a value this client sent in those
+- Another client that sets a member back during the outage, to a value this client held in those
   10 s, is undone: this client's value replaces it.
+- A member that sent more than 8 changes between the drop and the moment it was noticed, such as
+  an object being moved, takes the answer: it goes back to its value at the drop.
+- A member whose very first value was lost held nothing before it, and is not sent again.
 
 The server remembers a delete for `MODEL_TOMBSTONE_SECONDS`, 10 minutes by default. An object
 that another client deleted longer ago than that, while this client was away, is answered with
