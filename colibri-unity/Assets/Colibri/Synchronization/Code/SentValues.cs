@@ -7,9 +7,9 @@ using UnityEngine;
 namespace HCIKonstanz.Colibri.Synchronization
 {
     /// <summary>
-    /// The values one [Sync] member of one object sent most recently, kept for a single decision:
-    /// what to do with that member in the server's answers to the requests made again after a
-    /// reconnect (see <see cref="Judge"/> and Sync.ReconnectRound).
+    /// The values one [Sync] member of one object sent most recently, and the one it held before
+    /// them, kept for a single decision: what to do with that member in the server's answers to
+    /// the requests made again after a reconnect (see <see cref="Judge"/> and Sync.ReconnectRound).
     /// </summary>
     /// <remarks>
     /// <para>
@@ -23,8 +23,17 @@ namespace HCIKonstanz.Colibri.Synchronization
     /// </para>
     /// <para>
     /// The answer alone cannot tell such a lost change from one another client made during the
-    /// outage. What this client sent can: a value it sent before a newer one says the newer one
-    /// never arrived, while a value it never sent was set by someone else.
+    /// outage. What the member held can: a value it held before the one it sent last says that
+    /// one never arrived, while a value it did not hold was set by someone else.
+    /// </para>
+    /// <para>
+    /// What it held is what it sent in the window (<see cref="WindowSeconds"/>), and the value it
+    /// held when the window began. The latter is all there is for an object that sat still: one
+    /// switched on a minute ago and switched off at the drop sent only <c>false</c> in the window,
+    /// and the answer's <c>true</c> is the change lost, not another client's. It is the newest
+    /// value sent before the window if one is kept, and otherwise the value held before the oldest
+    /// one kept: one pushed out of the ring, or the one last taken from elsewhere, such as the
+    /// server's state when the object first came up.
     /// </para>
     /// </remarks>
     internal sealed class SentValues
@@ -38,13 +47,13 @@ namespace HCIKonstanz.Colibri.Synchronization
             Arrived,
 
             /// <summary>
-            /// The server holds a value sent before the last one: what was sent after it never
-            /// arrived. The local value stays, and goes out again.
+            /// The server holds a value the member held before the one it sent last: what was sent
+            /// after it never arrived. The local value stays, and goes out again.
             /// </summary>
             Lost,
 
             /// <summary>
-            /// The server holds a value this object never sent recently: another client set it
+            /// The server holds a value this member did not hold recently: another client set it
             /// while this one was away, and the answer is applied.
             /// </summary>
             ChangedElsewhere,
@@ -57,14 +66,22 @@ namespace HCIKonstanz.Colibri.Synchronization
 
         /// <summary>
         /// How long before the connection was lost a value may have been sent and still count. A
-        /// value sent long before cannot tell a lost change from another client's: a member that
-        /// went from A to B a minute ago and that another client has set back to A during the
-        /// outage would look as if B had been lost, and the other client's change would be undone.
+        /// member that sent nothing in that time has nothing to judge. A value sent long before
+        /// cannot tell a lost change from another client's: a member that went from A to B a minute
+        /// ago and that another client has set back to A during the outage would look as if B had
+        /// been lost, and the other client's change would be undone.
         /// </summary>
         /// <remarks>
+        /// <para>
+        /// For a member that did send in the window, that is what happens, and is accepted: another
+        /// client that sets it back during the outage, to a value it held in the window or when the
+        /// window began, is undone.
+        /// </para>
+        /// <para>
         /// Counted back from the moment this client noticed the outage, not from the answer, so a
         /// change lost at the drop is still recognised after an outage of any length. Settable only
         /// so the test suite can shorten it.
+        /// </para>
         /// </remarks>
         internal static double WindowSeconds = DefaultWindowSeconds;
 
@@ -73,10 +90,16 @@ namespace HCIKonstanz.Colibri.Synchronization
         private static void ResetWindow() => WindowSeconds = DefaultWindowSeconds;
 
         // A ring buffer: _newest is the slot of the latest value, the ones before it are older.
-        private readonly JToken[] _values = new JToken[Capacity];
-        private readonly double[] _times = new double[Capacity];
+        // Made at the first send, since every member that takes a value from elsewhere has a
+        // SentValues too, and on an object only ever moved by other clients none of them sends.
+        private JToken[] _values;
+        private double[] _times;
         private int _count;
         private int _newest = -1;
+
+        // The value the member held before the oldest one in the ring: the last one pushed out of
+        // it, or the one last taken from elsewhere. Null when there is neither.
+        private JToken _heldBefore;
 
         /// <param name="value">
         /// The value as it went into the update. It must not change afterwards; the caller copies
@@ -85,23 +108,38 @@ namespace HCIKonstanz.Colibri.Synchronization
         /// <param name="time">When it was sent, on <see cref="SyncTicker"/>'s clock.</param>
         internal void Remember(JToken value, double time)
         {
+            if (_values == null)
+            {
+                _values = new JToken[Capacity];
+                _times = new double[Capacity];
+            }
+
             _newest = (_newest + 1) % Capacity;
-            _values[_newest] = value;
-            _times[_newest] = time;
 
             if (_count < Capacity)
                 _count++;
+            else
+                _heldBefore = _values[_newest];
+
+            _values[_newest] = value;
+            _times[_newest] = time;
         }
 
         /// <summary>
-        /// Forgets everything: for when the member takes a value from elsewhere, after which what
-        /// this object sent before says nothing about the server any more.
+        /// For when the member takes <paramref name="value"/> from elsewhere. What this object sent
+        /// before says nothing about the server any more, and is forgotten. The value taken is
+        /// what the member holds until its next send, and is kept as the value before that send.
         /// </summary>
-        internal void Clear()
+        /// <param name="value">
+        /// The value as it arrived. It must not change afterwards; the caller copies one that may.
+        /// </param>
+        internal void TookFromElsewhere(JToken value)
         {
-            Array.Clear(_values, 0, _values.Length);
+            if (_values != null)
+                Array.Clear(_values, 0, _values.Length);
             _count = 0;
             _newest = -1;
+            _heldBefore = value;
         }
 
         /// <summary>Whether a value was sent at or after <paramref name="since"/>.</summary>
@@ -109,7 +147,8 @@ namespace HCIKonstanz.Colibri.Synchronization
 
         /// <summary>
         /// Compares the server's value with the values sent at or after <paramref name="since"/>,
-        /// newest first, as they read on the wire.
+        /// newest first, and then with the one the member held when that time began, as they read
+        /// on the wire.
         /// </summary>
         internal Verdict Judge(JToken serverValue, double since)
         {
@@ -120,16 +159,22 @@ namespace HCIKonstanz.Colibri.Synchronization
             for (var age = 0; age < _count; age++)
             {
                 var slot = (_newest - age + Capacity) % Capacity;
+                var held = WireEquals(ToWireForm(_values[slot]), server);
 
-                // Sent in order, so everything past this one is older still.
+                // Sent before the window: the value held when it began. Sent in order, so
+                // everything past this one is older still and does not count.
                 if (_times[slot] < since)
-                    break;
+                    return held ? Verdict.Lost : Verdict.ChangedElsewhere;
 
-                if (WireEquals(ToWireForm(_values[slot]), server))
+                if (held)
                     return age == 0 ? Verdict.Arrived : Verdict.Lost;
             }
 
-            return Verdict.ChangedElsewhere;
+            // Everything kept was sent in the window, so the value from before the oldest of
+            // them was held in the window too, or when it began.
+            return _heldBefore != null && WireEquals(ToWireForm(_heldBefore), server)
+                ? Verdict.Lost
+                : Verdict.ChangedElsewhere;
         }
 
         /// <summary>

@@ -66,42 +66,69 @@ namespace HCIKonstanz.Colibri.Tests
 
 
         /*
-         *  Which sends count
+         *  Which values count
          */
 
+        /// <summary>
+        /// The ninth value sent pushes out the first, which stays known as the value held before
+        /// the oldest one kept. The tenth pushes that out for good.
+        /// </summary>
         [Test]
-        public void OnlyTheLastEightValuesAreKept()
+        public void TheLastEightValuesAndTheOneBeforeThemAreKept()
         {
             var sent = Sent("v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8");
 
             Assert.That(sent.Judge(Wire("\"v1\""), Always), Is.EqualTo(SentValues.Verdict.Lost));
+            Assert.That(sent.Judge(Wire("\"v0\""), Always), Is.EqualTo(SentValues.Verdict.Lost),
+                "The value pushed out of the ring was held before the oldest one kept");
+
+            sent.Remember("v9", 109);
+            Assert.That(sent.Judge(Wire("\"v1\""), Always), Is.EqualTo(SentValues.Verdict.Lost));
             Assert.That(sent.Judge(Wire("\"v0\""), Always), Is.EqualTo(SentValues.Verdict.ChangedElsewhere),
-                "The ninth value sent should have pushed out the first");
+                "The tenth value sent should have pushed out the first for good");
         }
 
         /// <summary>
-        /// A value sent long before cannot tell a lost change from another client's: set back to
-        /// it by someone else, it would look as if everything after it had been lost.
+        /// Of what was sent before the window, only the newest counts: the value the member held
+        /// when the window began. One sent before that cannot tell a lost change from another
+        /// client's: set back to it by someone else, it would look as if everything after it had
+        /// been lost.
         /// </summary>
         [Test]
-        public void ValuesSentBeforeTheWindowDoNotCount()
+        public void OfTheValuesSentBeforeTheWindowOnlyTheOneHeldWhenItBeganCounts()
         {
-            var sent = Sent("a", "b"); // at 100 and 101
+            var sent = Sent("a", "b", "c"); // at 100, 101 and 102
 
-            Assert.That(sent.Judge(Wire("\"a\""), since: 100.5), Is.EqualTo(SentValues.Verdict.ChangedElsewhere),
-                "Only b was sent recently, so a was set by someone else");
-            Assert.That(sent.Judge(Wire("\"b\""), since: 100.5), Is.EqualTo(SentValues.Verdict.Arrived));
-            Assert.That(sent.Judge(Wire("\"b\""), since: 102), Is.EqualTo(SentValues.Verdict.NotSentRecently));
+            Assert.That(sent.Judge(Wire("\"c\""), since: 101.5), Is.EqualTo(SentValues.Verdict.Arrived));
+            Assert.That(sent.Judge(Wire("\"b\""), since: 101.5), Is.EqualTo(SentValues.Verdict.Lost),
+                "b was held when the window began, so c was lost");
+            Assert.That(sent.Judge(Wire("\"a\""), since: 101.5), Is.EqualTo(SentValues.Verdict.ChangedElsewhere),
+                "a had been replaced before the window began, so someone else set it");
+            Assert.That(sent.Judge(Wire("\"c\""), since: 103), Is.EqualTo(SentValues.Verdict.NotSentRecently));
         }
 
+        /// <summary>
+        /// Once the member has taken a value from elsewhere, what it sent before says nothing about
+        /// the server any more. The value it took does: the server held it, and holding it still
+        /// after the member's next change means that change was lost.
+        /// </summary>
         [Test]
-        public void ClearingForgetsEverySend()
+        public void TakingAValueForgetsWhatWasSentAndKeepsTheValueTaken()
         {
             var sent = Sent("a", "b");
-            sent.Clear();
+            sent.TookFromElsewhere(Wire("\"theirs\""));
 
-            Assert.That(sent.Judge(Wire("\"a\""), Always), Is.EqualTo(SentValues.Verdict.NotSentRecently));
+            Assert.That(sent.Judge(Wire("\"theirs\""), Always), Is.EqualTo(SentValues.Verdict.NotSentRecently),
+                "Nothing was sent since the value was taken");
             Assert.That(sent.HasSentSince(Always), Is.False);
+
+            sent.Remember("mine", 200);
+            Assert.That(sent.Judge(Wire("\"mine\""), since: 190), Is.EqualTo(SentValues.Verdict.Arrived));
+            Assert.That(sent.Judge(Wire("\"theirs\""), since: 190), Is.EqualTo(SentValues.Verdict.Lost),
+                "The value taken long before was still held when the window began");
+            Assert.That(sent.Judge(Wire("\"a\""), since: 190), Is.EqualTo(SentValues.Verdict.ChangedElsewhere),
+                "A value sent before the one taken was set back by someone else");
+            Assert.That(sent.Judge(Wire("\"b\""), Always), Is.EqualTo(SentValues.Verdict.ChangedElsewhere));
         }
 
 

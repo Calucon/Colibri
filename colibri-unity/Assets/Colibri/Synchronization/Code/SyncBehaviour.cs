@@ -336,8 +336,9 @@ namespace HCIKonstanz.Colibri.Synchronization
         private bool _wasActive;
         private bool _sendAtOnce;
 
-        // Parallel to _attributeList, each made when its member is first sent: the values the member
-        // sent most recently. Null for an object that has never sent anything.
+        // Parallel to _attributeList, each made when its member is first sent or first takes a value
+        // from elsewhere: the values the member sent most recently, and the one it held before
+        // them. Null for an object that has done neither.
         private SentValues[] _sentValues;
 
         // The round of answers to the requests made again after the last reconnect, while they are
@@ -601,13 +602,16 @@ namespace HCIKonstanz.Colibri.Synchronization
                 if (!_syncedAttributes.TryGetValue(property.Name, out var attribute))
                     continue;
 
-                _sentValues ??= new SentValues[_attributeList.Count];
-                var sent = _sentValues[attribute.Index] ??= new SentValues();
-
                 // Every other value is made afresh for each update, but a JObject member's is the
                 // application's own object, which it may change in place later.
-                sent.Remember(attribute.PropertyType == typeof(JObject) ? property.Value.DeepClone() : property.Value, now);
+                SentValuesOf(attribute).Remember(attribute.PropertyType == typeof(JObject) ? property.Value.DeepClone() : property.Value, now);
             }
+        }
+
+        private SentValues SentValuesOf(SyncedAttribute attribute)
+        {
+            _sentValues ??= new SentValues[_attributeList.Count];
+            return _sentValues[attribute.Index] ??= new SentValues();
         }
 
 
@@ -705,17 +709,22 @@ namespace HCIKonstanz.Colibri.Synchronization
          *  and the server answers with what it held before that change. Applied like any other
          *  update, the answer put the object back on the very client that had changed it, and
          *  every other client kept the old value too. So each member of what arrives in the round
-         *  (see Sync.ReconnectRound) is compared with the values that member sent recently
-         *  (SentValues):
+         *  (see Sync.ReconnectRound) is compared with the values that member sent recently, and
+         *  with the one it held before them (SentValues):
          *
          *  - the value sent last: it arrived, and there is nothing to do;
-         *  - a value sent before that: what followed it was lost. The local value stays and goes
-         *    out again, as an ordinary update under the send-rate limit, and the member takes
-         *    nothing more from the round: whatever else the round brings for it, the server had
-         *    before it read the value sent again, which then replaces it there and on every other
-         *    client;
+         *  - a value sent before that, or the one held before them: what followed it was lost. The
+         *    local value stays and goes out again, as an ordinary update under the send-rate
+         *    limit, and the member takes nothing more from the round: whatever else the round
+         *    brings for it, the server had before it read the value sent again, which then
+         *    replaces it there and on every other client;
          *  - any other value: another client set it while this one was away, and it is applied,
          *    as it always was. So is a member that was not sent recently at all.
+         *
+         *  The value held before them is what an object that sat still before the drop has to go
+         *  by: switched off at the drop after a minute switched on, it sent nothing but the lost
+         *  `false` in the window. Another client that sets a member back during the outage, to one
+         *  of those values, is undone in turn: that looks the same, and is accepted.
          *
          *  A member missing from what arrives is left alone. An update from another client
          *  carries only what that client changed, so a missing member says nothing about what
@@ -884,8 +893,11 @@ namespace HCIKonstanz.Colibri.Synchronization
 
             // The member holds another client's value now, and what it sent before that says
             // nothing about the server any more: an answer after the next reconnect holding one of
-            // those values again was set back to it by someone else.
-            _sentValues?[attribute.Index]?.Clear();
+            // those values again was set back to it by someone else. The value it holds now does:
+            // the server holds it too, so an answer holding it after this member's next change
+            // says that change was lost. A JObject is the application's own object from here on,
+            // and is copied, as in RememberSent.
+            SentValuesOf(attribute).TookFromElsewhere(attribute.PropertyType == typeof(JObject) ? value.DeepClone() : value);
 
             // A local change of the same member that is still waiting to be sent - polled earlier
             // this frame, or held by the send-rate limit - has just been overwritten here by the
