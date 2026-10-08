@@ -52,8 +52,10 @@ Colibri component from 1.x.
   `model::request { id, again: true }`, so a model another client deleted during the outage
   (within `MODEL_TOMBSTONE_SECONDS`) is dropped here instead of being sent back to everyone.
   This needs colibri-server 2.0.0 with its model tombstones.
-- The README says that `registerModel` takes the server's copy of an existing id, that registered
-  models are sent again after a reconnect, and that REST keys are URL-encoded.
+- The README is now a short page: requirements, install, a minimal example and the most common
+  problems. The full reference moved to [docs/guide.md](docs/guide.md), which says that
+  `registerModel` takes the server's copy of an existing id, that registered models are sent
+  again after a reconnect, and that REST keys are URL-encoded.
 - For maintainers: the `publish` npm script is now `release`. Under its old name npm also ran
   it after every `npm publish`, which tried to publish a second time and failed.
 
