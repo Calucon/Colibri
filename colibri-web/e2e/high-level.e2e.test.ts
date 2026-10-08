@@ -352,7 +352,7 @@ describe('RemoteLogger high-level API', () => {
         try {
             // The server's ClientLogger consumes 'log' channel messages for
             // its own admin UI and never relays them to other clients, so
-            // receipt isn't observable from here — that's covered by the
+            // receipt isn't observable from here; that's covered by the
             // mocked unit suite. Here we just assert the wire path doesn't
             // throw and the connection stays healthy afterwards.
             expect(() => {
