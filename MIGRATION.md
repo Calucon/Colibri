@@ -24,8 +24,8 @@ also the server's console output, so `docker logs` for a container) says what is
 - **A 1.x Unity client** cannot even send the server a handshake it can read, so the server cannot
   check its version or tell it anything. It recognizes the 1.x wire format instead and logs a
   warning that names the client's address and says to upgrade the Colibri Unity package
-  (`de.uni.kn.colibri`) to 2.x. A 1.x client retries about once a second, so the warning is repeated
-  at most once a minute per address. The client is never told why; it just keeps reconnecting.
+  (`de.uni.kn.colibri`) to 2.x, at most once a minute per address. The client is never told why: a
+  1.3.1 client typically shows no error at all, so the server's log is where to look.
 - **A client whose handshake the server can read, but whose protocol version it does not speak**,
   is refused: the server logs the client and both versions, and tells the client why on the
   `colibri` channel. A 2.0.0 Unity client logs that, shows it in `Window → Colibri Status`, and

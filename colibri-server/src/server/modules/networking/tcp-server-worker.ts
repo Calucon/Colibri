@@ -758,7 +758,7 @@ export class TCPServerWorker extends WorkerService {
         this.logWarning(
             `Refusing a connection from ${client.address}: it looks like a Colibri 1.x client (it speaks the 1.x wire format), ` +
                 `but this server speaks protocol v${PROTOCOL_VERSION}. Upgrade the Colibri Unity package (de.uni.kn.colibri) ` +
-                'in that app to 2.x. A 1.x client retries about once a second; this is logged at most once a minute per address.'
+                'in that app to 2.x. This is logged at most once a minute per address.'
         );
     }
 
