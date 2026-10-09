@@ -207,7 +207,8 @@ namespace HCIKonstanz.Colibri.E2E
         /// <summary>
         /// The other way round: a client without TLS against a server with it. The server hangs up
         /// on it without a frame, which the client can only suspect the cause of; the suspicion now
-        /// names TLS as well as the protocol version.
+        /// names TLS as well as the protocol version, and a proxy whose backend is down, which hangs
+        /// up the same way.
         /// </summary>
         [UnityTest]
         public IEnumerator APlainClientAgainstATlsServerIsToldToTickTheTlsSetting()
@@ -227,6 +228,7 @@ namespace HCIKonstanz.Colibri.E2E
                 "Three sessions against a TLS server without TLS raised no suspicion", 20f);
 
             Assert.That(Connection.SuspectedProtocolMismatch, Does.Contain("tick 'Server supports SSL/TLS'"));
+            Assert.That(Connection.SuspectedProtocolMismatch, Does.Contain("If a proxy or port forwarding is in front of the server"));
             Assert.That(Connection.UsesTls, Is.False);
         }
 
