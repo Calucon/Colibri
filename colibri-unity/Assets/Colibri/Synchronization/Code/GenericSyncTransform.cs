@@ -148,7 +148,12 @@ namespace HCIKonstanz.Colibri.Synchronization
         {
             if (rigidbody)
             {
-                if (PhysicsAuthority)
+                // Simulated only once the server's state is known. A placed object whose
+                // PhysicsAuthority is ticked has it on every client until the first answer, and on
+                // a client that joined later it fell from its spot in the scene meanwhile. That
+                // counted as a change made before the answer, and went out over the position the
+                // other clients shared.
+                if (PhysicsAuthority && KnowsServerState)
                     rigidbody.isKinematic = isKinematic;
                 else
                     rigidbody.isKinematic = true;

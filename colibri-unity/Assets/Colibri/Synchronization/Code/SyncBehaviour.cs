@@ -364,6 +364,9 @@ namespace HCIKonstanz.Colibri.Synchronization
         // this client's is kept over it.
         private bool _isBuiltFromUpdate;
 
+        // Given its id in Awake, a fresh one: the server holds nothing for the object.
+        private bool _hasMadeItsId;
+
         private readonly TaskCompletionSource<bool> _isReady = new TaskCompletionSource<bool>();
 
         private int _tickIndex = -1;
@@ -374,6 +377,12 @@ namespace HCIKonstanz.Colibri.Synchronization
         /// switched off since its scene loaded. The change trackers are made there.
         /// </summary>
         internal bool HasAwoken => _trackers != null;
+
+        /// <summary>
+        /// Whether this client knows what the server holds for the object: its first answer has
+        /// arrived, or the object made its id in Awake, so the server holds nothing for it yet.
+        /// </summary>
+        private protected bool KnowsServerState => _hasReceivedFirstUpdate || _hasMadeItsId;
 
         /// <summary>The id whose answer ends the round this object is in; null when it is in none. For the EditMode tests.</summary>
         internal string RoundEndMarker => _round == null || _round.IsOver ? null : _round.EndMarkerId;
@@ -403,7 +412,10 @@ namespace HCIKonstanz.Colibri.Synchronization
             // Awake only ever runs on an object in a scene - a placed or an instantiated one,
             // never a prefab asset - so there is no prefab case to exclude here.
             if (String.IsNullOrEmpty(Id))
+            {
                 Id = Guid.NewGuid().ToString();
+                _hasMadeItsId = true;
+            }
 
             var self = this as T;
             _trackers = new IChangeTracker[_attributeList.Count];
