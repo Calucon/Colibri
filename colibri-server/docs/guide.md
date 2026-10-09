@@ -151,7 +151,7 @@ Unusable TLS files also stop the server ([Startup errors](#startup-errors)).
 
 With `TLS_CERT` and `TLS_KEY` set, the TCP port (9012) accepts only TLS and the web port (9011) serves
 only HTTPS and WSS, admin UI included, both with one certificate. Without them, both stay
-unencrypted. There is no mixed mode, so every client must use TLS:
+unencrypted. There is no mixed mode. Every client must use TLS:
 
 - **Unity:** tick *Server supports SSL/TLS?* in the Colibri configuration
   ([Unity guide](../../colibri-unity/docs/guide.md#tls)).
@@ -160,17 +160,20 @@ unencrypted. There is no mixed mode, so every client must use TLS:
   answer, not redirected.
 
 Frames and protocol version are unchanged inside TLS ([protocol](protocol.md#tls)). TLS does not
-authenticate clients: anyone who can reach the ports can still join any app. Voice (UDP) stays
+authenticate clients. Anyone who can reach the ports can still join any app. Voice (UDP) stays
 unencrypted.
 
 ### Enabling TLS
 
-Set `TLS_CERT` to the PEM file of the certificate, followed by its chain (Let's Encrypt:
-`fullchain.pem`), and `TLS_KEY` to the PEM file of its private key, without a passphrase (Let's
-Encrypt: `privkey.pem`). Set both or neither, as absolute paths. Relative paths resolve from
-`dist/server`, like `DATA_ROOT`. RSA and EC certificates both work. The server does not create
-certificates. Use one from a certificate authority such as Let's Encrypt or your institution, or a
-[self-signed one](#a-self-signed-certificate).
+| Name | Content | Let's Encrypt file |
+| --- | --- | --- |
+| `TLS_CERT` | PEM certificate, followed by its chain | `fullchain.pem` |
+| `TLS_KEY` | PEM private key of that certificate, without a passphrase | `privkey.pem` |
+
+Set both or neither, as absolute paths. Relative paths resolve from `dist/server`, like `DATA_ROOT`.
+RSA and EC certificates both work. The server does not create certificates. Use one from a
+certificate authority such as Let's Encrypt or your institution, or a
+[self-signed one](#self-signed-certificate).
 
 At startup the log shows `Web server listening on 0.0.0.0:9011, HTTPS and WSS only`,
 `Starting Colibri TCP server on 0.0.0.0:9012, TLS only` and the certificate:
@@ -181,10 +184,11 @@ TLS is on, with the certificate in /srv/colibri/certs/fullchain.pem and the key 
 
 A Unity app can pin the fingerprint as *Server certificate SHA-256*. Case and colons are ignored
 there. A self-issued certificate shows as `self-signed`, e.g. openssl's default, a server-only one from
-PowerShell's `New-SelfSignedCertificate`, or colibri-unity's test certificate. The line then says how
-a Unity app and a browser can accept it. A certificate from an authority shows `issued by <issuer>`.
+PowerShell's `New-SelfSignedCertificate`, or colibri-unity's test certificate. For these, the line
+adds how a Unity app and a browser can accept it. A certificate from an authority shows
+`issued by <issuer>`.
 
-### A self-signed certificate
+### Self-signed certificate
 
 ```sh
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -keyout privkey.pem -out fullchain.pem -days 3650 -subj "/CN=colibri.example.org" -addext "subjectAltName=DNS:colibri.example.org,IP:192.0.2.10"
@@ -195,7 +199,7 @@ RSA, use `-newkey rsa:2048` instead of `-newkey ec -pkeyopt ec_paramgen_curve:pr
 Windows ships openssl in `usr/bin`. The certificate is valid for 10 years.
 
 Unity apps accept it by fingerprint ([Unity guide](../../colibri-unity/docs/guide.md#tls)). A browser
-must trust it once: open `https://<host>:9011` and accept it, or install it.
+must trust it once. Open `https://<host>:9011` and accept it, or install it.
 
 ### TLS with Docker
 
@@ -211,7 +215,7 @@ must trust it once: open `https://<host>:9011` and accept it, or install it.
 - **Mount the directory, not the two files.** A single-file bind mount stays on the file it found at
   start and misses a renewal that replaces it.
 - **uid 1000 must be able to read the key.** The server runs as the image's `node` user. openssl
-  creates `privkey.pem` readable by its owner only. If that is not uid 1000:
+  creates `privkey.pem` readable by its owner only. If the owner is not uid 1000, run
   `sudo chown 1000 certs/privkey.pem`.
 - **Let's Encrypt:** `live/` holds symbolic links into `../../archive`, which resolve only with all of
   `/etc/letsencrypt` mounted, and `privkey.pem` is readable by root only. Copy both files with a
@@ -251,18 +255,18 @@ the fix.
 | `Cannot read TLS_CERT (<path>): ...` or `TLS_KEY` | Missing, a directory, or not readable for the server's uid | Name a PEM file the server can read |
 | `TLS_CERT (<path>) holds no certificate the server can use ...` | Not a PEM certificate, e.g. swapped with the key | Point `TLS_CERT` at the certificate |
 | `TLS_KEY (<path>) holds no private key the server can use ...` | Not a PEM private key | Point `TLS_KEY` at the key |
-| `TLS_KEY (<path>) is not the private key of the certificate in TLS_CERT ...` | Key of another certificate, also an RSA key with an EC certificate or the reverse, which OpenSSL alone accepts and then fails every handshake | Use the key that belongs to the certificate |
+| `TLS_KEY (<path>) is not the private key of the certificate in TLS_CERT ...` | Key of another certificate, including an RSA key with an EC certificate or the reverse. OpenSSL accepts such a pair and then fails every handshake. | Use the key that belongs to the certificate |
 | `TLS_KEY (<path>) is protected by a passphrase ...` | The key has a passphrase | `openssl pkey -in <protected key> -out <key>` |
 | `TLS_CERT (<path>) and TLS_KEY (<path>) cannot serve TLS together: ...` | OpenSSL rejects the pair for another reason | See the OpenSSL error in the message |
 
-### TLS in the log
+### TLS log messages
 
 | Message | Cause | Fix |
 | --- | --- | --- |
 | WARN `Refusing a connection from <address> (Unity client '<name>', app '<app>'): it does not use TLS ...` | *Server supports SSL/TLS?* not ticked | Tick it |
 | WARN `Refusing a connection from <address>: it looks like a Colibri 1.x client, which cannot use TLS ...` | Colibri 1.x client on the TLS port | Upgrade the Unity package to 2.x and tick *Server supports SSL/TLS?* |
 | WARN `Refusing a connection from <address>: it starts a TLS handshake, but this server's TCP port does not use TLS ...` | *Server supports SSL/TLS?* ticked, server without TLS | Untick it, or enable TLS |
-| INFO `TLS handshake with <address> failed: ...` | Gives the reason. If the client refused the certificate or hung up during the handshake, as many clients do to refuse one, it adds what to check. | See the message |
+| INFO `TLS handshake with <address> failed: ...` | The client refused the certificate, closed the connection during the handshake (a common way to refuse one), or timed out | Follow the certificate hint in the message |
 | WARN `TLS_CERT or TLS_KEY has changed, but cannot be used: ... Still serving the certificate with SHA-256 fingerprint ...` | Incomplete or broken renewal | See [Renewal](#renewal) |
 
 Refusals and failed handshakes are logged at most once a minute per address, repeats at debug level.
@@ -271,13 +275,13 @@ Refusals and failed handshakes are logged at most once a minute per address, rep
 
 TLS can instead terminate in an existing reverse proxy, with `TLS_CERT` and `TLS_KEY` unset. For the
 TCP port, use nginx's `stream` module with `listen 9012 ssl`, or a Traefik TCP router with TLS.
-Colibri needs no changes, but then sees every client at the proxy's address, in the log and in the
-per-address limits on warnings.
+Colibri needs no changes. The log and the per-address warning limits then show every client at the
+proxy's address.
 
 ### Performance
 
-TLS compared with unencrypted, on a shared 4-core Linux host with Node 24, with 30 to 60 Unity-like
-clients sending 10 objects each at 20 to 30 Hz, and as many web clients:
+Cost of TLS compared with unencrypted, measured on a shared 4-core Linux host with Node 24, with 30
+to 60 Unity-like clients sending 10 objects each at 20 to 30 Hz, and as many web clients:
 
 - **Bytes:** about +15% from Unity to the server (29 bytes per TLS 1.2 record, frames of about 190
   bytes), +11% from the server to Unity, +3 to 4% on WSS.
