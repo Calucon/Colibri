@@ -444,7 +444,8 @@ The object asks the server for that state when it registers, in `Awake`, and the
 round trip later, or once the connection is up. A member changed in between (in `Start`, in an
 `OnConnected` handler, or right after entering Play mode) keeps its value: it replaces the server's
 value here, on the server and on every other client. Every other member takes the server's value, so
-values from the scene or the prefab are never sent over it. A script that moves the object in
+values from the scene or the prefab are not sent over it (in a model script of your own, see
+[SyncBehaviour](#syncbehaviour) on `Awake`). A script that moves the object in
 `Start` therefore moves it for everyone each time a client starts; leave starting positions to the
 scene.
 
@@ -515,6 +516,7 @@ By the way: `SyncTransform` is also a `SyncBehaviour`. What it says above about 
 ```c#
 protected override void Awake()
 {
+    // set up what your [Sync] getters read, such as a cached component
     base.Awake();
     // your code
 }
@@ -529,6 +531,11 @@ On an object placed in the scene or created on this client, a `[Sync]` member se
 [SyncTransform](#synctransform)). Set initial values before `base.Awake()`, or in the Inspector, to
 have the object take the server's state instead. A copy a manager builds from another client's
 update takes the values in that update, whatever its `Awake` sets.
+
+`base.Awake()` reads every `[Sync]` member once, and the server's first answer compares each member
+with that value, so whatever a getter reads has to be set up before `base.Awake()`. A getter that
+reads a component cached after it returns its fallback there and the real value later. That counts
+as a change too: each client that starts sends its own value over the server's.
 
 Limitations:
 
