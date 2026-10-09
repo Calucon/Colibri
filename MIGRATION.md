@@ -50,8 +50,8 @@ with a 2.0 server. A 2.0 server logs every client still on 1.x ([upgrade order](
 
 **All components**
 
-- [ ] Read [Behaviour changes that will not fail to compile](#behaviour-changes-that-will-not-fail-to-compile)
-- [ ] Go through [After upgrading, check these](#after-upgrading-check-these)
+- [ ] Read [Behaviour changes that still compile](#behaviour-changes-that-still-compile)
+- [ ] Do the [post-upgrade checks](#post-upgrade-checks)
 
 ---
 
@@ -393,207 +393,231 @@ TLS is optional in 2.0. To turn it on, set `TLS_CERT` and `TLS_KEY` on the serve
 
 ---
 
-## Behaviour changes that will not fail to compile
+## Behaviour changes that still compile
 
-These are the ones to watch: your project builds, and then behaves differently.
+### Send rate of synced objects (Unity)
 
-**Synced objects send at most 30 updates a second.** In 1.x a `SyncTransform`, like any other
-`SyncBehaviour<T>`, sent an update in every frame in which one of its values changed: 72 to 120 a
-second for each moving object on a headset, a rate that one server and one Wi-Fi network cannot
-sustain for dozens of headsets. Each synced object now sends at most *Max Send Rate* updates a
-second, 30 by default, projects configured with 1.x included.
+Each synced object sends at most *Max Send Rate* updates a second, 30 by default, also in projects
+configured with 1.x. In 1.x, every `SyncBehaviour<T>`, `SyncTransform` included, sent an update in
+every frame in which a value changed: 72 to 120 a second per moving object on a headset, too many
+for one server and one Wi-Fi network with dozens of headsets.
 
-- The first change after a quiet spell goes out at once. Later changes within the interval are
-  merged, and their latest values go out when it is up, so only the values in between are skipped.
-- Switching an object off or on, and destroying it, go out at once.
-- Other clients therefore see a moving object take 30 steps a second rather than one per frame.
-- *Window → Colibri Configuration → Optional Config → Max Send Rate* sets the limit,
-  `SyncSettings.MaxSendRate` changes it from code for the running app, and `0` brings back the 1.x
+- The first change after a quiet spell is sent at once. Later changes within the interval are
+  merged, and their latest values are sent when it ends. Only the values in between are skipped.
+- Switching an object off or on, and destroying it, are sent at once.
+- Other clients see a moving object take 30 steps a second instead of one per frame.
+- *Window → Colibri Configuration → Optional Config → Max Send Rate* sets the limit.
+  `SyncSettings.MaxSendRate` changes it from code for the running app. `0` restores the 1.x
   behaviour. `Sync.Send` is not limited.
 
-**Strings finally round-trip.** 1.x wrote string payloads *unquoted*, which is not valid JSON, so
-the server fell back to a different reader. A Unity `Sync.Send(channel, "hello")` and a web client's
-version of the same message did not arrive identically. Both now go out as JSON. If you had a
-workaround for that asymmetry, it is now the bug. The `log` channel is the deliberate exception and
-still carries raw text, because the admin UI reads it as a string.
+### String payloads
 
-**Colours cross between Unity and the web in both directions.** Unity writes `#RRGGBBAA`;
-colibri-web's `sendColor` writes `[r, g, b, a]` when given an array. Unity used to throw an
-`InvalidCastException` on the array form, out of the frame's single dispatch loop, taking every
-message queued behind it that frame with it. It now accepts both, and so does colibri-web (see
-[colour callbacks](#breaking-colour-callbacks-get-a-colorvalue)).
+1.x wrote string payloads *unquoted*, which is not valid JSON. The server read them with a different
+parser, so a Unity `Sync.Send(channel, "hello")` and the same message from a web client arrived
+differently. Both are now sent as JSON. Remove any workaround for that difference. The `log` channel
+is the deliberate exception and still carries raw text, because the admin UI reads it as a string.
 
-**Integers from Unity reach web clients.** Unity distinguishes `int` from `float` and tags the
-message accordingly, so `Sync.Send(channel, 5)` arrives as `broadcast::int`. `receiveNumber` only
-listened for `broadcast::float` and dropped every one of them in silence. It now listens for both.
+### Colours between Unity and web
 
-**`Store` gives up after 10 seconds.** `UnityWebRequest` defaults to no timeout at all, so a wrong
-server address left `Get`/`Put`/`Delete` outstanding forever: no result, no error, nothing in the
-console. Calls that used to hang now fail, and say what failed, at which URL, with the HTTP status.
+Unity writes `#RRGGBBAA`. colibri-web's `sendColor` writes `[r, g, b, a]` when given an array. Unity
+used to throw an `InvalidCastException` on the array form inside the frame's single dispatch loop,
+which lost every message queued behind it in that frame. Unity now accepts both forms, as does
+colibri-web (see [colour callbacks](#breaking-colour-callbacks-get-a-colorvalue)).
 
-**The store takes any JSON value.** 1.x answered `400` to anything but an object or an array, and
-`413` above 100 kB. A plain number, string, boolean or `null` is now stored too (Unity's
-`Store.Put("score", 42)`, colibri-web's `setRestObject('note', 'text')`), up to 5 MiB.
+### Integers from Unity
 
-**Unity's `Store` converts with Newtonsoft JSON instead of `JsonUtility`.**
+Unity tags `int` and `float` differently, so `Sync.Send(channel, 5)` arrives as `broadcast::int`.
+colibri-web's `receiveNumber` listened only for `broadcast::float` and silently dropped these. It
+now listens for both.
 
-- Newtonsoft saves public fields and properties, so a private `[SerializeField]` field of a saved
-  class is no longer saved or loaded: make it public, or add `[JsonProperty]`.
+### Store timeout (Unity)
+
+`Store` calls give up after 10 seconds. `UnityWebRequest` has no timeout by default, so with a wrong
+server address, `Get`, `Put` and `Delete` used to hang forever, with no result, no error and no
+console output. They now fail and log what failed, the URL and the HTTP status.
+
+### Store values
+
+1.x answered `400` to anything but an object or an array, and `413` above 100 kB. The store now
+accepts any JSON value up to 5 MiB, including a plain number, string, boolean or `null`, as in
+Unity's `Store.Put("score", 42)` or colibri-web's `setRestObject('note', 'text')`.
+
+### Store serialization (Unity)
+
+Unity's `Store` converts with Newtonsoft JSON instead of `JsonUtility`.
+
+- Newtonsoft saves public fields and properties. A private `[SerializeField]` field of a saved class
+  is no longer saved or loaded. Make it public, or add `[JsonProperty]`.
 - A `Vector2`, `Vector3`, `Vector4`, `Quaternion` or `Color` inside the class is saved as an array
-  of its components now, and values that 1.x saved as `{"x": …}` still load.
-- A value that cannot be converted, or a saved value that does not fit the type asked for, makes
-  `Put` return `false` and `Get` return `default`, with the reason in the console.
+  of its components. Values that 1.x saved as `{"x": …}` still load.
+- If a value cannot be converted, or a saved value does not fit the requested type, `Put` returns
+  `false` and `Get` returns `default`, with the reason in the console.
 
-**Clients catch up after a reconnect.** Both clients used to ask for the synced models' state only
-when a listener registered, so whatever other clients changed during an outage was missed until the
-next change. Unity and web clients now ask again every time they reconnect, and update the objects
-they have rather than creating duplicates.
+### Reconnects
 
-- The server still forgets an app's models once its last client disconnects, which is what a lone
-  client's outage looks like to it, and when it restarts. A client that finds its objects gone sends
-  them again in full (colibri-web: the models it registered itself). A Unity object that changed
-  during the outage is the exception: its changes reach the server first, and until its other
-  members change, the server and every client that joins later have only those (see
-  [Known limits](colibri-server/docs/protocol.md#known-limits)).
+In 1.x, clients requested the synced models' state only when a listener registered, and missed what
+changed during an outage until the next change. Unity and web clients now request it after every
+reconnect, and update their objects instead of creating duplicates.
+
+- The server still forgets an app's models when it restarts and when the app's last client
+  disconnects, which is how a lone client's outage looks to it. A client that finds its objects gone
+  sends them again in full (colibri-web: the models it registered). The exception is a Unity object
+  that changed during the outage. Its changes reach the server first, and until its other members
+  change, the server and every client that joins later have only those changes
+  ([Known limits](colibri-server/docs/protocol.md#known-limits)).
 - An object another client deleted during the outage is deleted on the reconnecting client too, if
-  the delete is no more than `MODEL_TOMBSTONE_SECONDS` (ten minutes) old (colibri-web: again only
-  for the models it registered; one it got from another client stays).
-- A change made as the connection dies without closing (a Wi-Fi drop) goes into the dead link and
-  is lost. The answer after the reconnect no longer undoes it: the client keeps its value and sends
-  it again (colibri-web: for the models it registered). A value another client set during the
-  outage still wins, unless it is one this client had in the 10 s before the outage: set back to
-  such a value, the member or field looks like a lost change, and the other client's change is
-  undone (see [Known limits](colibri-server/docs/protocol.md#known-limits)). A Unity object
-  destroyed at the drop has its delete sent again. After their re-requests, both clients send one
-  more `model::request`, on the channel `colibri::reconnect`, to tell when the answers are over. A
-  Unity client does so after every reconnect, and also when an object's first answer arrives
-  outside that round after the object changed members of its own (see below); colibri-web also does
-  so after asking for every model, after asking for one of its models once more, and after the first
-  update for a model it registers when it does neither.
-  See [After a reconnect](colibri-server/docs/protocol.md#after-a-reconnect).
-- While a Unity client is disconnected, what it sends waits in one queue and goes out in order when
-  the connection is back. Past 256 broadcasts and log lines the oldest are dropped, with one
-  warning per outage, while the model updates for one object are merged into one instead. Behind
-  that, the whole queue is capped at 10,000 messages, connected or not: past it the oldest
-  broadcasts and log lines go first, then the oldest model messages, with a warning.
+  the delete is at most `MODEL_TOMBSTONE_SECONDS` (ten minutes) old. colibri-web does this only for
+  the models it registered. A model it got from another client stays.
+- A change made as the connection dies without closing, as on a Wi-Fi drop, is lost in the dead
+  connection. The answer after the reconnect no longer undoes it. The client keeps its value and
+  sends it again (colibri-web: for the models it registered). A value another client set during the
+  outage still wins, unless this client had it in the 10 s before the outage. A member or field set
+  back to such a value looks like a lost change, and the other client's change is undone
+  ([Known limits](colibri-server/docs/protocol.md#known-limits)).
+- A Unity object destroyed at the drop has its delete sent again.
+- After their re-requests, both clients send one more `model::request`, on the channel
+  `colibri::reconnect`, to detect the end of the answers. A Unity client does so after every
+  reconnect, and when an object's first answer arrives outside that round after the object changed
+  its own members ([below](#changes-before-the-servers-state-arrives-unity)). colibri-web does so
+  after requesting every model, after requesting one of its models again, and after the first update
+  for a model it registers if it does neither. See
+  [After a reconnect](colibri-server/docs/protocol.md#after-a-reconnect).
+- While disconnected, a Unity client queues outgoing messages and sends them in order once
+  reconnected. Past 256 broadcasts and log lines, the oldest are dropped, with one warning per
+  outage. The model updates for one object are merged into one instead.
+- The whole queue holds at most 10,000 messages, connected or not. Past that, the oldest broadcasts
+  and log lines are dropped first, then the oldest model messages, with a warning.
 
-**A Unity object keeps what changed before the server's state arrived.** A `SyncBehaviour` or
-`SyncTransform` asks the server for its state when it wakes up. In 1.x a change made before the
-answer arrived, in `Start` say, was dropped, and the answer put the server's values back. Such a
-change now replaces the server's value, on every client, as colibri-web's `registerModel` does
-(below). A script that sets a `[Sync]` member or moves a `SyncTransform` in `Start` therefore does
-so for everyone each time a client starts. Set starting values in the scene or the prefab, or in a
-model's `Awake` before `base.Awake()`, to have the object take the server's state instead. Set up
-whatever a `[Sync]` getter reads there too, such as a cached component: a getter that reads its
-fallback in `base.Awake()` and the real value later counts as changed. A placed `SyncTransform`
-whose `PhysicsAuthority` is ticked stays kinematic until the answer.
+### Changes before the server's state arrives (Unity)
 
-**colibri-web's `registerModel` takes what the server has.** It used to send the new instance in
-full at once. When the server already held that id (a fixed id such as `'session'`, kept while
-another client stayed connected and the page was reloaded), that overwrote the copy everyone else
-had, while the answer to the request for every model put the old values back on this client only.
-`registerModel` now asks the server for the id first: if the server has the model, its values
-replace the instance's, and changes made after `registerModel` are sent on top of them; if not,
-the instance is sent in full, one round trip later than before. Registering an id that is already
-in the list replaces the listed instance instead of listing the id twice.
+A `SyncBehaviour` or `SyncTransform` requests the server's state when it wakes up. In 1.x, a change
+made before the answer, in `Start` for example, was dropped, and the answer restored the server's
+values. Such a change now replaces the server's value on every client, as colibri-web's
+`registerModel` does ([below](#registermodel-web)).
 
-**Voice chat binds to an ephemeral port.** The receive socket used to bind port 9014, which capped a
-machine at one Unity client. The server replies to the datagram's source port, so the fixed port
-bought nothing.
+- A script that sets a `[Sync]` member or moves a `SyncTransform` in `Start` therefore does so for
+  everyone each time a client starts.
+- To have the object take the server's state instead, set starting values in the scene or the
+  prefab, or in a model's `Awake` before `base.Awake()`.
+- Set up whatever a `[Sync]` getter reads in the same place, such as a cached component. A getter
+  that reads its fallback in `base.Awake()` and the real value later counts as changed.
+- A placed `SyncTransform` with `PhysicsAuthority` ticked stays kinematic until the answer.
 
-**Voice stays within the app.** In 1.x every voice packet went to every client on the server that
-was sending voice, and a `VoiceReceiver` played the voice id it was given, from whichever app it
-came. Now only clients with the same *App Name* hear each other, so two apps on one server can use
-the same voice ids, and a project without an App Name sends no voice. This keeps apps apart but is
-not access control: anyone who knows the App Name can listen, and voice is not encrypted.
+### `registerModel` (web)
 
-**The latency echo is gone.** The old `colibri` / `latency` message round trip was removed; TCP
-latency comes from the 100 ms heartbeat the client echoes back verbatim. Nothing sends `latency` to
-a TCP client any more.
+`registerModel` used to send the new instance in full at once. If the server already held the id,
+such as a fixed id like `'session'` kept while another client stayed connected and the page
+reloaded, this overwrote everyone else's copy. The answer to the request for every model then
+restored the old values on this client only.
 
-**An unconfigured project says so.** `ColibriConfig.Load()` used to return `null` without a config
-asset, which made `GetWebUrl` throw an NRE and the connection loop poll forever in silence. It now
-returns defaults and reports the missing configuration once, naming the menu item that fixes it.
+`registerModel` now asks the server for the id first. If the server has the model, its values
+replace the instance's, and changes made after `registerModel` are sent on top of them. If not, the
+instance is sent in full, one round trip later than before. Registering an id that is already listed
+replaces the listed instance instead of listing the id twice.
 
-**New warnings in the console.** Colibri routes messages on the channel *and* the type, so a `float`
-sent to a `string` listener was previously dropped without a word. That mismatch is now reported
-once per (channel, type), not once per message, and it names both types and the fix. If new warnings
-appear after upgrading, they were always happening; you just could not see them.
+### Voice port (Unity)
 
-**`Sync` listeners now unregister themselves with their component.** `Sync.Receive` records which
-Unity object the listener belongs to (the component for a method group, the component the closure
-captured for a lambda) and drops the listener once that object is destroyed. A listener with no such
-object stays registered until `Sync.Unregister`, as in 1.x: a static method, or a lambda that uses
-nothing of its component (only its parameter, `Debug.Log` or a static), because that lambda captures
-nothing. Registering the same one again on the same channel adds nothing, so a `Start` that runs
-again after a scene reload does not make each message reach it twice.
+The voice receive socket binds to an ephemeral port instead of 9014, which allowed only one Unity
+client per machine. The server replies to the datagram's source port, so a fixed port is not needed.
 
-Your existing `Sync.Unregister` calls in `OnDestroy` are still correct and worth keeping; for
-listeners that belong to a component they are just no longer the difference between working and
-not. What changes silently is the failure a forgotten one used to cause: the destroyed component
-kept being called, `MissingReferenceException` came out of `WebServerConnection.Update`, and every
-message queued behind it that frame was lost. If your project had unexplained gaps in delivery,
-this is a strong candidate.
+### Voice per app
 
-Note the asymmetry with the point above: **this covers `Sync.Receive` only.** `SyncBehaviour<T>`'s
-static `ModelCreated` / `ModelDestroyed` events are plain C# events and still need their `-=`.
+In 1.x, every voice packet went to every client on the server that was sending voice, and a
+`VoiceReceiver` played the voice id it was given, from any app. Now only clients with the same
+*App Name* hear each other, so two apps on one server can use the same voice ids. A project without
+an App Name sends no voice. This separates apps but is not access control. Anyone who knows the App
+Name can listen, and voice is not encrypted.
 
-**Two server-side data bugs are fixed structurally.** `DataStore` keyed on `group + channel`
-concatenated, so app `ab` + channel `c` collided with app `a` + channel `bc`. And `clearApp`
-matched on a `startsWith` prefix, so the last client of app `test` disconnecting wiped app `test2`'s
-store as well.
+### Latency echo removed
+
+The `colibri` / `latency` message round trip was removed. TCP latency comes from the 100 ms
+heartbeat, which the client echoes back unchanged. The server no longer sends `latency` to a TCP
+client.
+
+### Missing configuration (Unity)
+
+Without a config asset, `ColibriConfig.Load()` returned `null`, so `GetWebUrl` threw a
+`NullReferenceException` and the connection loop polled forever without output. It now returns
+defaults and reports the missing configuration once, with the menu item that fixes it.
+
+### Type mismatch warnings (Unity)
+
+Colibri routes messages by channel *and* type. A `float` sent to a `string` listener used to be
+dropped silently. This mismatch is now reported once per channel and type, not once per message,
+with both types and the fix. Such warnings after the upgrade are mismatches that 1.x hid.
+
+### `Sync` listener lifetime (Unity)
+
+`Sync.Receive` records the Unity object a listener belongs to, and removes the listener when that
+object is destroyed. For a method group, this is its component. For a lambda, it is the component
+the closure captured.
+
+- A listener without such an object stays registered until `Sync.Unregister`, as in 1.x. This
+  applies to a static method, and to a lambda that uses nothing of its component (only its
+  parameter, `Debug.Log` or a static), because that lambda captures nothing.
+- Registering the same listener again on the same channel adds nothing. A `Start` that runs again
+  after a scene reload does not receive each message twice.
+- Existing `Sync.Unregister` calls in `OnDestroy` are still correct. For a component's listener, a
+  forgotten one no longer breaks delivery. In 1.x, the destroyed component was still called,
+  `MissingReferenceException` came out of `WebServerConnection.Update`, and every message queued
+  behind it in that frame was lost. This is a likely cause of unexplained gaps in delivery in a 1.x
+  project.
+- **This covers `Sync.Receive` only.** The static `ModelCreated` and `ModelDestroyed` events of
+  `SyncBehaviour<T>` are plain C# events and still need their `-=`.
+
+### Server data store fixes
+
+`DataStore` keyed on the concatenation `group + channel`, so app `ab` with channel `c` collided with
+app `a` with channel `bc`. `clearApp` matched on a `startsWith` prefix, so when the last client of
+app `test` disconnected, the store of app `test2` was wiped too. Both bugs are fixed structurally.
 
 ---
 
-## After upgrading, check these
+## Post-upgrade checks
 
-1. **Every `[Sync]` member still has a supported type.** They are validated when the model type is
-   first initialized, and an unsupported type, a property missing an accessor, or two members whose
-   lowercased names collide are now reported at startup rather than on the first message.
-2. **Every static event you subscribe to is unsubscribed** in `OnDisable` or `OnDestroy`. This is
-   `SyncBehaviour<T>.ModelCreated` and `ModelDestroyed`. `Sync.Receive` listeners mostly look after
-   themselves now; a static method or a lambda that uses nothing of its component still needs its
-   `Sync.Unregister` (see [above](#behaviour-changes-that-will-not-fail-to-compile)).
+1. **Every `[Sync]` member has a supported type.** Members are validated when the model type is
+   first initialized. An unsupported type, a property without an accessor, or two members whose
+   lower-cased names collide are reported at startup, not on the first message.
+2. **Every static event subscription is removed** in `OnDisable` or `OnDestroy`. This applies to
+   `SyncBehaviour<T>.ModelCreated` and `ModelDestroyed`. Most `Sync.Receive` listeners are removed
+   automatically. A static method, or a lambda that uses nothing of its component, still needs
+   `Sync.Unregister` ([`Sync` listener lifetime](#sync-listener-lifetime-unity)).
 3. **Turn on *Run In Background*** (Project Settings → Player). With it off, an unfocused Editor
-   stops running the player loop, so the client silently stops sending and receiving, while the
-   socket stays up and everything still reports itself connected. This is not new in 2.0, but it is
-   the most common source of lost debugging time.
-4. **Open *Window → Colibri Status*** while connected. It shows the app name, and a typo there
-   produces a perfectly healthy connection on which no other client is ever seen. The opposite
-   mistake, a name others use too, puts strangers in your app: *Window → Colibri Configuration*
-   now warns about names such as `test` or `myAppName`, and the server logs a warning when one app
-   has more than 8 clients.
+   stops running the player loop. The client then stops sending and receiving without an error,
+   while the socket stays open and everything still reports as connected. This is not new in 2.0,
+   but it often costs debugging time.
+4. **Open *Window → Colibri Status*** while connected. It shows the app name. With a typo in the
+   name, the connection is healthy, but no other client ever appears. A name others also use puts
+   unrelated clients in your app. *Window → Colibri Configuration* now warns about names such as
+   `test` or `myAppName`, and the server logs a warning when one app has more than 8 clients.
 
 ---
 
-## What is tested, and what is not
+## Test coverage
 
-The test suites:
+| Command | Tests | In CI |
+| --- | --- | --- |
+| `npm test` in `colibri-server` and `colibri-web` | Unit tests | Yes |
+| `npm run test:e2e` in `colibri-web` | Against a running server | No |
+| `node colibri-unity/run-tests.mjs` | Unity EditMode tests, and PlayMode tests against a real server, started with Docker unless one is already running. Needs a local Unity installation. See [Running the tests](colibri-unity/docs/guide.md#running-the-tests). | No |
+| `npm run test:docker` in `colibri-server` | The image against a fresh, a root-owned and a named-volume data directory. Needs Docker. | No |
 
-- `npm test` in `colibri-server` and in `colibri-web`: unit tests. Both run in CI, together with a
-  check that the server's frame encoding matches the vectors the Unity tests use, and that every
-  client announces the protocol version the server speaks.
-- `npm run test:e2e` in `colibri-web`: against a running server. Not run in CI.
-- `node colibri-unity/run-tests.mjs`: the Unity client's EditMode tests, and its PlayMode tests
-  against a real server (started with Docker, unless one is already running). It needs a local
-  Unity installation and does not run in CI. See
-  [Running the tests](colibri-unity/docs/guide.md#running-the-tests).
-- `npm run test:docker` in `colibri-server`: runs the image against a fresh, a root-owned and a
-  named-volume data directory. Needs Docker; not run in CI.
+CI also checks that the server's frame encoding matches the vectors the Unity tests use, and that
+every client announces the server's protocol version.
 
-What none of them covers:
+Not covered by any suite:
 
 - **Voice chat**, beyond the server's relay, the packet format on both sides, the Unity client's
-  choice of server address, and the queue that hands received packets to the main thread. The
-  rest needs a microphone; the client's socket and its shutdown were reviewed and compiled, not
+  choice of server address, and the queue that hands received packets to the main thread. The rest
+  needs a microphone. The client's socket and its shutdown were reviewed and compiled, not
   exercised.
-- **Android and Meta Quest.** No suite builds for Android or runs on a headset. The code that only
-  runs there (the IL2CPP `[Sync]` accessors) and the Android settings check are tested in the
+- **Android and Meta Quest.** No suite builds for Android or runs on a headset. The code that runs
+  only there (the IL2CPP `[Sync]` accessors) and the Android settings check are tested in the
   Editor.
-- **Two Unity clients following each other.** The PlayMode tests talk to a scripted peer, not to a
-  second Unity client; an object following its copy between two Unity players is a manual check.
-- **The samples** are not compiled or run by any suite.
+- **Two Unity clients.** The PlayMode tests use a scripted peer, not a second Unity client. An
+  object following its copy between two Unity players is a manual check.
+- **The samples.** No suite compiles or runs them.
 
-Batched `model::request` replies were deliberately left for later; see the server changelog. And
-Colibri has no access control, by design: anyone who can reach the server's ports can join any app
+Batched `model::request` replies were deliberately left for later (see the server changelog).
+Colibri has no access control, by design. Anyone who can reach the server's ports can join any app
 and read or change its store. Run it on a network you trust.
