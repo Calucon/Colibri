@@ -26,6 +26,17 @@ class FakeSocketIOServer {
         this.broadcasts.push({ message, clients });
     }
 
+    /** The live log lines sent, without the histories that answer requestLog. */
+    public get live() {
+        return this.broadcasts.filter(b => b.message.command === 'message');
+    }
+
+    public get histories() {
+        return this.broadcasts
+            .filter(b => b.message.command === 'history')
+            .map(b => b.message.payload!.asValue<{ request: number | null; messages: { message: string; created: number; first: number; count: number }[] }>());
+    }
+
     public connectClient(client: SocketIoClient): void {
         this.clients.push(client);
     }
@@ -101,8 +112,8 @@ describe('WebLog', () => {
         emitter.emitInfo('info');
         emitter.emitDebug('debug');
 
-        expect(server.broadcasts).toHaveLength(1);
-        expect(server.broadcasts[0]!.message.payload!.asValue<{ message: string }>().message).toBe('err');
+        expect(server.live).toHaveLength(1);
+        expect(server.live[0]!.message.payload!.asValue<{ message: string }>().message).toBe('err');
     });
 
     it('the sync-traffic switch overrides the level gate for broadcast-tagged messages (carve-out semantics)', async () => {
@@ -121,8 +132,8 @@ describe('WebLog', () => {
         emitter.emitDebug('plain-debug');
         emitter.emitDebug('sync-tick', { broadcastTraffic: true });
 
-        expect(server.broadcasts).toHaveLength(1);
-        expect(server.broadcasts[0]!.message.payload!.asValue<{ message: string }>().message).toBe('plain-debug');
+        expect(server.live).toHaveLength(1);
+        expect(server.live[0]!.message.payload!.asValue<{ message: string }>().message).toBe('plain-debug');
 
         // Debug NOT selected, sync traffic explicitly shown: broadcast-tagged message still
         // shows even though its level (Debug) is unchecked.
@@ -134,8 +145,8 @@ describe('WebLog', () => {
         emitter.emitDebug('plain-debug-2');
         emitter.emitDebug('sync-tick-2', { broadcastTraffic: true });
 
-        expect(server.broadcasts).toHaveLength(1);
-        expect(server.broadcasts[0]!.message.payload!.asValue<{ message: string }>().message).toBe('sync-tick-2');
+        expect(server.live).toHaveLength(1);
+        expect(server.live[0]!.message.payload!.asValue<{ message: string }>().message).toBe('sync-tick-2');
     });
 
     it('gives two clients with different preferences only their own wanted subset', async () => {
@@ -156,7 +167,7 @@ describe('WebLog', () => {
         emitter.emitDebug('sync', { broadcastTraffic: true });
 
         const recipientsFor = (message: string) =>
-            server.broadcasts.find(b => b.message.payload!.asValue<{ message: string }>().message === message)
+            server.live.find(b => b.message.payload!.asValue<{ message: string }>().message === message)
                 ?.clients.map(c => c.id);
 
         expect(recipientsFor('err')).toEqual([ 'a', 'b' ]);
@@ -177,12 +188,61 @@ describe('WebLog', () => {
         server.connectClient(admin);
         server.broadcasts.length = 0;
 
-        // requestLog broadcasts one message per matching historical entry (not a single
-        // batched array), same payload shape as live delivery.
-        requestLog(server, admin, { levels: [ 0 ], showBroadcastTraffic: false });
+        // one history message with the matching entries, each in the same shape as a live line
+        requestLog(server, admin, { levels: [ 0 ], showBroadcastTraffic: false, request: 7 });
 
         expect(server.broadcasts).toHaveLength(1);
-        expect(server.broadcasts[0]!.message.payload!.asValue<{ message: string }>().message).toBe('err');
+        expect(server.broadcasts[0]!.clients).toEqual([ admin ]);
+        expect(server.histories).toHaveLength(1);
+        expect(server.histories[0]!.request).toBe(7);
+        expect(server.histories[0]!.messages.map(m => m.message)).toEqual([ 'err' ]);
+    });
+
+    it('answers requestLog with a history even when nothing matches, echoing a numeric request only', async () => {
+        const server = new FakeSocketIOServer();
+        const webLog = new WebLog(server as unknown as SocketIOServer);
+        await webLog.init();
+
+        const admin = makeClient('admin1', 'colibri');
+        server.connectClient(admin);
+
+        requestLog(server, admin, { filter: 'no-such-app', request: 3 });
+        requestLog(server, admin, { filter: 'no-such-app', request: '4' });
+        requestLog(server, admin, { filter: 'no-such-app' });
+
+        expect(server.histories).toEqual([
+            { request: 3, messages: [] },
+            { request: null, messages: [] },
+            { request: null, messages: [] }
+        ]);
+    });
+
+    it('sends the history in the order the lines last occurred, so a merged entry sits at its latest repeat', async () => {
+        vi.useFakeTimers({ toFake: [ 'Date' ] });
+        try {
+            const server = new FakeSocketIOServer();
+            const webLog = new WebLog(server as unknown as SocketIOServer);
+            await webLog.init();
+
+            const emitter = new Emitter();
+            vi.setSystemTime(1000);
+            emitter.emitInfo('repeated');
+            vi.setSystemTime(2000);
+            emitter.emitInfo('once');
+            vi.setSystemTime(3000);
+            emitter.emitInfo('repeated');
+
+            const admin = makeClient('admin1', 'colibri');
+            server.connectClient(admin);
+            requestLog(server, admin, {});
+
+            expect(server.histories[0]!.messages.map(m => [ m.message, m.first, m.created, m.count ])).toEqual([
+                [ 'once', 2000, 2000, 0 ],
+                [ 'repeated', 1000, 3000, 1 ]
+            ]);
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it('merges a repeated message into one entry with an incrementing count, even with unrelated traffic interleaved', async () => {
@@ -338,7 +398,7 @@ describe('WebLog', () => {
         emitter.emitDebug('debug');
         emitter.emitDebug('sync', { broadcastTraffic: true });
 
-        expect(server.broadcasts.map(b => b.message.payload!.asValue<{ message: string }>().message)).toEqual(['debug']);
+        expect(server.live.map(b => b.message.payload!.asValue<{ message: string }>().message)).toEqual(['debug']);
     });
 
     // requestLog is accepted from any client of any app, so its payload can be anything.
@@ -370,7 +430,7 @@ describe('WebLog', () => {
         };
 
         const delivered = function (server: FakeSocketIOServer): string[] {
-            return server.broadcasts.map(b => b.message.payload!.asValue<{ message: string }>().message);
+            return server.live.map(b => b.message.payload!.asValue<{ message: string }>().message);
         };
 
         it.each([

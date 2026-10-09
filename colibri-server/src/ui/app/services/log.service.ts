@@ -1,4 +1,4 @@
-import { Injectable, effect, inject, signal } from '@angular/core';
+import { Injectable, effect, inject, signal, untracked } from '@angular/core';
 import { SocketIOService } from './socketio.service';
 
 export interface LogMessage {
@@ -7,9 +7,18 @@ export interface LogMessage {
     level: number;
     message: string;
     group: string;
+    /** When the line last occurred. */
     created: number;
+    /** When the line first occurred: the same as `created` until it repeats. */
+    first: number;
+    /** How often the line repeated: 0 for a line that occurred once. */
     count: number;
     metadata: Record<string, unknown>;
+}
+
+interface LogHistory {
+    request: number | null;
+    messages: LogMessage[];
 }
 
 export const LOG_LEVELS: ReadonlyArray<{ value: number; label: string }> = [
@@ -19,6 +28,20 @@ export const LOG_LEVELS: ReadonlyArray<{ value: number; label: string }> = [
     { value: 3, label: 'Debug' }
 ];
 
+/** As many lines as the server sends in a history. */
+export const MAX_MESSAGES = 10000;
+
+/** How long live lines are collected before the page shows them, in ms. */
+export const FLUSH_INTERVAL = 100;
+
+const readHash = function (): string {
+    try {
+        return decodeURIComponent(location.hash.substring(1));
+    } catch {
+        return location.hash.substring(1);
+    }
+};
+
 @Injectable({
     providedIn: 'root'
 })
@@ -26,9 +49,22 @@ export class LogService {
     private readonly socketio = inject(SocketIOService);
 
     private readonly _messages = signal<ReadonlyArray<LogMessage>>([]);
+    /** The loaded lines in the order they last occurred, oldest first. */
     public readonly messages = this._messages.asReadonly();
 
-    public readonly filter = signal<string>(location.hash.substring(1));
+    private readonly _appended = signal(0);
+    /** How many lines were added at the end, new or repeated, since the page loaded. */
+    public readonly appended = this._appended.asReadonly();
+
+    private readonly _loading = signal(true);
+    /** Whether the history for the current filters is still on its way. */
+    public readonly loading = this._loading.asReadonly();
+
+    private readonly _apps = signal<ReadonlySet<string>>(new Set());
+    /** Every app seen in a log line since the page loaded, whatever the filters. */
+    public readonly apps = this._apps.asReadonly();
+
+    public readonly filter = signal<string>(readHash());
     public readonly levels = signal<ReadonlySet<number>>(new Set(LOG_LEVELS.map(l => l.value)));
     public readonly showBroadcastTraffic = signal(false);
 
@@ -36,53 +72,123 @@ export class LogService {
         this.levels.set(new Set(values));
     }
 
-    // for quick lookup of messages by id
-    private messageIds: { [id: string]: LogMessage } = {};
+    private readonly byId = new Map<string, LogMessage>();
+    private pending: LogMessage[] = [];
+    private flushTimer: ReturnType<typeof setTimeout> | undefined;
+
+    private lastRequest = 0;
+    // The request whose history has not arrived yet. Live lines are dropped until it has: they
+    // were filtered by the previous preferences, and the history holds every one that matches.
+    private awaiting: number | null = null;
 
     constructor() {
         this.socketio
             .listen('colibri::log')
             .subscribe((msg) => {
-                const m = msg.payload as LogMessage;
-
-                let messages = this._messages();
-                while (messages.length > 10000) {
-                    delete this.messageIds[messages[0].id];
-                    messages = messages.slice(1);
+                if (msg.command === 'history') {
+                    this.receiveHistory(msg.payload as LogHistory);
+                } else if (this.awaiting === null) {
+                    this.queue(msg.payload as LogMessage);
                 }
-
-                if (this.messageIds[m.id]) {
-                    // Replace with a new object (not mutate in place): LogMessageComponent is
-                    // OnPush with a signal input, so it only re-renders when the reference passed
-                    // into [log] actually changes - mutating the existing object left the count
-                    // and timestamp stuck at their first-seen values on screen.
-                    const existing = this.messageIds[m.id];
-                    const updated = { ...existing, count: m.count, created: m.created };
-                    this.messageIds[m.id] = updated;
-
-                    // put it to the end of the list
-                    const index = messages.indexOf(existing);
-                    messages = [ ...messages.slice(0, index), ...messages.slice(index + 1), updated ];
-                } else {
-                    // create new entry
-                    messages = [ ...messages, m ];
-                    this.messageIds[m.id] = m;
-                }
-
-                this._messages.set(messages);
             });
 
         effect(() => {
             const filter = this.filter();
-            const levels = this.levels();
-            const showBroadcastTraffic = this.showBroadcastTraffic();
+            this.levels();
+            this.showBroadcastTraffic();
 
-            this.socketio.emit('colibri::log', 'requestLog', { filter, levels: [ ...levels ], showBroadcastTraffic });
+            untracked(() => {
+                this.clear();
+                this.requestLog();
+            });
             location.hash = filter || '';
-
-            // reload messages
-            this._messages.set([]);
-            this.messageIds = {};
         });
+    }
+
+    private requestLog(): void {
+        this.awaiting = ++this.lastRequest;
+        this._loading.set(true);
+        this.socketio.emit('colibri::log', 'requestLog', {
+            filter: this.filter(),
+            levels: [ ...this.levels() ],
+            showBroadcastTraffic: this.showBroadcastTraffic(),
+            request: this.awaiting
+        });
+    }
+
+    private receiveHistory(history: LogHistory): void {
+        if (history.request !== this.awaiting) return;
+
+        this.awaiting = null;
+        this._loading.set(false);
+        this.add(history.messages ?? []);
+    }
+
+    // Lines arrive one socket event each, hundreds a second with sync traffic shown. Adding them
+    // in batches copies the list once per batch rather than once per line.
+    private queue(message: LogMessage): void {
+        this.pending.push(message);
+        if (this.flushTimer === undefined) {
+            this.flushTimer = setTimeout(() => this.flush(), FLUSH_INTERVAL);
+        }
+    }
+
+    private flush(): void {
+        this.flushTimer = undefined;
+        const batch = this.pending;
+        this.pending = [];
+        this.add(batch);
+    }
+
+    private clear(): void {
+        clearTimeout(this.flushTimer);
+        this.flushTimer = undefined;
+        this.pending = [];
+        this.byId.clear();
+        this._messages.set([]);
+    }
+
+    // A line the list already has is a repeat: the server sends the merged entry again with
+    // the new count and time. It moves to the end, where the history puts it too.
+    private add(batch: ReadonlyArray<LogMessage>): void {
+        const moved = new Set<string>();
+        const added = new Map<string, LogMessage>();
+        let apps: Set<string> | undefined;
+
+        for (const message of batch) {
+            const known = this.byId.get(message.id);
+            if (known) {
+                if (known.count === message.count && known.created === message.created) continue;
+                moved.add(message.id);
+                added.delete(message.id);
+            }
+
+            // A new object, not the old one changed: rows only re-render for a new reference.
+            this.byId.set(message.id, message);
+            added.set(message.id, message);
+
+            const app = message.metadata?.['clientApp'];
+            if (typeof app === 'string' && !this._apps().has(app) && !apps?.has(app)) {
+                apps ??= new Set(this._apps());
+                apps.add(app);
+            }
+        }
+
+        if (apps) this._apps.set(apps);
+        if (added.size === 0) return;
+
+        let messages = this._messages();
+        if (moved.size > 0) messages = messages.filter(m => !moved.has(m.id));
+        messages = messages.concat([ ...added.values() ]);
+
+        if (messages.length > MAX_MESSAGES) {
+            for (const evicted of messages.slice(0, messages.length - MAX_MESSAGES)) {
+                if (this.byId.get(evicted.id) === evicted) this.byId.delete(evicted.id);
+            }
+            messages = messages.slice(-MAX_MESSAGES);
+        }
+
+        this._messages.set(messages);
+        this._appended.update(n => n + added.size);
     }
 }

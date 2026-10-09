@@ -25,6 +25,8 @@ interface LogPreferences {
     filter: string;
     levels: Set<number> | undefined;
     showBroadcastTraffic: boolean;
+    /** Echoed in the history, so the admin UI can tell it from the answer to an earlier request. */
+    request: number | null;
 }
 
 // What makes two log lines "the same" for merging; WebMessage copies all of it verbatim from
@@ -49,7 +51,8 @@ const parseLogPreferences = function (body: unknown): LogPreferences {
         levels: Array.isArray(fields.levels)
             ? new Set(fields.levels.filter((level): level is number => typeof level === 'number' && KNOWN_LEVELS.has(level)))
             : undefined,
-        showBroadcastTraffic: fields.showBroadcastTraffic === true
+        showBroadcastTraffic: fields.showBroadcastTraffic === true,
+        request: typeof fields.request === 'number' && Number.isFinite(fields.request) ? fields.request : null
     };
 };
 
@@ -99,7 +102,7 @@ export class WebLog extends Service {
             return;
         }
 
-        const { filter, levels, showBroadcastTraffic } = parseLogPreferences(networkMsg.payload?.asValue());
+        const { filter, levels, showBroadcastTraffic, request } = parseLogPreferences(networkMsg.payload?.asValue());
 
         socketClient.metadata['log::filter'] = filter;
         socketClient.metadata['log::levels'] = levels;
@@ -108,17 +111,25 @@ export class WebLog extends Service {
         // client can't handle too many messages at once
         const clientLimit = 10000;
 
-        this.logMessages
+        // Sorted by `created`, the time a line last occurred, which is also where the admin UI
+        // puts a merged entry when it repeats live. In buffer order (first occurrences) a merged
+        // entry's time jumped backwards, and a reload reordered the page.
+        const messages = this.logMessages
             .toArray()
             .filter(msg => !filter || msg.metadata.clientApp === filter)
             .filter(msg => this.isVisibleToClient(msg.level, msg.metadata, levels, showBroadcastTraffic))
+            .sort((a, b) => a.created - b.created)
             .slice(-clientLimit)
-            .map(msg => ({
-                channel: 'colibri::log',
-                command: 'message',
-                payload: Payload.fromValue({ ...msg })
-            }))
-            .forEach(msg => this.socketio.broadcast(msg, [ socketClient ]));
+            .map(msg => ({ ...msg }));
+
+        // One message, and sent even when empty: the admin UI ignores live lines from asking until
+        // this arrives, since those were filtered by its previous preferences. It used to be one
+        // event per line, 10,000 of them for a full history.
+        this.socketio.broadcast({
+            channel: 'colibri::log',
+            command: 'history',
+            payload: Payload.fromValue({ request, messages })
+        }, [ socketClient ]);
     }
 
     private redirectLogMessage(log: LogMessage): void {

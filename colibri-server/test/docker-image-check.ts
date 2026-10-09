@@ -167,8 +167,8 @@ const adminLogAnswers = function (web: string): Promise<boolean> {
         };
         const timer = setTimeout(() => done(false), 5000);
         socket.on('connect', () => socket.emit('colibri::log', { command: 'requestLog', payload: {} }));
-        socket.on('colibri::log', (msg: { command?: string }) => {
-            if (msg.command === 'message') done(true);
+        socket.on('colibri::log', (msg: { command?: string; payload?: { messages?: unknown[] } }) => {
+            if (msg.command === 'history' && (msg.payload?.messages?.length ?? 0) > 0) done(true);
         });
         socket.on('connect_error', () => done(false));
     });

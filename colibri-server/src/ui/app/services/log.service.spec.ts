@@ -1,6 +1,6 @@
 import { TestBed } from '@angular/core/testing';
 import { Subject } from 'rxjs';
-import { LogMessage, LogService } from './log.service';
+import { FLUSH_INTERVAL, LogMessage, LogService, MAX_MESSAGES } from './log.service';
 import { SocketIOService } from './socketio.service';
 
 const message = (overrides: Partial<LogMessage>): LogMessage => ({
@@ -9,17 +9,30 @@ const message = (overrides: Partial<LogMessage>): LogMessage => ({
     level: 0,
     message: 'm',
     group: 'g',
-    created: Date.now(),
+    created: 1000,
+    first: 1000,
     count: 0,
     metadata: {},
     ...overrides
 });
 
 describe('LogService', () => {
-    let logChannel: Subject<{ command: string; payload: LogMessage }>;
+    let logChannel: Subject<{ command: string; payload: unknown }>;
     let emit: ReturnType<typeof vi.fn>;
 
+    const live = (overrides: Partial<LogMessage>) => logChannel.next({ command: 'message', payload: message(overrides) });
+    const history = (request: number | null, messages: LogMessage[]) => logChannel.next({ command: 'history', payload: { request, messages } });
+    const lastRequest = (): number => emit.mock.lastCall![2].request;
+
+    const start = (): LogService => {
+        const service = TestBed.inject(LogService);
+        TestBed.flushEffects();
+        history(lastRequest(), []);
+        return service;
+    };
+
     beforeEach(() => {
+        vi.useFakeTimers();
         logChannel = new Subject();
         emit = vi.fn();
 
@@ -31,6 +44,10 @@ describe('LogService', () => {
         });
     });
 
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
     it('requests the log with the default filter/levels/broadcast payload on construction', () => {
         TestBed.inject(LogService);
         TestBed.flushEffects();
@@ -38,15 +55,27 @@ describe('LogService', () => {
         expect(emit).toHaveBeenCalledWith('colibri::log', 'requestLog', {
             filter: '',
             levels: [ 0, 1, 2, 3 ],
-            showBroadcastTraffic: false
+            showBroadcastTraffic: false,
+            request: 1
         });
     });
 
-    it('re-requests the log and clears messages when levels change', () => {
+    it('loads the history it asked for, in the order sent', () => {
         const service = TestBed.inject(LogService);
         TestBed.flushEffects();
+        expect(service.loading()).toBe(true);
 
-        logChannel.next({ command: 'x', payload: message({ id: '1' }) });
+        history(1, [ message({ id: 'a' }), message({ id: 'b' }) ]);
+
+        expect(service.loading()).toBe(false);
+        expect(service.messages().map(m => m.id)).toEqual([ 'a', 'b' ]);
+    });
+
+    it('re-requests the log and clears messages when levels change', () => {
+        const service = start();
+
+        live({ id: '1' });
+        vi.advanceTimersByTime(FLUSH_INTERVAL);
         expect(service.messages().length).toBe(1);
 
         service.setLevels([ 0 ]);
@@ -56,15 +85,16 @@ describe('LogService', () => {
         expect(emit).toHaveBeenLastCalledWith('colibri::log', 'requestLog', {
             filter: '',
             levels: [ 0 ],
-            showBroadcastTraffic: false
+            showBroadcastTraffic: false,
+            request: 2
         });
     });
 
     it('re-requests the log and clears messages when showBroadcastTraffic changes', () => {
-        const service = TestBed.inject(LogService);
-        TestBed.flushEffects();
+        const service = start();
 
-        logChannel.next({ command: 'x', payload: message({ id: '1' }) });
+        live({ id: '1' });
+        vi.advanceTimersByTime(FLUSH_INTERVAL);
         expect(service.messages().length).toBe(1);
 
         service.showBroadcastTraffic.set(true);
@@ -74,19 +104,59 @@ describe('LogService', () => {
         expect(emit).toHaveBeenLastCalledWith('colibri::log', 'requestLog', {
             filter: '',
             levels: [ 0, 1, 2, 3 ],
-            showBroadcastTraffic: true
+            showBroadcastTraffic: true,
+            request: 2
         });
     });
 
+    // Lines sent before the server saw the new request were filtered by the old preferences,
+    // and an older request's history can still be on its way.
+    it('ignores live lines and older histories until the history it asked for arrives', () => {
+        const service = start();
+
+        service.setLevels([ 0 ]);
+        TestBed.flushEffects();
+        service.setLevels([ 0, 1 ]);
+        TestBed.flushEffects();
+
+        live({ id: 'old-live', level: 3 });
+        history(2, [ message({ id: 'old-history', level: 3 }) ]);
+        vi.advanceTimersByTime(FLUSH_INTERVAL);
+        expect(service.messages()).toEqual([]);
+        expect(service.loading()).toBe(true);
+
+        history(3, [ message({ id: 'current' }) ]);
+        live({ id: 'after' });
+        vi.advanceTimersByTime(FLUSH_INTERVAL);
+
+        expect(service.messages().map(m => m.id)).toEqual([ 'current', 'after' ]);
+    });
+
+    it('shows live lines in batches', () => {
+        const service = start();
+
+        live({ id: '1' });
+        live({ id: '2' });
+        expect(service.messages()).toEqual([]);
+
+        vi.advanceTimersByTime(FLUSH_INTERVAL);
+
+        expect(service.messages().map(m => m.id)).toEqual([ '1', '2' ]);
+        expect(service.appended()).toBe(2);
+    });
+
     it('updates an existing message and moves it to the end', () => {
-        const service = TestBed.inject(LogService);
+        const service = start();
 
-        logChannel.next({ command: 'x', payload: message({ id: '1', count: 0 }) });
-        logChannel.next({ command: 'x', payload: message({ id: '2', count: 0 }) });
+        live({ id: '1', count: 0 });
+        live({ id: '2', count: 0 });
+        vi.advanceTimersByTime(FLUSH_INTERVAL);
         const before = service.messages().find(m => m.id === '1');
-        logChannel.next({ command: 'x', payload: message({ id: '1', count: 1 }) });
 
-        expect(service.messages().map(m => m.id)).toEqual(['2', '1']);
+        live({ id: '1', count: 1, created: 2000 });
+        vi.advanceTimersByTime(FLUSH_INTERVAL);
+
+        expect(service.messages().map(m => m.id)).toEqual([ '2', '1' ]);
         expect(service.messages().find(m => m.id === '1')?.count).toBe(1);
         // Must be a new object, not the same one mutated in place: LogMessageComponent is OnPush
         // with a signal input, so a same-reference update would never re-render the row's
@@ -94,19 +164,47 @@ describe('LogService', () => {
         expect(service.messages().find(m => m.id === '1')).not.toBe(before);
     });
 
-    it('evicts the oldest message once more than 10001 messages have arrived', () => {
-        const service = TestBed.inject(LogService);
+    it('leaves a line in place when it is sent again unchanged', () => {
+        const service = start();
 
-        for (let i = 0; i <= 10000; i++) {
-            logChannel.next({ command: 'x', payload: message({ id: `${i}` }) });
+        live({ id: '1' });
+        live({ id: '2' });
+        vi.advanceTimersByTime(FLUSH_INTERVAL);
+        live({ id: '1' });
+        vi.advanceTimersByTime(FLUSH_INTERVAL);
+
+        expect(service.messages().map(m => m.id)).toEqual([ '1', '2' ]);
+        expect(service.appended()).toBe(2);
+    });
+
+    it('keeps the newest MAX_MESSAGES lines', () => {
+        const service = start();
+
+        for (let i = 0; i < MAX_MESSAGES; i++) {
+            live({ id: `${i}` });
         }
-        expect(service.messages().length).toBe(10001);
-        expect(service.messages().find(m => m.id === '0')).toBeDefined();
+        vi.advanceTimersByTime(FLUSH_INTERVAL);
+        expect(service.messages().length).toBe(MAX_MESSAGES);
+        expect(service.messages()[0].id).toBe('0');
 
-        logChannel.next({ command: 'x', payload: message({ id: '10001' }) });
+        live({ id: 'new' });
+        vi.advanceTimersByTime(FLUSH_INTERVAL);
 
-        expect(service.messages().length).toBe(10001);
-        expect(service.messages().find(m => m.id === '0')).toBeUndefined();
-        expect(service.messages().find(m => m.id === '10001')).toBeDefined();
+        expect(service.messages().length).toBe(MAX_MESSAGES);
+        expect(service.messages()[0].id).toBe('1');
+        expect(service.messages().at(-1)?.id).toBe('new');
+    });
+
+    it('remembers every app it has seen, across filter changes', () => {
+        const service = start();
+
+        live({ id: '1', metadata: { clientApp: 'a' } });
+        live({ id: '2', metadata: { clientApp: 'b' } });
+        vi.advanceTimersByTime(FLUSH_INTERVAL);
+
+        service.filter.set('a');
+        TestBed.flushEffects();
+
+        expect([ ...service.apps() ]).toEqual([ 'a', 'b' ]);
     });
 });
