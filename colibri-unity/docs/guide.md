@@ -260,7 +260,7 @@ Show [`LastConnectFailure`](#connection-and-outages) in your app instead.
 | `Colibri: 192.168.0.10:9012 accepted the connection but has not sent anything in 2 s, dropping it` (with TLS also `Colibri: server closed the connection`), then `Colibri: 3 connections in a row to 192.168.0.10:9012 were accepted, but nothing was received on any of them: …` | Something accepts connections, then closes them or forwards nothing: a proxy or port forwarding whose backend is down, a captive portal or a firewall. Or the server does not answer or is not a colibri-server. | Check that colibri-server runs and is reachable at that address and port |
 | `… did not answer the TLS handshake …` or `rejected the certificate of …` | TLS settings do not match the server | See [TLS errors](#tls-errors) |
 | `Colibri (Android build): …` or `Colibri (build): …` | Works in the Editor, not on the Quest or in a build | See [Build settings check](#build-settings-check) |
-| `Colibri: cannot synchronize '<class>.<member>' …` at startup | A `[Sync]` member with an unsupported type, a property without getter and setter, or a `readonly` field | Follow the message. Sync classes of your own as `JObject`. |
+| `Colibri: cannot synchronize '<class>.<member>' …` at startup | A `[Sync]` member with an unsupported type, a property without both a getter and a setter, or a `readonly` field | Follow the message. Sync classes of your own as `JObject`. |
 | `Colibri: could not save "<name>" at <url> …`, `could not load …` or `could not delete …` | A `Store` request failed. The message names the URL, the transport error and the HTTP status. | Check the server address and app name. For "Insecure connection not allowed", see [Advanced Configuration](#advanced-configuration). |
 
 ### Other symptoms
