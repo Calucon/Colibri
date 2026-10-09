@@ -13,7 +13,8 @@ namespace HCIKonstanz.Colibri.E2E
 {
     /// <summary>
     /// A stand-in for colibri-server that a test can script, for the connection behaviour a real
-    /// server will not produce on demand: hanging up, saying nothing, or refusing this client.
+    /// server will not produce on demand: hanging up, saying nothing, refusing this client, or
+    /// speaking the 1.x framing.
     ///
     /// What happens to a connection is decided when it is accepted, by <see cref="Mode"/>, so a
     /// test walks the client through a sequence of sessions by changing it between attempts - the
@@ -58,7 +59,16 @@ namespace HCIKonstanz.Colibri.E2E
             /// here for the test that keeps the client correct against one that does.
             /// </summary>
             HeartbeatThenRefuse,
+
+            /// <summary>
+            /// What a 1.x server sends: its heartbeat, <c>"\0\0\0h\0"</c>, every 100 ms from the
+            /// moment it accepts, handshake or not, and nothing else. Started with TLS, it is a 1.x
+            /// server behind a TLS-terminating proxy.
+            /// </summary>
+            SpeakV1,
         }
+
+        private static readonly byte[] V1Heartbeat = { 0, 0, 0, (byte)'h', 0 };
 
         private readonly TcpListener _listener;
         private readonly CancellationTokenSource _lifetime = new CancellationTokenSource();
@@ -258,6 +268,14 @@ namespace HCIKonstanz.Colibri.E2E
                         await Refuse(client, stream, await ReadHandshake(stream, token).ConfigureAwait(false), token)
                             .ConfigureAwait(false);
                         break;
+
+                    case Behaviour.SpeakV1:
+                        // Until a write fails: the client hangs up on the first beat it reads.
+                        while (true)
+                        {
+                            await stream.WriteAsync(V1Heartbeat, 0, V1Heartbeat.Length, token).ConfigureAwait(false);
+                            await Task.Delay(100, token).ConfigureAwait(false);
+                        }
 
                     case Behaviour.HeartbeatThenRefuse:
                         // A beat before the handshake has even been read. The client reads it before

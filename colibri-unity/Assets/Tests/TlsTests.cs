@@ -72,6 +72,8 @@ namespace HCIKonstanz.Colibri.E2E
 
             yield return DestroyConnection();
             E2EServer.Configure();
+
+            LogAssert.ignoreFailingMessages = false;
         }
 
 
@@ -271,6 +273,29 @@ namespace HCIKonstanz.Colibri.E2E
             Assert.That(Connection.ConsecutiveEarlyFrameFailures, Is.Zero);
             Assert.That(Logged(LogType.Warning, Unanswered).Length, Is.EqualTo(1),
                 "Three sessions in a row closed without a frame should be named as such, once");
+        }
+
+        /// <summary>
+        /// The counterpart: a 1.x server behind a TLS-terminating proxy. The TLS handshake completes,
+        /// and then the server's heartbeats arrive, which this client cannot decode. With TLS that is
+        /// the one kind of session without a frame that still counts towards the suspicion.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator AnOutOfDateServerBehindATlsProxyIsStillSuspectedOfAMismatch()
+        {
+            // Every session ends on an "invalid frame from server" error, and the suspicion is one too.
+            LogAssert.ignoreFailingMessages = true;
+
+            var server = _cleanup.Add(FakeColibriServer.Start(FakeColibriServer.Behaviour.SpeakV1, useTls: true));
+            ConnectionTo(allowSelfSigned: false, pin: TestTls.CertificateSha256, tcpPort: server.Port);
+
+            yield return E2EServer.WaitUntil(() => Connection.SuspectedProtocolMismatch != null,
+                "Three sessions with a 1.x server behind a TLS proxy raised no suspicion", 20f);
+
+            Assert.That(Connection.SuspectedProtocolMismatch, Does.Contain("needs colibri-server >= 2.0.0"));
+            Assert.That(Connection.SuspectedProtocolMismatch, Does.Not.Contain("tick 'Server supports SSL/TLS'"),
+                "The client uses TLS already");
+            Assert.That(Logged(LogType.Warning, Unanswered), Is.Empty);
         }
 
 
