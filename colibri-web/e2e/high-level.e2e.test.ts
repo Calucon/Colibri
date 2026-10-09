@@ -971,6 +971,119 @@ describe('RegisterModelSync registering an id the server already has', () => {
     });
 });
 
+// A page on a link with some latency registers an id the server already has, and changes one field
+// before the answer for the id arrives. The update the page takes for that answer need not be it: an
+// update another client made can come first, and so can the answer to the request for every model.
+// With nothing held then, a change made after it went out at once, and the answer itself, made before
+// the server had the change, undid it on the page only.
+describe('RegisterModelSync changing a model registered under an id the server already has', () => {
+    class Pair extends SyncModel<Pair> {
+        @Synced()
+        accessor value = '';
+        @Synced()
+        accessor other = '';
+    }
+
+    /** A peer that holds 'session' and stays connected throughout, and a page behind a slow link. */
+    const peerAndSlowPage = async (prefix: string) => {
+        const app = uniqueApp(prefix);
+        const channel = uniqueApp('shared');
+        const peer = await createClient(app);
+        peer.sendMessage(channel, 'model::update', { id: 'session', value: 'running', other: 'theirs' });
+        await roundTrip(peer);
+        const link = await startLinkProxy(25);
+        const page = await createClientThrough(app, link);
+        const [models$, registerModel] = RegisterModelSync<Pair>({ name: channel, type: Pair });
+        // Set before registerModel, so the server's value replaces it.
+        const session = new Pair('session');
+        session.other = 'mine before registering';
+        return { channel, peer, page, models$, registerModel, session };
+    };
+
+    /** Resolves once `models$` shows `session` with `value`. */
+    const shown = (models$: Observable<Pair[]>, session: Pair, value: string) =>
+        firstValueFrom(
+            models$.pipe(
+                filter(ms => ms.includes(session) && session.value === value),
+                timeout(3000)
+            )
+        );
+
+    /** What the page, the server and the peer have for 'session' once everything has arrived. */
+    const outcome = async (page: Colibri, peer: Colibri, channel: string, session: Pair) => {
+        const peerSaw = await updatesDuring(peer, channel, async () => {
+            for (let i = 0; i < 3; i++) await roundTrip(page);
+            await roundTrip(peer);
+        });
+        return {
+            page: session.toJson(),
+            server: await storedOn(peer, channel, 'session'),
+            peerLastSaw: peerSaw.at(-1)
+        };
+    };
+
+    // The change everywhere, and the server's value for the field the page did not change.
+    const expected = {
+        page: { id: 'session', value: 'mine', other: 'theirs' },
+        server: { id: 'session', value: 'mine', other: 'theirs' },
+        peerLastSaw: { id: 'session', value: 'mine' }
+    };
+
+    it('in the same tick as registerModel', async () => {
+        const { channel, peer, page, models$, registerModel, session } = await peerAndSlowPage('modelsync-same-tick');
+        await listed(page);
+
+        registerModel(session);
+        session.value = 'mine';
+
+        expect(await outcome(page, peer, channel, session)).toEqual(expected);
+        expect(latest(models$)).toEqual([session]);
+    });
+
+    it('after registerModel, before the answer', async () => {
+        const { channel, peer, page, models$, registerModel, session } =
+            await peerAndSlowPage('modelsync-before-answer');
+        await listed(page);
+
+        registerModel(session);
+        await new Promise(resolve => setTimeout(resolve, 10));
+        session.value = 'mine';
+
+        expect(await outcome(page, peer, channel, session)).toEqual(expected);
+        expect(latest(models$)).toEqual([session]);
+    });
+
+    it("after another client's update, before the answer", async () => {
+        const { channel, peer, page, models$, registerModel, session } = await peerAndSlowPage('modelsync-after-relay');
+        await listed(page);
+
+        const relayed = shown(models$, session, 'paused');
+        registerModel(session);
+        // The server reads this before the request for the id, which takes 25 ms more to reach it.
+        peer.sendMessage(channel, 'model::update', { id: 'session', value: 'paused' });
+        await relayed;
+        session.value = 'mine';
+
+        expect(await outcome(page, peer, channel, session)).toEqual(expected);
+        expect(latest(models$)).toEqual([session]);
+    });
+
+    it('after the answer to the request for every model, before the answer', async () => {
+        const { channel, peer, page, models$, registerModel, session } = await peerAndSlowPage('modelsync-after-all');
+        // Asked for every model by now, and registered while that answer is on its way, far enough
+        // behind it for a change made when it arrives to go out before the answer for the id comes.
+        await new Promise(resolve => setTimeout(resolve, 15));
+
+        const answered = shown(models$, session, 'running');
+        registerModel(session);
+        await answered;
+        session.value = 'mine';
+
+        expect(await outcome(page, peer, channel, session)).toEqual(expected);
+        expect(latest(models$)).toEqual([session]);
+    });
+});
+
 describe('RemoteLogger high-level API', () => {
     it('forwards console.info without throwing or breaking the connection', async () => {
         const { singleton } = await createSingletonWithPeer(uniqueApp('logger-app'));
