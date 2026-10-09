@@ -131,7 +131,7 @@ with listeners and the last 20 messages. All console messages: [guide](docs/guid
 | `Store.Get` or `Store.Put` fails | Wrong server address, or plain HTTP blocked ("Insecure connection not allowed") | Check the URL in the log. Allow HTTP or enable TLS, see [Configuration](#configuration). |
 | `NullReferenceException` in `TMP_Settings` in a sample scene | TMP Essential Resources missing | *Window → TextMeshPro → Import TMP Essential Resources* ([details](docs/guide.md#samples)) |
 | Unknown objects or messages appear | Another project uses the same app name | Choose a unique app name |
-| Works in the Editor but not on the Quest | Android Player settings, or a server address the headset cannot reach such as `localhost` | See [Meta Quest](#meta-quest) and the `Colibri (Android build): …` warnings |
+| Works in the Editor but not on the Quest | Android Player settings, or a server address the headset cannot reach such as `localhost` | See [Meta Quest](#meta-quest) and the `Colibri (Android build): …` and `Colibri (build): …` warnings |
 
 ## Testing
 
