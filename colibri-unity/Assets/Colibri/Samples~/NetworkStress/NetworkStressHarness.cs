@@ -638,12 +638,15 @@ namespace HCIKonstanz.Colibri.Samples
             Row("Worst", $"{_rttWorst:0.0} ms");
             Row("Echoed", $"{_probesEchoed} of {_probesSent}   ({_echoPerSecond:0}/s)");
 
+            // The rate limit is the likeliest of these: the scene's defaults, 100 moving objects at
+            // 30 updates a second each, are three times the server's default of 1000 a second.
             if (_probesLost > 0)
             {
                 var percent = 100f * _probesLost / Mathf.Max(1L, _probesSent);
                 GUILayout.Label(
-                    $"Lost {_probesLost} probe(s) ({percent:0.0}%). These messages were dropped: the server "
-                    + "discards writes to a client whose socket is more than 1 MB behind, and logs it.",
+                    $"Lost {_probesLost} probe(s) ({percent:0.0}%). The server drops broadcasts from a client over "
+                    + "CLIENT_MESSAGE_RATE_LIMIT (1000 msg/s by default) or while it is overloaded, and writes to a "
+                    + "client more than 1 MB behind. See the server log.",
                     _warningStyle);
             }
 
