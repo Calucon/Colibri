@@ -41,8 +41,8 @@ volumes:
 
 Admin UI: `http://<server-ip>:9011`.
 
-To build from a checkout, run `docker compose up -d` in `colibri-server`, which builds from source
-and keeps the data in `./data`. Or replace the `image:` line with
+To build from a checkout, run `docker compose up -d` in `colibri-server`. That compose file builds the
+image from source and keeps the data in `./data`. Alternatively, replace the `image:` line with
 `build: <path to the checkout>/colibri-server`.
 
 The image sets `NODE_ENV=production` and runs the server as PID 1. On `docker stop`, the server
@@ -128,7 +128,7 @@ with its default.
 | `CONSOLE_LOG_BROADCAST_TRAFFIC` | `false` | `true` also prints every `broadcast::` message, regardless of `CONSOLE_LOG_LEVEL` |
 | `TCP_INBOUND_BACKLOG_LIMIT` | `2000` | Messages from Unity clients that may wait for the main thread before [load limiting](#load-limits) starts. `0`: no limit. |
 | `CLIENT_MESSAGE_RATE_LIMIT`, `CLIENT_MESSAGE_RATE_BURST` | `1000`, `2000` | `model::update` and `broadcast::` messages per second one Unity or web client may send, and the burst after a quieter period. Beyond that, [load limiting](#load-limits) applies. Catches runaway send loops. `0`: no limit. The burst must be at least 1. |
-| `TCP_IDLE_TIMEOUT_SECONDS` | `10` | Seconds a Unity client may send nothing, heartbeat replies included, before it is disconnected ([Idle timeout](#idle-timeout)). `0`: never. |
+| `TCP_IDLE_TIMEOUT_SECONDS` | `10` | Seconds a Unity client may send nothing, heartbeat echoes included, before it is disconnected ([Idle timeout](#idle-timeout)). `0`: never. |
 | `APP_CLIENT_WARNING_THRESHOLD` | `8` | Warn when one app has more clients than this, Unity and web together, admin UI excluded. Common cause: separate projects using the same app name. `0`: never. |
 | `MODEL_TOMBSTONE_SECONDS` | `600` | Seconds a deleted synced object (model) is remembered. Meanwhile updates for it are ignored, so they cannot re-create it, and a re-request after a reconnect is answered with a delete. A client with the object in its scene again ends this early. Cleared with the app's models when its last client leaves. `0`: off. See [Deleted models](protocol.md#deleted-models). |
 | `TLS_CERT`, `TLS_KEY` | empty | PEM files of the certificate with its chain, and of its private key. With both set, the TCP and web ports serve [TLS](#tls) only. |
@@ -269,7 +269,8 @@ the fix.
 | INFO `TLS handshake with <address> failed: ...` | The client refused the certificate, closed the connection during the handshake (a common way to refuse one), or timed out | Follow the certificate hint in the message |
 | WARN `TLS_CERT or TLS_KEY has changed, but cannot be used: ... Still serving the certificate with SHA-256 fingerprint ...` | Incomplete or broken renewal | See [Renewal](#renewal) |
 
-Refusals and failed handshakes are logged at most once a minute per address, repeats at debug level.
+Refusals and failed handshakes are logged at most once a minute per address. Repeats are logged at
+debug level.
 
 ### Reverse proxy
 
@@ -346,8 +347,8 @@ dropped. A shorter one logs a debug line, or a warning if it lost updates.
 - **Backlog warning:** the server as a whole receives more than it can process. Sync fewer objects,
   less often, or with fewer clients per app.
 - **Rate warning:** the named client sends far more than the others, usually because it sends every
-  frame without a rate cap. Normal clients stay far below the limit. 10 objects at 72 Hz are 720
-  updates a second.
+  frame without a rate cap. Normal clients stay far below the limit. Syncing 10 objects at 72 Hz sends
+  720 updates a second.
 
 ### Idle timeout
 
@@ -361,11 +362,11 @@ which the operating system notices only after many minutes. A connection without
 this time is closed too.
 
 A message over 64 KiB contains no heartbeat, so a client reading it over a slow link echoes nothing
-until it is through. Until the client echoes a heartbeat sent after that message, its timeout grows by
-one timeout per 64 KiB of the message, at most 6 (60 s at the default). A 4 MiB message therefore needs
-about 60 KB/s or more. A slower client is disconnected, and the warning names the message size.
-Smaller messages need no extra time. A headset that is gone when such a message is sent, or goes while
-reading it, is detected within 7 timeouts (70 s) at worst
+until it is through. Until the client echoes a heartbeat sent after that message, its timeout is
+extended by one `TCP_IDLE_TIMEOUT_SECONDS` per 64 KiB of the message, at most 6 times (60 s at the
+default). A 4 MiB message therefore needs about 60 KB/s or more. A slower client is disconnected, and
+the warning names the message size. Smaller messages need no extra time. A headset that is gone when
+such a message is sent, or goes while reading it, is detected within 7 timeouts (70 s) at worst
 ([Heartbeat / latency](protocol.md#heartbeat--latency)).
 
 colibri-unity echoes heartbeats off Unity's main thread, so a long scene load does not trigger the
