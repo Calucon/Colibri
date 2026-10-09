@@ -126,7 +126,7 @@ namespace HCIKonstanz.Colibri.Setup
             Row("Server", $"{connection.ServerAddress}:{connection.TcpPort}{(connection.UsesTls ? "  TLS" : "")}");
             Row("App Name", string.IsNullOrEmpty(connection.AppName) ? "(not set)" : connection.AppName);
             Row("Protocol", status == ConnectionStatus.ProtocolMismatch
-                ? $"v{WebServerConnection.ClientVersion} (binary TCP) - server speaks v{connection.ServerVersion ?? "unknown"}"
+                ? $"v{WebServerConnection.ClientVersion} (binary TCP), server speaks v{connection.ServerVersion ?? "unknown"}"
                 : $"v{WebServerConnection.ClientVersion} (binary TCP)");
 
             if (status == ConnectionStatus.ProtocolMismatch)
@@ -148,7 +148,7 @@ namespace HCIKonstanz.Colibri.Setup
                 Row("Heartbeat",
                     gap < HeartbeatConcernMillis
                         ? "OK"
-                        : $"missing for {gap / 1000f:0.0} s - dropping the connection soon");
+                        : $"missing for {gap / 1000f:0.0} s, about to drop the connection");
 
                 DrawCertificate(connection);
                 DrawDeliveryRate(connection);
@@ -223,7 +223,7 @@ namespace HCIKonstanz.Colibri.Setup
             {
                 EditorGUILayout.HelpBox(
                     $"Messages are only handed to your code once per frame, and this client is "
-                    + $"running at {fps:0} fps - so anything arriving waits up to {delayMillis:0} ms "
+                    + $"running at {fps:0} fps, so anything arriving waits up to {delayMillis:0} ms "
                     + "before it is applied. This is local, not the network. An Editor window in "
                     + "the background is the usual reason: Unity throttles it. Enable "
                     + "Edit > Project Settings > Player > Run In Background, and click the "
