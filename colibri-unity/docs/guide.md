@@ -101,7 +101,8 @@ while the project has no configuration. *Save Config* writes `Assets/Resources/C
 - The window warns about common app names, in any case: `myAppName` (used by the web client's
   samples), `myApp`, `appName`, `app`, `test`, `testApp`, `demo`, `example`, `colibri`, `default`.
 - On a headset or phone, `localhost` is the device. Enter the server's LAN IPv4 address.
-- Valid changes take effect immediately, in Play mode too, before saving.
+- Valid changes apply at once, without saving. An open connection keeps its server and App Name
+  until it reconnects ([Voice Chat](#voice-chat)).
 - Invalid values, such as port 0, are marked as errors and neither used nor saved. The setting keeps
   its last valid value. The window shows the typed value until you correct it or close the window.
 - Changes made elsewhere, such as in the asset's Inspector, appear in the window and are kept.
