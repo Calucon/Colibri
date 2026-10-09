@@ -14,8 +14,8 @@ Overview and quick start: [README](../README.md). Release notes and breaking cha
 - [Usage](#usage)
     - [Sending data between clients](#sending-data-between-clients)
     - [SyncModel](#syncmodel)
-    - [Remote Store](#remote-store)
-    - [Web Interface for Logging](#web-interface-for-logging)
+    - [Remote store](#remote-store)
+    - [Web interface for logging](#web-interface-for-logging)
 - [Samples](#samples)
 - [Development](#development)
 
@@ -342,7 +342,7 @@ and is applied. This also holds if the connection dies again before the answer o
   connection, and the server relays an update to every client except the sender. Call `RegisterModelSync` once per
   channel and share what it returns.
 
-### Remote Store
+### Remote store
 
 The server stores data persistently under a `key`, per app name. All clients of the app can read and write it.
 
@@ -368,12 +368,12 @@ const stored = await GetRestApi(key);
   stores nothing.
 - `setRestObject` resolves to `false` if the server did not store the value. `getRestObject` resolves to `null` if
   there is no such key or the server answered with an error. Both reject if the server cannot be reached.
-- Keys are URL-encoded. Any key works, including `/`, `#`, `?`, `%` and spaces, and addresses the same value as
+- Keys are URL-encoded. Any key works, including `/`, `#`, `?`, `%` and spaces. A key addresses the same value as in
   Unity's `Store`.
 - Whitespace around a key and leading slashes are stripped. An empty key, `.` or `..` stores and finds nothing
   (`false` and `null`).
 
-### Web Interface for Logging
+### Web interface for logging
 
 `RemoteLogger` sends `console` output to the server, for devices without easy console access such as VR headsets and
 smartphones.
@@ -386,11 +386,12 @@ logger.disable(); // stop forwarding
 logger.enable(); // forward again
 ```
 
-- Forwarded lines appear in the admin UI at `http://<your-server>:9011`, and in the server's console output
+- Forwarded lines appear in the admin UI at `http://<your-server>:9011` and in the server's console output
   (`docker logs` for Docker). `console.debug` lines reach the console output only with `CONSOLE_LOG_LEVEL=debug`.
-- Create one `RemoteLogger`, at startup. A second one does not forward again. It warns once, and its `enabled`
-  argument, `enable()` and `disable()` then control the first one.
-- It may be created before `new Colibri()`. The first 100 lines until then are sent once Colibri exists. Further lines
+- Create one `RemoteLogger` at startup. A further instance does not forward a second time. It warns once
+  (`RemoteLogger: the console is already forwarded by an earlier new RemoteLogger() ...`). Its `enabled` argument,
+  `enable()` and `disable()` control the first instance.
+- It may be created before `new Colibri()`. The first 100 lines logged before then are sent once Colibri exists. Further lines
   are counted and reported in one warning.
 - Forwarding never makes a `console` call throw.
 
@@ -399,8 +400,8 @@ Sample: [remote-logging](../samples/remote-logging.ts) (`npm run samples/remote-
 ## Samples
 
 The [samples](../samples/) are TypeScript and run with [tsx](https://tsx.is/) against the sources. The interactive
-ones ask for the server address and port, with prompts shared in `common.ts`. `verification-peer` takes both as
-arguments and sends one value of every type, for testing against a Unity client.
+ones prompt for the server address and port (prompts in `common.ts`). `verification-peer` takes both as arguments and
+sends one value of every type, for testing against a Unity client.
 
 | Sample                                               | Run with                                             |
 | ---------------------------------------------------- | ---------------------------------------------------- |
@@ -418,7 +419,7 @@ arguments and sends one value of every type, for testing against a Unity client.
 | `npm run typecheck`    | Type-checks sources, samples and tests                                                           |
 | `npm run lint`         | Style check (ESLint)                                                                             |
 | `npm run format:check` | Formatting check (Prettier)                                                                      |
-| `npm run test:e2e`     | End-to-end tests against a real colibri-server (see below)                                       |
+| `npm run test:e2e`     | End-to-end tests against a real colibri-server                                                   |
 | `npm run release`      | Builds and publishes to npm. `npm publish` also builds first. Replaces the 1.x `publish` script. |
 
 `npm run test:e2e` starts a server from `../colibri-server` with Docker Compose on port 9011, unless
