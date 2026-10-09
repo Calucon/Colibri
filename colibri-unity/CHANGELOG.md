@@ -123,8 +123,10 @@ rationale, migration steps, and what the Editor verification did and did not cov
 - **A suspected mismatch, for the case the refusal cannot reach.** A server on genuinely different
   framing (a 1.x server) cannot decode this client's frames, and this client cannot decode its, so
   no refusal can arrive. After three sessions in a row that get past the handshake and then end
-  before a single frame decodes (however they end: a clean close, a reset or an undecodable frame),
-  the client logs that this usually means a protocol mismatch,
+  before a single frame decodes (a clean close, a reset or an undecodable frame; with TLS on, only
+  an undecodable frame), the client logs that this usually means a protocol mismatch, and without
+  TLS also names the causes that end connections the same way (TLS on the server only, a proxy or
+  port forwarding whose backend is down),
   `WebServerConnection.SuspectedProtocolMismatch` says the same, and `Window → Colibri Status`
   shows it as a yellow warning instead of advising you to check that colibri-server is running,
   which is the wrong advice when something is plainly answering on that port. It stays a
@@ -132,12 +134,16 @@ rationale, migration steps, and what the Editor verification did and did not cov
   refusal actually received, and the first frame a later session decodes clears it at once. A
   session that never got as far as sending the handshake ("connection refused" from a server that is
   simply not running) does not count, so that is still reported as what it is.
-- **Silence is not a suspected mismatch.** A session on which nothing arrives before the 2 s
-  heartbeat watchdog drops it does not count towards the suspicion, since neither a 1.x server
-  (it heartbeats from the moment it accepts) nor a server with TLS on (it hangs up) stays silent.
-  Three such sessions in a row get a warning of their own instead: something accepts connections
-  there but forwards nothing (a proxy or port forwarding whose backend is down, a captive portal, a
-  firewall), or the server does not answer or is not a colibri-server.
+- **Silence is not a suspected mismatch, nor is a close over TLS.** A session on which nothing
+  arrives before the 2 s heartbeat watchdog drops it does not count towards the suspicion, since
+  neither a 1.x server (it heartbeats from the moment it accepts) nor a server with TLS on (it hangs
+  up) stays silent. With TLS on, neither does a session closed or reset without a frame: past a
+  completed TLS handshake, a 1.x server behind a TLS-terminating proxy heartbeats, which fails to
+  decode, and a 2.x server sends a frame, so what closes it is usually a proxy whose backend is
+  down. Three such sessions in a row get a warning of their own instead: something accepts
+  connections there and then closes them or forwards nothing (a proxy or port forwarding whose
+  backend is down, a captive portal, a firewall), or the server does not answer or is not a
+  colibri-server.
 
 ## TLS
 
