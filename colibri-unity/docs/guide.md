@@ -429,8 +429,8 @@ synced. `UseLocalTransform` syncs local instead of world coordinates. See the Sy
 - Disabling only the `SyncTransform` component pauses syncing without hiding anything. Changes made
   meanwhile are sent when it is enabled again.
 - Destroying the object or unloading its scene, also by loading another scene in its place, deletes
-  it on the server and all clients for good. An update another client sent before the delete reached
-  it is ignored by the server and this client.
+  it on the server and all clients. The server and this client ignore an update another client sent
+  before the delete reached it.
 - Loading the scene again, on any client, lets its placed objects sync again between all clients
   that load it from then on, because the server no longer treats them as deleted. A client that kept
   the scene open lost its copies with the delete. It gets them back only by loading the scene again,
