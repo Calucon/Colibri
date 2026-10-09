@@ -37,6 +37,7 @@ namespace HCIKonstanz.Colibri.E2E
         private static readonly Regex Rejected = new Regex(@"^Colibri: rejected the certificate of ", RegexOptions.Singleline);
         private static readonly Regex NoTlsAnswer = new Regex(@"^Colibri: \S+ (accepted the connection but )?did not answer the TLS handshake", RegexOptions.Singleline);
         private static readonly Regex Unanswered = new Regex(@"^Colibri: 3 connections in a row to \S+ were accepted, but nothing was received on any of them: each was closed by the other end or dropped after 2 s of silence\.");
+        private static readonly Regex Failed = new Regex(@"^Colibri: connection to \S+ failed \(");
 
         private readonly List<(LogType Type, string Message, double Seconds)> _log = new List<(LogType, string, double)>();
         private readonly Stopwatch _clock = Stopwatch.StartNew();
@@ -252,6 +253,8 @@ namespace HCIKonstanz.Colibri.E2E
                 "A link that completed the TLS handshake and then sent nothing was reported as a suspected protocol mismatch");
             Assert.That(Logged(LogType.Warning, Unanswered).Length, Is.EqualTo(1),
                 "Three silent sessions in a row should be named as such, once");
+            Assert.That(Logged(LogType.Log, Failed), Is.Empty,
+                "A session the watchdog dropped was also logged as a failed connection, after the watchdog had said why");
         }
 
         /// <summary>

@@ -271,10 +271,13 @@ namespace HCIKonstanz.Colibri.E2E
             var connection = ConnectionTo(_scriptedServer.Port);
 
             var silenceWarnings = 0;
+            var failures = 0;
             void OnLog(string message, string stackTrace, LogType type)
             {
                 if (type == LogType.Warning && message.Contains("were accepted, but nothing was received on any of them"))
                     Interlocked.Increment(ref silenceWarnings);
+                if (Regex.IsMatch(message, @"^Colibri: connection to \S+ failed \("))
+                    Interlocked.Increment(ref failures);
             }
 
             Application.logMessageReceivedThreaded += OnLog;
@@ -290,6 +293,8 @@ namespace HCIKonstanz.Colibri.E2E
             Assert.That(connection.ConsecutiveEarlyFrameFailures, Is.Zero);
             Assert.That(silenceWarnings, Is.EqualTo(1),
                 "Three silent sessions in a row should be named as such, once");
+            Assert.That(failures, Is.Zero,
+                "A session the watchdog dropped was also logged as a failed connection, after the watchdog had said why");
             Assert.That(connection.Status, Is.Not.EqualTo(ConnectionStatus.ProtocolMismatch));
         }
 

@@ -245,6 +245,11 @@ namespace HCIKonstanz.Colibri.Networking
             // hint: neither a 1.x server nor one with TLS on stays silent.
             public volatile bool EndedSilent;
 
+            // Session-scoped: set by the watchdog in Update() when it drops the session, connected
+            // or not, before it closes the socket. The watchdog has said why, so the read or write
+            // that fails on the closed socket is not logged as a failed connection as well.
+            public volatile bool DroppedByWatchdog;
+
             // Session-scoped: set when the session ended on a frame this client could not decode,
             // the way every session with a 1.x server ends. With TLS, the only kind of session
             // without a frame that counts towards the framing hint; see CountSessionWithoutAFrame.
@@ -676,6 +681,7 @@ namespace HCIKonstanz.Colibri.Networking
             {
                 // Disarmed first so this does not re-fire every frame while the session unwinds.
                 loop.IsWatchdogArmed = false;
+                loop.DroppedByWatchdog = true;
 
                 if (Status == ConnectionStatus.Connected)
                 {
@@ -1057,6 +1063,7 @@ namespace HCIKonstanz.Colibri.Networking
                     loop.DecodedAnyFrame = false;
                     loop.ReachedHandshake = false;
                     loop.EndedSilent = false;
+                    loop.DroppedByWatchdog = false;
                     loop.EndedOnBadFrame = false;
                     await RunSession(loop, address, _tcpPort, handshakeApp, _useTls).ConfigureAwait(false);
                 }
@@ -1094,6 +1101,11 @@ namespace HCIKonstanz.Colibri.Networking
                 catch (TlsHandshakeException e)
                 {
                     ReportTlsFailure(e);
+                }
+                catch (Exception e) when (loop.DroppedByWatchdog && (e is SocketException || e is IOException))
+                {
+                    // The watchdog closed the socket under the session and has already said why. The
+                    // read that fails on it, with OperationAborted, would only say it again.
                 }
                 catch (SocketException e)
                 {
