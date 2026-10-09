@@ -555,7 +555,9 @@ otherwise spend on their prototype, so:
 - **`Window → Colibri Status`**: connection state, server, app name, protocol version, time since
   the last server heartbeat (not a latency: the heartbeat carries the *server's* clock), the
   channels with listeners and the type each expects, and the last 20 messages in and out. It uses
-  `FindAnyObjectByType`, never `WebServerConnection.Instance`, which *creates* a GameObject.
+  `FindAnyObjectByType`, never `WebServerConnection.Instance`, which *creates* a GameObject. Long
+  values wrap to the window's width, and the label column of the channel and message lists widens
+  to fit the longest channel name, so nothing is cut off at the window's default width.
 - **Status reports the delivery rate, not just the connection.** With the socket off the main
   thread, what is left between a message arriving and user code seeing it is one frame of *this*
   client's. So the window states it: the rate `Update` is running at, the delay that implies per
