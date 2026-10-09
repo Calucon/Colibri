@@ -169,8 +169,8 @@ client's address:
 - **TCP port:** with `TCP_PROXY_PROTOCOL=true`, a connection from a trusted peer must start with a
   PROXY protocol header, version 1 or 2, which names the Unity client
   ([PROXY protocol](protocol.md#proxy-protocol)). Other peers connect as before.
-- **Voice (UDP):** unchanged. nginx's PROXY protocol covers TCP only, so voice clients still show the
-  proxy's address.
+- **Voice (UDP):** unchanged. nginx's PROXY protocol covers TCP only, so voice sent through a proxy
+  still shows the proxy's address.
 
 With Docker, publish the web and TCP ports on `127.0.0.1`, so that clients reach them only through
 the proxy:
