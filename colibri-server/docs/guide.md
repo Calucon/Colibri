@@ -26,8 +26,8 @@ is in [protocol.md](protocol.md), and everything that changed since 1.x in
 
 The server connects the Unity clients (TCP) and web clients (Socket.IO) of each app: it relays
 their messages (`broadcast::`) and changes to synced objects (models) to each other, and keeps a
-copy of each app's models. It also stores values through a small REST API, relays voice over UDP,
-and serves an admin UI showing what every client logs.
+copy of each app's models. It also stores values through a small REST API, relays each app's voice
+over UDP, and serves an admin UI showing what every client logs.
 
 Colibri has no authentication: anyone who can reach these ports can join any app, read and change
 its data, and read the log. Run it on a network you trust.
@@ -329,9 +329,10 @@ The cost of TLS on a headset itself was not measured.
   clients; see [What the server relays](protocol.md#what-the-server-relays).
 - **REST store** at `/api/store` on the web port, saved to `store.json` in the data directory, see
   [REST store](protocol.md#rest-store).
-- **Voice relay** on UDP port 9013. It does not separate apps: every voice packet goes to every
-  other client currently sending voice to this server, and receivers pick voices by user id, so
-  apps that share a server need distinct voice user ids.
+- **Voice relay** on UDP port 9013. Each voice packet goes to the other clients of the sender's app
+  that are sending voice to this server. The app is an app id in the packet, the hash of the app
+  name; see [Voice packets](protocol.md#voice-packets-udp). Like the app name on TCP, it keeps
+  apps apart but is not access control. Voice is not encrypted.
 
 ### Logs
 
