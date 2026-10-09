@@ -46,6 +46,11 @@ namespace HCIKonstanz.Colibri.Networking
         // Main thread only: the App Name appId was computed from.
         private string appIdName = string.Empty;
 
+        // Main thread only: whether appIdName is an App Name at all, as ColibriConfig.IsConfigured
+        // has it, and whether sending without one has been reported since there last was one.
+        private bool hasAppName;
+        private bool hasReportedMissingAppName;
+
         // Receive thread in, main thread out - and there can be two receive threads at once:
         // OnDisable waits only 500 ms for the old one, so after a quick disable and enable it may
         // still be handing over a packet while the new one starts. Everything in the queues is
@@ -118,6 +123,9 @@ namespace HCIKonstanz.Colibri.Networking
 
             appIdName = appName;
             appId = VoicePacketCodec.AppId(appName);
+            hasAppName = !string.IsNullOrWhiteSpace(appName);
+            if (hasAppName)
+                hasReportedMissingAppName = false;
         }
 
         /// <summary>
@@ -325,11 +333,34 @@ namespace HCIKonstanz.Colibri.Networking
         public void SendByteData(short id, short sequence, short frameSize, Codec codec, byte[] data)
         {
             var client = udpClient;
-            if (client == null)
+            if (client == null || !TryEncodeToSend(id, sequence, frameSize, codec, data, out var bytes))
                 return;
 
-            byte[] bytes = VoicePacketCodec.Encode(appId, id, sequence, frameSize, codec, data);
             client.Send(bytes, bytes.Length, sendIPEndPoint);
+        }
+
+        /// <summary>
+        /// The voice packet to send, with this client's app id, or false without an App Name: the
+        /// TCP connection does not connect without one, and voice sent with the empty name's app id
+        /// would reach every other client on the server that has none. Says so once, until there is
+        /// an App Name again.
+        /// </summary>
+        /// <remarks>Main thread only; internal for the EditMode tests.</remarks>
+        internal bool TryEncodeToSend(short id, short sequence, short frameSize, Codec codec, byte[] data, out byte[] packet)
+        {
+            if (!hasAppName)
+            {
+                packet = null;
+                if (!hasReportedMissingAppName)
+                {
+                    hasReportedMissingAppName = true;
+                    Debug.LogError($"Colibri voice: no voice is sent without an App Name. {ColibriConfig.NOT_CONFIGURED_MESSAGE}");
+                }
+                return false;
+            }
+
+            packet = VoicePacketCodec.Encode(appId, id, sequence, frameSize, codec, data);
+            return true;
         }
 
         public void AddVoicePacketListener(short id, Action<VoicePacket> listener)
