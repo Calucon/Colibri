@@ -508,19 +508,18 @@ A `model::request` has three forms. Fields other than `id` and `again` are ignor
 
 `again` must be the JSON value `true`. Any other value makes the request a fresh one.
 
-A **bare `{ "id": "…" }`** means the server has no model for that id, so the requester's copy is all
-there is. The requester then sends its full state as a `model::update`, which creates the model on the
-server and reaches the other clients. If the server has the model, its values win. colibri-web then
-sends on top of them the changes made while it waited for that answer, since `registerModel` or since
-the connection dropped. colibri-unity does the same with the members a `SyncBehaviour` changed since
-`Awake`.
+A **bare `{ "id": "…" }`** means the server has no model for that id. The requester then sends its
+full state as a `model::update`, which creates the model on the server and reaches the other clients.
+If the server has the model, its values win. colibri-web then sends on top of them the changes made
+while it waited for that answer, since `registerModel` or since the connection dropped. colibri-unity
+does the same with the members a `SyncBehaviour` changed since `Awake`.
 
 How the clients use the three forms:
 
 - **colibri-unity.** A `SyncBehaviourManager`, and a `Sync.AddModelUpdateListener` without an id,
   request the whole channel. A `SyncBehaviour` placed in a scene or created on this client sends a fresh
   request for its id in `Awake`. A copy that a `SyncBehaviourManager` builds because another client
-  created the object sends none: it is not this client's object, and a fresh request would bring back
+  created the object sends none. It is not this client's object, and a fresh request would bring back
   one deleted a moment ago. After a reconnect, every object is re-requested by id and every channel a
   manager listens on is requested again, followed by an [end marker](#end-marker). An object whose
   first answer arrives after it changed its own members also sends an end marker, ahead of those
@@ -532,11 +531,14 @@ How the clients use the three forms:
     followed by an [end marker](#end-marker). A model registered while the connection was down gets a
     fresh request.
   - A registered model is requested once more, with `again: true`, followed by an end marker, when the
-    changes made while it waited replaced values the server had. By then, the last value an update
-    showed for a sent field is the server's. If it is the sent value, nothing happens. Another client's
-    value is applied. The replaced value means the update has not arrived yet, because the server holds
-    back updates of a client over its rate limit, never a request. The field is then sent again. Changes
-    made meanwhile go out without another request.
+    changes made while it waited replaced values the server had. When that answer is in, the last value
+    an update showed for a sent field is the server's:
+    - The sent value: nothing happens.
+    - Another client's value: applied.
+    - The replaced value: the update has not arrived yet, because the server holds back updates of a
+      client over its rate limit, never a request. The field is sent again.
+
+    Changes made meanwhile go out without another request.
   - The whole channel is requested once all of these answers are in, followed by an end marker.
   - An end marker also follows the first update with fields after a fresh request for a registered
     model, unless the model or the whole channel is requested next. That update may be another
@@ -549,7 +551,7 @@ How the clients use the three forms:
 
 On the wire, an answer is an ordinary `model::update`, like an update relayed from another client
 meanwhile. After a reconnect, and in the other cases listed per client, a client therefore sends one
-more request after the others: `{ "id": "<fresh id>", "again": true }` on the channel
+more request after the others, `{ "id": "<fresh id>", "again": true }` on the channel
 `colibri::reconnect`, where Colibri never stores a model. The server answers with the bare id, like any
 other, and the client takes that answer as the end of the answers to its earlier requests.
 
@@ -565,13 +567,13 @@ other, and the client takes that answer as the end of the answers to its earlier
   fields that follows a fresh request when it does neither (see above).
 
 The server has no code for this. The marker relies on the server handling one client's messages in
-arrival order and writing its answers to that client in the same order, which must stay so. The bare id
-then follows the answers to all earlier requests. A server that answered one client's requests out of
-order would mark the end too early.
+arrival order and writing its answers to that client in the same order. Server changes must keep both
+properties. The bare id then follows the answers to all earlier requests. A server that answered one
+client's requests out of order would mark the end too early.
 
 ### Deleted models
 
-Each `model::delete` leaves a tombstone: for `MODEL_TOMBSTONE_SECONDS` (default 600 s), the server
+Each `model::delete` leaves a tombstone. For `MODEL_TOMBSTONE_SECONDS` (default 600 s), the server
 remembers per app and channel that the id was deleted. Meanwhile:
 
 - **Updates for it are ignored:** neither stored nor relayed, with a debug line. Otherwise an update
@@ -587,7 +589,7 @@ remembers per app and channel that the id was deleted. Meanwhile:
 
 A tombstone also expires after `MODEL_TOMBSTONE_SECONDS`, and is cleared with the app's models once
 the app's last client has left. An app keeps at most 10,000, the oldest going first. With
-`MODEL_TOMBSTONE_SECONDS=0` the server keeps none: a re-request for a deleted id is then answered with
+`MODEL_TOMBSTONE_SECONDS=0` the server keeps none. A re-request for a deleted id is then answered with
 the bare id, the requester sends the object again, and it comes back for everyone.
 
 A tombstone cannot stop an update the server relayed before the delete arrived, e.g. one another client
@@ -602,56 +604,60 @@ answer for an object they hold:
 
 - **The model:** applied, so changes other clients made during the outage arrive, unless the answer
   shows that the client's own last change was lost (see below).
-- **The bare id:** the server has forgotten the model, after a restart or because the app's last client
-  had left, which is what a lone client's outage looks like to the server. The client sends its full
-  state again, so the model is back on the server for clients that join later.
+- **The bare id:** the server has no model any more, after a restart or because the app's last client
+  had left, as happens when an app's only client loses its connection. The client sends its full state
+  again, so the model is back on the server for clients that join later.
 - **`model::delete`:** another client deleted the object during the outage. The client removes its
   copy.
 
 colibri-unity sends these requests at once, behind the messages it queued during the outage, so an object
 changed meanwhile may not be sent in full ([Known limits](#known-limits)). colibri-web holds such changes
 back until the model's answer has arrived. It requests the whole channel only once all of its own models
-have their answers, so that this answer includes what it sent in between. [Known limits](#known-limits)
-lists what a reconnect does not catch up on.
+have their answers, so that this answer includes what it sent in between.
 
 **Changes lost at the drop.** A connection that dies without closing, e.g. when the Wi-Fi drops out, is
 detected only later: by colibri-unity after 2 s without a heartbeat, by Socket.IO after its ping
 timeout, within 45 s with the server's defaults. What a client sends until then is lost, and the answer
 has the old value. Applying it would undo a change no other client ever saw. Both clients therefore
-compare the answer with what they sent:
+compare the answer with what they sent.
 
 - **colibri-unity**
-  - For each `[Sync]` member, it keeps the values sent around the last time it heard from the server,
-    whose heartbeat comes every 100 ms: the latest 8 up to then, the first 8 after, and the newest. The
-    link died shortly after, so the server's value was sent around then. What the next connection
-    receives before the re-requests go out does not count.
+  - For each `[Sync]` member, it keeps the latest 8 values sent up to the last frame it received from
+    the server, the first 8 sent after, and the newest. The server sends a heartbeat every 100 ms, so
+    the link died shortly after that frame, and the server's value was sent around then. What the next
+    connection receives before the re-requests go out does not count.
   - From its re-request until the end of the answers, these stay fixed. Of what the member sends
     meanwhile, only the newest is kept as well, since no answer can hold it.
-  - It also keeps the member's value before those: the last one dropped, or the one the server last
-    showed it, in another client's update or in an answer.
+  - It also keeps the member's value before those. That is the last value dropped from this list, or
+    the last value received from the server, in another client's update or in an answer.
   - Everything received for an object from its re-request until the end of the answers
-    ([End marker](#end-marker)), other clients' updates included, is compared member by member with the
-    values the member held from 10 s before the client noticed the outage: those sent since, and the one
-    held at that point. The value sent last needs nothing. An earlier one means the last change was
-    lost: the member keeps its value, sends it again once in an ordinary update, and takes nothing more
-    until the answers end. A member changed after the re-requests does the same whatever arrives,
-    because the server reads that change after all of it. Any other value is applied, as is everything
-    for a member that sent nothing in those 10 s. A member missing from an update is left alone. An
-    object that has never sent anything applies everything.
-  - On noticing the outage, it sends again every `model::delete` sent after it last heard from the
-    server or in the second before, unless the delete is 60 s old or older. The connection holds them
-    for the next session, ahead of the re-requests. If the connection drops again before the end of the
-    answers, it sends them once more, however old, with every `model::delete` sent since it noticed the
-    outage, except for ids it has requested afresh since.
-- **colibri-web** compares everything received for a registered model from its re-request until the end
-  of the answers, other clients' updates included, field by field with the value the server last showed
-  it and the values sent since. Of these it keeps the latest 8 up to the last time it heard from the
-  server, the first 8 after, and the newest. The server's latency message arrives every 100 ms, so the
-  connection failed shortly after that time, and the server's value was sent around then.
-  - An earlier value that the field still had in the 10 s before that time means the last change was
-    lost. The field keeps its value and takes nothing more until the answers end. Its local value then
-    goes out again in one `model::update` with the changes held back since the outage, followed by
-    another request with `again: true`.
+    ([End marker](#end-marker)), other clients' updates included, is compared member by member with
+    the values the member held from 10 s before the client noticed the outage: those sent since, and
+    the one held at that point.
+    - The value sent last: nothing happens.
+    - An earlier one: the last change was lost. The member keeps its value, sends it again once in an
+      ordinary update, and takes nothing more until the answers end. A member changed after the
+      re-requests does the same whatever arrives, because the server reads that change after
+      everything that arrives before the end of the answers.
+    - Any other value: applied, as is everything for a member that sent nothing in those 10 s.
+
+    A member missing from an update is left alone. An object that has never sent anything applies
+    everything.
+  - On noticing the outage, it sends again every `model::delete` sent after the last frame it received
+    from the server or in the second before, unless the delete is 60 s old or older. The connection
+    holds them for the next session, ahead of the re-requests. If the connection drops again before
+    the end of the answers, it sends them once more, however old, with every `model::delete` sent
+    since it noticed the outage, except for ids it has requested afresh since.
+- **colibri-web** compares everything received for a registered model from its re-request until the
+  end of the answers, other clients' updates included, field by field with the last value received
+  from the server and the values sent since. Of these it keeps the latest 8 up to the last message it
+  received from the server, the first 8 after, and the newest. The server's latency message arrives
+  every 100 ms, so the connection failed shortly after that message, and the server's value was sent
+  around then.
+  - An earlier value that the field still had in the 10 s before that message means the last change
+    was lost. The field keeps its value and takes nothing more until the answers end. Its local value
+    then goes out again in one `model::update` with the changes held back since the outage, followed
+    by another request with `again: true`.
   - Any other value is applied. A field missing from an update is left alone.
 
 Both clients keep the answer's value for a lost member or field as the server's. If the connection drops
@@ -757,22 +763,21 @@ instead of the bare id, and the full state is not sent. The other fields reach t
 they change. A client joining meanwhile has its own starting values for them: the template's, or for an
 object placed in the scene, the scene's.
 
-**A lost change is told from another client's change by its value alone**
-([After a reconnect](#after-a-reconnect)):
+**Lost changes are detected by value only** ([After a reconnect](#after-a-reconnect)):
 
 - Another client that sets a member or field back during the outage, to a value the reconnecting client
   had in the 10 s before the outage, looks like a lost change, and the reconnecting client sends its
   own value over it. Both clients judge every update arriving before the end of the answers this way,
   even one another client made after the reconnect.
 - Both clients may miss a member or field that changed more than about 8 times within 100 ms of the
-  last time they heard from the server. For colibri-unity, that takes a send-rate limit above about 80
-  updates a second.
+  last frame or message they received from the server. For colibri-unity, that takes a send-rate limit
+  above about 80 updates a second.
 - colibri-unity may miss a member that changed more than once between a reconnect and a second drop
   before the end of the answers. It does not send again a member whose very first value was lost,
   since it held nothing before it.
 - colibri-web checks only the models it registered. It sends again a field it sent on top of an answer
-  when the server still shows the replaced value once the model was requested once more
-  ([Requests](#requests)), even if another client set it back in that round trip.
+  when the answer to the repeated request still holds the replaced value ([Requests](#requests)), even
+  if another client set it back in that round trip.
 - A value sent again can cross a change another client makes right after the answers, like any two
   simultaneous changes.
 - A `model::delete` colibri-unity sends again after an outage also removes an object another client has
