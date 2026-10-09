@@ -145,7 +145,9 @@ Colibri component from 1.x.
   change, and never sends a client's own update back to it, so this page showed the old value
   while the server and every other client had the new one. `RegisterModelSync` now sends one more
   request on `colibri::reconnect` after that one, and keeps the fields it sends out of every update
-  until the answer: whatever arrives before then was made before the server had them.
+  until the answer: whatever arrives before then was made before the server had them. Every
+  `RegisterModelSync` on the channel does so, as each receives the answers to the others' requests,
+  such as those of one created later on a re-render.
 - A change to a model is no longer undone by an update for it that arrives before the change is
   sent, 1 ms after it is made. The update was applied over the change, which then went out with
   the update's value, so it was lost on every client. The server reads the change after that
