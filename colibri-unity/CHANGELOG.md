@@ -354,7 +354,9 @@ rationale, migration steps, and what the Editor verification did and did not cov
   a packet while the new one starts), and which, being static, could hand one connection's packets
   to the next. `VoicePacketCodec` encodes and decodes the packets, and a received one is played only
   if it carries this client's app id. A datagram shorter than the header used to throw on the
-  receive thread and log the exception, once per datagram; it is dropped now.
+  receive thread and log the exception, once per datagram; it is dropped now. Without an App Name
+  no voice is sent, and an error says so once: the TCP connection does not connect without one,
+  but voice went out regardless.
 - **`Store`** serializes with Newtonsoft instead of `JsonUtility`, which cannot handle dictionaries,
   properties, or top-level arrays and so silently disagreed with what `Sync` can carry. What that
   costs a 1.x project is under Breaking changes. A value that cannot be converted, or a saved
