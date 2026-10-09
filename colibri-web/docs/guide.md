@@ -285,10 +285,12 @@ sent until that answer.
 `RegisterModelSync` and registering instances may happen before `new Colibri()`; the server is asked once it is
 created. After a reconnect, Colibri asks the server again for each instance this client registered, then for all the
 others, so what changed in the meantime is applied. A change made while that answer is on its way, at first or after a
-reconnect, is kept: the server made the answer before it had the change. An instance the server no longer has is sent
-again in full: the server forgets an app's models when it restarts and when the app's last client disconnects, which is
-what a lone client's outage looks like to it. A registered instance another client deleted during the outage is removed
-from the list, if the delete is no more than `MODEL_TOMBSTONE_SECONDS` (10 minutes by default) old. See
+reconnect, is kept: the server made the answer before it had the change. So is a change not yet sent when an update for
+the instance arrives: `SyncModel` sends changes 1 ms after they are made, and the server reads the change after that
+update. An instance the server no longer has is sent again in full: the server forgets an app's models when it restarts
+and when the app's last client disconnects, which is what a lone client's outage looks like to it. A registered instance
+another client deleted during the outage is removed from the list, if the delete is no more than
+`MODEL_TOMBSTONE_SECONDS` (10 minutes by default) old. See
 [After a reconnect](../../colibri-server/docs/protocol.md#after-a-reconnect) in the protocol docs.
 
 A change to a registered instance made just before the connection dies without closing (Wi-Fi dropping out, say) may

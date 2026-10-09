@@ -146,6 +146,10 @@ Colibri component from 1.x.
   while the server and every other client had the new one. `RegisterModelSync` now sends one more
   request on `colibri::reconnect` after that one, and keeps the fields it sends out of every update
   until the answer: whatever arrives before then was made before the server had them.
+- A change to a model is no longer undone by an update for it that arrives before the change is
+  sent, 1 ms after it is made. The update was applied over the change, which then went out with
+  the update's value, so it was lost on every client. The server reads the change after that
+  update, so the change is now kept.
 - `registerModel` with an id that `models$` already lists replaces that entry instead of listing
   the id twice. The replaced instance stops syncing (with a console warning if it was registered
   on this client), and registering the same instance again does nothing.
