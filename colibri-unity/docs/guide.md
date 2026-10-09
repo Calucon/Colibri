@@ -785,17 +785,23 @@ instead, and the client keeps retrying.
 
 <img src="../img/weblogger.png" alt="WebLogger" width=400/>
 
-Colibri provides a *web logger* with web interface to send diagnostic data (currently: console logs) to the server. This may be useful for devices (e.g., VR devices, smartphones) where access to the console is not easily available.
+The web logger sends diagnostic data, currently console logs, to the server's web interface. Use it
+on devices without an accessible console, such as VR headsets and smartphones.
 
-To setup, add the `[RemoteLogger]` prefab to your scene. The Unity log output should be redirect to your server's webinterface, which can be accessed via `http://<your-server-ip>:9011`.
+Add the `[RemoteLogger]` prefab to the scene. The Unity log then appears at
+`http://<your-server-ip>:9011`.
 
-Log lines are sent once a second, and identical lines in one batch are sent once. At most the newest 1000 lines are kept between two sends (while the connection is down, that is the whole outage) and sent once it is back. Where older lines had to be dropped, the server's log shows one line in their place, `Colibri: N log lines are missing here …`; the device's own log keeps everything. If the server refuses the client's protocol version, the kept lines are discarded.
+- Log lines are sent once per second. Identical lines in one batch are sent once.
+- Between two sends, at most the newest 1000 lines are kept. During an outage, this covers the whole
+  outage, and the lines are sent once the connection is back.
+- Where older lines were dropped, the server log shows one line instead:
+  `Colibri: N log lines are missing here …`. The device's own log keeps everything.
+- If the server refuses the client's protocol version, the kept lines are discarded.
 
 ## Voice Chat
 
-Colibri also offers a voice chat for remote scenarios. The voice chat consists of two scripts `VoiceBroadcast` and `VoiceReceiver`.
-
-`VoiceBroadcast` records the microphone audio and streams it over the network. Simply attach the script to an empty `GameObject`. To start broadcasting, call `StartBroadcast` on that component with any (`short`) voice id except `0`; `StopBroadcast` stops it again:
+`VoiceBroadcast` records the microphone and streams the audio. Add it to an empty GameObject. Call
+`StartBroadcast` with any `short` voice id except `0`, and `StopBroadcast` to stop:
 
 ```c#
 // The VoiceBroadcast component, assigned in the Inspector
@@ -809,9 +815,12 @@ void Start()
 }
 ```
 
-On Android (Meta Quest), `VoiceBroadcast` asks for the microphone permission when it starts. If the permission is refused, it logs an error and does not broadcast.
+On Android (Meta Quest), `VoiceBroadcast` requests the microphone permission when it starts. If the
+permission is refused, it logs an error and does not broadcast.
 
-`VoiceReceiver` receives and playbacks the voice data of a specific voice id. Attach the script to a `GameObject` of your choice. This is usually a user representation, such as an avatar. When attaching the script, an `AudioSource` is automatically added. To support mulitple `VoiceReceiver` create a prefab of the object. To start receiving voice data, call the `StartPlayback` method with the specific voice id of the client. For the distribution of active voice ids of other clients, `Sync.Send` can be used:
+`VoiceReceiver` plays the voice of one voice id. Add it to a GameObject, usually a user
+representation such as an avatar. Adding it also adds an `AudioSource`. For several receivers, make
+a prefab. Call `StartPlayback` with the voice id to play. Distribute voice ids with `Sync.Send`:
 
 ```c#
 void Start()
@@ -826,23 +835,35 @@ private void OnIdArrived(int id)
 }
 ```
 
-See `Samples/VoiceChat` for a fully working voice chat example with a `VoiceManager` handling voice ids and the instantiation of `VoiceReceiver` prefabs.
+The `Samples/VoiceChat` sample is a complete voice chat, with a `VoiceManager` that handles voice
+ids and instantiates `VoiceReceiver` prefabs.
 
-By default, the voice chat transmits audio as raw PCM data. However, to reduce throughput, the Colibri voice chat also supports Opus codec compression on Windows, Linux, and Android. In order to use the Opus codec, enable the `Use Opus Codec` toggle on both the `VoiceBroadcast` and `VoiceReceiver`.
+- **Codec:** raw PCM by default. To reduce bandwidth, enable *Use Opus Codec* on both
+  `VoiceBroadcast` and `VoiceReceiver`. Opus works on Windows, Linux and Android.
+- **Spatial audio:** the voice plays at the `VoiceReceiver`'s position. Enable *Spatialize* on the
+  `AudioSource` and set *Spatial Blend* to `1` (3D). Spatializer plugins set in the audio settings
+  also work.
+- **IPv4:** the voice server listens on IPv4 only. Colibri sends voice to an IPv4 address of the
+  server, so `localhost` also works on Windows, where it resolves to `::1` first. If the address has
+  no IPv4 address or cannot be resolved, Colibri logs an error and turns voice chat off.
+- **Apps:** the server forwards voice only to clients with the same *App Name*, so voice ids must be
+  unique only within an app. Each voice packet carries an app id, a hash of the App Name ([Voice
+  packets](../../colibri-server/docs/protocol.md#voice-packets-udp)). Without an App Name, no voice
+  is sent, and Colibri logs an error once.
+- **App Name changes at runtime:** voice moves to the new app from the next frame on. Synced objects
+  and `Sync` messages, such as voice ids sent with `Sync.Send`, stay in the old app until
+  `WebServerConnection` reconnects. Disable and re-enable that component to move them too.
+- **Colibri 1.x clients** are not heard. The server drops their voice packets, which have no app id.
+- A client receives voice only while its own `VoiceBroadcast` is broadcasting, because the server
+  registers voice clients by the voice they send.
 
-Colibri voice chat also supports spatial audio. The `VoiceReceiver` position in the scene defines the playback location of the voice. Make sure that `Spatialize` is enabled on the `AudioSource` and that `Spatial Blend` is set to `1` (3D). This also works with a spatializer plugin set in the audio settings. 
+### Limitations
 
-The voice server only listens on IPv4. Colibri sends voice to an IPv4 address of the configured server, so `localhost` works on Windows, where it resolves to the IPv6 address `::1` first. If the server address has no IPv4 address, or cannot be resolved, Colibri logs an error and turns voice chat off.
-
-Voice stays within the app: the server passes a client's voice on only to the clients with the same *App Name* in their Colibri configuration, so voice ids only have to be unique within an app. Each voice packet carries an app id, a hash of the App Name (see [Voice packets](../../colibri-server/docs/protocol.md#voice-packets-udp)). Without an App Name no voice is sent, and Colibri logs an error once. A client whose App Name changes at runtime sends and receives voice in the new app from the next frame on. Its synced objects and `Sync` messages, such as the voice ids sent with `Sync.Send`, stay in the old app until `WebServerConnection` connects again, so disable and re-enable the `WebServerConnection` component to move them too. Colibri 1.x clients are not heard: the server drops their voice packets, which have no app id.
-
-A client receives voice only while its own `VoiceBroadcast` is broadcasting: the server knows a voice client by the voice it sends.
-
-Limitations:
-
-- Only limited scalability: each voice packet goes to every other client of the app that is broadcasting.
-- Only limited security: the app id keeps apps apart, as the App Name does for synced objects, but it is not access control. Anyone who knows the App Name can receive the app's voice. Voice is not encrypted, even with TLS on.
-- Without enabling Opus high throughput
+- Limited scalability: each voice packet goes to every other broadcasting client of the app.
+- Limited security: the app id separates apps like the App Name does for synced objects, but it is
+  not access control. Anyone who knows the App Name can receive the app's voice. Voice is not
+  encrypted, even with TLS on.
+- High bandwidth without Opus.
 
 ## Other documents
 
