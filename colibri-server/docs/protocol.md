@@ -188,7 +188,7 @@ any application traffic - it sends:
 | | how it notices | how long it takes | what it does |
 | --- | --- | --- | --- |
 | `colibri-web` | no `colibri`/`protocol::accepted` within 5s of connecting | 5s | warns, emits a **non-fatal** `ProtocolMismatchError` (`fatal: false`, `serverVersion: '1'`), **stays connected** |
-| `colibri-unity` | 3 sessions in a row that got past the handshake and ended before a frame decoded | about 1.5s against a 1.x server: three sessions, 500ms and then 1000ms apart | logs an error, sets `SuspectedProtocolMismatch`, keeps retrying |
+| `colibri-unity` | 3 sessions in a row that got past the handshake and ended before a frame decoded, other than by its 2s heartbeat watchdog | about 1.5s against a 1.x server: three sessions, 500ms and then 1000ms apart | logs an error, sets `SuspectedProtocolMismatch`, keeps retrying |
 
 colibri-web reports each kind of mismatch at most once per `Colibri` instance on
 `Colibri.protocolMismatch`: this suspicion, and a refusal (`fatal: true`). A suspicion can be
