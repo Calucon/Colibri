@@ -373,7 +373,8 @@ logger.enable();
 logger.disable();
 ```
 
-Create only one `RemoteLogger`, since every instance forwards every line. It may be created before `new Colibri()`:
+Create one `RemoteLogger`, at startup. A second one does not forward again. It warns once, and from then on its
+`enabled` argument, `enable()` and `disable()` control the first one. It may be created before `new Colibri()`:
 the first 100 lines logged until then are kept and sent once Colibri exists, and any further lines are counted and
 reported in one warning. Forwarding never makes a `console` call throw.
 
