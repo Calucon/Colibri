@@ -423,7 +423,8 @@ namespace HCIKonstanz.Colibri.Synchronization
         /// answers with this client's own offline changes already applied. Not on the first
         /// connection: that is what the requests made at registration were queued for.
         /// </summary>
-        private static void OnConnected()
+        /// <remarks>Internal for the EditMode tests, which stand in for the connection coming up with it.</remarks>
+        internal static void OnConnected()
         {
             // A body that waits for the server's state waits for its answer now: see StopsWaitingForServer.
             _withoutServerSince = double.PositiveInfinity;

@@ -1174,13 +1174,23 @@ namespace HCIKonstanz.Colibri.Tests
                 .GetMethod(message, BindingFlags.Instance | BindingFlags.NonPublic)
                 .Invoke(sync, null);
 
-        /// <summary>
-        /// One fixed step: SyncTransform's FixedUpdate, then gravity, as the physics engine would
-        /// apply it to a body that is not kinematic.
-        /// </summary>
+        /// <summary>One fixed step: SyncTransform's FixedUpdate, then gravity.</summary>
         private static void FixedStep(ResyncTransform sync)
         {
             Deliver(sync, "FixedUpdate");
+            Fall(sync);
+        }
+
+        /// <summary>One fixed step, with FixedUpdate run at <paramref name="now"/> on SyncTicker's clock.</summary>
+        private static void FixedStepAt(ResyncTransform sync, double now)
+        {
+            sync.HoldOrSimulate(now);
+            Fall(sync);
+        }
+
+        /// <summary>Gravity, as the physics engine would apply it to a body that is not kinematic.</summary>
+        private static void Fall(ResyncTransform sync)
+        {
             if (sync.GetComponent<Rigidbody>().isKinematic)
                 return;
 
@@ -1267,6 +1277,165 @@ namespace HCIKonstanz.Colibri.Tests
             FixedStep(sync);
 
             Assert.That(sync.GetComponent<Rigidbody>().isKinematic, Is.False);
+        }
+
+
+        /*
+         *  Without a server, a placed body waited for its first answer for good. Once this client
+         *  has been without one for the connect timeout, it is simulated without the server's state.
+         *  Each test counts from Time.unscaledTimeAsDouble after its first ball woke: that ball's
+         *  Awake made the connection, and the time without a server counts from then.
+         */
+
+        private static readonly double ConnectTimeout = WebServerConnection.CONNECT_TIMEOUT_MS / 1000.0;
+
+        /// <summary>The console's warnings that bodies are simulated without a server, while it is not disposed.</summary>
+        private sealed class NoServerWarnings : System.IDisposable
+        {
+            public readonly List<string> Messages = new List<string>();
+
+            public NoServerWarnings() => Application.logMessageReceived += OnLog;
+
+            public void Dispose() => Application.logMessageReceived -= OnLog;
+
+            private void OnLog(string message, string stackTrace, LogType type)
+            {
+                if (type == LogType.Warning && message.StartsWith("Colibri: no connection to a server for "))
+                    Messages.Add(message);
+            }
+        }
+
+        /// <summary>While the client connects, the body waits for the server's state.</summary>
+        [Test]
+        public void APlacedBodyIsHeldWhileTheClientConnects()
+        {
+            using var warnings = new NoServerWarnings();
+            var sync = SpawnBall(placed: true);
+            var start = Time.unscaledTimeAsDouble;
+
+            foreach (var after in new[] { 0.0, 1.0, ConnectTimeout - 0.5 })
+            {
+                FixedStepAt(sync, start + after);
+                Poll(sync);
+                Assert.That(sync.GetComponent<Rigidbody>().isKinematic, Is.True, $"Simulated {after} s after the client started connecting");
+            }
+
+            Assert.That(sync.transform.position, Is.EqualTo(new Vector3(0f, 1f, 0f)));
+            Assert.That(Sent(sync), Is.Null);
+            Assert.That(warnings.Messages, Is.Empty);
+        }
+
+        /// <summary>No server within the connect timeout: the body is simulated without the server's state.</summary>
+        [Test]
+        public void APlacedBodyIsSimulatedOnceNoServerIsReachedWithinTheConnectTimeout()
+        {
+            var sync = SpawnBall(placed: true);
+            var start = Time.unscaledTimeAsDouble;
+
+            FixedStepAt(sync, start);
+            FixedStepAt(sync, start + ConnectTimeout + 0.5);
+            Assert.That(sync.GetComponent<Rigidbody>().isKinematic, Is.False, "Still held after the connect timeout");
+
+            FixedStepAt(sync, start + ConnectTimeout + 1);
+            Assert.That(sync.GetComponent<Rigidbody>().isKinematic, Is.False);
+            Assert.That(sync.transform.position.y, Is.LessThan(1f), "The ball did not fall");
+        }
+
+        /// <summary>Said once per session, not once for every body.</summary>
+        [Test]
+        public void BodiesSimulatedWithoutAServerAreReportedOnce()
+        {
+            using var warnings = new NoServerWarnings();
+            var first = SpawnBall(placed: true);
+            var second = SpawnBall(placed: true);
+            var start = Time.unscaledTimeAsDouble;
+
+            foreach (var after in new[] { 0.0, ConnectTimeout + 0.5, ConnectTimeout + 1 })
+            {
+                FixedStepAt(first, start + after);
+                FixedStepAt(second, start + after);
+            }
+            var third = SpawnBall(placed: true);
+            FixedStepAt(third, start + ConnectTimeout + 2);
+
+            Assert.That(new[] { first, second, third }.Select(b => b.GetComponent<Rigidbody>().isKinematic), Is.All.False);
+            Assert.That(warnings.Messages, Has.Count.EqualTo(1));
+            Assert.That(warnings.Messages[0], Does.Contain("Start colibri-server, or check the server address"));
+        }
+
+        /// <summary>
+        /// A server reached in time is waited for, however long its answer takes, and the body
+        /// takes the shared position from it as before.
+        /// </summary>
+        [Test]
+        public void APlacedBodyWaitsForTheAnswerOfAServerReachedInTime()
+        {
+            using var warnings = new NoServerWarnings();
+            var sync = SpawnBall(placed: true);
+            var start = Time.unscaledTimeAsDouble;
+
+            FixedStepAt(sync, start);
+            Poll(sync);
+            Sync.OnConnected();
+            FixedStepAt(sync, start + 1);
+            Poll(sync);
+            FixedStepAt(sync, start + ConnectTimeout + 0.5);
+            Poll(sync);
+            Assert.That(sync.GetComponent<Rigidbody>().isKinematic, Is.True, "Simulated before the answer of a server that was reached");
+
+            sync.OnModelUpdate(new JObject
+            {
+                { "id", sync.Id },
+                { "active", true },
+                { "position", new JArray(3f, 0f, 3f) },
+                { "physicsid", "another client's" },
+            });
+            FixedStepAt(sync, start + ConnectTimeout + 1);
+            Poll(sync);
+
+            Assert.That(sync.transform.position, Is.EqualTo(new Vector3(3f, 0f, 3f)));
+            Assert.That(Sent(sync), Is.Null);
+            Assert.That(sync.PhysicsAuthority, Is.False);
+            Assert.That(sync.GetComponent<Rigidbody>().isKinematic, Is.True);
+            Assert.That(warnings.Messages, Is.Empty);
+        }
+
+        /// <summary>
+        /// A body simulated without the server's state goes on being simulated when the connection
+        /// comes up. At its first answer, the position it fell to is a change made before the
+        /// answer, and goes out over the shared one: the accepted cost of starting without a server.
+        /// </summary>
+        [Test]
+        public void ABodySimulatedWithoutAServerSendsWhereItFellAtItsFirstAnswer()
+        {
+            var sync = SpawnBall(placed: true);
+            var start = Time.unscaledTimeAsDouble;
+
+            FixedStepAt(sync, start);
+            FixedStepAt(sync, start + ConnectTimeout + 0.5);
+            Poll(sync);
+            Sync.OnConnected();
+            FixedStepAt(sync, start + ConnectTimeout + 1);
+            Poll(sync);
+            Assert.That(sync.GetComponent<Rigidbody>().isKinematic, Is.False, "Held again when the connection came up");
+            var fellTo = sync.transform.position;
+
+            sync.OnModelUpdate(new JObject
+            {
+                { "id", sync.Id },
+                { "active", true },
+                { "position", new JArray(3f, 0f, 3f) },
+                { "physicsid", "another client's" },
+            });
+            FixedStepAt(sync, start + ConnectTimeout + 1.5);
+            Poll(sync);
+
+            var sent = Sent(sync);
+            Assert.That(sent, Is.Not.Null, "The position the ball fell to never went out");
+            Assert.That(Members(sent), Is.EqualTo(new[] { "id", "position" }), $"{sent}");
+            Assert.That(sent["position"].ToVector3(), Is.EqualTo(fellTo));
+            Assert.That(sync.PhysicsAuthority, Is.False, "The client that holds the authority keeps it");
+            Assert.That(sync.GetComponent<Rigidbody>().isKinematic, Is.True);
         }
     }
 }
