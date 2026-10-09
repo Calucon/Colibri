@@ -32,6 +32,7 @@ namespace HCIKonstanz.Colibri.E2E
             RegexOptions.IgnoreCase);
 
         private FakeColibriServer _server;
+        private readonly TestCleanup _cleanup = new TestCleanup();
 
         [UnitySetUp]
         public IEnumerator ReplaceTheConnection()
@@ -42,6 +43,7 @@ namespace HCIKonstanz.Colibri.E2E
         [UnityTearDown]
         public IEnumerator RestoreTheConnection()
         {
+            _cleanup.Run();
             _server?.Dispose();
             _server = null;
 
@@ -77,28 +79,23 @@ namespace HCIKonstanz.Colibri.E2E
             };
 
             Application.logMessageReceivedThreaded += countNotConfigured;
-            try
-            {
-                // Logged by the connection loop, off the main thread; counted above instead.
-                LogAssert.ignoreFailingMessages = true;
+            _cleanup.Add(() => Application.logMessageReceivedThreaded -= countNotConfigured);
 
-                var connection = ConnectionTo(_server.Port, appName: "   ");
+            // Logged by the connection loop, off the main thread; counted above instead.
+            LogAssert.ignoreFailingMessages = true;
 
-                // Three of the loop's half-second polls.
-                yield return E2EServer.Settle(1.5f);
+            var connection = ConnectionTo(_server.Port, appName: "   ");
 
-                Assert.That(_server.Accepted, Is.Zero, "An App Name of spaces was used to connect");
-                Assert.That(connection.Status, Is.EqualTo(ConnectionStatus.Disconnected));
-                Assert.That(notConfigured, Is.EqualTo(1), "Not being configured should be said exactly once");
+            // Three of the loop's half-second polls.
+            yield return E2EServer.Settle(1.5f);
 
-                ColibriConfig.Load().AppName = E2EServer.App;
-                yield return E2EServer.WaitUntil(() => connection.Status == ConnectionStatus.Connected,
-                    "The connection did not connect once the App Name was set", 10f);
-            }
-            finally
-            {
-                Application.logMessageReceivedThreaded -= countNotConfigured;
-            }
+            Assert.That(_server.Accepted, Is.Zero, "An App Name of spaces was used to connect");
+            Assert.That(connection.Status, Is.EqualTo(ConnectionStatus.Disconnected));
+            Assert.That(notConfigured, Is.EqualTo(1), "Not being configured should be said exactly once");
+
+            ColibriConfig.Load().AppName = E2EServer.App;
+            yield return E2EServer.WaitUntil(() => connection.Status == ConnectionStatus.Connected,
+                "The connection did not connect once the App Name was set", 10f);
         }
 
 
@@ -424,27 +421,26 @@ namespace HCIKonstanz.Colibri.E2E
             var events = Record(connection);
             yield return E2EServer.WaitUntil(() => events.Count == 1, "The client never connected", 10f);
 
-            using (var log = new LogLines())
-            {
-                var clock = System.Diagnostics.Stopwatch.StartNew();
-                connection.enabled = false;
-                connection.enabled = true;
+            var log = _cleanup.Add(new LogLines());
 
-                yield return E2EServer.WaitUntil(() => events.Count == 3, "The client never connected again after it was enabled", 10f);
-                var reconnected = clock.Elapsed.TotalSeconds;
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            connection.enabled = false;
+            connection.enabled = true;
 
-                // Time for anything the ended loop was still going to do.
-                yield return E2EServer.Settle(1f);
+            yield return E2EServer.WaitUntil(() => events.Count == 3, "The client never connected again after it was enabled", 10f);
+            var reconnected = clock.Elapsed.TotalSeconds;
 
-                Assert.That(log.Matching(Attempt), Has.Length.EqualTo(1),
-                    $"Enabling the connection again took more than one attempt to connect. Logged:\n{log}");
-                Assert.That(log.Matching(Failure), Is.Empty,
-                    $"Something failed, or said it was retrying, after a disable and enable. Logged:\n{log}");
-                Assert.That(reconnected, Is.LessThan(2), "Connecting again after a disable and enable took too long");
-                Assert.That(_server.Accepted, Is.EqualTo(2));
-                Assert.That(events, Is.EqualTo(new[] { "connected", "disconnected", "connected" }));
-                Assert.That(connection.Status, Is.EqualTo(ConnectionStatus.Connected));
-            }
+            // Time for anything the ended loop was still going to do.
+            yield return E2EServer.Settle(1f);
+
+            Assert.That(log.Matching(Attempt), Has.Length.EqualTo(1),
+                $"Enabling the connection again took more than one attempt to connect. Logged:\n{log}");
+            Assert.That(log.Matching(Failure), Is.Empty,
+                $"Something failed, or said it was retrying, after a disable and enable. Logged:\n{log}");
+            Assert.That(reconnected, Is.LessThan(2), "Connecting again after a disable and enable took too long");
+            Assert.That(_server.Accepted, Is.EqualTo(2));
+            Assert.That(events, Is.EqualTo(new[] { "connected", "disconnected", "connected" }));
+            Assert.That(connection.Status, Is.EqualTo(ConnectionStatus.Connected));
         }
 
         /// <summary>
@@ -502,38 +498,35 @@ namespace HCIKonstanz.Colibri.E2E
             var held = 0;
             connection.BeforeSessionCleanup = () => Interlocked.Increment(ref held) == 1 ? release.Task : Task.CompletedTask;
             var ended = connection.CurrentLoop;
-
-            try
-            {
-                connection.enabled = false;
-                connection.enabled = true;
-
-                yield return E2EServer.WaitUntil(() => Volatile.Read(ref held) == 1, "The ended loop never got to its cleanup", 5f);
-                yield return E2EServer.WaitUntil(() => events.Count == 3, "The client never connected again after it was enabled", 10f);
-                Assert.That(ended.IsCompleted, Is.False, "The ended loop should still be waiting to clean up");
-
-                release.SetResult(true);
-                yield return E2EServer.Await(ended, "The ended loop never finished its cleanup", 5f);
-
-                // One Update, to raise whatever the cleanup changed.
-                yield return null;
-                Assert.That(connection.Status, Is.EqualTo(ConnectionStatus.Connected), "The ended loop's cleanup changed the next session's status");
-
-                var sent = connection.SendCommandAsync("late-cleanup-test", "broadcast::int", 1);
-                yield return E2EServer.Await(sent, "What was sent after the ended loop's cleanup was not written", 2f);
-                Assert.That(sent.Result, Is.True);
-
-                yield return E2EServer.WaitUntil(() => _server.Received.Any(received => received.Frame.Channel == "late-cleanup-test"),
-                    "The server did not receive the message", 2f);
-                Assert.That(_server.Received.Where(received => received.Frame.Channel == "late-cleanup-test").Select(received => received.Session),
-                    Is.EqualTo(new[] { 2 }), "The message should have gone out on the session the enable started");
-                Assert.That(events, Is.EqualTo(new[] { "connected", "disconnected", "connected" }));
-            }
-            finally
+            _cleanup.Add(() =>
             {
                 connection.BeforeSessionCleanup = null;
                 release.TrySetResult(true);
-            }
+            });
+
+            connection.enabled = false;
+            connection.enabled = true;
+
+            yield return E2EServer.WaitUntil(() => Volatile.Read(ref held) == 1, "The ended loop never got to its cleanup", 5f);
+            yield return E2EServer.WaitUntil(() => events.Count == 3, "The client never connected again after it was enabled", 10f);
+            Assert.That(ended.IsCompleted, Is.False, "The ended loop should still be waiting to clean up");
+
+            release.SetResult(true);
+            yield return E2EServer.Await(ended, "The ended loop never finished its cleanup", 5f);
+
+            // One Update, to raise whatever the cleanup changed.
+            yield return null;
+            Assert.That(connection.Status, Is.EqualTo(ConnectionStatus.Connected), "The ended loop's cleanup changed the next session's status");
+
+            var sent = connection.SendCommandAsync("late-cleanup-test", "broadcast::int", 1);
+            yield return E2EServer.Await(sent, "What was sent after the ended loop's cleanup was not written", 2f);
+            Assert.That(sent.Result, Is.True);
+
+            yield return E2EServer.WaitUntil(() => _server.Received.Any(received => received.Frame.Channel == "late-cleanup-test"),
+                "The server did not receive the message", 2f);
+            Assert.That(_server.Received.Where(received => received.Frame.Channel == "late-cleanup-test").Select(received => received.Session),
+                Is.EqualTo(new[] { 2 }), "The message should have gone out on the session the enable started");
+            Assert.That(events, Is.EqualTo(new[] { "connected", "disconnected", "connected" }));
         }
 
         /// <summary>
@@ -548,26 +541,25 @@ namespace HCIKonstanz.Colibri.E2E
             var events = Record(connection);
             yield return E2EServer.WaitUntil(() => events.Count == 1, "The client never connected", 10f);
 
-            using (var log = new LogLines())
-            {
-                connection.enabled = false;
-                connection.enabled = true;
-                connection.enabled = false;
-                connection.enabled = true;
-                connection.SendCommand("rapid-test", "broadcast::int", 1);
+            var log = _cleanup.Add(new LogLines());
 
-                yield return E2EServer.WaitUntil(() => events.Count == 3, "The client never connected again after it was enabled", 10f);
-                yield return E2EServer.WaitUntil(() => _server.Received.Any(sent => sent.Frame.Channel == "rapid-test"),
-                    "What was sent after the second enable never reached the server", 3f);
-                yield return E2EServer.Settle(1f);
+            connection.enabled = false;
+            connection.enabled = true;
+            connection.enabled = false;
+            connection.enabled = true;
+            connection.SendCommand("rapid-test", "broadcast::int", 1);
 
-                Assert.That(log.Matching(Attempt), Has.Length.EqualTo(2), $"One attempt per enable, and no more. Logged:\n{log}");
-                Assert.That(log.Matching(Failure), Is.Empty, $"Logged:\n{log}");
-                Assert.That(events, Is.EqualTo(new[] { "connected", "disconnected", "connected" }));
-                Assert.That(connection.Status, Is.EqualTo(ConnectionStatus.Connected));
-                Assert.That(_server.Received.Where(sent => sent.Frame.Channel == "rapid-test").Select(sent => sent.Session),
-                    Is.EqualTo(new[] { _server.Accepted }), "The message should have gone out once, on the last session");
-            }
+            yield return E2EServer.WaitUntil(() => events.Count == 3, "The client never connected again after it was enabled", 10f);
+            yield return E2EServer.WaitUntil(() => _server.Received.Any(sent => sent.Frame.Channel == "rapid-test"),
+                "What was sent after the second enable never reached the server", 3f);
+            yield return E2EServer.Settle(1f);
+
+            Assert.That(log.Matching(Attempt), Has.Length.EqualTo(2), $"One attempt per enable, and no more. Logged:\n{log}");
+            Assert.That(log.Matching(Failure), Is.Empty, $"Logged:\n{log}");
+            Assert.That(events, Is.EqualTo(new[] { "connected", "disconnected", "connected" }));
+            Assert.That(connection.Status, Is.EqualTo(ConnectionStatus.Connected));
+            Assert.That(_server.Received.Where(sent => sent.Frame.Channel == "rapid-test").Select(sent => sent.Session),
+                Is.EqualTo(new[] { _server.Accepted }), "The message should have gone out once, on the last session");
         }
 
         /// <summary>
@@ -581,20 +573,19 @@ namespace HCIKonstanz.Colibri.E2E
             var connection = ConnectionTo(_server.Port);
             yield return E2EServer.WaitUntil(() => connection.Status == ConnectionStatus.Connected, "The client never connected", 10f);
 
-            using (var log = new LogLines())
-            {
-                connection.enabled = false;
-                connection.enabled = true;
-                Object.DestroyImmediate(connection.gameObject);
+            var log = _cleanup.Add(new LogLines());
 
-                // Longer than the shortest reconnect backoff: a loop left running would have tried again.
-                yield return E2EServer.Settle(1.5f);
+            connection.enabled = false;
+            connection.enabled = true;
+            Object.DestroyImmediate(connection.gameObject);
 
-                Assert.That(log.Matching(Attempt), Has.Length.EqualTo(1), $"Logged:\n{log}");
-                Assert.That(log.Matching(Failure), Is.Empty, $"Logged:\n{log}");
-                Assert.That(log.Matching(new Regex("^Colibri: connected to ")), Is.Empty, $"Logged:\n{log}");
-                Assert.That(_server.Accepted, Is.LessThanOrEqualTo(2));
-            }
+            // Longer than the shortest reconnect backoff: a loop left running would have tried again.
+            yield return E2EServer.Settle(1.5f);
+
+            Assert.That(log.Matching(Attempt), Has.Length.EqualTo(1), $"Logged:\n{log}");
+            Assert.That(log.Matching(Failure), Is.Empty, $"Logged:\n{log}");
+            Assert.That(log.Matching(new Regex("^Colibri: connected to ")), Is.Empty, $"Logged:\n{log}");
+            Assert.That(_server.Accepted, Is.LessThanOrEqualTo(2));
         }
 
 

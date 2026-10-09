@@ -41,6 +41,7 @@ namespace HCIKonstanz.Colibri.E2E
         private readonly Stopwatch _clock = Stopwatch.StartNew();
         private TcpProxy _proxy;
         private TcpPeer _peer;
+        private readonly TestCleanup _cleanup = new TestCleanup();
 
         private static WebServerConnection Connection => WebServerConnection.Instance;
 
@@ -60,6 +61,7 @@ namespace HCIKonstanz.Colibri.E2E
         [UnityTearDown]
         public IEnumerator RestoreTheConnection()
         {
+            _cleanup.Run();
             Application.logMessageReceivedThreaded -= Record;
 
             _peer?.Dispose();
@@ -258,18 +260,13 @@ namespace HCIKonstanz.Colibri.E2E
             var received = new List<string>();
             Action<string> onString = received.Add;
             Sync.Receive(inbound, onString);
-            try
-            {
-                _peer.Send(inbound, "broadcast::string", "\"back over tls\"");
-                _peer.Send(inbound, "broadcast::string", $"\"{large}\"");
+            _cleanup.Add(() => Sync.Unregister(inbound, onString));
 
-                yield return E2EServer.WaitUntil(() => received.Count >= 2, "The peer's broadcasts never reached Unity over TLS");
-                Assert.That(received, Is.EqualTo(new[] { "back over tls", large }));
-            }
-            finally
-            {
-                Sync.Unregister(inbound, onString);
-            }
+            _peer.Send(inbound, "broadcast::string", "\"back over tls\"");
+            _peer.Send(inbound, "broadcast::string", $"\"{large}\"");
+
+            yield return E2EServer.WaitUntil(() => received.Count >= 2, "The peer's broadcasts never reached Unity over TLS");
+            Assert.That(received, Is.EqualTo(new[] { "back over tls", large }));
 
             // A model: the server answers its request, and its updates go both ways.
             var models = E2EServer.Channel("tls-model");
@@ -277,23 +274,18 @@ namespace HCIKonstanz.Colibri.E2E
             var updates = new List<JObject>();
             Action<JObject> onModel = updates.Add;
             Sync.AddModelUpdateListener(models, onModel, id);
-            try
-            {
-                yield return E2EServer.WaitUntil(() => updates.Any(update => (string)update["id"] == id),
-                    "The server never answered the model's request over TLS");
+            _cleanup.Add(() => Sync.RemoveModelUpdateListener(models, onModel));
 
-                _peer.Send(models, "model::update", new JObject { { "id", id }, { "label", "from the peer" } });
-                yield return E2EServer.WaitUntil(() => updates.Any(update => (string)update["label"] == "from the peer"),
-                    "The peer's model update never reached Unity over TLS");
+            yield return E2EServer.WaitUntil(() => updates.Any(update => (string)update["id"] == id),
+                "The server never answered the model's request over TLS");
 
-                Sync.SendModelUpdate(models, new JObject { { "id", id }, { "label", "from unity" } });
-                yield return _peer.Expect(models, "model::update",
-                    frame => Assert.That((string)TcpPeer.Json(frame)["label"], Is.EqualTo("from unity")));
-            }
-            finally
-            {
-                Sync.RemoveModelUpdateListener(models, onModel);
-            }
+            _peer.Send(models, "model::update", new JObject { { "id", id }, { "label", "from the peer" } });
+            yield return E2EServer.WaitUntil(() => updates.Any(update => (string)update["label"] == "from the peer"),
+                "The peer's model update never reached Unity over TLS");
+
+            Sync.SendModelUpdate(models, new JObject { { "id", id }, { "label", "from unity" } });
+            yield return _peer.Expect(models, "model::update",
+                frame => Assert.That((string)TcpPeer.Json(frame)["label"], Is.EqualTo("from unity")));
         }
 
         /// <summary>

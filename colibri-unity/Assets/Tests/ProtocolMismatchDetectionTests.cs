@@ -32,6 +32,7 @@ namespace HCIKonstanz.Colibri.E2E
         private FakeV1Server _fakeServer;
         private FakeColibriServer _scriptedServer;
         private UnansweredPort _unansweredPort;
+        private readonly TestCleanup _cleanup = new TestCleanup();
 
         [UnitySetUp]
         public IEnumerator ReplaceTheConnection()
@@ -45,6 +46,10 @@ namespace HCIKonstanz.Colibri.E2E
         [UnityTearDown]
         public IEnumerator RestoreTheConnection()
         {
+            // Before the connection goes: a RemoteLogging left for the end of the frame could run
+            // an Update after the connection is destroyed, and build a new one.
+            _cleanup.Run();
+
             _fakeServer?.Dispose();
             _fakeServer = null;
             _scriptedServer?.Dispose();
@@ -293,15 +298,10 @@ namespace HCIKonstanz.Colibri.E2E
             }
 
             Application.logMessageReceivedThreaded += OnLog;
-            try
-            {
-                yield return E2EServer.WaitUntil(() => connection.SuspectedProtocolMismatch != null,
-                    "Three sessions that ended without a frame were not enough to suspect a mismatch", 20f);
-            }
-            finally
-            {
-                Application.logMessageReceivedThreaded -= OnLog;
-            }
+            _cleanup.Add(() => Application.logMessageReceivedThreaded -= OnLog);
+
+            yield return E2EServer.WaitUntil(() => connection.SuspectedProtocolMismatch != null,
+                "Three sessions that ended without a frame were not enough to suspect a mismatch", 20f);
 
             Assert.That(reportedWhenLogged, Is.Null,
                 "The suspicion was visible before its console line was logged, or the line came after it was seen");
@@ -392,48 +392,43 @@ namespace HCIKonstanz.Colibri.E2E
             };
 
             Application.logMessageReceivedThreaded += countRefusalWarnings;
-            try
-            {
-                // Sent in the frame the connection was created, so it is waiting in the queue
-                // when the refusal arrives.
-                var queuedBefore = connection.SendCommandAsync("refusal-test", "broadcast::int", 1);
-                var awaitingConnected = connection.Connected;
+            _cleanup.Add(() => Application.logMessageReceivedThreaded -= countRefusalWarnings);
 
-                yield return E2EServer.WaitUntil(() =>
-                    {
-                        everConnected |= Connection.Status == ConnectionStatus.Connected;
-                        return Connection.Status == ConnectionStatus.ProtocolMismatch;
-                    },
-                    "The client never settled into ProtocolMismatch after the server refused it", 10f);
+            // Sent in the frame the connection was created, so it is waiting in the queue
+            // when the refusal arrives.
+            var queuedBefore = connection.SendCommandAsync("refusal-test", "broadcast::int", 1);
+            var awaitingConnected = connection.Connected;
 
-                Assert.That(Connection.ServerVersion, Is.EqualTo("3"));
-                Assert.That(Connection.ProtocolMismatchReason, Does.Contain("Unsupported protocol version"));
+            yield return E2EServer.WaitUntil(() =>
+                {
+                    everConnected |= Connection.Status == ConnectionStatus.Connected;
+                    return Connection.Status == ConnectionStatus.ProtocolMismatch;
+                },
+                "The client never settled into ProtocolMismatch after the server refused it", 10f);
 
-                Assert.That(queuedBefore.IsCompleted, Is.True, "A message queued before the refusal is still waiting for a connection that will never come");
-                Assert.That(queuedBefore.Result, Is.False, "A message that was never sent was reported as sent");
-                Assert.That(awaitingConnected.IsCanceled, Is.True, "`await Connected` would wait forever after a refusal");
-                Assert.That(Connection.Connected.IsCanceled, Is.True, "`await Connected` would wait forever after a refusal");
+            Assert.That(Connection.ServerVersion, Is.EqualTo("3"));
+            Assert.That(Connection.ProtocolMismatchReason, Does.Contain("Unsupported protocol version"));
 
-                // Sends after the refusal complete at once, as dropped, and say so once between them.
-                var sentAfter = Connection.SendCommandAsync("refusal-test", "broadcast::int", 2);
-                Assert.That(sentAfter.IsCompleted, Is.True, "A send after the refusal is waiting for a connection that will never come");
-                Assert.That(sentAfter.Result, Is.False);
-                Sync.Send("refusal-test", 3);
+            Assert.That(queuedBefore.IsCompleted, Is.True, "A message queued before the refusal is still waiting for a connection that will never come");
+            Assert.That(queuedBefore.Result, Is.False, "A message that was never sent was reported as sent");
+            Assert.That(awaitingConnected.IsCanceled, Is.True, "`await Connected` would wait forever after a refusal");
+            Assert.That(Connection.Connected.IsCanceled, Is.True, "`await Connected` would wait forever after a refusal");
 
-                // Long enough for a retry to have happened, if there were going to be one.
-                yield return E2EServer.Settle(1.5f);
+            // Sends after the refusal complete at once, as dropped, and say so once between them.
+            var sentAfter = Connection.SendCommandAsync("refusal-test", "broadcast::int", 2);
+            Assert.That(sentAfter.IsCompleted, Is.True, "A send after the refusal is waiting for a connection that will never come");
+            Assert.That(sentAfter.Result, Is.False);
+            Sync.Send("refusal-test", 3);
 
-                Assert.That(_scriptedServer.Accepted, Is.EqualTo(1), "A refusal is final, but the client tried again");
-                Assert.That(Connection.Status, Is.EqualTo(ConnectionStatus.ProtocolMismatch));
-                Assert.That(onConnected, Is.Zero, "A refusal in the first frame was reported as a connection");
-                Assert.That(everConnected, Is.False, "A refusal in the first frame was reported as a connection");
-                Assert.That(onDisconnected, Is.Zero, "OnDisconnected without an OnConnected before it");
-                Assert.That(refusalWarnings, Is.EqualTo(1), "Dropping sends after a refusal should be said exactly once");
-            }
-            finally
-            {
-                Application.logMessageReceivedThreaded -= countRefusalWarnings;
-            }
+            // Long enough for a retry to have happened, if there were going to be one.
+            yield return E2EServer.Settle(1.5f);
+
+            Assert.That(_scriptedServer.Accepted, Is.EqualTo(1), "A refusal is final, but the client tried again");
+            Assert.That(Connection.Status, Is.EqualTo(ConnectionStatus.ProtocolMismatch));
+            Assert.That(onConnected, Is.Zero, "A refusal in the first frame was reported as a connection");
+            Assert.That(everConnected, Is.False, "A refusal in the first frame was reported as a connection");
+            Assert.That(onDisconnected, Is.Zero, "OnDisconnected without an OnConnected before it");
+            Assert.That(refusalWarnings, Is.EqualTo(1), "Dropping sends after a refusal should be said exactly once");
         }
 
         /// <summary>
@@ -486,29 +481,20 @@ namespace HCIKonstanz.Colibri.E2E
             _scriptedServer = FakeColibriServer.Start(FakeColibriServer.Behaviour.Refuse);
             yield return PointConnectionAt(_scriptedServer.Port);
 
-            var loggingObject = new GameObject("remote-logging");
-            try
-            {
-                var logging = loggingObject.AddComponent<RemoteLogging>();
+            var loggingObject = _cleanup.Add(new GameObject("remote-logging"));
+            var logging = loggingObject.AddComponent<RemoteLogging>();
 
-                yield return E2EServer.WaitUntil(() => Connection.Status == ConnectionStatus.ProtocolMismatch,
-                    "The client never settled into ProtocolMismatch after the server refused it", 10f);
+            yield return E2EServer.WaitUntil(() => Connection.Status == ConnectionStatus.ProtocolMismatch,
+                "The client never settled into ProtocolMismatch after the server refused it", 10f);
 
-                for (var i = 0; i < 200; i++)
-                    Debug.Log($"remote logging after a refusal, line {i}");
+            for (var i = 0; i < 200; i++)
+                Debug.Log($"remote logging after a refusal, line {i}");
 
-                // Past RemoteLogging's one-second send interval, twice.
-                yield return E2EServer.Settle(2.5f);
+            // Past RemoteLogging's one-second send interval, twice.
+            yield return E2EServer.Settle(2.5f);
 
-                Assert.That(logging.BufferedLineCount, Is.Zero,
-                    "RemoteLogging is still collecting lines for a server that will never take them");
-            }
-            finally
-            {
-                // Immediately: left for the end of the frame, its Update could run after the
-                // teardown has destroyed the connection, and would build a new one.
-                Object.DestroyImmediate(loggingObject);
-            }
+            Assert.That(logging.BufferedLineCount, Is.Zero,
+                "RemoteLogging is still collecting lines for a server that will never take them");
         }
 
         /// <summary>
