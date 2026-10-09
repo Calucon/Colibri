@@ -33,6 +33,9 @@ namespace HCIKonstanz.Colibri.Setup
         /// </summary>
         private const float DeliveryRateConcernFps = 20f;
 
+        /// <summary>Between the widest label and the value next to it.</summary>
+        private const float LabelColumnGap = 8f;
+
         private Vector2 _scroll;
         private double _nextRepaint;
 
@@ -92,8 +95,8 @@ namespace HCIKonstanz.Colibri.Setup
             if (!config.IsConfigured)
                 EditorGUILayout.HelpBox(ColibriConfig.NOT_CONFIGURED_MESSAGE, MessageType.Error);
 
-            EditorGUILayout.LabelField("App Name", string.IsNullOrEmpty(config.AppName) ? "(not set)" : config.AppName);
-            EditorGUILayout.LabelField("Server", $"{config.ServerAddress}  (tcp {config.TcpServerPort}, web {config.WebServerPort}{(config.IsSSL ? ", TLS" : "")})");
+            Row("App Name", string.IsNullOrEmpty(config.AppName) ? "(not set)" : config.AppName);
+            Row("Server", $"{config.ServerAddress}  (tcp {config.TcpServerPort}, web {config.WebServerPort}{(config.IsSSL ? ", TLS" : "")})");
         }
 
         private void DrawConnection()
@@ -117,12 +120,12 @@ namespace HCIKonstanz.Colibri.Setup
             var status = connection.Status;
             var previous = GUI.contentColor;
             GUI.contentColor = StatusColor(status);
-            EditorGUILayout.LabelField("Status", status.ToString());
+            Row("Status", status.ToString());
             GUI.contentColor = previous;
 
-            EditorGUILayout.LabelField("Server", $"{connection.ServerAddress}:{connection.TcpPort}{(connection.UsesTls ? "  TLS" : "")}");
-            EditorGUILayout.LabelField("App Name", string.IsNullOrEmpty(connection.AppName) ? "(not set)" : connection.AppName);
-            EditorGUILayout.LabelField("Protocol", status == ConnectionStatus.ProtocolMismatch
+            Row("Server", $"{connection.ServerAddress}:{connection.TcpPort}{(connection.UsesTls ? "  TLS" : "")}");
+            Row("App Name", string.IsNullOrEmpty(connection.AppName) ? "(not set)" : connection.AppName);
+            Row("Protocol", status == ConnectionStatus.ProtocolMismatch
                 ? $"v{WebServerConnection.ClientVersion} (binary TCP) - server speaks v{connection.ServerVersion ?? "unknown"}"
                 : $"v{WebServerConnection.ClientVersion} (binary TCP)");
 
@@ -142,7 +145,7 @@ namespace HCIKonstanz.Colibri.Setup
                 // Not a latency: the heartbeat carries the server's clock, so no round trip can be
                 // derived from it. It does say whether the server is still talking to us.
                 var gap = TrackHeartbeatGap(connection.MillisSinceLastHeartbeat());
-                EditorGUILayout.LabelField("Heartbeat",
+                Row("Heartbeat",
                     gap < HeartbeatConcernMillis
                         ? "OK"
                         : $"missing for {gap / 1000f:0.0} s - dropping the connection soon");
@@ -184,7 +187,7 @@ namespace HCIKonstanz.Colibri.Setup
             if (!connection.UsesTls || connection.CertificateAcceptance == null)
                 return;
 
-            EditorGUILayout.LabelField("Certificate", connection.CertificateAcceptance, EditorStyles.wordWrappedLabel);
+            Row("Certificate", connection.CertificateAcceptance);
 
             // A selectable label takes the height it is given, so that is worked out here, for the
             // width next to the label column less the window's margins and scrollbar. The
@@ -214,7 +217,7 @@ namespace HCIKonstanz.Colibri.Setup
 
             var delayMillis = 1000f / fps;
 
-            EditorGUILayout.LabelField("Delivery", $"{fps:0} fps  (up to {delayMillis:0} ms per message)");
+            Row("Delivery", $"{fps:0} fps  (up to {delayMillis:0} ms per message)");
 
             if (fps < DeliveryRateConcernFps)
             {
@@ -258,8 +261,10 @@ namespace HCIKonstanz.Colibri.Setup
                 return;
             }
 
+            var labelWidth = WidenLabelColumn(channels);
             foreach (var channel in channels)
-                EditorGUILayout.LabelField(channel, string.Join(", ", ChannelListenerRegistry.ListenerTypesFor(channel)));
+                Row(channel, string.Join(", ", ChannelListenerRegistry.ListenerTypesFor(channel)));
+            EditorGUIUtility.labelWidth = labelWidth;
 
             EditorGUILayout.HelpBox("A message is only delivered when the channel *and* the type match.", MessageType.None);
         }
@@ -285,8 +290,32 @@ namespace HCIKonstanz.Colibri.Setup
             }
 
             var now = Time.realtimeSinceStartup;
-            foreach (var entry in traffic)
-                EditorGUILayout.LabelField($"{(entry.Incoming ? "in " : "out")}  {entry.Channel}", $"{entry.Command}   {now - entry.Time:0.0}s ago");
+            var labels = traffic.Select(entry => $"{(entry.Incoming ? "in " : "out")}  {entry.Channel}").ToArray();
+            var labelWidth = WidenLabelColumn(labels);
+            for (var i = 0; i < traffic.Length; i++)
+                Row(labels[i], $"{traffic[i].Command}   {now - traffic[i].Time:0.0}s ago");
+            EditorGUIUtility.labelWidth = labelWidth;
+        }
+
+        /// <summary>
+        /// A label and its value, the value wrapped to the window's width. On one line, a value
+        /// longer than the space next to the label column was cut off at the window's edge.
+        /// </summary>
+        private static void Row(string label, string value)
+            => EditorGUILayout.LabelField(label, value, EditorStyles.wordWrappedLabel);
+
+        /// <summary>
+        /// Widens the label column to fit the widest of <paramref name="labels"/>, up to half the
+        /// window, for the rows drawn until it is put back. At the default width a long channel
+        /// name ran into the value next to it.
+        /// </summary>
+        /// <returns>The width to put back.</returns>
+        private static float WidenLabelColumn(string[] labels)
+        {
+            var previous = EditorGUIUtility.labelWidth;
+            var widest = labels.Select(label => EditorStyles.label.CalcSize(new GUIContent(label)).x).DefaultIfEmpty(0f).Max();
+            EditorGUIUtility.labelWidth = Mathf.Clamp(widest + LabelColumnGap, previous, EditorGUIUtility.currentViewWidth / 2f);
+            return previous;
         }
 
         private void DrawButtons()
