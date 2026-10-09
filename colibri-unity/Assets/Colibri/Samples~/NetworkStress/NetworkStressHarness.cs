@@ -612,7 +612,7 @@ namespace HCIKonstanz.Colibri.Samples
             Row("Coalesced", $"{StressModel.Coalesced}   (superseded before sending, not lost)");
 
             if (_objects.Count == 0 && ObjectCount == 0)
-                GUILayout.Label("Idle - receiving only. Drive the load from the other client.");
+                GUILayout.Label("Receiving only. Drive the load from the other client.");
         }
 
         private void DrawLatencySection()
@@ -630,7 +630,7 @@ namespace HCIKonstanz.Colibri.Samples
             {
                 GUILayout.Label(_probesSent == 0
                     ? "No probes sent yet."
-                    : "Nothing has come back yet - is a second client running this scene?");
+                    : "No probe echoed yet. Start a second client with this scene.");
                 return;
             }
 
@@ -642,9 +642,8 @@ namespace HCIKonstanz.Colibri.Samples
             {
                 var percent = 100f * _probesLost / Mathf.Max(1L, _probesSent);
                 GUILayout.Label(
-                    $"Lost {_probesLost} probe(s), {percent:0.0}% - these were real dropped messages. "
-                    + "The server discards writes to a client whose socket is more than 1 MB behind, "
-                    + "and says so in its own log.",
+                    $"Lost {_probesLost} probe(s) ({percent:0.0}%). These messages were dropped: the server "
+                    + "discards writes to a client whose socket is more than 1 MB behind, and logs it.",
                     _warningStyle);
             }
 
