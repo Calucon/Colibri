@@ -2,6 +2,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { readTlsFiles } from './modules/core/tls-files.js';
+import { parseTrustedProxies } from './modules/networking/trusted-proxies.js';
 
 // automatically load .env file. Quietly: dotenv 17 otherwise prints an "injected env"
 // line with a rotating advertising tip on every start, docker logs included.
@@ -122,4 +123,8 @@ export const Config = {
     // accepts only TLS connections and the web port serves only HTTPS and WSS.
     TLS_CERT: tlsFiles?.cert,
     TLS_KEY: tlsFiles?.key,
+
+    // The reverse proxies whose word on a client's address is taken (see trusted-proxies.ts);
+    // empty: none, and every client is logged at the address it comes from.
+    TRUSTED_PROXIES: parseTrustedProxies(process.env.TRUSTED_PROXIES),
 };

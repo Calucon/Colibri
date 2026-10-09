@@ -110,6 +110,27 @@ describe('Config', () => {
         });
     });
 
+    describe('TRUSTED_PROXIES', () => {
+        it('trusts no proxy when unset or empty', async () => {
+            expect((await loadConfig({ TRUSTED_PROXIES: undefined })).TRUSTED_PROXIES).toEqual([]);
+            expect((await loadConfig({ TRUSTED_PROXIES: '' })).TRUSTED_PROXIES).toEqual([]);
+        });
+
+        it('takes addresses, CIDR ranges and named ranges', async () => {
+            const config = await loadConfig({ TRUSTED_PROXIES: 'loopback, uniquelocal, 203.0.113.7, 2001:db8::/32' });
+
+            expect(config.TRUSTED_PROXIES).toEqual(['loopback', 'uniquelocal', '203.0.113.7', '2001:db8::/32']);
+        });
+
+        it.each([
+            ['loopback, proxy.example.org', '"proxy.example.org" is not an IP address'],
+            ['172.20', '"172.20" is not an IP address'],
+            ['10.0.0.0/33', '"10.0.0.0/33" has an invalid prefix length'],
+        ])('refuses to start with "%s", naming the entry', async (raw, problem) => {
+            await expect(loadConfig({ TRUSTED_PROXIES: raw })).rejects.toThrow(`Invalid TRUSTED_PROXIES: ${problem}`);
+        });
+    });
+
     describe('TLS_CERT and TLS_KEY', () => {
         let dir: string;
         let server: TestCertificate;
