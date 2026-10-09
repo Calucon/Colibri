@@ -315,6 +315,10 @@ const runProcess = (file, args, options = {}) =>
         child.once('close', code => resolve(code));
     });
 
+/** TextMesh Pro's dynamic fallback font, part of the project's TMP Essential Resources. */
+const TMP_FALLBACK_FONT = path.join(PROJECT_DIR, 'Assets', 'TextMesh Pro', 'Resources', 'Fonts & Materials',
+    'LiberationSans SDF - Fallback.asset');
+
 const runStrippingCheck = async unity => {
     const name = 'Stripping';
     if (!il2cppVariations(unity)) {
@@ -330,13 +334,19 @@ const runStrippingCheck = async unity => {
     const playerLog = path.join(RESULTS_DIR, 'StrippingCheck-player.log');
 
     // A player build rewrites ProjectSettings (the Standalone backend and stripping level the
-    // build sets and puts back, Unity Connect's settings), which would show up as an unrelated
-    // diff. Put every file there back exactly as it was.
+    // build sets and puts back, Unity Connect's settings) and adds glyphs to the atlas of
+    // TextMesh Pro's dynamic fallback font, which would show up as unrelated diffs. Put every one
+    // of those files back exactly as it was.
     const settingsDir = path.join(PROJECT_DIR, 'ProjectSettings');
     const settings = new Map(
-        readdirSync(settingsDir, { withFileTypes: true })
-            .filter(entry => entry.isFile())
-            .map(entry => [entry.name, readFileSync(path.join(settingsDir, entry.name))])
+        [
+            ...readdirSync(settingsDir, { withFileTypes: true })
+                .filter(entry => entry.isFile())
+                .map(entry => path.join(settingsDir, entry.name)),
+            TMP_FALLBACK_FONT,
+        ]
+            .filter(file => existsSync(file))
+            .map(file => [file, readFileSync(file)])
     );
 
     console.log('\nBuilding the stripping-check player (Release, IL2CPP, Managed Stripping High)...');
@@ -350,8 +360,7 @@ const runStrippingCheck = async unity => {
         );
     } finally {
         for (const [file, contents] of settings) {
-            const target = path.join(settingsDir, file);
-            if (!existsSync(target) || !readFileSync(target).equals(contents)) writeFileSync(target, contents);
+            if (!existsSync(file) || !readFileSync(file).equals(contents)) writeFileSync(file, contents);
         }
     }
     if (buildCode !== 0 || !existsSync(player)) {
