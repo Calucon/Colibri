@@ -185,9 +185,9 @@ Build Profiles* in Unity 6). The Quest needs ARM64, which on Android requires IL
 
 ### Build settings check
 
-Colibri checks two Player settings that otherwise fail only in the built app, without a console to
-show why. It warns after every script reload, including a build target switch, and at the start of
-every player build, without stopping it. *Window → Colibri Configuration* lists the issues with fix
+Colibri checks two Player settings that otherwise fail only in the built app, which has no console.
+It warns after every script reload, including a build target switch, and at the start of every
+player build, without stopping it. *Window → Colibri Configuration* lists the issues with fix
 buttons under **Android / Meta Quest** (Android target) or **Player build** (other targets).
 
 | Setting (*Player → Other Settings*) | Required | Checked | Warning | Otherwise |
@@ -199,40 +199,41 @@ buttons under **Android / Meta Quest** (Android target) or **Player build** (oth
 
 ### Platform notes
 
-- **Server address:** `localhost` is the headset. Enter the server's LAN IPv4 address. Voice chat
-  works only over IPv4. A headset that cannot reach the server keeps retrying, and
-  [`LastConnectFailure`](#connection-and-outages) holds the reason.
-- **Run In Background** has no effect on Android.
-- **Managed code stripping** keeps `[Sync]` members. Your classes that only Newtonsoft JSON uses
+- Use the server's LAN IPv4 address, not `localhost`. Voice chat works only over IPv4. A headset
+  that cannot reach the server keeps retrying, and [`LastConnectFailure`](#connection-and-outages)
+  holds the reason.
+- *Run In Background* has no effect on Android.
+- Managed code stripping keeps `[Sync]` members. Your classes that only Newtonsoft JSON uses
   (`JToken.FromObject`, `ToObject<T>`, `Store`) are reached only through reflection, so stripping
   above *Minimal* may remove their members. Keep *Managed Stripping Level* at *Minimal*, or preserve
   these classes with `[Preserve]` or a `link.xml`.
-- **`[Sync]` fields on IL2CPP** are read through reflection, which allocates every frame for a value
+- On IL2CPP, `[Sync]` fields are read through reflection, which allocates every frame for a value
   type (`int`, `float`, `Vector3`, …). Properties use a direct delegate. With many synced objects,
   use properties, as `SyncTransform` does.
 
 ## Samples
 
-In the Package Manager, select Colibri, then *Samples → Import*. Imported samples are copied to
+Samples imported in the Package Manager (*Colibri → Samples → Import*) are copied to
 `Assets/Samples/Colibri/` for editing. Only imported samples are compiled into the project and
 builds.
 
-The `Remote Store`, `SendData`, `SyncTransform` and `Voice Chat` scenes use **TextMeshPro**, which
+The `Remote Store`, `SendData`, `SyncTransform` and `Voice Chat` scenes use TextMeshPro, which
 Colibri does not install. Without TMP Essential Resources, their instruction text throws a
 `NullReferenceException` in `TMP_Settings`. Before opening these scenes:
 
-- **Unity 2022.3:** install *TextMeshPro* (`com.unity.textmeshpro`) if missing, then run *Window →
-  TextMeshPro → Import TMP Essential Resources*.
-- **Unity 6:** TextMeshPro is part of `com.unity.ugui`. Run only the import.
+| Unity | Steps |
+|---|---|
+| 2022.3 | Install *TextMeshPro* (`com.unity.textmeshpro`) if missing, then run *Window → TextMeshPro → Import TMP Essential Resources*. |
+| 6 | TextMeshPro is part of `com.unity.ugui`. Run only the import. |
 
 The `[RemoteLogger]` and `[SyncTransformManager]` prefabs are part of the package, not samples. Drag
 them from `Packages/Colibri/Prefabs/` in the Project window.
 
 ## Troubleshooting
 
-In Play mode, **Window → Colibri Status** shows:
+In Play mode, *Window → Colibri Status* shows:
 
-- connection state, server and **app name**. A misspelled app name connects normally, but no other
+- connection state, server and app name. A misspelled app name connects normally, but no other
   client ever appears.
 - whether the server's heartbeat arrives, and how long it has been missing
 - when not connected, why the last attempt failed
@@ -241,23 +242,23 @@ In Play mode, **Window → Colibri Status** shows:
 - the delivery rate in frames per second, with a warning below 20
 
 A headset has no Status window, and `[RemoteLogger]` cannot forward the console while disconnected.
-Show [`LastConnectFailure`](#connection-and-outages) in your app instead.
+Show [`LastConnectFailure`](#connection-and-outages) in your app.
 
 ### Console messages
 
 | Message | Cause | Fix |
 |---|---|---|
-| `Colibri: a float arrived on channel 'chat', but the listener registered there expects string. …` | Nothing arrives because the types differ. The message names the channel, both types and the fix. | Use the same type on both sides |
-| `Colibri is not configured yet. Open Window -> Colibri Configuration…` | Nothing connects because no app name is set | Enter an App Name and click *Save Config* |
-| `Colibri: 192.168.0.10:9012 did not answer within 5 s. …` | Nothing answers: wrong IP, server on another network or subnet, Wi-Fi with client isolation, or a firewall dropping packets | Fix the address or the network |
+| `Colibri: a float arrived on channel 'chat', but the listener registered there expects string. …` | Sender and listener use different types on the channel | Use the same type on both sides |
+| `Colibri is not configured yet. Open Window -> Colibri Configuration…` | No App Name set | Enter an App Name and click *Save Config* |
+| `Colibri: 192.168.0.10:9012 did not answer within 5 s. …` | Wrong IP, server on another network or subnet, Wi-Fi client isolation, or a firewall dropping packets | Fix the address or the network |
 | `Colibri: connection to 192.168.0.10 failed (ConnectionRefused), retrying...` | The machine is reachable, but nothing listens on the TCP port | Start colibri-server, or check *TCP server Port* |
-| `… failed (HostUnreachable) …`, `(NetworkUnreachable)` or another socket error | Address or network, as with the timeout | Fix the address or the network |
+| `… failed (HostUnreachable) …`, `(NetworkUnreachable)` or another socket error | Wrong address or network | Fix the address or the network |
 | `Colibri: invalid frame from server, dropping connection: …` if the server sends anything, then `Colibri: 3 connections in a row were accepted but ended before a single frame could be read. …` | A 1.x server, an address that is not a colibri-server, or [TLS](#tls) on the server only. With *Server supports SSL/TLS?* off, also a proxy or port forwarding whose backend is not running. | Use a 2.x server, correct the address, tick *Server supports SSL/TLS?*, or start the server behind the proxy |
-| `Colibri: 192.168.0.10:9012 accepted the connection but has not sent anything in 2 s, dropping it` (with TLS also `Colibri: server closed the connection`), then `Colibri: 3 connections in a row to 192.168.0.10:9012 were accepted, but nothing was received on any of them: …` | Something accepts connections, then closes them or forwards nothing: a proxy or port forwarding whose backend is down, a captive portal or a firewall. Or the server does not answer or is not a colibri-server. | Check that colibri-server runs and is reachable at that address and port |
+| `Colibri: 192.168.0.10:9012 accepted the connection but has not sent anything in 2 s, dropping it` (with TLS also `Colibri: server closed the connection`), then `Colibri: 3 connections in a row to 192.168.0.10:9012 were accepted, but nothing was received on any of them: …` | A proxy or port forwarding whose backend is down, a captive portal or a firewall accepts connections, then closes them or forwards nothing. Or the server does not answer or is not a colibri-server. | Check that colibri-server runs and is reachable at that address and port |
 | `… did not answer the TLS handshake …` or `rejected the certificate of …` | TLS settings do not match the server | See [TLS errors](#tls-errors) |
-| `Colibri (Android build): …` or `Colibri (build): …` | Works in the Editor, not on the Quest or in a build | See [Build settings check](#build-settings-check) |
+| `Colibri (Android build): …` or `Colibri (build): …` | A Player setting that fails only in the built app (Internet Access, Allow downloads over HTTP) | Click the fix button in *Window → Colibri Configuration* ([Build settings check](#build-settings-check)) |
 | `Colibri: cannot synchronize '<class>.<member>' …` at startup | A `[Sync]` member with an unsupported type, a property without both a getter and a setter, or a `readonly` field | Follow the message. Sync classes of your own as `JObject`. |
-| `Colibri: could not save "<name>" at <url> …`, `could not load …` or `could not delete …` | A `Store` request failed. The message names the URL, the transport error and the HTTP status. | Check the server address and app name. For "Insecure connection not allowed", see [Advanced configuration](#advanced-configuration). |
+| `Colibri: could not save "<name>" at <url> …`, `could not load …` or `could not delete …` | A failed `Store` request. The message names the URL, the transport error and the HTTP status. | Check the server address and app name. For "Insecure connection not allowed", see [Advanced configuration](#advanced-configuration). |
 
 ### Other symptoms
 
@@ -265,7 +266,7 @@ Show [`LastConnectFailure`](#connection-and-outages) in your app instead.
 |---|---|---|
 | Two clients do not see each other | Different app names | Compare the names in the log line `Colibri: connected to <host>:<port> as app '<app>'. …` |
 | Unknown objects or messages appear | Another project uses the same app name. Unity reports nothing at runtime. | Choose a unique app name ([Configuration](#configuration)). The server log warns, naming the app, above 8 clients by default (`APP_CLIENT_WARNING_THRESHOLD`). |
-| One client is connected but sends and receives nothing | Its Editor is in the background with *Run In Background* off | See [Quickstart](#quickstart), step 3 |
+| One client is connected but sends and receives nothing | Its Editor is in the background with *Run In Background* off | Enable *Run In Background* ([Quickstart](#quickstart), step 3) |
 
 ## Sending data between clients
 
