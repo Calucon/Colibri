@@ -17,6 +17,7 @@ with a 2.0 server, and from the moment it runs, the server's log names every cli
 
 - [ ] [Node 24; the server is native ESM now](#breaking)
 - [ ] [Rewrite anything of your own that speaks TCP to Colibri against the new protocol](#breaking)
+- [ ] [Rewrite anything of your own that sends or receives voice against the new voice packet format](#breaking)
 - [ ] [Docker: pin the image version you run](#worth-knowing)
 - [ ] [Docker: remove `tty: true` if your compose file came from the 1.x README](#worth-knowing)
 - [ ] [Docker with `--user` (or `user:` in compose): give the data directory to that user](#worth-knowing)
@@ -128,6 +129,14 @@ the server's rules matter to such a client:
 - It disconnects a TCP client that has sent nothing for 10 seconds (`TCP_IDLE_TIMEOUT_SECONDS`),
   one that never handshakes included. Echoing every heartbeat, as colibri-unity does, keeps a
   client well inside that.
+
+**The voice packet format.** A voice packet has an 11-byte header now: the 7 bytes 1.x had, with
+a header version in the high 4 bits of the codec byte, then an app id, the 32-bit FNV-1a hash of
+the app name. The server passes a packet on only to the voice clients with the same app id. It
+drops a 1.x client's voice packets, which have no app id, and logs a warning naming the client's
+address, so Colibri 1.x voice clients are not compatible with a 2.0 server or with 2.0 clients.
+Anything of your own that sends or receives voice has to follow
+[Voice packets](colibri-server/docs/protocol.md#voice-packets-udp).
 
 **The `flatbuffers` dependency is gone**, along with `body-parser`, `uuid` and
 `source-map-support`.
@@ -513,6 +522,12 @@ in the list replaces the listed instance instead of listing the id twice.
 machine at one Unity client. The server replies to the datagram's source port, so the fixed port
 bought nothing.
 
+**Voice stays within the app.** In 1.x every voice packet went to every client on the server that
+was sending voice, and a `VoiceReceiver` played the voice id it was given, from whichever app it
+came. Now only clients with the same *App Name* hear each other, so two apps on one server can use
+the same voice ids. This keeps apps apart but is not access control: anyone who knows the App Name
+can listen, and voice is not encrypted.
+
 **The latency echo is gone.** The old `colibri` / `latency` message round trip was removed; TCP
 latency comes from the 100 ms heartbeat the client echoes back verbatim. Nothing sends `latency` to
 a TCP client any more.
@@ -589,9 +604,10 @@ The test suites:
 
 What none of them covers:
 
-- **Voice chat**, beyond the server's relay, the Unity client's choice of server address, and the
-  queue that hands received packets to the main thread. The rest needs a microphone; the client's
-  socket and its shutdown were reviewed and compiled, not exercised.
+- **Voice chat**, beyond the server's relay, the packet format on both sides, the Unity client's
+  choice of server address, and the queue that hands received packets to the main thread. The
+  rest needs a microphone; the client's socket and its shutdown were reviewed and compiled, not
+  exercised.
 - **Android and Meta Quest.** No suite builds for Android or runs on a headset. The code that only
   runs there (the IL2CPP `[Sync]` accessors) and the Android settings check are tested in the
   Editor.
