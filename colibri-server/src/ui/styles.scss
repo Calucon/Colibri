@@ -1,54 +1,117 @@
-/* You can add global styles to this file, and also import other style files */
 @use 'sass/nord' as *;
 
-@import '@fontsource/roboto/300.css';
 @import '@fontsource/roboto/400.css';
 @import '@fontsource/roboto/500.css';
+@import '@fontsource/roboto/700.css';
 @import '@fontsource/fira-mono/400.css';
+
+// The palette every page uses: Nord, with text colours checked for at least 4.5:1 against the
+// backgrounds they appear on.
+:root {
+    color-scheme: dark;
+
+    --bg: #{$nord0};
+    --surface-1: #{$nord1};
+    --surface-2: #{$nord2};
+    --surface-3: #{$nord3};
+    --border: #{$nord2};
+
+    --text: #{$nord5};
+    --text-strong: #{$nord6};
+    --text-muted: #aab3c4;
+    --accent: #{$nord8};
+
+    --ok: #{$nord14};
+    --err: #ec9aa1;
+    --err-mark: #{$nord11};
+    --err-row: #423a46;
+    --warn: #{$nord13};
+    --warn-row: #3a3d45;
+    --info: #{$nord8};
+    --debug: #aab3c4;
+
+    --mono: 'Fira Mono', monospace;
+    --sans: Roboto, 'Helvetica Neue', sans-serif;
+}
 
 html,
 body {
     height: 100%;
-
 }
+
 body {
     margin: 0;
-    font-family: Roboto, "Helvetica Neue", sans-serif;
-    background-color: $nord1;
-    color: white;
+    font-family: var(--sans);
+    background-color: var(--bg);
+    color: var(--text);
 
     overflow: hidden;
 }
 
+:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
 
 /** Nicer scroll bars **/
-::-webkit-scrollbar-track
-{
-	background-color: $nord0;
+::-webkit-scrollbar-track {
+    background-color: var(--bg);
 }
 
-::-webkit-scrollbar
-{
-	width: 10px;
-	background-color: $nord1;
+::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+    background-color: var(--bg);
 }
 
-::-webkit-scrollbar-thumb
-{
-	background-color: $nord4;
+::-webkit-scrollbar-thumb {
+    background-color: var(--surface-3);
     border-radius: 10px;
 }
 
-
 a {
-    color: $nord6;
+    color: var(--text-strong);
     text-decoration: none;
 
     &:hover {
-        color: $nord8;
+        color: var(--accent);
     }
+}
+
+button {
+    font-family: inherit;
 }
 
 .no-select {
     user-select: none;
+}
+
+// An app's name in its colour (--app, from appColor()), on the log and the statistics page alike.
+.app-chip {
+    display: inline-block;
+    padding: 0 6px;
+    border: 0;
+    border-radius: 3px;
+
+    color: var(--app);
+    background: color-mix(in srgb, var(--app) 10%, transparent);
+    font: 500 12px/18px var(--sans);
+    white-space: nowrap;
+}
+
+button.app-chip {
+    cursor: pointer;
+
+    &:hover {
+        background: color-mix(in srgb, var(--app) 20%, transparent);
+    }
+}
+
+.visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
 }
