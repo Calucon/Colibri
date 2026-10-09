@@ -365,10 +365,11 @@ EditMode tests, which `npm run test:vectors` checks in CI.
   bare answer as the end of the others. colibri-unity sends it after every reconnect and also takes
   it as the point by which the server has read the deletes it sent again. It also sends one when an
   object's first answer arrives outside that round after the object changed members of its own,
-  ahead of those members. colibri-web also sends one after each request for a whole channel and each
-  time it asks for one of its models once more. The server needs no code for this, but has to keep
-  handling one client's messages in order and writing its answers to it in that order. See
-  [Requests](./protocol.md#requests).
+  ahead of those members. colibri-web also sends one after each request for a whole channel, each
+  time it asks for one of its models once more, and after the first update with fields that follows
+  a fresh request for one of its models when it does neither. The server needs no code for this,
+  but has to keep handling one client's messages in order and writing its answers to it in that
+  order. See [Requests](./protocol.md#requests).
 
 ### Correctness & robustness
 
