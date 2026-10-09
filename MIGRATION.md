@@ -213,6 +213,11 @@ which lifts such a tombstone (without it, the updates for an id deleted a moment
 and `{ id, again: true }` when it asks again after a reconnect for an object it held before. See
 [Deleted models](colibri-server/docs/protocol.md#deleted-models).
 
+**Voice recordings have a new file name** (`VOICE_RECORDING=true`):
+`rec_<start time>_app_<app id>_ID_<voice id>_port_<source port>.wav` instead of
+`rec_<start time>_ID_<voice id>.wav`. Change anything that finds recordings by name. See
+[Voice packets](colibri-server/docs/protocol.md#voice-packets-udp).
+
 ---
 
 ## colibri-web
