@@ -170,9 +170,18 @@ client's address:
 - **Voice (UDP):** unchanged. nginx's PROXY protocol covers TCP only, so voice clients still show the
   proxy's address.
 
-With Docker and the ports published on `127.0.0.1`, the proxy appears as the gateway of the Docker
-network, e.g. `172.20.0.1`, and its subnet can change when compose recreates the network. The usual
-setting is then:
+With Docker, publish the web and TCP ports on `127.0.0.1`, so that clients reach them only through
+the proxy:
+
+```yaml
+    ports:
+      - 127.0.0.1:9011:9011 # admin UI, web clients, REST store
+      - 127.0.0.1:9012:9012 # TCP, Unity clients
+      - "9013:9013/udp" # voice
+```
+
+The proxy then appears as the gateway of the Docker network, e.g. `172.20.0.1`, and its subnet can
+change when compose recreates the network. The usual setting is:
 
 ```yaml
     environment:
@@ -180,9 +189,13 @@ setting is then:
       TCP_PROXY_PROTOCOL: "true"
 ```
 
-`uniquelocal` also covers clients on a private network. Such a client reaching the web port through
-the proxy can set the address it is shown at with its own `X-Forwarded-For`. To prevent that, give
-the compose network a fixed subnet and trust only that range.
+A connection from a trusted address that does not come through the proxy can name any client
+address: on the web port with its own `X-Forwarded-For`, on the TCP port with its own PROXY protocol
+header. With a new address on each connection, it also gets past the per-address warning limits.
+With the ports above, only processes on the host and containers on the compose network can connect
+directly. `uniquelocal` also covers clients on a private network, so such a client can do the same on
+the web port through the proxy, with its own `X-Forwarded-For`. To limit this to processes on the
+host, give the compose network a fixed subnet and trust only its gateway.
 
 In nginx, add to each `location` that proxies to the web port:
 
