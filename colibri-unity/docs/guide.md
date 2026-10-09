@@ -1,11 +1,11 @@
 # Colibri Unity guide
 
-Everything about the Colibri Unity package in one place: every option, limit and console message.
-For installing it and getting two clients to talk, the [README](../README.md) is enough.
+Reference for the Colibri Unity package with all options, limits and console messages. Installation
+and first run: [README](../README.md).
 
 ## Contents
 
-- Setting up
+- Setup
   - [Requirements](#requirements)
   - [Installation](#installation)
   - [Quickstart](#quickstart)
@@ -14,7 +14,7 @@ For installing it and getting two clients to talk, the [README](../README.md) is
   - [Meta Quest and Android](#meta-quest-and-android)
   - [Samples](#samples)
   - [Troubleshooting](#troubleshooting)
-- Using Colibri
+- Usage
   - [Sending Data between Clients](#sending-data-between-clients)
   - [SyncTransform](#synctransform)
   - [SyncBehaviour](#syncbehaviour)
@@ -28,77 +28,61 @@ For installing it and getting two clients to talk, the [README](../README.md) is
 
 ## Requirements
 
-- Unity 2022.3 LTS or higher
-- **colibri-server 2.0.0 or higher.** Colibri Unity 2.0.0 speaks the [v3 binary TCP
-  protocol](../../colibri-server/docs/protocol.md) and **cannot talk to a 1.x server**: there is no
-  version negotiation, both sides have to be upgraded together. Colibri Unity 1.x likewise cannot
-  talk to a 2.0.0 server. What a mismatch looks like depends on which side is old:
-  - **This package against a 1.x server.** Neither side can read the other's framing, so no
-    refusal can be sent. After three connections in a row that end before the server has sent
-    anything this client can read, the console reports a *suspected* protocol mismatch and
-    `Window → Colibri Status` shows it as a yellow warning. The client keeps retrying, waiting
-    longer each time (up to 10 s), because the same symptom also fits an address that is not a
-    Colibri server at all.
-  - **Colibri Unity 1.x against a 2.0.0 server.** The old client cannot be told either. The
-    server's log names the client's address and says it looks like a Colibri 1.x client.
-  - **Same framing, different protocol version** (a future server). The server refuses the
-    connection and says why, `Window → Colibri Status` shows the refusal in red, and the client
-    stops reconnecting: `Status` becomes `ConnectionStatus.ProtocolMismatch`.
+- Unity 2022.3 LTS or newer
+- colibri-server 2.0.0 or newer
+
+Colibri Unity 2.x uses the [v3 binary TCP protocol](../../colibri-server/docs/protocol.md) and does
+not interoperate with 1.x in either direction. There is no version negotiation, so upgrade server
+and clients together.
+
+| Combination | Result |
+|---|---|
+| Colibri Unity 2.x, colibri-server 1.x | The framings differ, so the server cannot send a refusal. After three connections in a row end before anything readable arrives, the client reports a suspected protocol mismatch, in yellow in *Window → Colibri Status*. It keeps retrying with growing delays up to 10 s, because an address that is not a Colibri server looks the same. |
+| Colibri Unity 1.x, colibri-server 2.x | The client gets no refusal. The server logs `Refusing a connection from <address>: it looks like a Colibri 1.x client …`. |
+| Same framing, other protocol version, e.g. a future server | The server refuses with a reason, in red in *Window → Colibri Status*. The client stops reconnecting ([Protocol mismatch](#protocol-mismatch)). |
 
 ## Installation
 
-One URL. In Unity, open *Window → Package Manager → + → Install package from git URL* and paste:
+In *Window → Package Manager → + → Install package from git URL*, enter:
 
 ```
 https://github.com/hcigroupkonstanz/Colibri.git?path=colibri-unity/Assets/Colibri
 ```
 
-The Package Manager should then list **Colibri 2.0.0** or newer. Errors about UniRx or UniTask mean
-it installed a Colibri 1.x, which could not talk to a 2.x server anyway. To stay on one exact
-version, append a release tag from the [Releases
-page](https://github.com/hcigroupkonstanz/Colibri/releases) to the URL, e.g. `#v2.0.0`.
-The Package Manager also records the commit it installed, so a project only moves to a newer
-Colibri when you update it there.
-
-Colibri's only dependency is `com.unity.nuget.newtonsoft-json`, which the Package Manager
-installs by itself.
+- The Package Manager must list **Colibri 2.0.0** or newer. UniRx or UniTask errors indicate a 1.x
+  install, which does not work with a 2.x server.
+- To pin a version, append a [release](https://github.com/hcigroupkonstanz/Colibri/releases) tag,
+  e.g. `#v2.0.0`. The Package Manager records the installed commit, so Colibri changes only when you
+  update it there.
+- The only dependency, `com.unity.nuget.newtonsoft-json`, is installed automatically.
 
 ### UnityPackage
 
-Alternatively, import the `.unitypackage` attached to the 2.0.0 release on the [Releases page](https://github.com/hcigroupkonstanz/Colibri/releases). Check the version number: a Colibri 1.x release cannot talk to a 2.x server. Installed this way, Newtonsoft JSON has to be added by hand from the Package Manager (`com.unity.nuget.newtonsoft-json`): a `.unitypackage` cannot declare dependencies.
+Alternatively, import the `.unitypackage` of the 2.0.0 release, not a 1.x one, from the [Releases
+page](https://github.com/hcigroupkonstanz/Colibri/releases). It cannot declare dependencies, so add
+`com.unity.nuget.newtonsoft-json` manually in the Package Manager.
 
 ## Quickstart
 
-1. Install Colibri (above). A configuration window opens on its own.
-2. Enter an **App Name** (every client that should see each other has to use the *same* one, and
-   nobody else on the server should use it) and the **Server Address** of your colibri-server,
-   then press *Save Config*. The window warns about names many people pick, such as `test` or
-   `myAppName`. The server can be a shared colibri-server 2.x instance or one you run yourself
-   ([Docker setup](../../colibri-server/README.md#docker)). The address is preset to the
-   public test server `colibri.hci.uni-konstanz.de`, which this package can only use while it runs
-   colibri-server 2.x: against a 1.x server, *Window → Colibri Status* reports a suspected protocol
-   mismatch (see [Requirements](#requirements)).
-3. Turn on *Project Settings → Player → Resolution and Presentation → **Run In Background***.
-   Unity leaves this off by default, and with it off the Editor stops running your game the
-   moment its window loses focus. The connection stays up and the status window still says
-   *Connected*, but nothing is sent and nothing that arrived is delivered, because none of that
-   happens until `Update` runs again. It is the single most confusing way for two clients on one
-   machine to appear broken. (Unity ignores this setting on Android, so it does not matter for
-   the Quest build itself.)
-4. Import the **SendData** sample: *Window → Package Manager → Colibri → Samples → Import*. (The
-   scene needs TextMeshPro's essential resources; see [Samples](#samples).)
-5. Start a second client. Unity does not open one project twice, so copy the project's `Assets`,
-   `Packages` and `ProjectSettings` folders into a new folder and open that from the Unity Hub. The
-   copy has the same configuration (`Assets/Resources/ColibriConfig`) and the imported sample. A
-   build of the scene is a client too, but it has no Inspector to tick `SendProperties` in, and
-   its log goes to a file rather than a console.
-6. Open the sample scene in both Editors and press Play. Tick `SendProperties` on the `[ClickMe]`
-   object (its `SendMessages` component) in one: the other's console logs `Received message with
-   value …` for every value sent. The sender logs none of these lines, because a client never
-   receives what it sent itself (see [Sending Data between Clients](#sending-data-between-clients)).
+1. Install Colibri. The configuration window opens automatically.
+2. Enter an **App Name** and the **Server Address** of a shared or
+   [own](../../colibri-server/README.md#docker) colibri-server 2.x, then click *Save Config*
+   ([Configuration](#configuration)).
+3. Enable *Project Settings → Player → Resolution and Presentation → **Run In Background***. It is
+   off by default, and a background Editor then pauses the game. The status window still shows
+   *Connected*, but nothing is sent or delivered until `Update` runs again. This is the most common
+   reason why two clients on one machine appear broken. Android ignores the setting.
+4. Import the **SendData** sample (*Window → Package Manager → Colibri → Samples → Import*). It
+   needs TextMeshPro's essential resources ([Samples](#samples)).
+5. Unity cannot open one project twice. For a second client, copy the `Assets`, `Packages` and
+   `ProjectSettings` folders to a new folder and open it from Unity Hub. The copy includes the
+   configuration (`Assets/Resources/ColibriConfig`) and the sample. A build also works as a client,
+   but has no Inspector to enable `SendProperties` and logs to a file.
+6. Open the sample scene in both Editors and enter Play mode. In one, enable `SendProperties` on the
+   `[ClickMe]` object (component `SendMessages`). The other logs `Received message with value …` for
+   each value. The sender logs nothing, because clients never receive their own messages.
 
-Stuck? Open **Window → Colibri Status**. It shows whether you are connected, which app name you
-are connected as, which channels have listeners, and the last messages in and out.
+If nothing arrives, see [Troubleshooting](#troubleshooting).
 
 ## Configuration
 
