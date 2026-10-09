@@ -188,7 +188,7 @@ any application traffic - it sends:
 | | how it notices | how long it takes | what it does |
 | --- | --- | --- | --- |
 | `colibri-web` | no `colibri`/`protocol::accepted` within 5s of connecting | 5s | warns, emits a **non-fatal** `ProtocolMismatchError` (`fatal: false`, `serverVersion: '1'`), **stays connected** |
-| `colibri-unity` | 3 sessions in a row that got past the handshake and ended before a frame decoded, other than by its 2s heartbeat watchdog | about 1.5s against a 1.x server: three sessions, 500ms and then 1000ms apart | logs an error, sets `SuspectedProtocolMismatch`, keeps retrying |
+| `colibri-unity` | 3 sessions in a row that got past the handshake and ended before a frame decoded, other than by its 2s heartbeat watchdog or, with TLS on, by a close or reset | about 1.5s against a 1.x server: three sessions, 500ms and then 1000ms apart | logs an error, sets `SuspectedProtocolMismatch`, keeps retrying |
 
 colibri-web reports each kind of mismatch at most once per `Colibri` instance on
 `Colibri.protocolMismatch`: this suspicion, and a refusal (`fatal: true`). A suspicion can be
@@ -196,10 +196,16 @@ followed by a refusal, but not the other way round.
 
 colibri-unity counts a session as connected only once the server has sent its first frame, so
 none of these sessions resets the reconnect backoff, which keeps doubling (0.5s, 1s, 2s, ... up
-to 10s). Every session that got past the handshake and ended without a frame counts, however it
-ended - a clean close, a reset, an undecodable frame, or 2s without any frame. The first frame a
-session decodes clears the count and the suspicion. A server that accepts the connection and then
-says nothing takes longer to suspect, since each of those sessions lasts the full 2s.
+to 10s). A session that got past the handshake and ended without a frame counts if it ended on a
+clean close, a reset or an undecodable frame; with TLS on, only an undecodable frame counts. The
+first frame a session decodes clears the count and the suspicion.
+
+A session that colibri-unity's 2s heartbeat watchdog ends without a frame does not count, and with
+TLS on, neither does a close or a reset. A 1.x server heartbeats from the moment it accepts,
+through a TLS-terminating proxy too, and its heartbeat fails to decode at once. A 2.x server with
+TLS on hangs up on a client without TLS, and sends a frame to one with it. Such sessions point at
+something that accepts connections and then closes them or forwards nothing, such as a proxy whose
+backend is down, and after 3 of them in a row colibri-unity logs a warning that says so instead.
 
 TCP clients are sent no announcement and need none: the framing itself changed incompatibly in
 2.0.0, so a pre-2.0.0 server is already unmistakable to them.
