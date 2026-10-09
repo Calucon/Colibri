@@ -15,14 +15,14 @@ and first run: [README](../README.md).
   - [Samples](#samples)
   - [Troubleshooting](#troubleshooting)
 - Usage
-  - [Sending Data between Clients](#sending-data-between-clients)
+  - [Sending data between clients](#sending-data-between-clients)
   - [SyncTransform](#synctransform)
   - [SyncBehaviour](#syncbehaviour)
   - [Send rate](#send-rate)
-  - [Remote Store](#remote-store)
+  - [Remote store](#remote-store)
   - [Connection and outages](#connection-and-outages)
-  - [Web Interface for Logging](#web-interface-for-logging)
-  - [Voice Chat](#voice-chat)
+  - [Web interface for logging](#web-interface-for-logging)
+  - [Voice chat](#voice-chat)
 - [Related documents](#related-documents)
 - [Development](#development)
 
@@ -102,12 +102,12 @@ while the project has no configuration. *Save Config* writes `Assets/Resources/C
   samples), `myApp`, `appName`, `app`, `test`, `testApp`, `demo`, `example`, `colibri`, `default`.
 - On a headset or phone, `localhost` is the device. Enter the server's LAN IPv4 address.
 - Valid changes apply at once, without saving. An open connection keeps its server and App Name
-  until it reconnects ([Voice Chat](#voice-chat)).
+  until it reconnects ([Voice chat](#voice-chat)).
 - Invalid values, such as port 0, are marked as errors and neither used nor saved. The setting keeps
   its last valid value. The window shows the typed value until you correct it or close the window.
 - Changes made elsewhere, such as in the asset's Inspector, appear in the window and are kept.
 
-### Advanced Configuration
+### Advanced configuration
 
 Under *Optional Config*, ports, TLS and the voice sampling rate must match the server. Change them
 only if the server does not use the defaults.
@@ -261,7 +261,7 @@ Show [`LastConnectFailure`](#connection-and-outages) in your app instead.
 | `… did not answer the TLS handshake …` or `rejected the certificate of …` | TLS settings do not match the server | See [TLS errors](#tls-errors) |
 | `Colibri (Android build): …` or `Colibri (build): …` | Works in the Editor, not on the Quest or in a build | See [Build settings check](#build-settings-check) |
 | `Colibri: cannot synchronize '<class>.<member>' …` at startup | A `[Sync]` member with an unsupported type, a property without both a getter and a setter, or a `readonly` field | Follow the message. Sync classes of your own as `JObject`. |
-| `Colibri: could not save "<name>" at <url> …`, `could not load …` or `could not delete …` | A `Store` request failed. The message names the URL, the transport error and the HTTP status. | Check the server address and app name. For "Insecure connection not allowed", see [Advanced Configuration](#advanced-configuration). |
+| `Colibri: could not save "<name>" at <url> …`, `could not load …` or `could not delete …` | A `Store` request failed. The message names the URL, the transport error and the HTTP status. | Check the server address and app name. For "Insecure connection not allowed", see [Advanced configuration](#advanced-configuration). |
 
 ### Other symptoms
 
@@ -271,7 +271,7 @@ Show [`LastConnectFailure`](#connection-and-outages) in your app instead.
 | Unknown objects or messages appear | Another project uses the same app name. Unity reports nothing at runtime. | Choose a unique app name ([Configuration](#configuration)). The server log warns, naming the app, above 8 clients by default (`APP_CLIENT_WARNING_THRESHOLD`). |
 | One client is connected but sends and receives nothing | Its Editor is in the background with *Run In Background* off | See [Quickstart](#quickstart), step 3 |
 
-## Sending Data between Clients
+## Sending data between clients
 
 `Sync.Send` publishes a value on a channel from anywhere in your code:
 
@@ -585,7 +585,7 @@ SyncSettings.MaxSendRate = 60; // updates per second per synced object; 0 = no l
   The configuration window warns about it.
 - A configuration saved before this setting existed uses 30.
 
-## Remote Store
+## Remote store
 
 `Store` saves data per app name on the server through its REST interface, so it persists between
 sessions. It takes anything Newtonsoft JSON can serialize, such as an object of your own class (also
@@ -659,8 +659,8 @@ sent later.
 
 - **Broadcasts** (`Sync.Send`): at most 256 wait. Beyond that the oldest are dropped, with one
   warning per outage.
-- **Log lines** wait in `[RemoteLogger]`, which keeps the newest 1000 ([Web Interface for
-  Logging](#web-interface-for-logging)). Only lines it handed over before the drop count toward the
+- **Log lines** wait in `[RemoteLogger]`, which keeps the newest 1000 ([Web interface for
+  logging](#web-interface-for-logging)). Only lines it handed over before the drop count toward the
   256.
 - **Synced object changes** are exempt from the 256 limit. Changes to one object are merged into one
   update, newer values winning.
@@ -758,7 +758,7 @@ reconnecting, and queued and later messages are dropped with a one-time warning.
 component to retry. A mismatch the server cannot report appears in `SuspectedProtocolMismatch`
 instead, and the client keeps retrying.
 
-## Web Interface for Logging
+## Web interface for logging
 
 <img src="../img/weblogger.png" alt="WebLogger" width=400/>
 
@@ -775,7 +775,7 @@ Add the `[RemoteLogger]` prefab to the scene. The Unity log then appears at
   `Colibri: N log lines are missing here …`. The device's own log keeps everything.
 - If the server refuses the client's protocol version, the kept lines are discarded.
 
-## Voice Chat
+## Voice chat
 
 `VoiceBroadcast` records the microphone and streams the audio. Add it to an empty GameObject. Call
 `StartBroadcast` with any `short` voice id except `0`, and `StopBroadcast` to stop:
