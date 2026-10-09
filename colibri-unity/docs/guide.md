@@ -397,30 +397,28 @@ synced. `UseLocalTransform` syncs local instead of world coordinates. See the Sy
 - The server stores each object's state and sends it to clients that connect later.
 - The object requests the state in `Awake` and gets it a round trip later, or once connected.
 - Members changed before the answer, e.g. in `Start`, in `OnConnected` or right after entering Play
-  mode, keep their values. These replace the server's values here, on the server and on all other
-  clients.
-- All other members take the server's values, so scene and prefab values do not overwrite them. For
-  model scripts of your own, see [Awake and OnDestroy](#awake-and-ondestroy).
+  mode, keep their values. These replace the server's values on the server and all clients.
+- All other members take the server's values, not the scene or prefab values. For your own model
+  scripts, see [Awake and OnDestroy](#awake-and-ondestroy).
 - A script that moves the object in `Start` therefore moves it for everyone whenever a client
   starts. Set starting positions in the scene.
-- Moving objects send at most 30 updates per second by default ([Send rate](#send-rate)).
 
 ### Showing, hiding and deleting
 
-- `SetActive(false)` hides the copies on other clients, `SetActive(true)` shows them again. Only the
-  object's own flag (`activeSelf`) is synced, so deactivating a parent has no effect elsewhere. With
-  `SyncActive` off, the active state stays local.
+- `SetActive(false)` hides the copies on other clients, and `SetActive(true)` shows them. Only
+  `activeSelf` is synced, so deactivating a parent has no effect elsewhere. With `SyncActive` off,
+  the active state stays local.
 - Disabling only the `SyncTransform` component pauses syncing without hiding anything. Changes made
-  meanwhile are sent when it is enabled again.
+  meanwhile are sent when it is re-enabled.
 - Destroying the object or unloading its scene, also by loading another scene in its place, deletes
   it on the server and all clients. The server and this client ignore an update another client sent
   before the delete reached it.
-- Loading the scene again, on any client, lets its placed objects sync again between all clients
-  that load it from then on, because the server no longer treats them as deleted. A client that kept
-  the scene open lost its copies with the delete. It gets them back only by loading the scene again,
-  or from a manager with a `Template` for them, which builds them from the next update.
+- After any client loads the scene again, the server no longer treats its placed objects as deleted.
+  They sync again between all clients that load the scene from then on. A client that kept the scene
+  open lost its copies with the delete. It gets them back only by loading the scene again, or from a
+  manager whose `Template` builds them from the next update.
 - Leaving Play mode, quitting or killing the app deletes nothing, whether the object is shown or
-  hidden. It stays on the server until the app's last client disconnects ([Connection and
+  hidden. The object stays on the server until the app's last client disconnects ([Connection and
   outages](#connection-and-outages)).
 
 ### Physics
@@ -429,18 +427,17 @@ synced. `UseLocalTransform` syncs local instead of world coordinates. See the Sy
   on one client sets it to `false` on all others. If it is ticked by default, the first client gets
   the authority.
 - Until the server's state arrives, the `Rigidbody` stays kinematic regardless of
-  `PhysicsAuthority`, so a client that joins later starts from the shared position, not from its own
-  simulation.
-- An object instantiated on this client with an empty `Id` is simulated at once, because the server
+  `PhysicsAuthority`. A client that joins later thus starts from the shared position.
+- An object instantiated on this client with an empty `Id` is simulated at once, since the server
   has no state for it.
-- If the connection is not up 5 s (the connect timeout) after Colibri opened it or after it dropped,
-  the object stops waiting once no connect attempt is running. Attempts also give up after 5 s. The
-  object is then simulated according to `PhysicsAuthority`, and the console warns once per session:
+- The object stops waiting when no connection is up 5 s after Colibri opened it or after a drop, and
+  no connect attempt is running. A connect attempt gives up after 5 s. The object is then simulated
+  according to `PhysicsAuthority`, and the console warns once per session:
   `Colibri: no connection to a server for 5 s, so placed SyncTransforms with a Rigidbody and PhysicsAuthority ticked are simulated without the server's state; …`.
 - When a server answers later, the position the object reached replaces the shared one on all
   clients. Start colibri-server before the clients.
-- `isKinematic` of the `SyncTransform` overwrites `isKinematic` of the `Rigidbody`. Change it on the
-  `SyncTransform`, not only on the `Rigidbody`.
+- The `SyncTransform`'s `isKinematic` overwrites the `Rigidbody`'s. Change it on the
+  `SyncTransform`.
 
 ### Objects created at runtime
 
@@ -456,7 +453,7 @@ object ([SyncBehaviour](#syncbehaviour)).
 
 ### Limitations
 
-These also apply to every `SyncBehaviour`.
+These apply to every `SyncBehaviour`.
 
 - Update each member from one client at a time.
 - The scene is reset when all clients disconnect.
@@ -498,16 +495,16 @@ Add the manager to the scene and set its `Template` to a prefab with the model s
 
 - The `Template` can also be an inactive scene object. An active one would also sync as an object of
   its own.
-- The manager activates every copy it builds, so the copy runs `Awake`, and then applies the synced
-  state. A `SyncTransform` copy of an object hidden elsewhere is therefore deactivated at once, and
-  shown when the original is.
+- The manager activates every copy it builds, so the copy runs `Awake`, then applies the synced
+  state. A `SyncTransform` copy of an object hidden elsewhere is thus deactivated at once and shown
+  when the original is.
 - `SyncTransform` is a `SyncBehaviour`. Its rules for server state, disabling, destroying and
   quitting apply to every `SyncBehaviour`. Only the active state is specific to `SyncTransform`.
 
 ### Awake and OnDestroy
 
-A `SyncBehaviour` registers in `Awake` and unregisters in `OnDestroy`. To use them, override them
-and call the base method:
+A `SyncBehaviour` registers in `Awake` and unregisters in `OnDestroy`. To use these methods,
+override them and call the base method:
 
 ```c#
 protected override void Awake()
@@ -518,7 +515,7 @@ protected override void Awake()
 }
 ```
 
-A plain `void Awake()` or `void OnDestroy()` hides the base method, and only compiler warning CS0114
+A plain `void Awake()` or `void OnDestroy()` hides the base method. Only compiler warning CS0114
 reports it. Without `base.Awake()`, the object never syncs. Without `base.OnDestroy()`, destroying
 it does not delete it on the other clients.
 
@@ -529,8 +526,8 @@ it does not delete it on the other clients.
   whatever its `Awake` sets.
 - `base.Awake()` reads every `[Sync]` member once, and the server's first answer is compared with
   these values. Set up whatever a getter reads before `base.Awake()`. A getter that reads a
-  component cached later returns its fallback first and the real value afterwards. This counts as a
-  change too, so each client that starts sends its own value over the server's.
+  component cached later returns its fallback first and the real value afterwards. That counts as a
+  change, so each client that starts sends its own value over the server's.
 
 ## Send rate
 
