@@ -110,7 +110,8 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
     // From a reconnect until everything else is asked for, the instance to ask through.
     let catchingUpThrough: Colibri | undefined;
 
-    // Own models whose wait for an answer a model::delete ended (see onDelete). That delete may
+    // Own models whose wait for an answer a model::delete ended (see onDelete), or that one removed
+    // while their answer may still have been on its way (see answerMayFollow). That delete may
     // have been relayed from another client just before the answer, and a server that does not
     // remember deletes (MODEL_TOMBSTONE_SECONDS=0) still answers with the bare id, which must not
     // become a model of its own.
@@ -186,6 +187,11 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
     // is too late: another client may set the field once the server has this client's value, and its
     // update can come before that answer.
     let keptOut = new WeakMap<T, Map<string, string>>();
+
+    // Own models settled by an update that need not have been their answer (see takeAnswer), by id:
+    // the id in guardEnds whose answer comes after theirs. Until it comes, the answer may still be on
+    // its way.
+    const answerMayFollow = new Map<string, string>();
 
     // When this client last heard from the server before the connection was lost (see lastHeardFrom).
     let lastHeardBeforeOutage = 0;
@@ -270,7 +276,9 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
     // `end`, none of them is going to.
     const endGuard = (end?: string) => {
         guardEnds = end === undefined ? [] : guardEnds.slice(guardEnds.indexOf(end) + 1);
-        if (guardEnds.length === 0) keptOut = new WeakMap<T, Map<string, string>>();
+        if (guardEnds.length > 0) return;
+        keptOut = new WeakMap<T, Map<string, string>>();
+        answerMayFollow.clear();
     };
 
     // initial data fetch - and the same again after every reconnect, since an update relayed while
@@ -455,7 +463,11 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
         awaitingAnswer.delete(id);
         const held = releaseHeldChanges(model);
         applyUpdate(model, withoutChanges(modelData, model, held));
-        if (!sendOnTop(id, asker, model, modelData, held, []) && !catchUpOnceAnswered()) guardFrom(asker);
+        if (sendOnTop(id, asker, model, modelData, held, [])) return;
+        if (!catchUpOnceAnswered()) guardFrom(asker);
+        // Either sends a request whose answer comes after the one for this model.
+        const end = guardEnds.at(-1);
+        if (end !== undefined) answerMayFollow.set(id, end);
     };
 
     // The answers to asking again after a reconnect are over (see takeAnswer): each own model asked
@@ -701,9 +713,14 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
         // settled, everything else is still to be asked for. Left waiting, the id kept that from
         // ever happening, and every other model stayed as it was before the outage.
         endConfirmation(id);
+        const answerEnd = answerMayFollow.get(id);
+        answerMayFollow.delete(id);
         if (awaitingAnswer.delete(id)) {
             deletedWhileAwaited.add(id);
             catchUpOnceAnswered();
+        } else if (answerEnd !== undefined && guardEnds.includes(answerEnd)) {
+            // Settled by an update that need not have been the answer, which may still come.
+            deletedWhileAwaited.add(id);
         }
     };
 

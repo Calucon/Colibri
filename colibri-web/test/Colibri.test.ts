@@ -1676,10 +1676,10 @@ describe('keeping a change made after registerModel', () => {
         debugSpy.mockRestore();
     });
 
-    /** A connected RegisterModelSync on 'reg' that has asked for every model, then 'p1' registered. */
-    const registeredLate = async () => {
+    /** A connected RegisterModelSync on `channel` that has asked for every model, then 'p1' registered. */
+    const registeredLate = async (channel = 'reg') => {
         new Colibri('app', 'localhost', 9011);
-        const [models$, registerModel] = RegisterModelSync({ name: 'reg', type: Pair });
+        const [models$, registerModel] = RegisterModelSync({ name: channel, type: Pair });
         connectSocket();
         await nextTask();
         fakeSocket.emit.mockClear();
@@ -1781,6 +1781,23 @@ describe('keeping a change made after registerModel', () => {
             ['model::request', { id: 'p1' }],
             ['model::update', { id: 'p1', a: 'changed' }]
         ]);
+    });
+
+    // The server read the request for the id after the delete, so its answer is the bare id, which
+    // was listed as a model with no fields that no other client has.
+    it("does not list the bare answer that comes after another client's update and delete", async () => {
+        // On a channel of its own: a RegisterModelSync left from another test, with an own 'p1' on
+        // 'reg', would take that answer as its own and drop it.
+        const { models$ } = await registeredLate('reg-deleted');
+        endOfAnswers();
+        deliver('reg-deleted', { command: 'model::update', payload: { id: 'p1', b: 'theirs' } });
+        deliver('reg-deleted', { command: 'model::delete', payload: { id: 'p1' } });
+        // The answer to the request for the id.
+        deliver('reg-deleted', { command: 'model::update', payload: { id: 'p1' } });
+        await settle();
+
+        expect(latest(models$)).toEqual([]);
+        expect(sentOnChannel()).toEqual([['model::request', { id: 'p1' }]]);
     });
 
     it('keeps a change made after the answer for every model came first, and the answer after it', async () => {
