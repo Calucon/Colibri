@@ -308,6 +308,11 @@ EditMode tests, which `npm run test:vectors` checks in CI.
   other malformed packets.
 - A client whose packets name another app moves to it. The relay finds a packet's peers in a list
   per app, rebuilt only when a client joins, times out or changes app.
+- A voice recording (`VOICE_RECORDING=true`) is named
+  `rec_<start time>_app_<app id>_ID_<voice id>_port_<source port>.wav` instead of
+  `rec_<start time>_ID_<voice id>.wav`. Two recordings with the same voice id that started in the
+  same millisecond, as clients of two apps can after a restart, got the same name, and the second
+  replaced the first.
 - The app id keeps apps apart but is not access control: anyone who knows an app's name can send
   and receive its voice. Voice is not encrypted.
 
