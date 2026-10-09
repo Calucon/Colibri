@@ -219,13 +219,13 @@ class Player extends SyncModel<Player> {
 }
 ```
 
-This also fixes field synchronization in frameworks that re-create instances, such as React, which
+This also fixes field synchronization in frameworks that re-create instances, such as React. It
 never worked correctly with the legacy decorator.
 
 ### Breaking: TypeScript and `rxjs`
 
-Colibri targets TypeScript 5.0 or newer. The plain JavaScript sample ports were removed. For
-projects tied to plain JavaScript, `colibri-web/docs/js-workaround` documents a workaround.
+Colibri targets TypeScript 5.0 or newer. The plain JavaScript sample ports were removed. Plain
+JavaScript: [unsupported workaround](colibri-web/docs/js-workaround/README.md).
 
 `rxjs` is now a **peer dependency**, because its types are part of the public API (`SyncModel`,
 `RegisterModelSync`, `Colibri.messages`):
@@ -263,8 +263,8 @@ Sync.receiveColor('tint', colour => setTint(toHexColor(colour)));
 - The `console.log` on every model registration is gone. With `RemoteLogger`, it also caused
   needless network traffic.
 - The server address can be written as a browser shows it, such as `'http://192.168.0.10:9011'`.
-  `https://`, `ws://`, `wss://`, a port in the address and a trailing slash work too. The port is
-  the one in the address, else the third argument, else 9011, also for `https://`.
+  `https://`, `ws://`, `wss://`, a port in the address and a trailing slash work too. Port
+  precedence: the port in the address, then the third argument, then 9011, also for `https://`.
 - An address that 1.x turned into a URL that could never connect now throws a `ColibriError`: a path
   after the host (such as the admin UI's `…/log`), an unknown scheme, a port that is not a whole
   number, or a port in the address that differs from the port argument.
@@ -286,8 +286,8 @@ LTS.
 
 ### Breaking: UniRx removed
 
-UniRx was removed without a replacement. `SyncBehaviour<T>.ModelCreated()` and `ModelDestroyed()`
-returned `IObservable<>`. They are now static events:
+There is no replacement. `SyncBehaviour<T>.ModelCreated()` and `ModelDestroyed()` returned
+`IObservable<>`. They are now static events:
 
 ```csharp
 // 1.x
@@ -377,8 +377,8 @@ any number of producers and consumers.
 ## TLS
 
 TLS is optional in 2.0. To turn it on, set `TLS_CERT` and `TLS_KEY` on the server, and tick
-*Server supports SSL/TLS?* in each Unity app (see TLS in the
-[server](colibri-server/docs/guide.md#tls) and [Unity](colibri-unity/docs/guide.md#tls) guides).
+*Server supports SSL/TLS?* in each Unity app. Details:
+[server guide](colibri-server/docs/guide.md#tls), [Unity guide](colibri-unity/docs/guide.md#tls).
 
 - The setting (`ColibriConfig.IsSSL`) now covers the TCP connection too, not only the Store.
 - With the setting ticked, a deployment with only the web port behind a TLS proxy, such as nginx on
