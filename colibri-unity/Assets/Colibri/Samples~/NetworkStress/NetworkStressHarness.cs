@@ -141,7 +141,7 @@ namespace HCIKonstanz.Colibri.Samples
             _manager = FindAnyObjectByType<StressModelManager>();
 
             if (_manager == null)
-                Debug.LogWarning("No StressModelManager in the scene - objects created by the other client will never appear here.");
+                Debug.LogWarning("No StressModelManager in the scene. Objects created by the other client will not appear here.");
 
             ResetStats();
         }
