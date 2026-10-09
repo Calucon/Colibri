@@ -14,7 +14,7 @@ since 1.x: [CHANGELOG.md](../CHANGELOG.md). Upgrading all Colibri components to 
     - [Remote Store](#remote-store)
     - [Web Interface for Logging](#web-interface-for-logging)
 - [Samples](#samples)
-- [For maintainers](#for-maintainers)
+- [Development](#development)
 
 ## Installation
 
@@ -148,48 +148,40 @@ colibri.protocolMismatch.subscribe(error => {
 
 ### Sending Data between Clients
 
-Colibri supports simple data transmission via pub/sub communication. Data can be published from anywhere in the
-executed code, as illustrated with the following simple example of sending a boolean value on a "myChannel" channel:
+`Sync` publishes values on named channels, from anywhere in your code:
 
 ```ts
 import { Sync } from '@hcikn/colibri';
 Sync.sendBool('myChannel', true);
-```
 
-The sent data can then be received anywhere by registering a listener:
-
-```ts
 const onValue = (value: boolean) => {
-    // Will be called whenever a bool on "myChannel" channel is received
+    // called for every bool received on 'myChannel'
 };
 Sync.receiveBool('myChannel', onValue);
-```
-
-The listener can be deregistered via:
-
-```ts
 Sync.unregister('myChannel', onValue);
 ```
 
-Listeners may be registered (and deregistered) before `new Colibri()`; they are attached once it is created. Sending
-needs the instance: a `Sync.send*` call before `new Colibri()` is dropped with a console warning.
+Listeners can be registered and unregistered before `new Colibri()`, and are attached when it is created. A
+`Sync.send*` call before `new Colibri()` is dropped with the warning `Colibri not initialized yet! (Instance is null)`.
 
-The following built-in types are available for sync: `bool, int (as number), float (as number), string, Vector2, Vector3, Quaternion, Color` and arrays thereof. For arbitrary data, you can use JSON:
+| Type       | Send                                         | Value                                      |
+| ---------- | -------------------------------------------- | ------------------------------------------ |
+| bool       | `sendBool`                                   | `boolean`                                  |
+| int, float | `sendNumber`, aliases `sendInt`, `sendFloat` | `number`                                   |
+| string     | `sendString`                                 | `string`                                   |
+| Vector2    | `sendVector2`                                | `[x, y]`                                   |
+| Vector3    | `sendVector3`                                | `[x, y, z]`                                |
+| Quaternion | `sendQuaternion`                             | `[x, y, z, w]`                             |
+| Color      | `sendColor`                                  | `[r, g, b, a]`, each 0-1, or `"#RRGGBBAA"` |
+| JSON       | `sendJson`                                   | object                                     |
 
-```ts
-Sync.sendJson('myChannel', { foo: 'bar' });
-Sync.receiveJson('myChannel', json => {
-    /* ... */
-});
-```
+Each `send*` has a matching `receive*`. Each type except JSON also has an array form, such as `sendVector3Array`.
+Vectors, quaternions and colours are plain arrays, where Unity uses structs.
 
-Vectors, quaternions and colours are plain arrays here, where Unity uses its own structs:
-`Sync.sendVector2('myChannel', [1, 2])`, `Sync.sendVector3('myChannel', [1, 2, 3])`,
-`Sync.sendColor('myChannel', [1, 0, 0, 1])` with each colour component 0-1.
+#### Colours
 
-**A colour arrives in either of two forms.** A Unity client sends the HTML string
-`"#RRGGBBAA"`; a colibri-web client sends `[r, g, b, a]`. Both reach your callback, so normalize
-rather than assuming one:
+Unity sends a colour as the HTML string `"#RRGGBBAA"`, colibri-web as `[r, g, b, a]`. A callback receives either form.
+Normalize it:
 
 ```ts
 import { Sync, toHexColor, toRgbaColor } from '@hcikn/colibri';
@@ -200,32 +192,30 @@ Sync.receiveColor('myChannel', color => {
 });
 ```
 
-Both normalizers warn and fall back to opaque black on a payload that is not a colour, rather
-than throwing. The full wire format is in
-[the protocol docs](../../colibri-server/docs/protocol.md#payload-shapes).
+For a payload that is not a colour, both functions warn and return opaque black instead of throwing. The wire format
+is in [Payload shapes](../../colibri-server/docs/protocol.md#payload-shapes).
 
-See also [the broadcast sample](../samples/broadcast.ts) (run sample with `npm run samples/broadcast`).
+Sample: [broadcast](../samples/broadcast.ts) (`npm run samples/broadcast`).
 
-Limitations:
+#### Limitations
 
-- The server relays data, it does not store it: a listener only receives what is sent while it is registered and
-  connected
-- Data goes to the _other_ clients with the same app name; the sender does not receive its own data
-- Type and channel _must_ match between Listener and Sender. JavaScript has one number type, so
-  everything this library sends is tagged `float`, including `sendInt`, which exists only for API
-  symmetry with Unity. **Unity clients must receive numbers sent from web with `Sync.Receive<float>`,
-  never `Sync.Receive<int>`.** The other direction is handled: `receiveNumber` accepts both.
-- Remember to unregister your listener where necessary!
-- By default the server takes up to 1000 broadcasts and model updates a second from one client, in bursts of up
-  to 2000. Beyond that it drops the client's broadcasts, and holds back its model updates, merging them per object so
-  that the latest value of every field still arrives. It logs a warning naming the client. The limit is there to catch
-  a runaway send loop, and the server's operator can change it.
+- The server relays data without storing it. A listener receives only what is sent while it is registered and
+  connected.
+- Data goes to the _other_ clients of the app, not to the sender.
+- Channel and type must match between sender and listener.
+- colibri-web tags every number as `float`, since JavaScript has one number type. `sendInt` sends `float` too, and
+  exists only for API symmetry with Unity. **Unity must receive web numbers with `Sync.Receive<float>`, never
+  `Sync.Receive<int>`.** `receiveNumber` accepts both.
+- A listener stays registered until `Sync.unregister`.
+- By default, the server accepts up to 1000 broadcasts and model updates a second from one client, in bursts of up
+  to 2000. Beyond that, it drops the client's broadcasts and holds back its model updates, merged per object so that
+  the latest value of every field still arrives. It logs a warning naming the client. The limit catches runaway send
+  loops. The server's operator can change it.
 
 ### SyncModel
 
-(Counterpart to [SyncBehaviour in Unity client](../../colibri-unity/docs/guide.md#syncbehaviour))
-
-For more complex scenarios, Colibri supports synchronization of data models (e.g., for use in model-view-controller architectures). For this, we need to extend the _Model_ with `SyncModel`:
+`SyncModel` synchronizes data models between clients, for example in a model-view-controller architecture. It is the
+counterpart of [SyncBehaviour](../../colibri-unity/docs/guide.md#syncbehaviour) in Unity.
 
 ```ts
 import { SyncModel, Synced } from '@hcikn/colibri';
@@ -242,16 +232,15 @@ export class SampleClass extends SyncModel<SampleClass> {
 }
 ```
 
-`@Synced()` requires TypeScript's standard decorators, the default since TypeScript 5.0. Make sure `experimentalDecorators` is **not** set (or is `false`) in your `tsconfig.json`, and declare every synced member with the `accessor` keyword.
+Declare each synced member with `accessor` and mark it with `@Synced()`. `@Synced('billingAddress')` syncs the member
+under the given name. `@Synced()` needs TypeScript's standard decorators, the default since TypeScript 5.0. Leave
+`experimentalDecorators` unset or `false` in `tsconfig.json`.
 
-Any `accessor` member marked with `@Synced()` will be synchronized across all network clients.
+**From 1.x:** remove `experimentalDecorators` and turn every synced field into an `accessor`
+(`@Synced() private age = 0;` becomes `@Synced() accessor age = 0;`). This also fixes field synchronization in
+frameworks such as React, which never worked with the legacy decorator.
 
-> **Migrating from 1.x:** remove `experimentalDecorators` from your `tsconfig.json`, and turn every
-> synced field/property into an `accessor` (e.g. `@Synced() private age = 0;` → `@Synced() accessor age = 0;`).
-> This also fixes field synchronization in frameworks like React, which never worked correctly under
-> the legacy decorator.
-
-Lastly, we need to register the class with the Synchronization mechanism by calling `RegisterModelSync`:
+Register the class:
 
 ```ts
 import { RegisterModelSync } from '@hcikn/colibri';
@@ -261,81 +250,89 @@ const [SampleClasses$, registerExampleClass] = RegisterModelSync<SampleClass>({
 });
 ```
 
-`name` is the channel the models are synchronized on. **Always pass it.** Without it, Colibri uses the class name in
-lower case, which a minifying production build changes, so two builds of your app, or a minified build and Unity, stop
-synchronizing without an error; Colibri only warns in the console when the class name looks minified. To synchronize
-with a Unity `SyncBehaviour<T>`, use the Unity class name in lower case (`MyClass` → `'myclass'`), followed by
-`_<ModelId>` if that component's `ModelId` is set. Property names are compared in lower case too, so
-`@Synced() accessor myString` matches Unity's `[Sync] public string MyString`.
+`name` is the channel. **Always pass it.** The default is the class name in lower case, which minification changes.
+Two builds of your app, or a minified build and Unity, then stop synchronizing without an error. Colibri warns only
+when the class name looks minified (two characters or fewer, or containing `$`).
 
-The first return value (e.g., `SampleClasses$`) is an RxJS [Observable](https://rxjs.dev/guide/observable) of all
-synchronized SampleClass instances. It emits the current list as soon as you subscribe, and again whenever an instance
-is added or deleted, or another client updates one. The second return value (e.g., `registerExampleClass`) can be used
-to sync new instantiations:
+To sync with a Unity `SyncBehaviour<T>`, use the Unity class name in lower case (`'myclass'` for `MyClass`), plus
+`_<ModelId>` if the component's `ModelId` is set. Property names are compared in lower case, so
+`@Synced() accessor myString` matches `[Sync] public string MyString`. A received field the class does not declare
+logs `Unknown property <field> in <class>`.
+
+`SampleClasses$` is an RxJS [Observable](https://rxjs.dev/guide/observable) of all synchronized instances. It emits
+the list on subscribe, and again when an instance is added or deleted, or another client updates one.
+`registerExampleClass` (`registerModel` below) synchronizes a new instance:
 
 ```ts
-const mySample = new SampleClass('myId'); // mySample is not synchronized across clients yet
-registerExampleClass(mySample); // from now on mySample is synchronized with the other clients
+const mySample = new SampleClass('myId'); // not synchronized yet
+registerExampleClass(mySample); // synchronized with the other clients from now on
 ```
 
-The id identifies the instance on every client, so it has to be unique. `registerModel` first asks the server for that
-id. If the server already has a model with it (another client created it, or this page did before it was reloaded while
-another client of the app stayed connected), the server's copy wins: its values replace the ones the instance had when
-it was registered, and changes made after `registerModel` are sent on top of them and kept, also when an update another
-client made to the model arrives before the server's answer. Otherwise the instance is sent to the other clients in
-full. An id that is already in the list, such as a copy the server sent earlier, is replaced by the instance you
-register; the replaced one stops syncing, and Colibri warns in the console if this client had registered it itself.
+#### Registering an instance
 
-`SampleClasses$` emits a freshly registered instance once with its constructor values, in the same tick as
-`registerModel` and before the server's answer arrives, so a UI bound to it briefly shows the defaults; nothing of it is
-sent until that answer.
+The id identifies the instance on every client and must be unique. `registerModel` first asks the server for it.
 
-`RegisterModelSync` and registering instances may happen before `new Colibri()`; the server is asked once it is
-created. After a reconnect, Colibri asks the server again for each instance this client registered, then for all the
-others, so what changed in the meantime is applied. A change made while that answer is on its way is kept, at first,
-after a reconnect, and when another `RegisterModelSync` on the channel asks: the server made the answer before it had
-the change. So is a change not yet sent when an update for the instance arrives: `SyncModel` sends changes 1 ms after
-they are made, and the server reads the change after that update. An instance the server no longer has is sent again in
-full: the server forgets an app's models when it restarts and when the app's last client disconnects, which is what a
-lone client's outage looks like to it. A registered instance another client deleted during the outage is removed from
-the list, if the delete is no more than `MODEL_TOMBSTONE_SECONDS` (10 minutes by default) old. See
-[After a reconnect](../../colibri-server/docs/protocol.md#after-a-reconnect) in the protocol docs.
+- If the server has the id, its values replace the instance's. This happens if another client created it, or if this
+  page did and was reloaded while another client stayed connected. Changes made after `registerModel` are sent on top
+  and kept, even if another client's update arrives before the server's answer.
+- Otherwise, the instance is sent in full.
 
-A change to a registered instance made just before the connection dies without closing (Wi-Fi dropping out, say) may
-never reach the server: Socket.IO notices such a connection only after its ping timeout, up to about 45 s with the
-server's defaults, and what is sent until then is lost. When the server's answer after the reconnect, or an update from
-another client that arrives before the answers are over, shows a field with an earlier value it had here, one it still
-had in the 10 s before the connection stopped working, Colibri keeps the local value and sends it again once the answers
-are over, however many changes were made in the meantime. A value this client never had is another client's and is
-applied. This holds when the connection dies again before that answer comes, too, or before the value sent again
+The observable lists the new instance with its constructor values in the same tick, so a bound UI briefly shows the
+defaults. Nothing is sent before the server's answer.
+
+A registered instance replaces a listed one with the same id, such as a copy from the server. The replaced one stops
+syncing, with a console warning if this client registered it. Registering the same instance again does nothing.
+
+#### Reconnects
+
+- `RegisterModelSync` and `registerModel` may run before `new Colibri()`. The server is asked once it exists.
+- After a reconnect, Colibri asks again for each instance this client registered, then for all others, and applies
+  what changed.
+- A change made while the server's answer is on its way is kept, whether the answer follows the registration, a
+  reconnect or a request from another `RegisterModelSync` on the channel. The server made the answer before it had the
+  change.
+- So is a change not yet sent when an update for the instance arrives. `SyncModel` sends changes 1 ms after they are
+  made, and the server reads the change after that update.
+- The server keeps models in memory only, per app name. It forgets them on restart and when the app's last client
+  disconnects, as in a lone client's outage. This client then resends its registered instances in full. Other models
+  come back only from a client that has them.
+- An instance another client deleted while this client was disconnected is removed on the reconnect only if this
+  client registered it and the delete is at most `MODEL_TOMBSTONE_SECONDS` old (default 10 minutes). Other instances
+  stay listed.
+
+Details: [After a reconnect](../../colibri-server/docs/protocol.md#after-a-reconnect).
+
+#### Changes lost in a dropped connection
+
+Socket.IO notices a connection that dies without closing, as on a Wi-Fi dropout, only after its ping timeout, up to
+about 45 s with the server's defaults. Changes sent until then are lost.
+
+The server's answer after the reconnect, or another client's update before the answers are over, may show an earlier
+value that a field had here in the 10 s before the connection stopped working. Colibri then keeps the local value and
+resends it once the answers are over, however many changes were made meanwhile. A value this client never had is
+another client's and is applied. This also holds if the connection dies again before the answer or the resent value
 arrives.
 
-See also [the model-sync sample](../samples/model-sync.ts) (run sample with `npm run samples/model-sync`).
+Sample: [model-sync](../samples/model-sync.ts) (`npm run samples/model-sync`).
 
-Limitations:
+#### Limitations
 
-- The server keeps synchronized models in memory only, per app name, and forgets them when the last client of that app
-  disconnects or the server restarts. This client sends the instances it registered again after a reconnect; any other
-  model comes back only from a client that has it.
-- colibri-web cannot delete an instance for the other clients: `delete()` only stops that instance sending its changes.
-  An instance another client (e.g. Unity) deletes is removed from the list. If this client was disconnected at the
-  time, that happens on the reconnect only for an instance it registered itself, and only within
-  `MODEL_TOMBSTONE_SECONDS` of the delete; any other stays in the list.
-- A change lost in a connection that died is sent again only for an instance this client registered. On a model listed
-  from the server, the server's value replaces it after the reconnect.
-- A field changed more than about 8 times within roughly 100 ms of the last message from the server before the
-  connection died (a fast drag on a slow link, say) may not be recognised; the server's value is then applied.
-- Another client that sets a field back during the outage, or just after the reconnect, to a value the field had here in
-  the 10 s before the connection died, looks like a lost change: this client's value replaces it.
-- A field changed while this client waits for the server's answer after `registerModel` or a reconnect is sent again
-  when the server still shows the value it replaced a round trip later, even if another client set it back meanwhile.
-- Two `RegisterModelSync` on one channel in the same page do not receive each other's updates: the server relays an
-  update to every client but the one that sent it, and both use the page's one connection. Call `RegisterModelSync`
-  once per channel and share what it returns.
+- colibri-web cannot delete an instance for other clients. `delete()` only stops the instance sending its changes. An
+  instance another client deletes, such as a Unity client, is removed from the list.
+- A lost change is resent only for a registered instance. On a model listed from the server, the server's value wins.
+- A field changed more than about 8 times within roughly 100 ms of the last message from the server before the drop,
+  as in a fast drag on a slow link, may not be recognized as lost. The server's value is then applied.
+- Another client setting a field back, during the outage or right after the reconnect, to a value it had here in the
+  10 s before the drop looks like a lost change. This client's value replaces it.
+- A field changed while waiting for the server's answer after `registerModel` or a reconnect is resent if the server
+  still shows the replaced value a round trip later, even if another client set it back meanwhile.
+- Two `RegisterModelSync` calls on one channel in one page do not receive each other's updates. They share the page's
+  connection, and the server relays an update to every client except the sender. Call `RegisterModelSync` once per
+  channel and share what it returns.
 
 ### Remote Store
 
-Colibri offers persistent data storage on the server, so that data can be shared easily between connected clients. Each object is identified by its individual `key`, within the app name passed to `new Colibri()`:
+The server stores data persistently under a `key`, per app name. All clients of the app can read and write it.
 
 ```ts
 import { Colibri, GetRestApi, PutRestApi } from '@hcikn/colibri';
@@ -343,54 +340,55 @@ import { Colibri, GetRestApi, PutRestApi } from '@hcikn/colibri';
 const key = 'sampleKey';
 const data = { name: 'Test', age: 32 };
 
-// either directly via the Colibri instance...
+// through the Colibri instance
 const colibri = Colibri.getInstance();
 if (colibri) {
     await colibri.setRestObject(key, data); // true if stored
-    const stored = await colibri.getRestObject(key); // null if there is nothing stored under key
+    const stored = await colibri.getRestObject(key); // null if nothing is stored under key
 }
 
-// ...or via the wrapper functions, which return undefined if there is no Colibri instance yet
+// or through the wrapper functions, which return undefined without a Colibri instance
 await PutRestApi(key, data);
 const stored = await GetRestApi(key);
 ```
 
-A stored value can be any JSON value up to 5 MiB, `null` included; `undefined` is not one, so
-`setRestObject(key, undefined)` stores nothing. `setRestObject` resolves to `false` if the server did not store it,
-and `getRestObject` to `null` if there is no such key or the server answered with an error; both reject if the server
-cannot be reached. A key is URL-encoded, so any key works, `/`, `#`, `?`, `%` and spaces included, and addresses the
-same value as Unity's `Store`. Whitespace around a key and slashes in front of it are stripped, and an empty key, `.`
-or `..` stores and finds nothing (`false` and `null`).
+- A value is any JSON value up to 5 MiB, `null` included. `undefined` is not JSON, so `setRestObject(key, undefined)`
+  stores nothing.
+- `setRestObject` resolves to `false` if the server did not store the value. `getRestObject` resolves to `null` if
+  there is no such key or the server answered with an error. Both reject if the server cannot be reached.
+- Keys are URL-encoded. Any key works, including `/`, `#`, `?`, `%` and spaces, and addresses the same value as
+  Unity's `Store`.
+- Whitespace around a key and leading slashes are stripped. An empty key, `.` or `..` stores and finds nothing
+  (`false` and `null`).
 
 ### Web Interface for Logging
 
-Colibri provides a _web logger_ with web interface to send diagnostic data (currently: console logs) to the server. This may be useful for devices (e.g., VR devices, smartphones) where access to the console is not easily available.
-
-To setup, import the `RemoteLogger` and construct a new instance. Any subsequent `console` calls should now also appear on your colibri server's web interface, which can be accessed via `http://<your-server-ip>:9011`. The server also prints them to its console output (`docker logs` for a Docker server), apart from `console.debug` lines unless it runs with `CONSOLE_LOG_LEVEL=debug`.
+`RemoteLogger` sends `console` output to the server, for devices without easy console access such as VR headsets and
+smartphones.
 
 ```ts
 import { RemoteLogger } from '@hcikn/colibri';
 const logger = new RemoteLogger();
 
-// en-/disable RemoteLogger
-logger.enable();
-logger.disable();
+logger.disable(); // stop forwarding
+logger.enable(); // forward again
 ```
 
-Create one `RemoteLogger`, at startup. A second one does not forward again. It warns once, and from then on its
-`enabled` argument, `enable()` and `disable()` control the first one. It may be created before `new Colibri()`:
-the first 100 lines logged until then are kept and sent once Colibri exists, and any further lines are counted and
-reported in one warning. Forwarding never makes a `console` call throw.
+- Forwarded lines appear in the admin UI at `http://<your-server>:9011`, and in the server's console output
+  (`docker logs` for Docker). `console.debug` lines reach the console output only with `CONSOLE_LOG_LEVEL=debug`.
+- Create one `RemoteLogger`, at startup. A second one does not forward again. It warns once, and its `enabled`
+  argument, `enable()` and `disable()` then control the first one.
+- It may be created before `new Colibri()`. The first 100 lines until then are sent once Colibri exists. Further lines
+  are counted and reported in one warning.
+- Forwarding never makes a `console` call throw.
 
-See also [the remote-logging sample](../samples/remote-logging.ts) (run sample with `npm run samples/remote-logging`).
+Sample: [remote-logging](../samples/remote-logging.ts) (`npm run samples/remote-logging`).
 
 ## Samples
 
-See [Sample folder](../samples/) for more examples on how to use the Colibri web client.
-
-The samples are TypeScript and run with [tsx](https://tsx.is/) directly against the sources. The interactive ones ask
-for the server address and port, sharing their prompts via `common.ts`; `verification-peer` takes them as arguments
-instead and sends one value of every type, for testing against a Unity client.
+The [samples](../samples/) are TypeScript and run with [tsx](https://tsx.is/) against the sources. The interactive
+ones ask for the server address and port, with prompts shared in `common.ts`. `verification-peer` takes both as
+arguments and sends one value of every type, for testing against a Unity client.
 
 | Sample                                               | Run with                                             |
 | ---------------------------------------------------- | ---------------------------------------------------- |
@@ -400,12 +398,16 @@ instead and sends one value of every type, for testing against a Unity client.
 | [rest-api](../samples/rest-api.ts)                   | `npm run samples/rest-api`                           |
 | [verification-peer](../samples/verification-peer.ts) | `npm run samples/verification-peer -- [host] [port]` |
 
-## For maintainers
+## Development
 
-- `npm test` runs the unit tests, `npm run typecheck` type-checks sources, samples and tests, and `npm run lint` and
-  `npm run format:check` check the style.
-- `npm run test:e2e` runs the end-to-end tests against a real colibri-server. It starts one from `../colibri-server`
-  with Docker Compose on port 9011, unless `COLIBRI_E2E_SERVER` names a running server (port: `COLIBRI_E2E_PORT`,
-  default 9011).
-- `npm run release` builds and publishes the package to npm; a plain `npm publish` builds first as well. The 1.x
-  `publish` script is gone.
+| Command                | Description                                                                                      |
+| ---------------------- | ------------------------------------------------------------------------------------------------ |
+| `npm test`             | Unit tests                                                                                       |
+| `npm run typecheck`    | Type-checks sources, samples and tests                                                           |
+| `npm run lint`         | Style check (ESLint)                                                                             |
+| `npm run format:check` | Formatting check (Prettier)                                                                      |
+| `npm run test:e2e`     | End-to-end tests against a real colibri-server (see below)                                       |
+| `npm run release`      | Builds and publishes to npm. `npm publish` also builds first. Replaces the 1.x `publish` script. |
+
+`npm run test:e2e` starts a server from `../colibri-server` with Docker Compose on port 9011, unless
+`COLIBRI_E2E_SERVER` names a running server (port: `COLIBRI_E2E_PORT`, default 9011).
