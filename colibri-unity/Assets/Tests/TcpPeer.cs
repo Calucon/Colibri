@@ -81,6 +81,18 @@ namespace HCIKonstanz.Colibri.E2E
         public bool Closed => Volatile.Read(ref _closed);
         private bool _closed;
 
+        /// <summary>True once the server has sent this peer a frame of any kind.</summary>
+        private bool Answered => Volatile.Read(ref _answered);
+        private bool _answered;
+
+        /// <summary>
+        /// Connects and handshakes, and returns once the server has answered. It writes nothing
+        /// to a client before it has put it on the app, or refused it, so from the first frame on,
+        /// anything relayed to the app reaches this peer. Returning as soon as the handshake was
+        /// written was not enough: the server reads its connections in no fixed order, and under
+        /// load it relayed a message sent on another connection after the handshake before it had
+        /// read the handshake.
+        /// </summary>
         /// <param name="version">
         /// Handshake protocol version. Defaults to the client library's own, so the peer is
         /// accepted; a test can pass something else to exercise the server's refusal.
@@ -88,6 +100,8 @@ namespace HCIKonstanz.Colibri.E2E
         public IEnumerator Connect(string name = "e2e-peer", string version = null)
         {
             yield return E2EServer.Await(ConnectAsync(name, version), "the raw peer never reached the server");
+            yield return E2EServer.WaitUntil(() => Answered || Closed,
+                $"The server never answered the handshake of the raw peer '{name}'");
         }
 
         private async Task ConnectAsync(string name, string version)
@@ -240,6 +254,8 @@ namespace HCIKonstanz.Colibri.E2E
 
                 foreach (var frame in Decode(buffer, read))
                 {
+                    Volatile.Write(ref _answered, true);
+
                     switch (frame.Type)
                     {
                         case FrameType.Heartbeat:
