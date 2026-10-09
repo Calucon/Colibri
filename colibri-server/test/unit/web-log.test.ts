@@ -216,6 +216,26 @@ describe('WebLog', () => {
         expect(new Set(ids).size).toBe(1);
     });
 
+    it('does not merge the same line from two apps', async () => {
+        const server = new FakeSocketIOServer();
+        const webLog = new WebLog(server as unknown as SocketIOServer);
+        await webLog.init();
+
+        const admin = makeClient('admin1', 'colibri');
+        server.connectClient(admin);
+
+        const emitter = new Emitter();
+        emitter.emitInfo('[127.0.0.1] ready', { clientApp: 'app-a' });
+        emitter.emitInfo('[127.0.0.1] ready', { clientApp: 'app-b' });
+        emitter.emitInfo('[127.0.0.1] ready', { clientApp: 'app-a' });
+
+        const sent = server.broadcasts
+            .map(b => b.message.payload!.asValue<{ id: string; count: number; metadata: { clientApp: string } }>());
+        expect(sent.map(m => [ m.metadata.clientApp, m.count ])).toEqual([ [ 'app-a', 0 ], [ 'app-b', 0 ], [ 'app-a', 1 ] ]);
+        expect(sent[2]!.id).toBe(sent[0]!.id);
+        expect(sent[1]!.id).not.toBe(sent[0]!.id);
+    });
+
     it('does not merge into a message that has since been evicted from history', async () => {
         const server = new FakeSocketIOServer();
         const webLog = new WebLog(server as unknown as SocketIOServer);

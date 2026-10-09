@@ -24,10 +24,12 @@ interface LogPreferences {
     showBroadcastTraffic: boolean;
 }
 
-// What makes two log lines "the same" for merging; WebMessage copies all three verbatim
-// from the LogMessage, so an entry's key can be recomputed from either.
-const messageKey = function (msg: { level: number; group: string; message: string }): string {
-    return JSON.stringify([ msg.level, msg.group, msg.message ]);
+// What makes two log lines "the same" for merging; WebMessage copies all of it verbatim from
+// the LogMessage, so an entry's key can be recomputed from either. The app is part of it: the
+// clients of two apps on one host share a name (their IP address), so the same line from both
+// used to become one entry, counted together and shown under the first app only.
+const messageKey = function (msg: { level: number; group: string; message: string; metadata: Metadata }): string {
+    return JSON.stringify([ msg.level, msg.group, msg.message, msg.metadata.clientApp ?? null ]);
 };
 
 const KNOWN_LEVELS: ReadonlySet<number> = new Set([ LogLevel.Error, LogLevel.Warn, LogLevel.Info, LogLevel.Debug ]);
