@@ -47,6 +47,9 @@ namespace HCIKonstanz.Colibri.Setup
         private long _worstRecentGap;
         private double _gapWindowEnds;
 
+        // The width the certificate's fingerprint had in the last repaint; see DrawCertificate.
+        private float _fingerprintWidth;
+
         [MenuItem("Window/Colibri Status")]
         private static void ShowStatusWindow()
         {
@@ -182,24 +185,41 @@ namespace HCIKonstanz.Colibri.Setup
         /// Both wrap: on one line, they ran past the edge of the window at its default width and
         /// were cut off.
         /// </remarks>
-        private static void DrawCertificate(WebServerConnection connection)
+        private void DrawCertificate(WebServerConnection connection)
         {
             if (!connection.UsesTls || connection.CertificateAcceptance == null)
                 return;
 
             Row("Certificate", connection.CertificateAcceptance);
 
-            // A selectable label takes the height it is given, so that is worked out here, for the
-            // width next to the label column less the window's margins and scrollbar. The
-            // fingerprint has no spaces: it breaks between characters.
+            // A selectable label takes the height it is given, and the layout needs that height
+            // before it hands out widths. So it is worked out for the width the fingerprint had in
+            // the last repaint, and only estimated before the first one: an estimate below the
+            // real width reserved a second, empty line in a wide window. The fingerprint has no
+            // spaces: it breaks between characters.
             var fingerprint = connection.ServerCertificateSha256 ?? "";
-            var width = EditorGUIUtility.currentViewWidth - EditorGUIUtility.labelWidth - 40f;
+            var width = _fingerprintWidth > 0f
+                ? _fingerprintWidth
+                : EditorGUIUtility.currentViewWidth - EditorGUIUtility.labelWidth - 40f;
             var height = Mathf.Max(EditorGUIUtility.singleLineHeight,
                 EditorStyles.wordWrappedLabel.CalcHeight(new GUIContent(fingerprint), width));
 
             EditorGUILayout.BeginHorizontal();
             EditorGUILayout.PrefixLabel("SHA-256");
             EditorGUILayout.SelectableLabel(fingerprint, EditorStyles.wordWrappedLabel, GUILayout.Height(height));
+
+            // Only a repaint has the real width. Laid out again at once when it changed, so a new
+            // window or a resize shows the wrong height for a single frame at most.
+            if (Event.current.type == EventType.Repaint)
+            {
+                var laidOut = GUILayoutUtility.GetLastRect().width;
+                if (!Mathf.Approximately(laidOut, _fingerprintWidth))
+                {
+                    _fingerprintWidth = laidOut;
+                    Repaint();
+                }
+            }
+
             EditorGUILayout.EndHorizontal();
         }
 
