@@ -438,7 +438,9 @@ rationale, migration steps, and what the Editor verification did and did not cov
   manager builds from another client's update takes that update as it is. A placed `SyncTransform`
   with a `Rigidbody` stays kinematic until its first answer, whatever `PhysicsAuthority` says, so
   that a client that joins later does not send where its own simulation took the object meanwhile
-  as a change of its own. One instantiated with an empty `Id` is simulated at once. See
+  as a change of its own. One instantiated with an empty `Id` is simulated at once. Without a
+  connection for 5 s (the connect timeout), the object stops waiting, and a warning says so once per
+  session; when a server answers later, the position it reached replaces the shared one. See
   [SyncTransform](docs/guide.md#synctransform).
 - **Objects built from a disabled `Template` come to life.** A copy starts out as its template is,
   and a manager's template is often kept switched off in the scene. A copy that is switched off
@@ -717,7 +719,8 @@ otherwise spend on their prototype, so:
   after the reconnect. `ModelResyncTests` also cover a change made before an object's first answer,
   kept over that answer and the ones still on their way, also in the round after a reconnect, the
   members left as they were, which take the answer, and a placed body with `PhysicsAuthority`
-  ticked, which waits for it; `ReconnectTests` an object placed during
+  ticked, which waits for it, unless the client has had no connection for the connect timeout;
+  `ReconnectTests` an object placed during
   the outage and changed as the client reconnects. `ProtocolMismatchDetectionTests` walk the
   client through scripted sessions against a `FakeColibriServer` that hangs up, stays silent, heartbeats or refuses: the
   growing backoff, the suspected mismatch and what clears it, the watchdog before the first frame,
@@ -899,6 +902,10 @@ The fixes it produced:
   whose very first value was lost held nothing before it, and is not sent again. A delete sent again
   after an outage also removes an object another client has created under the same id in the
   meantime.
+- A placed `SyncTransform` with `PhysicsAuthority` ticked stops waiting for the server's state once
+  the client has had no connection for 5 s (the connect timeout). A client that started without a
+  server, or lost it for that long, and connects later sends the position its own simulation
+  reached over the shared one.
 - `SyncBehaviourManager` must unsubscribe from `SyncBehaviour<T>.ModelCreated` / `ModelDestroyed` in
   `OnDestroy`, since static events do not do it themselves. It does; anything else subscribing to
   them has to as well, or it leaks across Play sessions when domain reload is disabled.
