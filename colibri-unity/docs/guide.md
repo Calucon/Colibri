@@ -18,7 +18,7 @@ For installing it and getting two clients to talk, the [README](../README.md) is
   - [Sending Data between Clients](#sending-data-between-clients)
   - [SyncTransform](#synctransform)
   - [SyncBehaviour](#syncbehaviour)
-  - [How often synced objects send](#how-often-synced-objects-send)
+  - [Send rate](#send-rate)
   - [Remote Store](#remote-store)
   - [Connection and outages](#connection-and-outages)
   - [Web Interface for Logging](#web-interface-for-logging)
@@ -128,7 +128,7 @@ this for every build target (see [Meta Quest and Android](#meta-quest-and-androi
 
 When using the voice chat, Colibri allows to adjust the sampling rate on the server. In this case, clients need to manually set the `Voice Sampling Rate` setting in the configuration.
 
-`Max Send Rate (Hz)` caps how many updates per second each synced object sends (see [How often synced objects send](#how-often-synced-objects-send)).
+`Max Send Rate (Hz)` caps how many updates per second each synced object sends (see [Send rate](#send-rate)).
 
 Default values:
 
@@ -427,45 +427,86 @@ so these need neither.
 
 ## SyncTransform
 
-For synchronizing the location of an object, Colibri provides a `SyncTransform` script. Simply attach the script to an object, and its active state, position, rotation, and scale will be synchronized between all clients. Set `UseLocalTransform` to `true` to synchronize the local coordinates of the object. See SyncTransform samples for more information.
+`SyncTransform` syncs an object's active state, position, rotation and scale between all clients.
+`SyncActive`, `SyncPosition`, `SyncRotation` and `SyncScale`, all on by default, select what is
+synced. `UseLocalTransform` syncs local instead of world coordinates. See the SyncTransform sample.
 
-Information about the object's state is stored on the server. When a new client connects, the location is automatically updated to its current state.
+### Server state
 
-The object asks the server for that state when it registers, in `Awake`, and the answer arrives a
-round trip later, or once the connection is up. A member changed in between (in `Start`, in an
-`OnConnected` handler, or right after entering Play mode) keeps its value: it replaces the server's
-value here, on the server and on every other client. Every other member takes the server's value, so
-values from the scene or the prefab are not sent over it (in a model script of your own, see
-[SyncBehaviour](#syncbehaviour) on `Awake`). A script that moves the object in
-`Start` therefore moves it for everyone each time a client starts; leave starting positions to the
-scene.
+- The server stores each object's state and sends it to clients that connect later.
+- The object requests the state in `Awake` and gets it a round trip later, or once connected.
+- Members changed before the answer, e.g. in `Start`, in `OnConnected` or right after entering Play
+  mode, keep their values. These replace the server's values here, on the server and on all other
+  clients.
+- All other members take the server's values, so scene and prefab values do not overwrite them. For
+  model scripts of your own, see [Awake and OnDestroy](#awake-and-ondestroy).
+- A script that moves the object in `Start` therefore moves it for everyone whenever a client
+  starts. Set starting positions in the scene.
+- Moving objects send at most 30 updates per second by default ([Send rate](#send-rate)).
 
-A moving object sends at most 30 updates a second by default (see [How often synced objects send](#how-often-synced-objects-send)).
+### Showing, hiding and deleting
 
-Showing, hiding and deleting:
+- `SetActive(false)` hides the copies on other clients, `SetActive(true)` shows them again. Only the
+  object's own flag (`activeSelf`) is synced, so deactivating a parent has no effect elsewhere. With
+  `SyncActive` off, the active state stays local.
+- Disabling only the `SyncTransform` component pauses syncing without hiding anything. Changes made
+  meanwhile are sent when it is enabled again.
+- Destroying the object or unloading its scene, also by loading another scene in its place, deletes
+  it on the server and all clients for good. An update another client sent before the delete reached
+  it is ignored by the server and this client.
+- Loading the scene again, on any client, lets its placed objects sync again between all clients
+  that load it from then on, because the server no longer treats them as deleted. A client that kept
+  the scene open lost its copies with the delete. It gets them back only by loading the scene again,
+  or from a manager with a `Template` for them, which builds them from the next update.
+- Leaving Play mode, quitting or killing the app deletes nothing, whether the object is shown or
+  hidden. It stays on the server until the app's last client disconnects ([Connection and
+  outages](#connection-and-outages)).
 
-- Deactivating the GameObject (`SetActive(false)`) hides its copies on the other clients, and reactivating it shows them again. Only the object's own active flag (`activeSelf`) is synced: deactivating a parent changes nothing elsewhere. Turn `SyncActive` off to keep the active state local.
-- Disabling only the `SyncTransform` component pauses its syncing without hiding anything. Changes made meanwhile are sent once it is enabled again.
-- Destroying the object, or unloading its scene (including loading another scene in its place), deletes it on the server and on every client. It stays deleted: an update another client sent just before the delete reached it is ignored, by the server and by this client, and does not bring it back.
-- Loading the scene again, on this client or any other, lets its placed objects sync again, between every client that loads the scene from then on: the server no longer treats them as deleted. A client that still had the scene open lost its copies with the delete. It gets them back only by loading the scene again, or from a manager with a `Template` for them, which builds them from the next update.
-- Leaving Play mode, quitting the app, or the app being killed deletes nothing, whether the object is shown or hidden. It stays on the server for the other clients, until the app's last client disconnects (see [Connection and outages](#connection-and-outages)).
+### Physics
 
-`SyncTransform` also supports physics. `PhysicsAuthority` defines which client is currently controlling the physics. Only one client can control the physics of an object at a time. If the `PhysicsAuthority` is set to `true` on one client it is automatically set to `false` on all other clients. If the `PhysicsAuthority` is checked by default, the first client receives the physics authority. Until the server's state for the object arrives (see above), its `Rigidbody` stays kinematic whatever `PhysicsAuthority` says, so a client that joins later starts from the shared position rather than from wherever its own simulation took the object meanwhile. An object instantiated on this client with an empty `Id` is simulated at once: the server holds nothing for it. If the connection is still not up 5 s (the connect timeout) after Colibri opened it, or after it dropped, the object stops waiting as soon as no connect attempt is under way (an attempt gives up after the same 5 s): it is simulated as `PhysicsAuthority` says, and the console says so once per session. When a server answers later, the position the object reached replaces the shared one on every client, so start colibri-server before the clients. The `isKinematic` field of the attached `Rigidbody` will be overwritten by the `isKinematic` field of the `SyncTransform`. Therefore, if you want to change this field, always (additionally) set the `isKinematic` field of the `SyncTransform`.
+- `PhysicsAuthority` marks the one client that controls the object's physics. Setting it to `true`
+  on one client sets it to `false` on all others. If it is ticked by default, the first client gets
+  the authority.
+- Until the server's state arrives, the `Rigidbody` stays kinematic regardless of
+  `PhysicsAuthority`, so a client that joins later starts from the shared position, not from its own
+  simulation.
+- An object instantiated on this client with an empty `Id` is simulated at once, because the server
+  has no state for it.
+- If the connection is not up 5 s (the connect timeout) after Colibri opened it or after it dropped,
+  the object stops waiting once no connect attempt is running. Attempts also give up after 5 s. The
+  object is then simulated according to `PhysicsAuthority`, and the console warns once per session:
+  `Colibri: no connection to a server for 5 s, so placed SyncTransforms with a Rigidbody and PhysicsAuthority ticked are simulated without the server's state; …`.
+- When a server answers later, the position the object reached replaces the shared one on all
+  clients. Start colibri-server before the clients.
+- `isKinematic` of the `SyncTransform` overwrites `isKinematic` of the `Rigidbody`. Change it on the
+  `SyncTransform`, not only on the `Rigidbody`.
 
-For dynamically created objects, add the `[SyncTransformManager]` prefab from `Packages/Colibri/Prefabs/` to the scene. Create a prefab of the object you'll dynamically instantiate and add it to the `Template` attribute. Set the `ModelId` (in the `SyncTransform`) of the prefab to a custom value that identifies the prefab. When a client instantiates an object with `SyncTransform` and the same `ModelId`, the Manager will automatically create an object using this prefab and synchronize it. Make sure to leave the `Id` field of the prefab blank! Instead of a prefab, the `Template` can also be an object in the scene that you keep switched off (see [SyncBehaviour](#syncbehaviour)).
+### Objects created at runtime
+
+1. Add the `[SyncTransformManager]` prefab from `Packages/Colibri/Prefabs/` to the scene.
+2. Set its `Template` to a prefab of the object.
+3. Set the prefab's `ModelId` to a value that identifies the prefab, and leave its `Id` empty.
+
+When a client instantiates an object with a `SyncTransform` and this `ModelId`, the manager on the
+other clients creates it from the prefab and syncs it. The `Template` can also be an inactive scene
+object ([SyncBehaviour](#syncbehaviour)).
 
 <img src="../img/synctransformmanager.png" alt="SyncTransformManager" width=400/>
 
-Limitations:
+### Limitations
 
-- Only one client can update each attribute of the object simultaneously
-- Scene will be reset once all clients disconnect
+These also apply to every `SyncBehaviour`.
+
+- Update each member from one client at a time.
+- The scene is reset when all clients disconnect.
 
 ## SyncBehaviour
 
-For more complex scenarios, Colibri supports synchronization of data models (e.g., for use in model-view-controller architectures). For this, we need a model script and a manager script.
+`SyncBehaviour<T>` syncs data models, e.g. in a model-view-controller architecture. It needs a model
+script and a manager script.
 
-The model script has to inherit from `SyncBehaviour<T>` instead of `MonoBehaviour`. Afterward, just add `[Sync]` to the property or field you want to synchronize:
+The model script inherits from `SyncBehaviour<T>` instead of `MonoBehaviour`. `[Sync]` marks the
+properties and fields to sync:
 
 ```c#
 public class MyClass : SyncBehaviour<MyClass>
@@ -482,27 +523,30 @@ public class MyClass : SyncBehaviour<MyClass>
 }
 ```
 
-The manager just requires a declaration matching the model script:
+The manager needs only a matching declaration:
 
 ```c#
 public class MyClassManager : SyncBehaviourManager<MyClass>
 {
-    // No code necessary: just add this script
-    // to your scene (e.g., on an empty GameObject)
+    // No code needed. Add this script to the scene,
+    // e.g. on an empty GameObject.
 }
 ```
 
-The manager should be added to your scene (e.g., on an empty GameObject), and the manager requires a Prefab with the model script for synchronizing different objects. 
+Add the manager to the scene and set its `Template` to a prefab with the model script.
 
-The manager's `Template` can be a prefab, or an object in the scene that you keep switched off (an
-active one would also be synced as an object in its own right). Every copy the manager builds is
-switched on, so its scripts run `Awake`, and then takes the synced state. A `SyncTransform` copy of
-an object that is hidden elsewhere is therefore switched off again at once, and shown as soon as
-the original is.
+- The `Template` can also be an inactive scene object. An active one would also sync as an object of
+  its own.
+- The manager activates every copy it builds, so the copy runs `Awake`, and then applies the synced
+  state. A `SyncTransform` copy of an object hidden elsewhere is therefore deactivated at once, and
+  shown when the original is.
+- `SyncTransform` is a `SyncBehaviour`. Its rules for server state, disabling, destroying and
+  quitting apply to every `SyncBehaviour`. Only the active state is specific to `SyncTransform`.
 
-By the way: `SyncTransform` is also a `SyncBehaviour`. What it says above about the server's state, disabling, destroying and quitting applies to every `SyncBehaviour`; only the active state is specific to `SyncTransform`.
+### Awake and OnDestroy
 
-`Awake` and `OnDestroy` are where a `SyncBehaviour` registers and unregisters itself. If you need them in your model script, override them and call the base method:
+A `SyncBehaviour` registers in `Awake` and unregisters in `OnDestroy`. To use them, override them
+and call the base method:
 
 ```c#
 protected override void Awake()
@@ -513,53 +557,43 @@ protected override void Awake()
 }
 ```
 
-A plain `void Awake()` or `void OnDestroy()` hides the base method instead, and only compiler
-warning CS0114 says so. Without `base.Awake()` the object is never synced; without
-`base.OnDestroy()`, destroying it does not delete it on the other clients.
+A plain `void Awake()` or `void OnDestroy()` hides the base method, and only compiler warning CS0114
+reports it. Without `base.Awake()`, the object never syncs. Without `base.OnDestroy()`, destroying
+it does not delete it on the other clients.
 
-On an object placed in the scene or created on this client, a `[Sync]` member set after
-`base.Awake()` counts as a change, like one made in `Start`, and replaces the server's value (see
-[SyncTransform](#synctransform)). Set initial values before `base.Awake()`, or in the Inspector, to
-have the object take the server's state instead. A copy a manager builds from another client's
-update takes the values in that update, whatever its `Awake` sets.
+- On objects placed in the scene or created on this client, a `[Sync]` member set after
+  `base.Awake()` counts as a change ([Server state](#server-state)). To take the server's state
+  instead, set initial values before `base.Awake()` or in the Inspector.
+- A copy that a manager builds from another client's update takes the values of that update,
+  whatever its `Awake` sets.
+- `base.Awake()` reads every `[Sync]` member once, and the server's first answer is compared with
+  these values. Set up whatever a getter reads before `base.Awake()`. A getter that reads a
+  component cached later returns its fallback first and the real value afterwards. This counts as a
+  change too, so each client that starts sends its own value over the server's.
 
-`base.Awake()` reads every `[Sync]` member once, and the server's first answer compares each member
-with that value, so whatever a getter reads has to be set up before `base.Awake()`. A getter that
-reads a component cached after it returns its fallback there and the real value later. That counts
-as a change too: each client that starts sends its own value over the server's.
+## Send rate
 
-Limitations:
+A synced object (`SyncTransform` or any other `SyncBehaviour`) sends at most **30 updates per
+second** by default. Without a limit, a moving object sends an update every frame, 72 to 120 per
+second on a headset. Dozens of headsets doing that overload one server and one Wi-Fi network.
 
-- Only one client can update each attribute of the object simultaneously
-- Scene will be reset once all clients disconnect
+- A single change is sent in the frame it is made.
+- Faster changes are collected. Their latest values are sent together when the interval (1/30 s)
+  ends, even if nothing changes afterwards.
+- Values in between are never sent. A synced object shares its current state, not every step, so a
+  `[Sync]` setter on another client does not see every value either. Use `Sync.Send` for events that
+  must all arrive.
+- `SetActive` sends pending changes at once, for a `SyncTransform` including the hide or show.
+- Destroying the object sends its delete at once and drops any pending change.
+- Pending changes are sent at once when the app pauses or loses focus. On a Quest, this happens when
+  the headset is taken off, the system menu opens or the user leaves the app.
+- When the app quits or Play mode ends, pending changes are sent as a best effort only, because the
+  connection closes in the same teardown.
+- A value from another client replaces a pending local change of the same member, so all copies end
+  up with the same value.
 
-## How often synced objects send
-
-A synced object (a `SyncTransform` or any other `SyncBehaviour`) sends at most **30 updates a
-second** by default, however fast the app runs. A headset renders 72 to 120 frames a second, and
-without a limit every moving object sends that many messages: dozens of headsets, each moving a
-few objects, produce more traffic than one server and one Wi-Fi network can keep up with.
-
-What the limit holds back, and what it does not:
-
-- A single change goes out in the frame it is made, as without a limit.
-- Changes that come quicker are collected, and their latest values go out together as soon as the
-  interval (1/30 s) is up, even if nothing changes afterwards. The values in between are never sent:
-  a synced object shares its current state, not every step on the way there, so a `[Sync]`
-  setter on another client does not see every value either. Use `Sync.Send` for events that must
-  each arrive.
-- Switching the object off or on (`SetActive`) sends whatever is waiting at once; for a
-  `SyncTransform`, that includes being hidden or shown.
-- Destroying the object sends its delete at once; a change still waiting is dropped with it.
-- When the app pauses or loses focus (on a Quest: taking the headset off, opening the system
-  menu, leaving the app), whatever is waiting goes out at once. When the app quits or Play mode
-  ends it is sent too, but only as a best effort, because the connection closes in the same
-  teardown.
-- A value that arrives from another client replaces a local change of the same member that has
-  not gone out yet, so every copy ends up with the same value.
-
-Change the limit under *Optional Config → Max Send Rate (Hz)* in *Window → Colibri
-Configuration*, or from code while the app runs:
+Change the limit in *Window → Colibri Configuration → Optional Config → Max Send Rate (Hz)*, or at
+runtime:
 
 ```c#
 using HCIKonstanz.Colibri.Synchronization;
@@ -567,10 +601,12 @@ using HCIKonstanz.Colibri.Synchronization;
 SyncSettings.MaxSendRate = 60; // updates per second per synced object; 0 = no limit
 ```
 
-Set from code, it applies to this run of the app only (in the Editor: this Play session) and leaves
-the configuration alone; a negative value throws an `ArgumentOutOfRangeException`. `0` turns the
-limit off (an update in every frame in which something changed, as in Colibri 1.x) and the
-configuration window warns about it. A configuration saved before this setting existed uses 30.
+- A value set from code applies to the current run only (in the Editor: the Play session) and does
+  not change the configuration.
+- A negative value throws an `ArgumentOutOfRangeException`.
+- `0` disables the limit. An update then goes out in every frame with a change, as in Colibri 1.x.
+  The configuration window warns about it.
+- A configuration saved before this setting existed uses 30.
 
 ## Remote Store
 
