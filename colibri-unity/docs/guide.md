@@ -786,10 +786,14 @@ Colibri voice chat also supports spatial audio. The `VoiceReceiver` position in 
 
 The voice server only listens on IPv4. Colibri sends voice to an IPv4 address of the configured server, so `localhost` works on Windows, where it resolves to the IPv6 address `::1` first. If the server address has no IPv4 address, or cannot be resolved, Colibri logs an error and turns voice chat off.
 
+Voice stays within the app: the server passes a client's voice on only to the clients with the same *App Name* in their Colibri configuration, so voice ids only have to be unique within an app. Each voice packet carries an app id, a hash of the App Name (see [Voice packets](../../colibri-server/docs/protocol.md#voice-packets-udp)). A client whose App Name changes at runtime switches to the new app's voice from the next frame on. Colibri 1.x clients are not heard: the server drops their voice packets, which have no app id.
+
+A client receives voice only while its own `VoiceBroadcast` is broadcasting: the server knows a voice client by the voice it sends.
+
 Limitations:
 
-- Only limited scalability, because voice data is distributed to all active clients on the server using `VoiceBroadcast`
-- Only limited security, as voice data can be received by knowing the voice ID, regardless of the app name set in the Colibri configuration.
+- Only limited scalability: each voice packet goes to every other client of the app that is broadcasting.
+- Only limited security: the app id keeps apps apart, as the App Name does for synced objects, but it is not access control. Anyone who knows the App Name can receive the app's voice. Voice is not encrypted, even with TLS on.
 - Without enabling Opus high throughput
 
 ## Other documents
@@ -818,8 +822,8 @@ Two suites, and they need different things:
 - **EditMode** (`Assets/Colibri/Tests/Editor/`) is plain NUnit over the framing, the JSON
   conversions, the diagnostics, the outage queue, message dispatch, the `[Sync]` accessors
   (including the IL2CPP path), the send-rate limit, the connect timeout, the Android build check,
-  the app-name warning, and the voice server address and packet queue. No server needed, runs
-  anywhere Unity does.
+  the app-name warning, and the voice server address, packet format and packet queue. No server
+  needed, runs anywhere Unity does.
 - **PlayMode** (`Assets/Tests/`) is the real thing: a Unity client and a raw v3 peer talking to a
   running `colibri-server`. The script starts one with `docker compose` and stops it again, unless
   something is already listening on the port, which it uses as it stands and leaves running.
@@ -885,4 +889,5 @@ server by hand (`docker compose -f colibri-unity/tls-test-server/compose.yml up 
 run over TLS, also set `COLIBRI_E2E_TLS=1` in the environment the Editor starts with.
 
 Voice chat has no end-to-end coverage: it needs a microphone. Only the choice of the server's
-address and the queue that hands received packets to the main thread are unit-tested.
+address, the packet format with its app id, and the queue that hands received packets to the main
+thread are unit-tested.
