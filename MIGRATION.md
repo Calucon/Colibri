@@ -494,7 +494,10 @@ answer arrived, in `Start` say, was dropped, and the answer put the server's val
 change now replaces the server's value, on every client, as colibri-web's `registerModel` does
 (below). A script that sets a `[Sync]` member or moves a `SyncTransform` in `Start` therefore does
 so for everyone each time a client starts. Set starting values in the scene or the prefab, or in a
-model's `Awake` before `base.Awake()`, to have the object take the server's state instead.
+model's `Awake` before `base.Awake()`, to have the object take the server's state instead. Set up
+whatever a `[Sync]` getter reads there too, such as a cached component: a getter that reads its
+fallback in `base.Awake()` and the real value later counts as changed. A placed `SyncTransform`
+whose `PhysicsAuthority` is ticked stays kinematic until the answer.
 
 **colibri-web's `registerModel` takes what the server has.** It used to send the new instance in
 full at once. When the server already held that id (a fixed id such as `'session'`, kept while
