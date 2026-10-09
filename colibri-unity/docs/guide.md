@@ -216,61 +216,59 @@ buttons under **Android / Meta Quest** (Android target) or **Player build** (oth
 
 ## Samples
 
-Samples live in the `Samples` tab of the Package Manager: select Colibri, then *Samples →
-Import*. Importing copies a sample into `Assets/Samples/Colibri/`, which is yours to edit. The
-package's own copy is not compiled into your project until you import it, so nothing you never
-asked for ends up in your build.
+In the Package Manager, select Colibri, then *Samples → Import*. Imported samples are copied to
+`Assets/Samples/Colibri/` for editing. Only imported samples are compiled into the project and
+builds.
 
-The `Remote Store`, `SendData`, `SyncTransform` and `Voice Chat` sample scenes show their
-instructions with **TextMeshPro**, which Colibri does not install for you. Without TextMeshPro's
-essential resources, the instructions text throws a `NullReferenceException` in
-`TMP_Settings`. Before opening one of those scenes:
+The `Remote Store`, `SendData`, `SyncTransform` and `Voice Chat` scenes use **TextMeshPro**, which
+Colibri does not install. Without TMP Essential Resources, their instruction text throws a
+`NullReferenceException` in `TMP_Settings`. Before opening these scenes:
 
-- **Unity 2022.3:** install *TextMeshPro* (`com.unity.textmeshpro`) from the Package Manager if
-  the project does not have it yet, then run *Window → TextMeshPro → Import TMP Essential
-  Resources*.
-- **Unity 6:** TextMeshPro is part of `com.unity.ugui`, so only the import is needed: *Window →
+- **Unity 2022.3:** install *TextMeshPro* (`com.unity.textmeshpro`) if missing, then run *Window →
   TextMeshPro → Import TMP Essential Resources*.
+- **Unity 6:** TextMeshPro is part of `com.unity.ugui`. Run only the import.
 
-The `[RemoteLogger]` and `[SyncTransformManager]` prefabs are **not** samples: they are part of
-the package proper. Drag them straight out of `Packages/Colibri/Prefabs/` in the Project window.
+The `[RemoteLogger]` and `[SyncTransformManager]` prefabs are part of the package, not samples. Drag
+them from `Packages/Colibri/Prefabs/` in the Project window.
 
 ## Troubleshooting
 
-Open **Window → Colibri Status** while the game is running. It shows, at a glance:
+In Play mode, **Window → Colibri Status** shows:
 
-- whether you are connected, to which server, and **as which app name** (a typo there gives a
-  perfectly healthy connection on which no other client is ever seen)
-- whether the server's heartbeat is still arriving, and how long the silence has been if not
-- while not connected, why the last attempt failed
-- every channel that has listeners, and the type each one expects
+- connection state, server and **app name**. A misspelled app name connects normally, but no other
+  client ever appears.
+- whether the server's heartbeat arrives, and how long it has been missing
+- when not connected, why the last attempt failed
+- channels with listeners and the type each expects
 - the last 20 messages sent and received
+- the delivery rate in frames per second, with a warning below 20
 
-Colibri also reports the common mistakes in the console rather than failing quietly:
+A headset has no Status window, and `[RemoteLogger]` cannot forward the console while disconnected.
+Show [`LastConnectFailure`](#connection-and-outages) in your app instead.
 
-| Symptom | What Colibri tells you |
-|---|---|
-| Nothing arrives, no errors | `a float arrived on channel 'chat', but the listener registered there expects string…`: the channel *and* the type have to match |
-| Nothing connects, no errors | `Colibri is not configured yet. Open Window -> Colibri Configuration…` |
-| Never connects, and nothing answers at all | `Colibri: 192.168.0.10:9012 did not answer within 5 s. Check the server address, and that this device is on the same network as the server.` A wrong IP, a server on another network or subnet, a Wi-Fi with client isolation, or a firewall dropping the packets: fix the address or the network |
-| Never connects, and the connection is refused | `Colibri: connection to 192.168.0.10 failed (ConnectionRefused), retrying...` The machine is reachable, but nothing listens on that TCP port: start colibri-server, or check the *TCP server Port* |
-| Two clients don't see each other | The connect log names the app name in use; both clients must show the same one |
-| Objects or messages you did not create show up | Nothing in Unity at runtime: someone else uses the same app name. *Window → Colibri Configuration* warns when it is a name many people use, such as `myAppName` or `test`, and the server's log warns, naming the app, once it has more than 8 clients (by default) |
-| A `[Sync]` field never syncs | Its type is reported at startup if Colibri cannot put it on the wire |
-| Connected, but one client is silent | That client's Editor window is in the background and *Run In Background* is off (see step 3 of the [Quickstart](#quickstart)) |
-| `Store.Get`/`Put` reports a failure | The log names the operation, the object, the URL, the transport error and the HTTP status; requests give up after 10 s rather than hanging |
-| Never connects, although something answers on the port | `invalid frame from server` errors if the server sends anything, then `3 connections in a row were accepted but ended before a single frame could be read. This usually means a protocol mismatch…`: the server is probably 1.x, or the address is not a colibri-server, or the server has [TLS](#tls) on and *Server supports SSL/TLS?* is off. With that setting off, a proxy or port forwarding whose backend is not running ends connections the same way |
-| Never connects, although the port accepts the connection | `… accepted the connection but has not sent anything in 2 s, dropping it` (with TLS also `server closed the connection`), then `3 connections in a row to 192.168.0.10:9012 were accepted, but nothing was received on any of them: each was closed by the other end or dropped after 2 s of silence…`: something accepts connections there and then closes them or forwards nothing, such as a proxy or port forwarding whose backend is down, a captive portal or a firewall, or the server does not answer or is not a colibri-server. Check that colibri-server is running and reachable at that address and port |
-| Works in the Editor, not on the Quest or in a build | `Colibri (Android build): …` or `Colibri (build): …` in the console, and the *Android / Meta Quest* or *Player build* section of *Window → Colibri Configuration* |
-| Never connects, with TLS on either side | `… did not answer the TLS handshake …` or `rejected the certificate of …`: see [TLS errors](#tls-errors) |
+### Console messages
 
-Other failures to connect name their socket error the same way, such as `failed (HostUnreachable)`
-or `failed (NetworkUnreachable)`; like the timeout, they point at the address or the network.
+| Message | Cause | Fix |
+|---|---|---|
+| `Colibri: a float arrived on channel 'chat', but the listener registered there expects string. …` | Nothing arrives because the types differ. The message names the channel, both types and the fix. | Use the same type on both sides |
+| `Colibri is not configured yet. Open Window -> Colibri Configuration…` | Nothing connects because no app name is set | Enter an App Name and click *Save Config* |
+| `Colibri: 192.168.0.10:9012 did not answer within 5 s. …` | Nothing answers: wrong IP, server on another network or subnet, Wi-Fi with client isolation, or a firewall dropping packets | Fix the address or the network |
+| `Colibri: connection to 192.168.0.10 failed (ConnectionRefused), retrying...` | The machine is reachable, but nothing listens on the TCP port | Start colibri-server, or check *TCP server Port* |
+| `… failed (HostUnreachable) …`, `(NetworkUnreachable)` or another socket error | Address or network, as with the timeout | Fix the address or the network |
+| `Colibri: invalid frame from server, dropping connection: …` if the server sends anything, then `Colibri: 3 connections in a row were accepted but ended before a single frame could be read. …` | A 1.x server, an address that is not a colibri-server, or [TLS](#tls) on the server only. With *Server supports SSL/TLS?* off, also a proxy or port forwarding whose backend is not running. | Use a 2.x server, correct the address, tick *Server supports SSL/TLS?*, or start the server behind the proxy |
+| `Colibri: 192.168.0.10:9012 accepted the connection but has not sent anything in 2 s, dropping it` (with TLS also `Colibri: server closed the connection`), then `Colibri: 3 connections in a row to 192.168.0.10:9012 were accepted, but nothing was received on any of them: …` | Something accepts connections, then closes them or forwards nothing: a proxy or port forwarding whose backend is down, a captive portal or a firewall. Or the server does not answer or is not a colibri-server. | Check that colibri-server runs and is reachable at that address and port |
+| `… did not answer the TLS handshake …` or `rejected the certificate of …` | TLS settings do not match the server | See [TLS errors](#tls-errors) |
+| `Colibri (Android build): …` or `Colibri (build): …` | Works in the Editor, not on the Quest or in a build | See [Build settings check](#build-settings-check) |
+| `Colibri: cannot synchronize '<class>.<member>' …` at startup | A `[Sync]` member with an unsupported type, a property without getter and setter, or a `readonly` field | Follow the message. Sync classes of your own as `JObject`. |
+| `Colibri: could not save "<name>" at <url> …`, `could not load …` or `could not delete …` | A `Store` request failed. The message names the URL, the transport error and the HTTP status. | Check the server address and app name. For "Insecure connection not allowed", see [Advanced Configuration](#advanced-configuration). |
 
-On a headset there is no Status window, and while it is not connected the `[RemoteLogger]` cannot
-forward the console either. For a status display in your app,
-`WebServerConnection.Instance.LastConnectFailure` holds why the last attempt to connect failed (such
-as the timeout or the refusal above) and is `null` once a connection has opened.
+### Other symptoms
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Two clients do not see each other | Different app names | Compare the names in the log line `Colibri: connected to <host>:<port> as app '<app>'. …` |
+| Unknown objects or messages appear | Another project uses the same app name. Unity reports nothing at runtime. | Choose a unique app name ([Configuration](#configuration)). The server log warns, naming the app, above 8 clients by default (`APP_CLIENT_WARNING_THRESHOLD`). |
+| One client is connected but sends and receives nothing | Its Editor is in the background with *Run In Background* off | See [Quickstart](#quickstart), step 3 |
 
 ## Sending Data between Clients
 
