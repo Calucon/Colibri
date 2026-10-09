@@ -296,132 +296,115 @@ The cost of TLS on a headset was not measured.
 
 ### Logs
 
-Everything the server logs, and every line a client sends through colibri-unity's
-`RemoteLogging` or colibri-web's `RemoteLogger`, goes to two places:
+Server messages, and lines clients send through colibri-unity's `RemoteLogging` or colibri-web's
+`RemoteLogger`, go to:
 
-- **stdout and stderr**, one line per message, `<time> <LEVEL> [<group>/<service>] <message>`;
-  errors and warnings go to stderr. With Docker, `docker logs colibri` shows them: refused
-  clients, failed `store.json` writes and client errors included. `CONSOLE_LOG_LEVEL` sets how
-  much is printed (by default everything but debug messages), and `broadcast::` messages only
-  appear with `CONSOLE_LOG_BROADCAST_TRAFFIC=true`.
-- **the admin UI's Log page**, which keeps the last 20,000 messages of every level in memory,
-  repeats merged into one entry. They are gone when the server restarts.
+- **stdout and stderr:** one line per message, `<time> <LEVEL> [<group>/<service>] <message>`, errors
+  and warnings on stderr. `docker logs colibri` shows them, including refused clients, failed
+  `store.json` writes and client errors. `CONSOLE_LOG_LEVEL` sets the minimum level (default:
+  everything but debug). `broadcast::` messages appear only with `CONSOLE_LOG_BROADCAST_TRAFFIC=true`.
+- **Admin UI *Log* page:** the last 20,000 messages of every level, in memory, repeats merged into one
+  entry. Lost on restart.
 
 ### Load limits
 
-Every message is relayed to every other client of the same app, so the server's work grows with
-the square of an app's size. Give each project that shares a server an app name of its own. Each
-time an app grows past `APP_CLIENT_WARNING_THRESHOLD` clients, the server logs a warning naming
-it, e.g. `App 'MyApp' now has 9 clients, more than 8 (APP_CLIENT_WARNING_THRESHOLD) ...`.
+Every message is relayed to every other client of the app, so the server's work grows with the square
+of an app's size. Give each project on a shared server its own app name. Each time an app grows past
+`APP_CLIENT_WARNING_THRESHOLD` clients, the server logs a warning naming it, e.g.
+`App 'MyApp' now has 9 clients, more than 8 (APP_CLIENT_WARNING_THRESHOLD) ...`.
 
-When clients send more than the server can process, it holds messages back and drops some
-rather than fall further and further behind. If its main thread is `TCP_INBOUND_BACKLOG_LIMIT`
-messages behind what the Unity clients sent, or one client sends more than
-`CLIENT_MESSAGE_RATE_LIMIT` messages a second, `model::update` messages are held back and merged
-per object (the latest value of every field still arrives, only later) and `broadcast::`
-messages are dropped. Nothing else is ever held back or dropped. Synced objects then move less
-smoothly for the other clients. Updates are held for at most 1000 objects per client: an update
-for one more object is lost, and that object reaches the server's copy of the app's models and the
-other clients only when it changes again.
+When the main thread is `TCP_INBOUND_BACKLOG_LIMIT` messages behind the Unity clients, or one client
+sends more than `CLIENT_MESSAGE_RATE_LIMIT` messages a second, the server holds back `model::update`
+and drops `broadcast::` messages, so its memory and delay stay bounded. Held updates are merged per
+object: the latest value of every field arrives, later. Nothing else is held back or dropped. Synced
+objects move less smoothly for the other clients. Updates are held for at most 1000 objects per client.
+An update for one more object is lost, and that object reaches the server and the other clients only
+when it changes again.
 
-An episode that goes on for a second is logged as a warning then, naming
-`TCP_INBOUND_BACKLOG_LIMIT`, or `CLIENT_MESSAGE_RATE_LIMIT` and the client, and again when it
-ends, with how many updates were held back and messages dropped. A shorter one is summed up in a
-single debug line, unless it lost updates, which is a warning however short the episode was.
-[Inbound limits](protocol.md#inbound-limits) quotes the warnings and describes what the clients
-see.
+An overload lasting a second logs a warning naming `TCP_INBOUND_BACKLOG_LIMIT`, or
+`CLIENT_MESSAGE_RATE_LIMIT` and the client, and another at its end with the numbers held back and
+dropped. A shorter one logs a debug line, or a warning if it lost updates.
+[Inbound limits](protocol.md#inbound-limits) lists the warnings and their effect on clients.
 
-The rate limit leaves ordinary clients alone: one syncing 10 objects 72 times a second sends 720
-updates a second. The backlog warning means the server as a whole is taking in more than it can
-process; fewer synced objects, a lower sync rate or fewer clients per app reduce the load. The
-rate warning names one client that sends far more than the others, usually because something
-sends every frame without a rate cap.
+- **Backlog warning:** the server as a whole receives more than it can process. Sync fewer objects,
+  less often, or with fewer clients per app.
+- **Rate warning:** the named client sends far more than the others, usually every frame without a
+  rate cap. Normal clients stay far below the limit: 10 objects at 72 Hz are 720 updates a second.
 
 ### Idle timeout
 
-The server sends every Unity client a heartbeat ten times a second, and the client echoes it. A
-Unity client that has sent nothing at all for `TCP_IDLE_TIMEOUT_SECONDS` (10 s) is disconnected
-as if it had closed the connection, with a warning naming it: the other clients of its app see it
-leave, and if it was the app's last client, the app's synchronized models are cleared. This is how
-a headset that left the Wi-Fi or went to sleep without closing its connection is noticed, which
-would otherwise take the operating system many minutes.
+The server sends each Unity client a heartbeat ten times a second, and the client echoes it. A Unity
+client silent for `TCP_IDLE_TIMEOUT_SECONDS` (10 s) is disconnected as if it had closed the
+connection, with the warning
+`Unity client '<name>' (<id>, app '<app>', <address>) has sent nothing for <n> s ...`. The other
+clients of its app receive `client::disconnected`, and if it was the last client, the app's models are
+cleared. This detects a headset that left
+the Wi-Fi or went to sleep without closing its connection, which the operating system notices only
+after many minutes. A connection without a handshake within this time is closed too.
 
-A message larger than 64 KiB has no heartbeat inside it, so a client reading one over a slow link
-echoes nothing until it is through, and the server cannot see it being read. Until it echoes a
-heartbeat sent after the message, such a client may stay silent one more
-`TCP_IDLE_TIMEOUT_SECONDS` for every 64 KiB of the message, but at most 6 more (60 s at the
-default). A 4 MiB message thus needs a link of about 60 KB/s or faster; over a slower one the
-client is disconnected, and the warning names the message's size. Data sent as messages of 64 KiB
-or less has heartbeats in between and needs no extra time. The price is that a headset that is
-gone by the time such a message is sent to it, or goes while it is being read, is noticed that much
-later: within 7 times `TCP_IDLE_TIMEOUT_SECONDS` (70 s) at worst.
+A message over 64 KiB contains no heartbeat, so a client reading it over a slow link echoes nothing
+until it is through. Until it echoes a heartbeat sent after that message, it may stay silent one extra
+timeout per 64 KiB of the message, at most 6 (60 s at the default), so a 4 MiB message needs about
+60 KB/s or more. A slower client is disconnected, and the warning names the message size. Smaller
+messages need no extra time. A headset that is gone when such a message is sent, or goes while reading
+it, is therefore detected only within 7 timeouts (70 s) at worst
+([Heartbeat / latency](protocol.md#heartbeat--latency)).
 
-colibri-unity echoes the heartbeats off Unity's main thread, so a long scene load does not trip
-the timeout. A debugger stopped at a breakpoint usually pauses every thread of the app, though,
-and then it does: when you debug with long breakpoints against a server of your own, raise
-`TCP_IDLE_TIMEOUT_SECONDS` or set it to `0`. Web clients are not affected; Socket.IO's own ping
-notices a web client that has gone, within about 45 s.
+colibri-unity echoes heartbeats off Unity's main thread, so a long scene load does not trigger the
+timeout. A debugger stopped at a breakpoint usually pauses all threads and does trigger it. For long
+breakpoints against your own server, raise `TCP_IDLE_TIMEOUT_SECONDS` or set it to `0`. Web clients
+are not affected: Socket.IO's own ping detects a lost one within about 45 s.
 
 ## Protocol version
 
-Web clients talk to the server over Socket.IO, and Unity clients over TCP using a custom binary
-protocol; [protocol.md](protocol.md) describes both. **v2.0.0 introduces a v3 framing format that
-is a breaking change** for Unity clients: colibri-unity 1.x cannot connect, update it to 2.x. The
-Socket.IO envelope is unchanged, but colibri-web 1.x is refused too (see below), so update web
-clients to 2.x as well.
+Web clients use Socket.IO, Unity clients a custom binary protocol over TCP
+([protocol.md](protocol.md)). **v2.0.0 introduces the v3 framing, a breaking change for Unity
+clients:** colibri-unity 1.x cannot connect. colibri-web 1.x is refused too, although the Socket.IO
+envelope is unchanged. Update both to 2.x.
 
-Both transports announce a protocol version in their handshake, and the server refuses any client
-that does not match its own: there is one supported version at a time and no negotiation. A
-refused client is told why on the `colibri` channel and then disconnected, never appears in the
-admin UI, and the server logs the refusal with both versions. A colibri-unity 1.x client cannot
-read that refusal; the server recognises it by its 1.x framing instead and logs a warning naming
-its address and the package to upgrade, at most once a minute per address. See
-[Version checking](protocol.md#version-checking).
+Both transports send a protocol version in the handshake, and the server refuses every version but its
+own, without negotiation. A refused client receives the reason on the `colibri` channel, is
+disconnected and never appears in the admin UI. The log names both versions. colibri-unity 1.x cannot
+read the refusal, so the server detects its 1.x framing and logs a warning naming the address and the
+package to upgrade, at most once a minute per address ([Version checking](protocol.md#version-checking)).
 
 ## Development
 
-- `npm ci`: Install the dependencies.
-- `npm run watch`: Run the development server, which compiles and reloads on file changes.
-- `npm run build`: Compile.
-- `npm start`: Start the server; compile first.
-- `npm run lint`: Lint the server and admin UI sources.
-- `npm test`: Run the vitest unit suite. The TLS tests make their certificates with `openssl`, so
-  it has to be on `PATH` (Git for Windows ships it in `usr/bin`). In a test,
+- `npm ci`: install the dependencies.
+- `npm run watch`: development server, recompiles and reloads on changes.
+- `npm run build`: compile.
+- `npm start`: start the server. Compile first.
+- `npm run lint`: lint the server and admin UI sources.
+- `npm test`: vitest unit tests. The TLS tests need `openssl` on `PATH` (Git for Windows ships it in
+  `usr/bin`). In a test,
   `createTestCertificate(dir, name, { commonName, keyType: 'ec' | 'rsa', signedBy, serverOnly })`
-  from [`test/tls-test-certificate.ts`](../test/tls-test-certificate.ts) makes a certificate valid
+  from [`test/tls-test-certificate.ts`](../test/tls-test-certificate.ts) creates a certificate valid
   for 2 days, self-signed or signed by another test certificate.
-- `npm run gui:test`: Run the admin UI's unit tests.
-- `npm run bench`: Run the vitest benchmark harness. Results are machine- and runtime-specific,
-  so they are reported in the pull request that claims them rather than committed here; always
-  measure a before/after pair on the same machine and the same Node version.
-- `npm run test:vectors`: Check that colibri-unity's protocol test vectors still match this
-  server's encoder, and that colibri-web, colibri-unity and the admin UI announce this server's
-  protocol version. CI runs it; `npm run test:vectors -- --emit` prints the C# vector table.
-- `npm run test:tcpclient`: Manual smoke test against a server running on this machine (on
-  `TCP_PORT`): connects with the v3 TCP framing, handshakes and echoes heartbeats.
-  `npm run test:tcpclient -- 1` announces protocol version 1 instead, to see a refusal. It exits
-  0 when it connected and was heartbeated, 2 when the server refused its protocol version, after
-  printing the server's reason, and 1 when something is wrong with the server: no heartbeat
-  arrived, or the server sent a frame it cannot decode, which is printed as
-  `Malformed frame from server` and ends the run. Against a server with TLS:
-  `TCP_PORT=<port> npm run test:tcpclient -- --tls`, plus `--insecure` for a certificate that is
-  not trusted here, such as a self-signed one, and `--host <name>` for a server on another machine.
-  It prints the SHA-256 fingerprint of the server's certificate. The manual probe
+- `npm run gui:test`: admin UI unit tests.
+- `npm run bench`: vitest benchmarks. Results depend on machine and runtime, so report them in the pull
+  request that claims them instead of committing them. Always compare before and after on the same
+  machine and Node version.
+- `npm run test:vectors`: checks that colibri-unity's protocol test vectors match this server's
+  encoder, and that colibri-web, colibri-unity and the admin UI announce this server's protocol
+  version. Runs in CI. `npm run test:vectors -- --emit` prints the C# vector table.
+- `npm run test:tcpclient`: manual smoke test against a server on this machine on `TCP_PORT`: v3
+  handshake, then heartbeat echoes. `-- 1` announces protocol version 1 to provoke a refusal. Exits 0
+  when connected and heartbeated, 2 when refused (after printing the server's reason), 1 on a server
+  problem: no heartbeat, or an undecodable frame, printed as `Malformed frame from server`, which ends
+  the run. With TLS: `TCP_PORT=<port> npm run test:tcpclient -- --tls`, plus `--insecure` for an
+  untrusted certificate such as a self-signed one, and `--host <name>` for another machine. Prints the
+  SHA-256 fingerprint of the server's certificate. The manual probe
   `tsx test/tcp-crosstalk-check.ts [app] [ms] --tls [--insecure] [--host <name>]` takes the same
   options.
-- `npm run test:stressecho`: A raw TCP client that answers the probes of colibri-unity's Network
-  Stress sample, so a single Unity editor can measure round trips
-  (`npm run test:stressecho -- [app] [seconds]`).
-- `npm run test:docker`: Needs Docker. Builds the image (or uses `COLIBRI_DOCKER_IMAGE`) and runs
-  it with a fresh bind mount, a root-owned 1.x data directory, a named volume, as
-  `--user 1000:1000` on a named volume and on a root-owned directory, with the 1.x data mounted
-  read-only, without `CAP_CHOWN`, with `WEBSERVER_PORT` set in the environment and in a mounted
-  `.env`, with `WEBSERVER_HOST=localhost`, and with TLS on both ports. It checks that each one
-  becomes healthy and stops cleanly, and that it saves data and keeps it across a restart, or,
-  where it cannot save, that it says so loudly, with advice that fits. With TLS, it also checks the
-  certificate both ports serve, that a client without TLS is refused, and that a renewed
-  certificate is taken up without a restart; like `npm test`, it needs `openssl` on `PATH` for
-  that. It removes each container once its deployment is done, and everything else it created at
-  the end. Pass deployment names to run only those; `COLIBRI_DOCKER_PREFIX`,
-  `COLIBRI_DOCKER_PORT` and `COLIBRI_DOCKER_TMPDIR` are described at the top of
-  [`test/docker-image-check.ts`](../test/docker-image-check.ts).
+- `npm run test:stressecho`: raw TCP client that answers the probes of colibri-unity's Network Stress
+  sample, so one Unity editor can measure round trips (`npm run test:stressecho -- [app] [seconds]`).
+- `npm run test:docker`: requires Docker. Builds the image, or uses `COLIBRI_DOCKER_IMAGE`, and runs it
+  with a fresh bind mount, a root-owned 1.x data directory, a named volume, `--user 1000:1000` on a
+  named volume and on a root-owned directory, read-only 1.x data, no `CAP_CHOWN`, `WEBSERVER_PORT` in
+  the environment and in a mounted `.env`, `WEBSERVER_HOST=localhost`, and TLS on both ports. Each run
+  must become healthy, stop cleanly and keep saved data across a restart, or, where it cannot save,
+  report that with advice for the cause. With TLS, it also checks the served certificate, the refusal
+  of a client without TLS, and renewal without a restart, which needs `openssl` on `PATH`. Each
+  container is removed after its deployment, everything else at the end. Pass deployment names to run
+  only those. `COLIBRI_DOCKER_PREFIX`, `COLIBRI_DOCKER_PORT` and `COLIBRI_DOCKER_TMPDIR` are described
+  at the top of [`test/docker-image-check.ts`](../test/docker-image-check.ts).
