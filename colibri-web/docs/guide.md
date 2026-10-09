@@ -185,7 +185,7 @@ Listeners can be registered and unregistered before `new Colibri()`. They are at
 Each type except JSON also has an array form, such as `sendVector3Array` and `receiveVector3Array`. Unity uses structs
 for vectors, quaternions and colours.
 
-`sendInt` and `sendFloat` are send-only aliases of `sendNumber`, after Unity's type names. `sendIntArray` and
+`sendInt` and `sendFloat` are send-only aliases of `sendNumber`, named after Unity's types. `sendIntArray` and
 `sendFloatArray` are aliases of `sendNumberArray`.
 
 Sample: [broadcast](../samples/broadcast.ts) (`npm run samples/broadcast`).
@@ -272,7 +272,7 @@ logs `Unknown property <field> in <class>`.
 
 `SampleClasses$` is an RxJS [Observable](https://rxjs.dev/guide/observable) of all synchronized instances. It emits
 the list on subscribe, and again when an instance is added or deleted, or another client updates one.
-`registerExampleClass` (`registerModel` below) synchronizes a new instance:
+`registerExampleClass` (generically `registerModel`) synchronizes a new instance:
 
 ```ts
 const mySample = new SampleClass('myId'); // not synchronized yet
