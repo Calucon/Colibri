@@ -125,9 +125,8 @@ therefore work neither with a 2.0 server nor with 2.0 clients. Port your own voi
 
 ### Other changes
 
-**Pin the image version.** Untagged, `hcikn/colibri` means `latest`, and the next pull can move a
-1.x server to 2.x and cut off every 1.x client. Pin the version you run, and change it when you
-upgrade the clients.
+**Pin the image version.** Untagged, `hcikn/colibri` means `latest`. The next pull can move a 1.x
+server to 2.x and cut off every 1.x client. Change the pinned version when you upgrade the clients.
 
 **Multi-stage image.** The image ships only `dist/` and production dependencies, sets
 `NODE_ENV=production` and has a `HEALTHCHECK` on the web port. It starts `node` directly instead of
@@ -144,12 +143,12 @@ elsewhere.
   `--user 1001:1001`. A new named volume belongs to uid 1000, so it works unchanged only with
   `--user 1000:1000`.
 - If the server cannot write its data directory, it prints the problem and the fix on stderr at
-  startup, and runs on without saving anything.
+  startup and keeps running without saving anything.
 
-**Console log.** The server log, in 1.x only on the admin UI's log page, now also goes to stdout,
-errors and warnings to stderr, and so to `docker logs`. This includes the refusals, the 1.x client
-warning, and the lines clients send through Unity's `[RemoteLogger]` prefab or colibri-web's
-`RemoteLogger`.
+**Console log.** In 1.x, the server log appeared only on the admin UI's log page. It now also goes
+to stdout, with errors and warnings on stderr, and so to `docker logs`. This includes the refusals,
+the 1.x client warning, and the lines clients send through Unity's `[RemoteLogger]` prefab or
+colibri-web's `RemoteLogger`.
 
 - The bundled `docker-compose.yml` caps the container log at five files of 10 MB.
 - Remove `tty: true` from a compose file based on the 1.x README. With a TTY, `docker logs` has no
@@ -163,22 +162,20 @@ warning, and the lines clients send through Unity's `[RemoteLogger]` prefab or c
 | `CONSOLE_LOG_BROADCAST_TRAFFIC` | `false` | Print broadcast traffic. |
 | `CLIENT_MESSAGE_RATE_LIMIT` | `1000` | Broadcasts and model updates a second per client, Unity or web. Above it, broadcasts are dropped, and model updates are held back and merged per object, so the latest value of every field still arrives. `0`: no limit. |
 | `CLIENT_MESSAGE_RATE_BURST` | `2000` | Burst size of the rate limit. |
-| `TCP_INBOUND_BACKLOG_LIMIT` | `2000` | Messages from Unity clients that may wait for the server's main thread before their broadcasts and model updates are handled the same way. `0`: no limit. |
+| `TCP_INBOUND_BACKLOG_LIMIT` | `2000` | Messages from Unity clients that may wait for the server's main thread. Beyond it, their broadcasts are dropped and model updates held back, as with the rate limit. `0`: no limit. |
 | `TCP_IDLE_TIMEOUT_SECONDS` | `10` | Disconnect a Unity client that sends nothing for this long. `0`: never. |
 | `APP_CLIENT_WARNING_THRESHOLD` | `8` | Log a warning when an app has more clients than this. `0`: never. |
 | `MODEL_TOMBSTONE_SECONDS` | `600` | How long the server remembers a deleted model. `0`: not at all. |
 
-The load limits keep one client, or many clients together, from overloading the server.
-
-- A headset that leaves the Wi-Fi or goes to sleep does not close its connection. Before the idle
-  timeout, it counted as connected, and kept its app's synced objects alive, until the operating
-  system gave up on it many minutes later.
+- A headset that leaves the Wi-Fi or goes to sleep does not close its connection. In 1.x, without
+  the idle timeout, it counted as connected and kept its app's synced objects alive until the
+  operating system dropped the connection many minutes later.
 - The server's work grows with the square of an app's size, since every message goes to each of the
   app's other clients. A large app usually means that several projects on one server use the same
   app name, such as `test` or one from an example.
-- Dropping or holding back that lasts a second is logged then as one warning, naming the client for
-  the rate limit, and as one summary with the counts when it ends. A shorter stretch is only a debug
-  line, unless it lost model updates.
+- Dropping or holding back that lasts a second logs one warning at that point and one summary with
+  the counts when it ends. For the rate limit, the warning names the client. A shorter stretch logs
+  only a debug line, unless it lost model updates.
 - One client can have updates held back for at most 1000 objects. An update for one more is lost and
   logged as a warning, however short the stretch.
 - The default rate limit is far above typical traffic. Ten objects sending in every frame at 72 Hz
@@ -187,7 +184,7 @@ The load limits keep one client, or many clients together, from overloading the 
 **Deleted models.** For `MODEL_TOMBSTONE_SECONDS`, the server ignores updates for a deleted id, so
 an update another client sent before it received the delete no longer brings the object back for
 everyone. A client that asks for the object again after a reconnect is told to delete its copy.
-colibri-unity and colibri-web 2.x handle this. Your own client of the protocol must send:
+colibri-unity and colibri-web 2.x handle this. A custom protocol client must send:
 
 - `model::request { id }` for an object it has in its scene or is creating. This lifts the
   tombstone. Without it, updates for an id deleted a moment ago are ignored.
@@ -195,9 +192,10 @@ colibri-unity and colibri-web 2.x handle this. Your own client of the protocol m
 
 See [Deleted models](colibri-server/docs/protocol.md#deleted-models).
 
-**Voice recording file name** (`VOICE_RECORDING=true`): `rec_<start time>_app_<app id>_ID_<voice
-id>_port_<source port>.wav` instead of `rec_<start time>_ID_<voice id>.wav`. Update anything that
-finds recordings by name. See [Voice packets](colibri-server/docs/protocol.md#voice-packets-udp).
+**Voice recording file name** (`VOICE_RECORDING=true`):
+`rec_<start time>_app_<app id>_ID_<voice id>_port_<source port>.wav` instead of
+`rec_<start time>_ID_<voice id>.wav`. Update anything that finds recordings by name. See
+[Voice packets](colibri-server/docs/protocol.md#voice-packets-udp).
 
 ---
 
