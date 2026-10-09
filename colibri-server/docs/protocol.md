@@ -569,6 +569,7 @@ all there is. The requester then sends its full state as a `model::update`, whic
 model on the server and reaches the other clients. A model the server does have wins: the
 requester takes its values. colibri-web then sends on top of them the changes made to the model
 while it waited for that answer: since `registerModel`, or since the connection dropped.
+colibri-unity does the same with the members a `SyncBehaviour` changed since it woke up.
 
 How the two clients use the three forms:
 
@@ -578,7 +579,10 @@ How the two clients use the three forms:
   because another client created the object sends no fresh request: it is not this client's own
   object, and a fresh request would bring back one that was deleted a moment ago. After a
   reconnect, every object is re-requested by id, and every channel a manager listens on is asked
-  for again as a whole. One more request then marks the end of their answers (see below).
+  for again as a whole. One more request then marks the end of their answers (see below). An
+  object whose first answer arrives after it changed members of its own sends one more request
+  too, before it sends those members, unless that answer comes in the round after a reconnect
+  (see below).
 - **colibri-web.** `registerModel` sends a fresh request for the model it registers, and
   `RegisterModelSync` asks for the whole channel once the models registered by then have their
   answer. After a reconnect, each registered model that the server had answered for is
@@ -598,12 +602,16 @@ How the two clients use the three forms:
 update the server relays from another client meanwhile. So after a reconnect, a client sends one more
 request after all the others: `{ "id": "<fresh id>", "again": true }` on the channel
 `colibri::reconnect`, where Colibri never stores a model. colibri-unity sends one after every
-reconnect, with a GUID for the id. colibri-web sends one per `RegisterModelSync` that re-requested a
-model, and one more after each request for the whole channel and each time it asks for a model once
-more (see above). The server answers it like any other, with the bare id, and the client takes that
-answer as the end of the answers to the requests it sent before. colibri-unity also takes it as the
-point by which the server has read everything it queued before, the deletes it sent again included
-(see [After a reconnect](#after-a-reconnect)). colibri-unity passes nothing on that channel to an
+reconnect, with a GUID for the id. It sends one more when an object's first answer arrives outside
+that round after the object changed members of its own: it goes out ahead of those members, and
+until its answer the object keeps them over whatever arrives, the answer to a manager's request for
+the whole channel included, since all of that was made before the server read them. colibri-web
+sends one per `RegisterModelSync` that re-requested a model, and one more after each request for the
+whole channel and each time it asks for a model once more (see above). The server answers it like
+any other, with the bare id, and the client takes that answer as the end of the answers to the
+requests it sent before. colibri-unity also takes the one after a reconnect as the point by which
+the server has read everything it queued before, the deletes it sent again included (see [After a
+reconnect](#after-a-reconnect)). colibri-unity passes nothing on that channel to an
 application listener. The server has no code of its own for this. It works because of two things
 the server already does, which have to stay:
 
