@@ -2,7 +2,7 @@ import { Server as SocketIoServer, Socket as SocketIoSocket, Event as SocketIoEv
 import { Server as HttpServer } from 'http';
 import { Observable, Subject } from 'rxjs';
 
-import { Payload, Service } from '../core/index.js';
+import { Metadata, Payload, Service } from '../core/index.js';
 import { NetworkClient, NetworkMessage, NetworkServer } from '../command-hooks/index.js';
 import {
     COLIBRI_CHANNEL,
@@ -32,6 +32,12 @@ import { TrustProxy, forwardedClientAddress, trustNoProxy } from './trusted-prox
 // How often held-back updates are passed on as a limited client's tokens refill, and finished
 // episodes reported.
 const RATE_LIMIT_SWEEP_MILLIS = 100;
+
+// For a line about one client: the admin UI shows its app, and lists the line when it shows only
+// that app. A refused client's error used to appear only in the unfiltered log.
+const aboutClient = function (client: { app: string; name: string; id: string }): Metadata {
+    return { clientApp: client.app, clientName: client.name, clientId: client.id };
+};
 
 export interface SocketIoServerOptions {
     // Per client; see InboundRateLimiter.
@@ -112,11 +118,11 @@ export class SocketIOServer extends Service implements NetworkServer {
     private createRateLimiter(limit: RateLimit): InboundRateLimiter<SocketIoClient> {
         const describe = (client: SocketIoClient) => `Web client ${client.id} (app '${client.app}', ${client.name})`;
         return new InboundRateLimiter<SocketIoClient>(limit, {
-            started: (client) => this.logWarning(rateLimitStartWarning(describe(client), limit)),
+            started: (client) => this.logWarning(rateLimitStartWarning(describe(client), limit), aboutClient(client)),
             ended: (client, summary, left) => {
                 const text = rateLimitEndWarning(describe(client), summary, left);
-                if (warnsAtEnd(summary)) this.logWarning(text);
-                else this.logDebug(text);
+                if (warnsAtEnd(summary)) this.logWarning(text, aboutClient(client));
+                else this.logDebug(text, aboutClient(client));
             },
         });
     }
@@ -294,7 +300,7 @@ export class SocketIOServer extends Service implements NetworkServer {
             if (client.app === COLIBRI_CHANNEL) {
                 this.logWarning(`Admin UI client ${client.id} announced protocol version '${client.version || '(none)'}'; expected v${PROTOCOL_VERSION}`);
             } else {
-                this.logError(`Refusing client ${client.id} from ${address}: ${rejection.reason}`, false);
+                this.logError(`Refusing client ${client.id} from ${address}: ${rejection.reason}`, false, aboutClient(client));
                 socket.emit(COLIBRI_CHANNEL, { command: PROTOCOL_REJECTED_COMMAND, payload: rejection });
                 // Not disconnect(true): forcing the transport shut can truncate the rejection
                 // that was just queued. The unforced form writes the namespace disconnect
@@ -305,13 +311,10 @@ export class SocketIOServer extends Service implements NetworkServer {
         }
 
         if (client.app !== 'colibri') { // ignore colibri web interface clients
+            // One line: a Socket.IO client names its app as it connects, unlike a TCP client, so
+            // "waiting for app name" followed by the app, as the TCP server logs it, was noise.
             const through = address === peer ? '' : ` through ${peer}`;
-            this.logDebug(`New client (${client.id}) connected from ${address}${through}, waiting for app name`);
-            this.logDebug(`Setting app of new colibri client '${client.name}' (${client.id}, v${client.version}) to "${client.app}"`, {
-                clientApp: client.app,
-                clientName: client.name,
-                clientId: client.id
-            });
+            this.logDebug(`New client '${client.name}' (${client.id}, v${client.version}) connected to app "${client.app}" from ${address}${through}`, aboutClient(client));
         }
 
         // Announced to everyone that got this far, before any application traffic. A client
@@ -331,7 +334,7 @@ export class SocketIOServer extends Service implements NetworkServer {
             // Socket.IO catches that synchronously it still drops the client.
             const body = (content ?? {}) as { command?: unknown; payload?: unknown };
             if (typeof body.command !== 'string') {
-                this.logError(`Ignoring malformed event on channel '${channel}' from client ${client.id}: no command`, false);
+                this.logError(`Ignoring malformed event on channel '${channel}' from client ${client.id}: no command`, false, aboutClient(client));
                 next();
                 return;
             }
@@ -378,11 +381,7 @@ export class SocketIOServer extends Service implements NetworkServer {
             this.releaseHeld(rc);
             this.rateLimiter.forget(rc);
             if (rc.app !== 'colibri') { // ignore colibri web interface clients
-                this.logDebug(`Colibri client '${rc.name}' (${rc.id}) disconnected`, {
-                    clientApp: rc.app,
-                    clientName: rc.name,
-                    clientId: rc.id
-                });
+                this.logDebug(`Colibri client '${rc.name}' (${rc.id}) disconnected`, aboutClient(rc));
             }
             this.clientDisconnectedStream.next(rc);
         }

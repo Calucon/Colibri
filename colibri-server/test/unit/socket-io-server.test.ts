@@ -99,6 +99,15 @@ describe('SocketIOServer', () => {
             expect(server.hasRecipients('appA')).toBe(false);
             expect(logged(LogLevel.Error).some(m => m.includes('Refusing client'))).toBe(true);
         });
+
+        // so that the admin UI lists the refusal under the app, also when it shows only that app
+        it('is logged with its app', async () => {
+            const { socket } = connect({ app: 'appA', version: '1' });
+            await disconnectReason(socket);
+
+            const refusal = logs.find(l => l.message.includes('Refusing client'));
+            expect(refusal?.metadata).toMatchObject({ clientApp: 'appA', clientId: expect.any(String) });
+        });
     });
 
     describe('a client announcing no protocol version', () => {
