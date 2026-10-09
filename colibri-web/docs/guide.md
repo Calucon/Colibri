@@ -6,6 +6,9 @@ Overview and quick start: [README](../README.md). Release notes and breaking cha
 - [Installation](#installation)
     - [Building from source](#building-from-source)
 - [Configuration](#configuration)
+    - [App name](#app-name)
+    - [Server address and port](#server-address-and-port)
+    - [Instance and connection](#instance-and-connection)
     - [TLS](#tls)
     - [Protocol version](#protocol-version)
 - [Usage](#usage)
@@ -70,44 +73,45 @@ new Colibri('app_name', '<your-server>', 9011);
 | -------- | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | `app`    | required                                     | App name. Messages, synchronized models and stored data are shared only within one app name.                     |
 | `server` | Host that served the page. Required in Node. | Host name or IP address, optionally with `http://`, `ws://`, `https://` or `wss://`, `:port` and a trailing `/`. |
-| `port`   | `9011`                                       | A `number` from 1 to 65535.                                                                                      |
+| `port`   | `9011`                                       | Server port, a `number` from 1 to 65535. Used if `server` has no port.                                           |
 
-#### App name
+### App name
 
 - All clients of your app, web and Unity, must use the same name.
 - Anyone else using the name joins your app and sees its messages and objects. Choose a unique name, not a placeholder
   like `app_name`.
-- `colibri` is reserved for the admin UI. The server treats such a client as an admin UI, and colibri-web warns.
+- `colibri` is reserved for the admin UI. The server treats a client with this name as an admin UI. colibri-web warns.
 
-#### Server address and port
+### Server address and port
 
-- `https://` and `wss://` encrypt the socket and the REST requests, and need [TLS](#tls) on the server.
-- An IPv6 address goes in brackets: `http://[::1]:9011`.
-- A path such as the admin UI's `/log`, a query, a fragment or another scheme throws a `ColibriError`.
-- The port in the address applies, else the third argument, else 9011. If both give a port, they must match, or
-  `new Colibri()` throws. `colibri.port` returns the port in use.
+- `https://` and `wss://` encrypt the socket and the REST requests. They need [TLS](#tls) on the server.
+- IPv6 addresses go in brackets: `http://[::1]:9011`.
+- A path such as the admin UI's `/log`, a query, a fragment or an unsupported scheme throws a `ColibriError`.
+- Port precedence: the port in the address, then the third argument, then 9011. If both give a port, they must match,
+  or `new Colibri()` throws. `colibri.port` returns the port in use.
 - The scheme never implies a port. `https://<your-server>` means port 9011, not 443.
 - Convert a port from `URLSearchParams` first: `Number(params.get('port') ?? 9011)`. Plain JavaScript may still pass a
   string of digits such as `'9011'`, as in 1.x.
 
-#### Instance and connection
+### Instance and connection
 
 - A second `new Colibri()` throws a `ColibriError`.
 - `Colibri.getInstance()` returns the instance, or `null` with the warning
   `Colibri not initialized yet! (Instance is null)`. `Colibri.getInstance(false)` skips the warning.
-- Colibri retries a failed connection until the server answers, with one warning per outage.
+- Colibri retries a failed connection until the server answers. It warns once per outage:
+  `Colibri: could not connect to <address> (<reason>). Retrying until it answers ...`.
 - Browsers block `ws://` and `http://` from an `https://` page (mixed content). Use `wss://` or `https://` there, with
   [TLS](#tls) on the server or a TLS proxy.
 - After an outage, a background tab may reconnect late (90 s in a test with Chrome). Browsers throttle timers in hidden
-  tabs, including Socket.IO's reconnect backoff. A visible tab reconnects within seconds.
+  tabs, including Socket.IO's reconnect backoff. Showing the tab again makes it reconnect within seconds.
 
 ### TLS
 
-With TLS on (`TLS_CERT` and `TLS_KEY`, see [TLS](../../colibri-server/docs/guide.md#tls) in the server guide),
-colibri-server serves its web port over HTTPS and WSS only.
+With `TLS_CERT` and `TLS_KEY` set ([server guide](../../colibri-server/docs/guide.md#tls)), colibri-server serves its
+web port over HTTPS and WSS only.
 
-- Connect with `https://<your-server>:9011` or `wss://<your-server>:9011`. Either means `wss` for the socket and
-  `https` for the REST requests.
+- Connect with `https://<your-server>:9011` or `wss://<your-server>:9011`. Both use `wss` for the socket and `https`
+  for the REST requests.
 - The admin UI is at `https://<your-server>:9011`.
 - `http://<your-server>:9011` gets no answer. The connection is closed, not redirected.
 
@@ -128,7 +132,7 @@ The server refuses a client whose protocol version (`PROTOCOL_VERSION`, exported
 | `true`  | The server refused this client.                                                           | The connection is closed. Colibri does not reconnect.  |
 | `false` | The server did not identify itself within 5 s of connecting, so it is probably pre-2.0.0. | The connection stays up and works. Upgrade the server. |
 
-- Each kind is emitted at most once per `Colibri` instance, and also logged to the console.
+- Each kind is emitted at most once per `Colibri` instance and also logged to the console.
 - A suspected mismatch can be followed by a refusal, not the other way round.
 - Nothing is replayed to a late subscriber. Subscribe right after `new Colibri()`.
 - `serverVersion` and `clientVersion` are protocol versions (`'1'`, `'2'`), not release versions.
@@ -139,10 +143,10 @@ import { Colibri } from '@hcikn/colibri';
 const colibri = new Colibri('app_name', 'http://<your-server>:9011');
 colibri.protocolMismatch.subscribe(error => {
     if (error.fatal) {
-        // disconnected for good: install matching colibri-web and colibri-server versions
+        // disconnected, no reconnect: install matching colibri-web and colibri-server versions
         console.error(`Server protocol v${error.serverVersion}, client protocol v${error.clientVersion}`);
     } else {
-        // the server is older than 2.0.0, the connection still works
+        // server older than 2.0.0, the connection still works
     }
 });
 ```
