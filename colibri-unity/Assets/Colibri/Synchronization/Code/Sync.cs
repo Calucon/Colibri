@@ -99,6 +99,7 @@ namespace HCIKonstanz.Colibri.Synchronization
                     _reconnectRound.IsOver = true;
                     _reconnectRound = null;
                 }
+                EndAnswerRounds();
                 ForgetUnreadDeletes();
 
                 // Nor has this one heard from the server yet, and it makes no requests again at
@@ -279,6 +280,10 @@ namespace HCIKonstanz.Colibri.Synchronization
         /// as if it were news, putting back a value from before the outage.
         /// </para>
         /// <para>
+        /// A SyncBehaviour that keeps changes of its own at its first answer opens a round of its
+        /// own, for the answers still on their way then (see <see cref="AskForEndOfAnswers"/>).
+        /// </para>
+        /// <para>
         /// What can be told is when the answers are over. The server handles one client's messages
         /// in the order they were sent and writes its answers to that client in the same order, so
         /// the answer to a request sent after all the others comes after all of theirs. That last
@@ -299,7 +304,8 @@ namespace HCIKonstanz.Colibri.Synchronization
             /// <summary>
             /// When this client noticed the outage, on SyncTicker's clock: the one before this
             /// reconnect, or an earlier one if the link dropped again before that one's round was
-            /// over.
+            /// over. Negative infinity for a round an object opened at its first answer, which
+            /// follows no outage: everything the object sends counts.
             /// </summary>
             internal readonly double DisconnectedAt;
 
@@ -323,6 +329,43 @@ namespace HCIKonstanz.Colibri.Synchronization
 
         /// <summary>The id whose answer ends the current round; null when none is open. For the EditMode tests.</summary>
         internal static string ReconnectRoundEndMarker => _reconnectRound?.EndMarkerId;
+
+        /// <summary>
+        /// The rounds objects opened at their first answer (see <see cref="AskForEndOfAnswers"/>),
+        /// by the id their last request asks for, until its answer arrives.
+        /// </summary>
+        private static readonly Dictionary<string, ReconnectRound> _answerRounds = new Dictionary<string, ReconnectRound>();
+
+        /// <summary>
+        /// For a SyncBehaviour that keeps changes of its own at its first answer, and sends them in
+        /// place of the server's values (see its "Changes made before the first answer"): one more
+        /// request, sent now, ahead of those changes, and the round its answer ends. The answer to
+        /// every request this client sent before comes ahead of it, a manager's request for its
+        /// whole channel included, and so does every update the server relayed before it read the
+        /// request. Each of those holds what the server had before it read the changes.
+        /// </summary>
+        internal static ReconnectRound AskForEndOfAnswers()
+        {
+            var round = new ReconnectRound(double.NegativeInfinity);
+
+            // Noted once sent: a connection put in place of a destroyed one on the way ends the
+            // rounds asked for on that one.
+            SendCommand(ReconnectRoundChannel, "model::request", new JObject { { "id", round.EndMarkerId }, { "again", true } });
+            _answerRounds[round.EndMarkerId] = round;
+            return round;
+        }
+
+        /// <summary>
+        /// Ends every round objects opened at their first answer. The answers that end them were
+        /// asked for on a connection that is gone, and after a reconnect the requests made again
+        /// open the round those objects are in.
+        /// </summary>
+        private static void EndAnswerRounds()
+        {
+            foreach (var round in _answerRounds.Values)
+                round.IsOver = true;
+            _answerRounds.Clear();
+        }
 
         /// <summary>
         /// After a reconnect, every model this client holds may be stale: whatever other clients
@@ -417,6 +460,10 @@ namespace HCIKonstanz.Colibri.Synchronization
                 _reconnectRound.IsOver = true;
             }
 
+            // So did a round an object opened at its first answer. The object is in this one now,
+            // and what it sent in place of the server's values is judged as any other value sent.
+            EndAnswerRounds();
+
             // After every other request, on every channel: its answer comes after all of theirs.
             // Sent even when no object was asked for again: its answer also says that the server
             // has read the deletes sent again ahead of the requests. And only an answered round
@@ -444,12 +491,20 @@ namespace HCIKonstanz.Colibri.Synchronization
         /// </summary>
         private static void EndReconnectRound(JToken data)
         {
-            var round = _reconnectRound;
-            if (round == null || !(data is JObject answer) || !answer.TryGetValue("id", out var id)
-                || id.Type != JTokenType.String || (string)id != round.EndMarkerId)
+            if (!(data is JObject answer) || !answer.TryGetValue("id", out var id) || id.Type != JTokenType.String)
+                return;
+
+            var marker = (string)id;
+            if (_answerRounds.TryGetValue(marker, out var answerRound))
             {
+                _answerRounds.Remove(marker);
+                answerRound.IsOver = true;
                 return;
             }
+
+            var round = _reconnectRound;
+            if (round == null || marker != round.EndMarkerId)
+                return;
 
             round.IsOver = true;
             _reconnectRound = null;
@@ -862,11 +917,12 @@ namespace HCIKonstanz.Colibri.Synchronization
             ChannelListenerRegistry.Clear();
 
             // The previous session's outage and the deletes it sent again, on a clock that has gone
-            // on running since, its round of answers, which no object of this session is part of,
+            // on running since, its rounds of answers, which no object of this session is part of,
             // and when its connection last heard from the server, as last asked and held.
             _disconnectedAt = double.NegativeInfinity;
             ForgetUnreadDeletes();
             _reconnectRound = null;
+            EndAnswerRounds();
             _heardStamps = 0;
             _heardAt = double.NegativeInfinity;
             _heardAskedAt = double.NegativeInfinity;

@@ -342,7 +342,9 @@ namespace HCIKonstanz.Colibri.Synchronization
         private SentValues[] _sentValues;
 
         // The round of answers to the requests made again after the last reconnect, while they are
-        // still coming in (see Sync.ReconnectRound); null otherwise.
+        // still coming in (see Sync.ReconnectRound), or the one this object opened at its first
+        // answer to keep changes made before it (see "Changes made before the first answer");
+        // null otherwise.
         private Sync.ReconnectRound _round;
 
         // Parallel to _attributeList: the members whose last change the round showed to have been
@@ -358,6 +360,10 @@ namespace HCIKonstanz.Colibri.Synchronization
         private bool _hasReceivedDestroyCommand;
         private bool _hasReceivedFirstUpdate;
 
+        // Built by a manager from another client's update, which is its first update: nothing of
+        // this client's is kept over it.
+        private bool _isBuiltFromUpdate;
+
         private readonly TaskCompletionSource<bool> _isReady = new TaskCompletionSource<bool>();
 
         private int _tickIndex = -1;
@@ -368,6 +374,9 @@ namespace HCIKonstanz.Colibri.Synchronization
         /// switched off since its scene loaded. The change trackers are made there.
         /// </summary>
         internal bool HasAwoken => _trackers != null;
+
+        /// <summary>The id whose answer ends the round this object is in; null when it is in none. For the EditMode tests.</summary>
+        internal string RoundEndMarker => _round == null || _round.IsOver ? null : _round.EndMarkerId;
 
 
         /// <summary>
@@ -417,6 +426,7 @@ namespace HCIKonstanz.Colibri.Synchronization
             // had sent before the delete then created it afresh on the server and on every client.
             if (RemoteModelBeingBuilt != null && RemoteModelBeingBuilt == Id)
             {
+                _isBuiltFromUpdate = true;
                 Sync.AddModelUpdateListenerWithoutRequest(Channel, OnModelUpdate, Id, OnRequestedAgain);
             }
             else
@@ -526,9 +536,13 @@ namespace HCIKonstanz.Colibri.Synchronization
                     continue;
                 }
 
-                // Latched unconditionally, but only reported once the server has sent this
-                // object's state - otherwise the local value would overwrite it on arrival.
-                if (_trackers[i].CaptureChange(self) && _hasReceivedFirstUpdate)
+                // Until the server's first answer for this object, nothing is compared or latched:
+                // the answer compares each member with the value it had when the object
+                // registered (see "Changes made before the first answer" below).
+                if (!_hasReceivedFirstUpdate)
+                    continue;
+
+                if (_trackers[i].CaptureChange(self))
                     AddUpdate(attribute, attribute.GetBoxed(self));
             }
 
@@ -645,9 +659,15 @@ namespace HCIKonstanz.Colibri.Synchronization
                 // While the answers to the requests made again after the last reconnect are
                 // coming in, everything received is judged against what this object sent before
                 // the outage: see "The answers to the requests made again after a reconnect" below.
+                // So is everything received after a first answer over which this object kept
+                // changes of its own, until the answers still on their way then are in: see
+                // "Changes made before the first answer".
                 var round = _round;
                 if (round != null && round.IsOver)
                     round = _round = null;
+
+                if (isFirstUpdate)
+                    KeepChangesMadeBeforeTheAnswer(data, ref round);
 
                 foreach (var prop in data)
                 {
@@ -712,6 +732,72 @@ namespace HCIKonstanz.Colibri.Synchronization
             {
                 if (IsSynced(attribute.MemberName))
                     AddUpdate(attribute, attribute.GetBoxed(self));
+            }
+        }
+
+
+        /*
+         *  Changes made before the first answer.
+         *
+         *  An object asks the server for its state when it registers, in Awake, and the answer
+         *  arrives a round trip later, or once the connection is up. A member changed in between,
+         *  in a script's Start or OnConnected handler or by a user right after Play, used to be
+         *  latched by the poll without being sent, and the answer then put the server's value over
+         *  it: the change was undone on this client and never reached any other.
+         *
+         *  So the poll compares nothing until the first answer, and the answer compares each member
+         *  with the value it had when the object registered. A member that differs keeps its value,
+         *  which goes out as an ordinary update; the server reads it after the answer, and every
+         *  other client takes it from there. Every other member takes the answer's value, so a
+         *  value from the scene or the prefab, or one set in Awake before base.Awake(), never goes
+         *  out over the server's.
+         *
+         *  The answer is not the last message that can hold the server's older values. A manager
+         *  asks for every model on its channel, usually in the same frame as the object asks for
+         *  its own, and the answer to that holds this object too; an update another client sent
+         *  before the server read the change is relayed here as well. Applied, either undid the
+         *  change on this client alone. So a member kept takes nothing more until the answer to
+         *  one more request, sent now, ahead of the change: the server has answered every request
+         *  made before by then (see Sync.AskForEndOfAnswers). It is kept as a member is in the
+         *  round after a reconnect, and an object whose first answer arrives in that round, one
+         *  registered during the outage, keeps it in that round instead.
+         *
+         *  An object a manager builds from another client's update takes that update as it is:
+         *  what its own Awake set is no change of this client's.
+         */
+
+        /// <summary>
+        /// At the server's first answer for this object: keeps every member changed since the
+        /// object registered, and sends it. <paramref name="round"/> is the round the object is
+        /// in, or null, and is opened when a member is kept outside one.
+        /// </summary>
+        private void KeepChangesMadeBeforeTheAnswer(JObject answer, ref Sync.ReconnectRound round)
+        {
+            // A component that is switched off sends nothing, and takes what arrives.
+            if (_trackers == null || _isBuiltFromUpdate || _hasReceivedDestroyCommand || !enabled)
+                return;
+
+            var self = this as T;
+            for (var i = 0; i < _trackers.Length; i++)
+            {
+                var attribute = _attributeList[i];
+
+                // A member that is switched off reads a placeholder, and one switched on since the
+                // last poll was compared with one: neither is a change. The next poll sends the
+                // latter, as it sends every member switched on.
+                if (!IsSynced(attribute.MemberName) || !_wasSynced[i] || !_trackers[i].CaptureChange(self))
+                    continue;
+
+                if (round == null)
+                    round = _round = Sync.AskForEndOfAnswers();
+
+                // The value the server holds, which the one sent now goes out after. Should that be
+                // lost in a link that drops before the server has read it, the round after the
+                // reconnect tells it by this value.
+                if (answer.TryGetValue(attribute.Name, out var shown))
+                    SentValuesOf(attribute).ServerShowed(ToKeep(attribute, shown));
+
+                KeepAndSendAgain(attribute);
             }
         }
 
@@ -789,17 +875,18 @@ namespace HCIKonstanz.Colibri.Synchronization
         /// </summary>
         private bool KeepsLocalValue(string name, JToken serverValue, Sync.ReconnectRound round)
         {
-            if (_sentValues == null || !_syncedAttributes.TryGetValue(name, out var attribute))
+            if (!_syncedAttributes.TryGetValue(name, out var attribute))
                 return false;
 
             // A member that is switched off reads a placeholder, which is no value to keep or send.
             if (!IsSynced(attribute.MemberName))
                 return false;
 
+            // Kept before it has sent anything, too: a member changed before the first answer.
             if (_keptInRound != null && _keptInRound[attribute.Index])
                 return true;
 
-            var sent = _sentValues[attribute.Index];
+            var sent = _sentValues?[attribute.Index];
             if (sent == null)
                 return false;
 
@@ -825,7 +912,7 @@ namespace HCIKonstanz.Colibri.Synchronization
             return true;
         }
 
-        /// <summary>Keeps the member's local value for the rest of the round, and sends it again.</summary>
+        /// <summary>Keeps the member's local value for the rest of the round, and sends it.</summary>
         private void KeepAndSendAgain(SyncedAttribute attribute)
         {
             _keptInRound ??= new bool[_attributeList.Count];

@@ -68,8 +68,8 @@ namespace HCIKonstanz.Colibri.Tests
         }
 
         /// <summary>
-        /// A model that has had its first update from the server: until then, a model latches its
-        /// changes without reporting them, so that its local values cannot overwrite the shared ones.
+        /// A model that has had its first update from the server: until then, a model compares
+        /// nothing, and the first answer decides which of its members go out.
         /// </summary>
         private RateModel SpawnModel()
         {

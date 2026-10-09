@@ -19,6 +19,9 @@ namespace HCIKonstanz.Colibri.Tests
     ///
     /// A model another client deleted meanwhile is answered with <c>model::delete</c> instead, as
     /// long as the server remembers the delete; ReconnectTests checks that against the server.
+    ///
+    /// Also what a model does with the first answer, to the request it makes when it registers,
+    /// when this client changed it before that answer arrived.
     /// </summary>
     public class ModelResyncTests
     {
@@ -943,6 +946,219 @@ namespace HCIKonstanz.Colibri.Tests
             Assert.That(model.Label, Is.EqualTo("theirs"), "The other client's label, set during the outage, was not applied");
             Assert.That(model.Count, Is.EqualTo(6), "The other client's count, set during the outage, was not applied");
             Assert.That(SentAt(model, 203), Is.Null);
+        }
+
+
+        /*
+         *  The first answer, to the request an object makes when it registers. A member changed
+         *  before it arrives, in Start, in an OnConnected handler or by a user right after Play,
+         *  keeps its value and goes out; every other member takes the answer.
+         */
+
+        /// <summary>
+        /// The answer to the request an object sent at its first answer, ahead of the changes it
+        /// kept there (see Sync.AskForEndOfAnswers): the answers made before the server read them
+        /// are all in.
+        /// </summary>
+        private static void EndOfAnswersFor<T>(SyncBehaviour<T> model) where T : SyncBehaviour<T>
+        {
+            var marker = model.RoundEndMarker;
+            Assert.That(marker, Is.Not.Null, "Precondition: the object keeps changes made before its first answer");
+            Sync.OnServerMessage(Sync.ReconnectRoundChannel, "model::update", new JObject { { "id", marker } });
+        }
+
+        /// <summary>
+        /// The bug, as found in Unity on Windows: a placed SyncTransform hidden half a second after
+        /// Play, before the server had answered, was shown again by the answer, and no other
+        /// client ever saw it hidden.
+        /// </summary>
+        [Test]
+        public void AnObjectHiddenBeforeTheFirstAnswerStaysHiddenAndIsHiddenElsewhere()
+        {
+            var sync = Spawn<ResyncTransform>("hidden-before-the-answer");
+            sync.Wake();
+
+            sync.gameObject.SetActive(false);
+            Poll(sync);
+            sync.OnModelUpdate(new JObject
+            {
+                { "id", sync.Id },
+                { "active", true },
+                { "position", new JArray(1f, 2f, 3f) },
+            });
+
+            Assert.That(sync.gameObject.activeSelf, Is.False, "The answer showed the object again");
+            Assert.That(sync.transform.position, Is.EqualTo(new Vector3(1f, 2f, 3f)), "The position, not changed here, did not take the server's value");
+            var sent = Sent(sync);
+            Assert.That(sent, Is.Not.Null, "Hiding the object never went out");
+            Assert.That(Members(sent), Is.EqualTo(new[] { "active", "id" }), $"Only what changed here goes out: {sent}");
+            Assert.That((bool)sent["active"], Is.False);
+        }
+
+        /// <summary>
+        /// Changed in the frame the answer arrives, before the poll has run: in an OnConnected
+        /// handler, which is raised in the same Update as the answer is delivered, just before it.
+        /// </summary>
+        [Test]
+        public void AChangeMadeJustBeforeTheFirstAnswerIsKeptAndSent()
+        {
+            var model = SpawnModel();
+
+            model.Label = "mine";
+            model.OnModelUpdate(Answer(model, "theirs", 5));
+
+            Assert.That(model.Label, Is.EqualTo("mine"), "The answer put the server's value over the change");
+            Assert.That(model.Count, Is.EqualTo(5), "The count, not changed here, did not take the server's value");
+            var sent = Sent(model);
+            Assert.That(sent, Is.Not.Null, "The change never went out");
+            Assert.That(Members(sent), Is.EqualTo(new[] { "id", "label" }), $"Only what changed here goes out: {sent}");
+            Assert.That((string)sent["label"], Is.EqualTo("mine"));
+        }
+
+        /// <summary>
+        /// The server has nothing for the object yet. The change goes out all the same; the full
+        /// state is still up to a manager's TriggerSync.
+        /// </summary>
+        [Test]
+        public void AChangeMadeBeforeABareFirstAnswerIsSent()
+        {
+            var model = SpawnModel();
+
+            model.Label = "mine";
+            Poll(model);
+            model.OnModelUpdate(Bare(model.Id));
+
+            var sent = Sent(model);
+            Assert.That(sent, Is.Not.Null, "The change never went out");
+            Assert.That(Members(sent), Is.EqualTo(new[] { "id", "label" }), $"Only what changed here goes out: {sent}");
+        }
+
+        /// <summary>
+        /// What the object had when it registered, from the scene, the prefab or Awake before
+        /// base.Awake(), is no change: it takes the server's state, and nothing goes back.
+        /// </summary>
+        [Test]
+        public void AMemberLeftAsItWasTakesTheFirstAnswerAndNothingGoesOut()
+        {
+            var model = Spawn<ResyncModel>("set-in-the-scene");
+            model.Label = "from the scene";
+            model.Wake();
+            Poll(model);
+
+            model.OnModelUpdate(Answer(model, "theirs", 5));
+            Poll(model);
+
+            Assert.That(model.Label, Is.EqualTo("theirs"));
+            Assert.That(model.Count, Is.EqualTo(5));
+            Assert.That(Sent(model), Is.Null, "A value the object registered with went out over the server's");
+            Assert.That(model.RoundEndMarker, Is.Null, "Nothing was kept, and nothing needs asking for");
+        }
+
+        /// <summary>A member changed and set back before the answer holds what it registered with.</summary>
+        [Test]
+        public void AMemberChangedAndSetBackBeforeTheFirstAnswerTakesIt()
+        {
+            var model = SpawnModel();
+
+            model.Label = "for a moment";
+            Poll(model);
+            model.Label = "";
+            Poll(model);
+            model.OnModelUpdate(Answer(model, "theirs"));
+
+            Assert.That(model.Label, Is.EqualTo("theirs"));
+            Assert.That(Sent(model), Is.Null);
+        }
+
+        /// <summary>
+        /// A manager on the channel asked for every model on it, and its answer holds this object
+        /// too, as the server had it before it read the change; so does another client's update
+        /// relayed before then. Neither puts the old value back. Once the answer to the request
+        /// sent ahead of the change is in, an update is applied as it arrives.
+        /// </summary>
+        [Test]
+        public void AChangeKeptAtTheFirstAnswerTakesNothingFromTheAnswersStillOnTheirWay()
+        {
+            var model = SpawnModel();
+            System.Action<JObject> manager = _ => { };
+            Sync.AddModelUpdateListener(model.Channel, manager);
+            try
+            {
+                model.Label = "mine";
+                Poll(model);
+
+                model.OnModelUpdate(Answer(model, "theirs", 5));
+                Assert.That((string)Sent(model)?["label"], Is.EqualTo("mine"), "The change never went out");
+
+                model.OnModelUpdate(Answer(model, "theirs", 5));
+                model.OnModelUpdate(Relayed(model, "label", "theirs, sent before the server read ours"));
+                Assert.That(model.Label, Is.EqualTo("mine"), "An answer still on its way put the server's older value back");
+                Assert.That(model.Count, Is.EqualTo(5));
+                Assert.That(Sent(model), Is.Null, "The change went out a second time");
+
+                EndOfAnswersFor(model);
+                model.OnModelUpdate(Relayed(model, "label", "theirs, sent after"));
+                Assert.That(model.Label, Is.EqualTo("theirs, sent after"), "After the answers, another client's update should be applied as it arrives");
+                Assert.That(Sent(model), Is.Null);
+            }
+            finally
+            {
+                Sync.RemoveModelUpdateListener(model.Channel, manager);
+            }
+        }
+
+        /// <summary>
+        /// An object registered during an outage has its first answer in the round after the
+        /// reconnect, and its request again is answered there too. The change is kept for the
+        /// whole round, and goes out once.
+        /// </summary>
+        [Test]
+        public void AChangeMadeBeforeAFirstAnswerAfterAReconnectIsKeptForTheRound()
+        {
+            var model = SpawnModel();
+            Sync.RequestModelsAgain(disconnectedAt: 103);
+
+            model.Label = "mine";
+            Poll(model);
+            model.OnModelUpdate(Answer(model, "theirs", 5));
+            Assert.That(model.RoundEndMarker, Is.EqualTo(Sync.ReconnectRoundEndMarker), "The object opened a round of its own inside the round after the reconnect");
+            var sent = SentAt(model, 104);
+            model.OnModelUpdate(Answer(model, "theirs", 5));
+            EndOfAnswers();
+
+            Assert.That(model.Label, Is.EqualTo("mine"), "An answer put the server's value over the change");
+            Assert.That(model.Count, Is.EqualTo(5));
+            Assert.That(sent, Is.Not.Null, "The change never went out");
+            Assert.That((string)sent["label"], Is.EqualTo("mine"));
+            Assert.That(SentAt(model, 105), Is.Null, "The change went out a second time");
+        }
+
+        /// <summary>
+        /// An object a manager builds from another client's update takes that update as its state:
+        /// a value its own Awake set is the template's, and goes out over nothing.
+        /// </summary>
+        [Test]
+        public void AnObjectBuiltFromAnotherClientsUpdateTakesItWhateverItsAwakeSet()
+        {
+            var id = System.Guid.NewGuid().ToString();
+            var model = Spawn<ResyncModel>("built-from-an-update");
+            model.Id = id;
+            SyncBehaviour<ResyncModel>.RemoteModelBeingBuilt = id;
+            try
+            {
+                model.Wake();
+            }
+            finally
+            {
+                SyncBehaviour<ResyncModel>.RemoteModelBeingBuilt = null;
+            }
+
+            // What a model's own Awake might do after base.Awake().
+            model.Label = "the template's";
+            model.OnModelUpdate(new JObject { { "id", id }, { "label", "theirs" } });
+
+            Assert.That(model.Label, Is.EqualTo("theirs"));
+            Assert.That(Sent(model), Is.Null);
         }
     }
 }
