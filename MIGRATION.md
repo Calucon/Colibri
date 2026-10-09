@@ -530,8 +530,8 @@ bought nothing.
 **Voice stays within the app.** In 1.x every voice packet went to every client on the server that
 was sending voice, and a `VoiceReceiver` played the voice id it was given, from whichever app it
 came. Now only clients with the same *App Name* hear each other, so two apps on one server can use
-the same voice ids. This keeps apps apart but is not access control: anyone who knows the App Name
-can listen, and voice is not encrypted.
+the same voice ids, and a project without an App Name sends no voice. This keeps apps apart but is
+not access control: anyone who knows the App Name can listen, and voice is not encrypted.
 
 **The latency echo is gone.** The old `colibri` / `latency` message round trip was removed; TCP
 latency comes from the 100 ms heartbeat the client echoes back verbatim. Nothing sends `latency` to
