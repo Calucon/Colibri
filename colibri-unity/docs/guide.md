@@ -440,6 +440,14 @@ For synchronizing the location of an object, Colibri provides a `SyncTransform` 
 
 Information about the object's state is stored on the server. When a new client connects, the location is automatically updated to its current state.
 
+The object asks the server for that state when it registers, in `Awake`, and the answer arrives a
+round trip later, or once the connection is up. A member changed in between (in `Start`, in an
+`OnConnected` handler, or right after entering Play mode) keeps its value: it replaces the server's
+value here, on the server and on every other client. Every other member takes the server's value, so
+values from the scene or the prefab are never sent over it. A script that moves the object in
+`Start` therefore moves it for everyone each time a client starts; leave starting positions to the
+scene.
+
 A moving object sends at most 30 updates a second by default (see [How often synced objects send](#how-often-synced-objects-send)).
 
 Showing, hiding and deleting:
@@ -500,7 +508,7 @@ switched on, so its scripts run `Awake`, and then takes the synced state. A `Syn
 an object that is hidden elsewhere is therefore switched off again at once, and shown as soon as
 the original is.
 
-By the way: `SyncTransform` is also a `SyncBehaviour`. What it says above about disabling, destroying and quitting applies to every `SyncBehaviour`; only the active state is specific to `SyncTransform`.
+By the way: `SyncTransform` is also a `SyncBehaviour`. What it says above about the server's state, disabling, destroying and quitting applies to every `SyncBehaviour`; only the active state is specific to `SyncTransform`.
 
 `Awake` and `OnDestroy` are where a `SyncBehaviour` registers and unregisters itself. If you need them in your model script, override them and call the base method:
 
@@ -515,6 +523,12 @@ protected override void Awake()
 A plain `void Awake()` or `void OnDestroy()` hides the base method instead, and only compiler
 warning CS0114 says so. Without `base.Awake()` the object is never synced; without
 `base.OnDestroy()`, destroying it does not delete it on the other clients.
+
+On an object placed in the scene or created on this client, a `[Sync]` member set after
+`base.Awake()` counts as a change, like one made in `Start`, and replaces the server's value (see
+[SyncTransform](#synctransform)). Set initial values before `base.Awake()`, or in the Inspector, to
+have the object take the server's state instead. A copy a manager builds from another client's
+update takes the values in that update, whatever its `Awake` sets.
 
 Limitations:
 
