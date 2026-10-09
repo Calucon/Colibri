@@ -1,15 +1,12 @@
 # Upgrading to Colibri 2.0
 
-Upgrade steps for a Colibri 1.x project, per component, and behaviour that differs afterwards. Full
-details are in the changelogs:
-[`colibri-server/docs/v2-changelog.md`](colibri-server/docs/v2-changelog.md),
-[`colibri-web/CHANGELOG.md`](colibri-web/CHANGELOG.md),
-[`colibri-unity/CHANGELOG.md`](colibri-unity/CHANGELOG.md).
+Changelogs with full details: [server](colibri-server/docs/v2-changelog.md),
+[web](colibri-web/CHANGELOG.md), [Unity](colibri-unity/CHANGELOG.md).
 
 ## Checklist
 
-**Upgrade the server first, then Unity, then the web clients.** No 1.x client, Unity or web, works
-with a 2.0 server. A 2.0 server logs every client still on 1.x ([upgrade order](#upgrade-order)).
+**Upgrade the server first, then Unity, then the web clients** ([upgrade order](#upgrade-order)).
+No 1.x client, Unity or web, works with a 2.0 server.
 
 **Server**
 
@@ -23,10 +20,10 @@ with a 2.0 server. A 2.0 server logs every client still on 1.x ([upgrade order](
 
 **Web**
 
-- [ ] [`npm install @hcikn/colibri@^2`. The server refuses 1.x web clients without a client-side
-      error.](#upgrade-order)
+- [ ] [`npm install @hcikn/colibri@^2`](#upgrade-order). A 2.0 server refuses 1.x web clients,
+      which show no error.
 - [ ] [TypeScript 5.0 or newer](#breaking-typescript-and-rxjs). Plain JavaScript:
-      [`colibri-web/docs/js-workaround`](colibri-web/docs/js-workaround)
+      [unsupported workaround](colibri-web/docs/js-workaround/README.md)
 - [ ] [Add `rxjs` to your dependencies](#breaking-typescript-and-rxjs)
 - [ ] [`@Synced() private x = 0` becomes `@Synced() accessor x = 0`, without
       `experimentalDecorators`](#breaking-synced-needs-standard-decorators)
@@ -57,30 +54,32 @@ with a 2.0 server. A 2.0 server logs every client still on 1.x ([upgrade order](
 
 ## Upgrade order
 
+Upgrade the server first, then Unity, then the web clients.
+
 colibri-unity 2.0.0 uses a [new binary TCP protocol](colibri-server/docs/protocol.md) and **requires
 colibri-server 2.0.0 or newer**. There is no version negotiation, so upgrade both together.
 
-The server log names clients on the wrong version. It is on the admin UI's log page and, since 2.0,
-in the console output (`docker logs` for a container).
+From then on, the server log names every client still on 1.x. The log is on the admin UI's log page
+and, since 2.0, in the console output (`docker logs` for a container).
 
-| Client | Server | Client side |
+| Client | Server behaviour | Client symptom |
 | --- | --- | --- |
-| Unity 1.x | Cannot read the handshake, so it cannot check the version or reply. Recognizes the 1.x wire format and logs a warning with the client's address and the fix, upgrading the Colibri Unity package (`de.uni.kn.colibri`) to 2.x. At most once a minute per address. | No reason given. A 1.3.1 client typically shows no error. |
+| Unity 1.x | Cannot read the handshake, so it cannot check the version or reply. Recognizes the 1.x wire format. Logs a warning with the client's address and the fix (upgrade the Colibri Unity package `de.uni.kn.colibri` to 2.x), at most once a minute per address. | No reason given. A 1.3.1 client typically shows no error. |
 | Readable handshake, other protocol version | Refuses the client, logs it with both versions, and sends the reason on the `colibri` channel. | A 2.0.0 Unity client logs the reason, shows it in `Window → Colibri Status` and stops reconnecting. |
-| colibri-web 1.x | Refuses it, since it announces `version: '1'` in the handshake query. Logs the client, its address and both versions. | No 1.x release (the last is 1.3.2) handles `protocol::rejected`. The rejection arrives as an ordinary message on `Colibri.messages`, which nothing listens to. Socket.IO does not reconnect after a server-side disconnect. **The client connects once and stops, with no error.** |
+| colibri-web 1.x | Refuses it, since it announces `version: '1'` in the handshake query. Logs the client, its address and both versions. | No 1.x release (the last is 1.3.2) handles `protocol::rejected`. The rejection arrives as an ordinary message on `colibri.messages`, which nothing listens to. Socket.IO does not reconnect after a server-side disconnect. **The client connects once and stops, with no error.** |
 
-For web clients, this refusal is the only break, since Socket.IO did not change. colibri-web 2.0.0
-logs a refusal and reports it on `Colibri.protocolMismatch`. See
+This refusal is the only protocol break for web clients. The Socket.IO envelope did not change.
+colibri-web 2.0.0 logs a refusal and reports it on `colibri.protocolMismatch`. See
 [Version checking](colibri-server/docs/protocol.md#version-checking).
 
 **Clients upgraded first** can only suspect an old server, since a 1.x server has no version check.
 A 2.0.0 or newer server announces itself to web clients on connect.
 
-- A current web client warns if that announcement is missing after 5 seconds, and **stays
+- A 2.0 web client warns if that announcement is missing after 5 seconds, and **stays
   connected**. The connection works, since the Socket.IO envelope did not change (verified against
   real 1.1.1 and 1.3.1 servers, with traffic in both directions).
-- A current Unity client cannot connect to a 1.x server. After three connections in a row that were
-  accepted and ended before a frame could be read, it reports a likely protocol mismatch, and keeps
+- A 2.0 Unity client cannot connect to a 1.x server. After three connections in a row that were
+  accepted and ended before a frame could be read, it reports a likely protocol mismatch and keeps
   retrying.
 
 Details:
