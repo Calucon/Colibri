@@ -531,22 +531,21 @@ it does not delete it on the other clients.
 
 ## Send rate
 
-A synced object (`SyncTransform` or any other `SyncBehaviour`) sends at most **30 updates per
-second** by default. Without a limit, a moving object sends an update every frame, 72 to 120 per
-second on a headset. Dozens of headsets doing that overload one server and one Wi-Fi network.
+A synced object (`SyncTransform` or any other `SyncBehaviour`) sends at most 30 updates per second
+by default. Without a limit, a moving object sends every frame, 72 to 120 times per second on a
+headset. Dozens of headsets at that rate overload a server and a Wi-Fi network.
 
 - A single change is sent in the frame it is made.
-- Faster changes are collected. Their latest values are sent together when the interval (1/30 s)
-  ends, even if nothing changes afterwards.
-- Values in between are never sent. A synced object shares its current state, not every step, so a
-  `[Sync]` setter on another client does not see every value either. Use `Sync.Send` for events that
-  must all arrive.
+- Faster changes are collected. Their latest values go out together when the interval (1/30 s) ends,
+  even if nothing changes afterwards.
+- Values in between are never sent, so a `[Sync]` setter on another client does not see every value.
+  Use `Sync.Send` for events that must all arrive.
 - `SetActive` sends pending changes at once, for a `SyncTransform` including the hide or show.
 - Destroying the object sends its delete at once and drops any pending change.
-- Pending changes are sent at once when the app pauses or loses focus. On a Quest, this happens when
-  the headset is taken off, the system menu opens or the user leaves the app.
-- When the app quits or Play mode ends, pending changes are sent as a best effort only, because the
-  connection closes in the same teardown.
+- Pending changes are sent at once when the app pauses or loses focus, on a Quest when the headset
+  is taken off, the system menu opens or the user leaves the app.
+- When the app quits or Play mode ends, pending changes are sent best effort only. The connection
+  closes in the same teardown.
 - A value from another client replaces a pending local change of the same member, so all copies end
   up with the same value.
 
@@ -559,8 +558,8 @@ using HCIKonstanz.Colibri.Synchronization;
 SyncSettings.MaxSendRate = 60; // updates per second per synced object; 0 = no limit
 ```
 
-- A value set from code applies to the current run only (in the Editor: the Play session) and does
-  not change the configuration.
+- A value set from code applies until the app quits or Play mode ends. It does not change the
+  configuration.
 - A negative value throws an `ArgumentOutOfRangeException`.
 - `0` disables the limit. An update then goes out in every frame with a change, as in Colibri 1.x.
   The configuration window warns about it.
@@ -568,48 +567,36 @@ SyncSettings.MaxSendRate = 60; // updates per second per synced object; 0 = no l
 
 ## Remote store
 
-`Store` saves data per app name on the server through its REST interface, so it persists between
-sessions. It takes anything Newtonsoft JSON can serialize, such as an object of your own class (also
-with `Vector3`, `Quaternion` or `Color` fields), a list, a number or a string, up to 5 MiB of JSON
-per name.
+`Store` saves data per app name on the server through its REST interface. The data persists between
+sessions. It takes anything Newtonsoft JSON can serialize, up to 5 MiB of JSON per name, e.g. an
+object of your own class (also with `Vector3`, `Quaternion` or `Color` fields), a list, a number or
+a string.
 
 ```c#
-// Create example object
-ExampleClass exampleObject = new ExampleClass();
-exampleObject.Id = 1234;
-exampleObject.Name = "Charly Sharp";
-
-// Save example object using REST API
+var exampleObject = new ExampleClass { Id = 1234, Name = "Charly Sharp" };
 bool putSuccess = await Store.Put("exampleObject", exampleObject);
-Debug.Log($"Success: {putSuccess}");
 ```
 
 ```c#
 ExampleClass exampleObject = await Store.Get<ExampleClass>("exampleObject");
-if (exampleObject != null)
-{
-    // Use fetched "exampleObject"
-}
-else
-{
+if (exampleObject == null)
     Debug.LogError("Get Example Object failed!");
-}
 ```
 
 `await Store.Delete("exampleObject")` deletes the value and returns `false` on failure.
 
-- Values are fetched only on request. They do not update automatically.
+- Values are fetched only on request, never automatically.
 - Newtonsoft JSON saves the public fields and properties of your class. `[Serializable]` is not
   needed. A private `[SerializeField]` field is not saved.
 - A `Vector2`, `Vector3`, `Vector4`, `Quaternion` or `Color` inside your class is converted with
   [`ColibriJson`](#json) and saved as an array of its components. Values Colibri 1.x saved as
   `{"x": …}` still load.
-- Failures do not throw. `Store.Put` returns `false` if the value cannot be converted or the server
-  did not store it. `Store.Get<T>` returns `default` if the request fails, nothing is saved under
-  the name, or the saved value does not fit `T`. Both log the reason.
+- Failures do not throw, and both methods log the reason. `Store.Put` returns `false` if the value
+  cannot be converted or the server did not store it. `Store.Get<T>` returns `default` if the
+  request fails, nothing is saved under the name, or the saved value does not fit `T`.
 - A saved `null` is returned as `null`. Exceptions thrown by your own class, e.g. by its
   constructor, pass through.
-- Requests give up after 10 s.
+- Requests time out after 10 s.
 - The app name and the name you save under are URL-encoded. Names with `/`, `#`, `?`, `%` or spaces
   work and address the same value as in colibri-web.
 
