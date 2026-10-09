@@ -876,9 +876,14 @@ become. Set *Max Send Rate* to 0 to measure the raw per-frame load.
 to arrive exactly once. It is a round trip, so no clock is shared between the two ends and the
 figure stays honest across machines, and it is kept at a low rate on purpose: it measures the delay
 *under* the load rather than adding to it. That channel is the only thing in the sample that can
-report a genuinely dropped message, and it is what makes the server's own backpressure visible from
-inside Unity: `tcp-server-worker.ts` discards writes to a client whose socket has fallen more than
-1 MB behind, logs the fact on its own side, and never tells the client.
+report a genuinely dropped message, and it is what makes the server's own limits visible from
+inside Unity: the server drops broadcasts from a client over `CLIENT_MESSAGE_RATE_LIMIT` (1000 a
+second by default) or while it is `TCP_INBOUND_BACKLOG_LIMIT` messages behind, and
+`tcp-server-worker.ts` discards writes to a client whose socket has fallen more than 1 MB behind.
+The server logs each on its own side and never tells the client. The scene's defaults, 100 moving
+objects at the default send rate of 30, come to about 3000 updates a second, three times the rate
+limit, so at those settings the probes measure the rate limit rather than the round trip; with 30
+objects or fewer they measure the round trip.
 
 Two things that follow from the design rather than from the harness:
 

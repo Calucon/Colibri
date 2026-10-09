@@ -581,9 +581,13 @@ otherwise spend on their prototype, so:
   measure the raw per-frame load. **Latency and loss** ride on a separate low-rate probe
   channel where every message is meant to arrive exactly once, measured as a round trip so no clock
   is shared between the two ends. That channel is the only thing here that can honestly report a
-  dropped message, and it is what makes the server's own backpressure discard visible from inside
-  Unity, since a client whose socket falls more than 1 MB behind has writes dropped without being
-  told (`tcp-server-worker.ts`). `colibri-server`'s `npm run test:stressecho` is a raw v3 client
+  dropped message, and it is what makes the server's own limits visible from inside Unity: the
+  server drops broadcasts from a client over `CLIENT_MESSAGE_RATE_LIMIT` (1000 a second by default)
+  or while it is `TCP_INBOUND_BACKLOG_LIMIT` messages behind, and writes to a client whose socket
+  falls more than 1 MB behind, without telling the client. The scene's defaults, 100 moving objects
+  at the default *Max Send Rate* of 30, come to about 3000 updates a second, three times the rate
+  limit, so at those settings the server drops nearly every probe; with *Objects* at 30 or fewer
+  the probes measure the round trip. `colibri-server`'s `npm run test:stressecho` is a raw v3 client
   that answers probes, so the round trip can be measured with one editor instead of two.
 - **`[Sync]` members are validated at startup**: an unsupported type, a property missing an
   accessor, or two members whose lowercased names collide are reported when the model type is first
