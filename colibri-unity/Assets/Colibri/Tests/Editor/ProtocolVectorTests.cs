@@ -1,3 +1,4 @@
+using HCIKonstanz.Colibri.Networking;
 using HCIKonstanz.Colibri.Networking.Protocol;
 using NUnit.Framework;
 using System;
@@ -7,8 +8,9 @@ namespace HCIKonstanz.Colibri.Tests
 {
     /// <summary>
     /// Cross-implementation vectors: byte-for-byte expectations produced by the server's own
-    /// encoder (<c>colibri-server/src/server/modules/networking/protocol.ts</c>) and asserted
-    /// against <see cref="FrameCodec"/>.
+    /// encoders (<c>colibri-server/src/server/modules/networking/protocol.ts</c> and, for voice,
+    /// <c>colibri-server/src/server/modules/web/voice-packet.ts</c>) and asserted against
+    /// <see cref="FrameCodec"/> and <see cref="VoicePacketCodec"/>.
     ///
     /// The round-trip tests elsewhere in this suite only prove the C# encoder and decoder
     /// agree with each other - they would pass just as happily with both sides big-endian, or
@@ -59,6 +61,23 @@ namespace HCIKonstanz.Colibri.Tests
             => AssertBytes("0d00000002010062030072617700ff7f80",
                 FrameCodec.EncodeMessage("b", "raw", new byte[] { 0x00, 0xFF, 0x7F, 0x80 }));
 
+        // The app id in each voice packet is AppId of the app name, so these pin the hash as well
+        // as the header.
+        [Test]
+        public void VoicePacketMatchesTheServerEncoder()
+            => AssertBytes("01000000c00320463c19780001ff7f",
+                VoicePacketCodec.Encode(VoicePacketCodec.AppId("myApp"), 1, 0, 960, Codec.PCM, new byte[] { 0x00, 0x01, 0xFF, 0x7F }));
+
+        [Test]
+        public void VoicePacketWithANonAsciiAppNameMatchesTheServerEncoder()
+            => AssertBytes("feff0102e001213d844cc4fcfffe",
+                VoicePacketCodec.Encode(VoicePacketCodec.AppId("Bjorn-ü中"), -2, 513, 480, Codec.OPUS, new byte[] { 0xFC, 0xFF, 0xFE }));
+
+        [Test]
+        public void VoicePacketWithAnEmptyAppNameAndNoDataMatchesTheServerEncoder()
+            => AssertBytes("007dffff000020c59d1c81",
+                VoicePacketCodec.Encode(VoicePacketCodec.AppId(""), 32000, -1, 0, Codec.PCM, ReadOnlySpan<byte>.Empty));
+
         /// <summary>Every vector above must also decode back to what the server would have sent.</summary>
         [Test]
         public void ServerVectorsDecodeBackToTheirOriginalFrames()
@@ -73,6 +92,11 @@ namespace HCIKonstanz.Colibri.Tests
 
             Assert.That(reader.Append(FromHex("220000000209006170703a3a6368616e0d006d6f64656c3a3a7570646174657b2278223a317d")),
                 Is.EqualTo(new[] { DecodedFrame.Message("app::chan", "model::update", Encoding.UTF8.GetBytes("{\"x\":1}")) }));
+
+            Assert.That(VoicePacketCodec.TryDecode(FromHex("feff0102e001213d844cc4fcfffe"), out var appId, out var packet), Is.True);
+            Assert.That(appId, Is.EqualTo(VoicePacketCodec.AppId("Bjorn-ü中")));
+            Assert.That((packet.Id, packet.Sequence, packet.FrameSize, packet.Codec), Is.EqualTo(((short)-2, (short)513, (short)480, Codec.OPUS)));
+            Assert.That(packet.Data, Is.EqualTo(new byte[] { 0xFC, 0xFF, 0xFE }));
         }
 
 

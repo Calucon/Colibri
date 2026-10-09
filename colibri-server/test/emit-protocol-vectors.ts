@@ -1,6 +1,7 @@
 /**
- * Cross-implementation protocol vectors: encodes a fixed set of frames with *this* server's
- * encoders and checks that colibri-unity's `ProtocolVectorTests.cs` still expects the same bytes.
+ * Cross-implementation protocol vectors: encodes a fixed set of frames and voice packets with
+ * *this* server's encoders and checks that colibri-unity's `ProtocolVectorTests.cs` still expects
+ * the same bytes.
  *
  * The C# suite's round-trip tests only prove that the C# encoder and decoder agree with each
  * other - they would pass just as happily with both sides big-endian, or both off by one. The
@@ -25,6 +26,7 @@ import {
     encodeHeartbeatFrame,
     encodeMessageFrame,
 } from '../src/server/modules/networking/protocol.js';
+import { VoiceCodec, encodeVoicePacket, voiceAppId } from '../src/server/modules/web/voice-packet.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '../..');
@@ -110,6 +112,43 @@ const vectors: Vector[] = [
             payload: Buffer.from([0x00, 0xff, 0x7f, 0x80]),
         }),
     },
+
+    // Voice packets (UDP). The app id in each is voiceAppId of the app name, so these pin the
+    // hash as well as the header.
+    {
+        description: 'VoicePacket(AppId("myApp"), 1, 0, 960, PCM, 00 01 ff 7f)',
+        bytes: encodeVoicePacket({
+            appId: voiceAppId('myApp'),
+            userId: 1,
+            sequence: 0,
+            frameSize: 960,
+            codec: VoiceCodec.PCM,
+            data: Buffer.from([0x00, 0x01, 0xff, 0x7f]),
+        }),
+    },
+    {
+        // The App Name is typed in by hand, so it can be anything; the hash is over its utf8 bytes.
+        description: 'VoicePacket(AppId("Bjorn-ü中"), -2, 513, 480, OPUS, fc ff fe)',
+        bytes: encodeVoicePacket({
+            appId: voiceAppId('Bjorn-ü中'),
+            userId: -2,
+            sequence: 513,
+            frameSize: 480,
+            codec: VoiceCodec.OPUS,
+            data: Buffer.from([0xfc, 0xff, 0xfe]),
+        }),
+    },
+    {
+        description: 'VoicePacket(AppId(""), 32000, -1, 0, PCM, empty)',
+        bytes: encodeVoicePacket({
+            appId: voiceAppId(''),
+            userId: 32000,
+            sequence: -1,
+            frameSize: 0,
+            codec: VoiceCodec.PCM,
+            data: Buffer.alloc(0),
+        }),
+    },
 ];
 
 const hex = (buffer: Buffer) => buffer.toString('hex');
@@ -132,8 +171,8 @@ const check = function (): number {
         return 1;
     }
 
-    // Every hex literal in the file. Nine bytes is the shortest frame there is, so anything
-    // shorter than that is some other string.
+    // Every hex literal in the file. Nine bytes is the shortest frame there is, and a voice
+    // packet is at least 11, so anything shorter than that is some other string.
     const literals = new Set((source.match(/"[0-9a-f]{18,}"/g) ?? []).map(match => match.slice(1, -1)));
 
     const missing = vectors.filter(vector => !literals.has(hex(vector.bytes)));
