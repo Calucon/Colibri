@@ -113,6 +113,27 @@ this is the server's full detail.
   with an EC certificate or the other way round. A renewal with the same problems is not used: the
   server warns once and keeps the old certificate.
 
+### Reverse proxies
+
+- **Client addresses behind a reverse proxy.** Behind nginx or another proxy, every client was
+  logged, refused and listed at the proxy's address. New `TRUSTED_PROXIES` names the proxies trusted
+  to report the client's address: IP addresses, CIDR ranges and `loopback`, `linklocal` and
+  `uniquelocal`, as in Express's `trust proxy`. Empty, the default, trusts nobody and changes
+  nothing. An invalid entry stops the server at startup, naming it. See
+  [Behind a reverse proxy](./guide.md#behind-a-reverse-proxy).
+- **Web port:** from a trusted peer, a Socket.IO client's address is the right-most
+  `X-Forwarded-For` entry that is not itself a trusted proxy, so a client cannot choose it by
+  sending the header itself. It names the client in the log and the admin UI. Express's `req.ip`
+  agrees.
+- **TCP port:** with new `TCP_PROXY_PROTOCOL=true`, a connection from a trusted peer must start
+  with a PROXY protocol header, version 1 (nginx's `proxy_protocol on`) or 2. It is read ahead of a
+  TLS handshake, also when it arrives in pieces. The client it names is the one in every log line
+  and per-address warning limit. A trusted peer without a valid header within 10 s, and a header
+  from any other peer, are refused with a warning at most once a minute per address. The setting
+  takes only `true` or `false`, and needs `TRUSTED_PROXIES`. See
+  [PROXY protocol](./protocol.md#proxy-protocol).
+- Voice (UDP) still shows the proxy's address: nginx's PROXY protocol covers TCP only.
+
 ### Docker
 
 - The Dockerfile is multi-stage: the builder runs `npm ci` and the full build (admin UI and
@@ -542,6 +563,9 @@ The endpoints are documented under [REST store](./protocol.md#rest-store).
 - `npm run test:tcpclient` and `test/tcp-crosstalk-check.ts` take `--tls`, `--insecure` and
   `--host`, and print the fingerprint of the server's certificate. `npm run test:docker` has a TLS
   deployment. The TLS tests make their certificates with `openssl`, which has to be on `PATH`.
+- Unit tests for `TRUSTED_PROXIES` matching, `X-Forwarded-For` on Socket.IO and `req.ip`, the
+  PROXY protocol reader (both versions, split, malformed and oversized headers), and the TCP worker
+  behind a proxy, with and without TLS.
 
 ### Documentation
 

@@ -88,6 +88,7 @@ data, and read the log. Run the server on a trusted network.
 | `App 'MyApp' now has 9 clients, more than 8 ...` | Separate projects use the same app name | Give each project its own app name |
 | Warning naming `TCP_INBOUND_BACKLOG_LIMIT`, synced objects lag, broadcasts missing | The server is overloaded | Sync fewer objects, less often, or with fewer clients per app ([Load limits](docs/guide.md#load-limits)) |
 | Warning naming `CLIENT_MESSAGE_RATE_LIMIT` | The named client sends too much, usually every frame | Cap that client's send rate |
+| Every client is logged at the reverse proxy's address | The server does not trust the proxy | Set `TRUSTED_PROXIES`, and for Unity clients `TCP_PROXY_PROTOCOL` ([Behind a reverse proxy](docs/guide.md#behind-a-reverse-proxy)) |
 | Admin UI Log page empty after a restart | The admin UI keeps only the last 20,000 messages, in memory | Use `docker logs colibri`, filtered by `CONSOLE_LOG_LEVEL` |
 
 ## Development

@@ -132,6 +132,8 @@ with its default.
 | `APP_CLIENT_WARNING_THRESHOLD` | `8` | Warn when one app has more clients than this, Unity and web together, admin UI excluded. Common cause: separate projects using the same app name. `0`: never. |
 | `MODEL_TOMBSTONE_SECONDS` | `600` | Seconds a deleted synced object (model) is remembered. Meanwhile updates for it are ignored, so they cannot re-create it, and a re-request after a reconnect is answered with a delete. A client with the object in its scene again ends this early. Cleared with the app's models when its last client leaves. `0`: off. See [Deleted models](protocol.md#deleted-models). |
 | `TLS_CERT`, `TLS_KEY` | empty | PEM files of the certificate with its chain, and of its private key. With both set, the TCP and web ports serve [TLS](#tls) only. |
+| `TRUSTED_PROXIES` | empty | Reverse proxies trusted to report the client's address: IP addresses, CIDR ranges and `loopback`, `linklocal`, `uniquelocal`, separated by commas, as in Express's `trust proxy`. Empty: none. See [Behind a reverse proxy](#behind-a-reverse-proxy). |
+| `TCP_PROXY_PROTOCOL` | `false` | `true`: a connection to the TCP port from a `TRUSTED_PROXIES` address must start with a PROXY protocol header, which names the Unity client. Requires `TRUSTED_PROXIES`. |
 
 `DATA_ROOT` and `WEBSERVER_ROOT` may be absolute, e.g. `DATA_ROOT=/var/lib/colibri`. Relative paths
 resolve from `dist/server`, so the defaults are `dist/ui` and `data` next to `dist`. In Docker, leave
@@ -144,8 +146,74 @@ Invalid values stop the server at startup with `Invalid <NAME>: "<value>" is not
   integer
 - another numeric setting that is not an integer of 0 or more
 - an unknown `CONSOLE_LOG_LEVEL`
+- a `TCP_PROXY_PROTOCOL` other than `true` or `false`
+- a `TRUSTED_PROXIES` entry that is not an IP address, a CIDR range or one of the named ranges,
+  including IPv4 shorthands such as `172.20`. An entry with an invalid prefix length, such as
+  `10.0.0.0/33`, gives `Invalid TRUSTED_PROXIES: "10.0.0.0/33" has an invalid prefix length ...`.
 
-Unusable TLS files also stop the server ([Startup errors](#startup-errors)).
+`TCP_PROXY_PROTOCOL=true` with an empty `TRUSTED_PROXIES` stops the server too. So do unusable TLS
+files ([Startup errors](#startup-errors)).
+
+### Behind a reverse proxy
+
+Behind a reverse proxy, every client comes from the proxy's address: in the log, in the admin UI and
+for the per-address warning limits. `TRUSTED_PROXIES` names the proxies trusted to report the
+client's address:
+
+- **Web port:** from a trusted peer, the client is the right-most `X-Forwarded-For` entry that is not
+  itself a trusted proxy. A client can write anything into the header, and each proxy appends the
+  address it got the request from, so the entries left of that are ignored. A peer that is not
+  trusted is shown at its own address. Express's `req.ip` follows the same rule.
+- **TCP port:** with `TCP_PROXY_PROTOCOL=true`, a connection from a trusted peer must start with a
+  PROXY protocol header, version 1 or 2, which names the Unity client
+  ([PROXY protocol](protocol.md#proxy-protocol)). Other peers connect as before.
+- **Voice (UDP):** unchanged. nginx's PROXY protocol covers TCP only, so voice clients still show the
+  proxy's address.
+
+With Docker and the ports published on `127.0.0.1`, the proxy appears as the gateway of the Docker
+network, e.g. `172.20.0.1`, and its subnet can change when compose recreates the network. The usual
+setting is then:
+
+```yaml
+    environment:
+      TRUSTED_PROXIES: loopback,uniquelocal
+      TCP_PROXY_PROTOCOL: "true"
+```
+
+`uniquelocal` also covers clients on a private network. Such a client reaching the web port through
+the proxy can set the address it is shown at with its own `X-Forwarded-For`. To prevent that, give
+the compose network a fixed subnet and trust only that range.
+
+In nginx, add to each `location` that proxies to the web port:
+
+```nginx
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+```
+
+and to the `stream` server that proxies to the TCP port:
+
+```nginx
+proxy_protocol on;
+```
+
+Restart the server with `TCP_PROXY_PROTOCOL=true` first, then reload nginx with `proxy_protocol on`.
+Until both are done, every Unity connection through the proxy fails. In this order the log names the
+missing header. In the other order, the server reads the header as a frame and logs an invalid frame
+length, or with TLS on, a client that does not use TLS. At startup the log shows:
+
+```
+Starting Colibri TCP server on 0.0.0.0:9012, PROXY protocol header required from TRUSTED_PROXIES (loopback, uniquelocal)
+```
+
+| Message | Cause | Fix |
+| --- | --- | --- |
+| WARN `Refusing a connection from <address>: it is in TRUSTED_PROXIES and TCP_PROXY_PROTOCOL is true, but the connection does not start with a PROXY protocol header ...` | The proxy sends no header, or a client connects directly from a trusted address | `proxy_protocol on;` in the proxy |
+| WARN `Refusing a connection from <address>: it is in TRUSTED_PROXIES and TCP_PROXY_PROTOCOL is true, but it sent no complete PROXY protocol header within 10 s ...` | As above, with a client that sends nothing | As above |
+| WARN `Refusing a connection from <address>: its PROXY protocol header is invalid: ...` | A malformed header, a version 1 header over 107 bytes, or a version 2 header over 4 KiB after its fixed 16 bytes | Check the proxy's PROXY protocol settings |
+| WARN `Refusing a connection from <address>: it starts with a PROXY protocol header, but its address is not in TRUSTED_PROXIES ...` | The proxy's address is not trusted, e.g. after the Docker network changed | Add it to `TRUSTED_PROXIES` |
+| ERROR `Invalid frame from client <id>, ...: Invalid frame length: 1481593424`, or with TLS on, WARN `Refusing a connection from <address>: it does not use TLS ...` | The proxy sends a header, but `TCP_PROXY_PROTOCOL` is not set | Set `TCP_PROXY_PROTOCOL=true` |
+
+The refusals are logged at most once a minute per address, repeats at debug level.
 
 ## TLS
 
@@ -276,8 +344,8 @@ debug level.
 
 TLS can instead terminate in an existing reverse proxy, with `TLS_CERT` and `TLS_KEY` unset. For the
 TCP port, use nginx's `stream` module with `listen 9012 ssl`, or a Traefik TCP router with TLS.
-Colibri needs no changes. The log and the per-address warning limits then show every client at the
-proxy's address.
+Colibri needs no changes. To show each client at its own address rather than the proxy's, see
+[Behind a reverse proxy](#behind-a-reverse-proxy).
 
 ### Performance
 

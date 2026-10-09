@@ -339,6 +339,21 @@ per address.
 For web clients only the transport changes. With TLS on, the web port serves only HTTPS and WSS. The
 [Socket.IO envelope](#socketio-envelope-web-clients) is unchanged.
 
+### PROXY protocol
+
+With `TCP_PROXY_PROTOCOL=true` ([Behind a reverse proxy](guide.md#behind-a-reverse-proxy)), a
+connection from an address in `TRUSTED_PROXIES` starts with a
+[PROXY protocol](https://github.com/haproxy/haproxy/blob/master/doc/proxy-protocol.txt) header, sent
+by the proxy, never by a Unity client: version 1, a line of text of at most 107 bytes ending in CRLF,
+or version 2, binary, with at most 4 KiB after its fixed 16 bytes. Its source address replaces the
+connection's address as the client's. Version 1 `UNKNOWN`, version 2 `LOCAL`, and anything but TCP
+over IPv4 or IPv6 keep the connection's address. The connection goes on after the header as without
+one: the TLS handshake on a TLS port, then the handshake frame. A connection without a header is told
+apart by its 4th byte at the latest: read as a v3 length field, the first 4 bytes of either header
+exceed 5 MiB, and a TLS handshake starts with `0x16`. A trusted peer without a valid header within
+10 s is closed, and so is a connection from any other address that starts with a header, or sends
+nothing within 10 s.
+
 ### Backpressure
 
 Before writing a relayed frame to a TCP client, the server compares the relayed traffic waiting in the
