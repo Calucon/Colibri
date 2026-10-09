@@ -36,6 +36,7 @@ namespace HCIKonstanz.Colibri.E2E
         private static readonly Regex UntrustedAccepted = new Regex(@"^Colibri: accepted the certificate of \S+ although .*'Allow self-signed certificate' is on", RegexOptions.Singleline);
         private static readonly Regex Rejected = new Regex(@"^Colibri: rejected the certificate of ", RegexOptions.Singleline);
         private static readonly Regex NoTlsAnswer = new Regex(@"^Colibri: \S+ (accepted the connection but )?did not answer the TLS handshake", RegexOptions.Singleline);
+        private static readonly Regex Silence = new Regex(@"^Colibri: 3 connections in a row to \S+ were accepted, but nothing was received on any of them within 2 s\.");
 
         private readonly List<(LogType Type, string Message, double Seconds)> _log = new List<(LogType, string, double)>();
         private readonly Stopwatch _clock = Stopwatch.StartNew();
@@ -225,6 +226,28 @@ namespace HCIKonstanz.Colibri.E2E
 
             Assert.That(Connection.SuspectedProtocolMismatch, Does.Contain("tick 'Server supports SSL/TLS'"));
             Assert.That(Connection.UsesTls, Is.False);
+        }
+
+        /// <summary>
+        /// A TLS-terminating proxy whose backend is down: the TLS handshake completes, and then
+        /// nothing comes. As without TLS, that is named as silence. It used to be reported as a
+        /// suspected protocol mismatch, as an error.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator ALinkThatCompletesTheTlsHandshakeAndThenSendsNothingIsNotReportedAsAMismatch()
+        {
+            var server = _cleanup.Add(FakeColibriServer.Start(FakeColibriServer.Behaviour.Silent, useTls: true));
+            ConnectionTo(allowSelfSigned: false, pin: TestTls.CertificateSha256, tcpPort: server.Port);
+
+            // Three silent sessions of 2 s each, 500 ms and 1000 ms apart, and the fourth accepted
+            // 2 s after the third ended.
+            yield return E2EServer.WaitUntil(() => server.Accepted >= 4,
+                "The client stopped retrying a link that completes the TLS handshake and then sends nothing", 20f);
+
+            Assert.That(Connection.SuspectedProtocolMismatch, Is.Null,
+                "A link that completed the TLS handshake and then sent nothing was reported as a suspected protocol mismatch");
+            Assert.That(Logged(LogType.Warning, Silence).Length, Is.EqualTo(1),
+                "Three silent sessions in a row should be named as such, once");
         }
 
 
