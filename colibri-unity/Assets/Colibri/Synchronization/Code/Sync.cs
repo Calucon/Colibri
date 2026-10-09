@@ -133,7 +133,8 @@ namespace HCIKonstanz.Colibri.Synchronization
         /// For a placed body that waits for the server's state before it is simulated (see
         /// GenericSyncTransform): whether it stops waiting at <paramref name="now"/>, on
         /// SyncTicker's clock. It does once this client has been without a server for the connect
-        /// timeout. The first body that stops waiting in a session says so in the console.
+        /// timeout, and is not in the middle of a connect attempt. The first body that stops
+        /// waiting in a session says so in the console.
         /// </summary>
         internal static bool StopsWaitingForServer(double now)
         {
@@ -143,6 +144,20 @@ namespace HCIKonstanz.Colibri.Synchronization
             var timeout = WebServerConnection.CONNECT_TIMEOUT_MS / 1000.0;
             if (now - _withoutServerSince < timeout)
                 return false;
+
+            // Nor while the connection is up or trying. It comes up on a worker thread, and
+            // OnConnected follows only in the next Update, after this frame's FixedUpdates. An
+            // attempt gives up after the connect timeout itself, and may have started later than
+            // the time counted from, the start of the frame in which Awake took up the connection:
+            // seconds later in a frame that loads a scene.
+            var connection = _connection;
+            if (!ReferenceEquals(connection, null))
+            {
+                var status = connection.Status;
+                if (status == ConnectionStatus.Connected || status == ConnectionStatus.Connecting
+                    || status == ConnectionStatus.Reconnecting)
+                    return false;
+            }
 
             if (!_hasWarnedAboutNoServer)
             {
