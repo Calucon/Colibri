@@ -762,7 +762,9 @@ namespace HCIKonstanz.Colibri.Synchronization
          *  which goes out as an ordinary update; the server reads it after the answer, and every
          *  other client takes it from there. Every other member takes the answer's value, so a
          *  value from the scene or the prefab, or one set in Awake before base.Awake(), never goes
-         *  out over the server's.
+         *  out over the server's. That needs a getter to read the object's value in base.Awake()
+         *  already: one that reads a field set up after it, a cached component say, reads its
+         *  fallback there and the real value at the answer, which counts as a change.
          *
          *  The answer is not the last message that can hold the server's older values. A manager
          *  asks for every model on its channel, usually in the same frame as the object asks for
