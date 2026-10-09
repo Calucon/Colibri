@@ -162,5 +162,38 @@ namespace HCIKonstanz.Colibri.Tests
 
             Assert.That(delivered, Is.Empty, "A new connection delivered a packet the previous one had received");
         }
+
+        /// <summary>
+        /// The server relays only the voice of this client's app. Whatever reaches the socket some
+        /// other way is dropped before it is queued: a packet of another app with the same voice
+        /// id, one from a Colibri 1.x client, one too short for the header. A short one used to
+        /// throw on the receive thread and cost a log line each time.
+        /// </summary>
+        [Test]
+        public void OnlyVoicePacketsOfThisClientsAppAreDelivered()
+        {
+            _voice.UseAppName("app-a");
+            var delivered = new List<short>();
+            _voice.AddVoicePacketListener(1, packet => delivered.Add(packet.Sequence));
+
+            var appA = VoicePacketCodec.AppId("app-a");
+            _voice.HandleReceived(VoicePacketCodec.Encode(appA, 1, 1, 960, Codec.OPUS, new byte[] { 0xF8 }));
+            _voice.HandleReceived(VoicePacketCodec.Encode(VoicePacketCodec.AppId("app-b"), 1, 2, 960, Codec.OPUS, new byte[] { 0xF8 }));
+            _voice.HandleReceived(new byte[] { 0x01, 0x00, 0x03, 0x00, 0xC0, 0x03, (byte)Codec.PCM, 0, 0 });
+            _voice.HandleReceived(new byte[] { 0x01, 0x00, 0x04 });
+            _voice.HandleReceived(VoicePacketCodec.Encode(appA, 0, 5, 960, Codec.OPUS, new byte[] { 0xF8 }));
+            _voice.HandleReceived(VoicePacketCodec.Encode(appA, 1, 6, 960, Codec.OPUS, new byte[] { 0xF8 }));
+            _voice.DeliverReceivedPackets();
+
+            Assert.That(delivered, Is.EqualTo(new short[] { 1, 6 }));
+
+            // Another App Name, and the other app's packets are the ones played.
+            _voice.UseAppName("app-b");
+            _voice.HandleReceived(VoicePacketCodec.Encode(appA, 1, 7, 960, Codec.OPUS, new byte[] { 0xF8 }));
+            _voice.HandleReceived(VoicePacketCodec.Encode(VoicePacketCodec.AppId("app-b"), 1, 8, 960, Codec.OPUS, new byte[] { 0xF8 }));
+            _voice.DeliverReceivedPackets();
+
+            Assert.That(delivered, Is.EqualTo(new short[] { 1, 6, 8 }));
+        }
     }
 }
