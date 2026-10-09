@@ -1,104 +1,90 @@
 # Upgrading to Colibri 2.0
 
-For projects built on Colibri 1.x: what you have to change in the server, the web client and the
-Unity client, and what changes underneath you. Each checklist item links to its detail below; each
-component's changelog has the full detail:
+Upgrade steps for a Colibri 1.x project, per component, and behaviour that differs afterwards. Full
+details are in the changelogs:
 [`colibri-server/docs/v2-changelog.md`](colibri-server/docs/v2-changelog.md),
 [`colibri-web/CHANGELOG.md`](colibri-web/CHANGELOG.md),
 [`colibri-unity/CHANGELOG.md`](colibri-unity/CHANGELOG.md).
 
-## The short version
+## Checklist
 
 **Upgrade the server first, then Unity, then the web clients.** No 1.x client, Unity or web, works
-with a 2.0 server, and from the moment it runs, the server's log names every client still on 1.x
-([why, and what each side shows](#why-the-server-and-unity-move-together)).
+with a 2.0 server. A 2.0 server logs every client still on 1.x ([upgrade order](#upgrade-order)).
 
 **Server**
 
-- [ ] [Node 24; the server is native ESM now](#breaking)
-- [ ] [Rewrite anything of your own that speaks TCP to Colibri against the new protocol](#breaking)
-- [ ] [Rewrite anything of your own that sends or receives voice against the new voice packet format](#breaking)
-- [ ] [Docker: pin the image version you run](#worth-knowing)
-- [ ] [Docker: remove `tty: true` if your compose file came from the 1.x README](#worth-knowing)
-- [ ] [Docker with `--user` (or `user:` in compose): give the data directory to that user](#worth-knowing)
+- [ ] [Node 24, native ESM](#breaking)
+- [ ] [Port your own TCP clients to the new protocol](#breaking)
+- [ ] [Port your own voice code to the new packet format](#breaking)
+- [ ] [Docker: pin the image version](#other-changes)
+- [ ] [Docker: remove `tty: true` from a compose file based on the 1.x README](#other-changes)
+- [ ] [Docker with `--user` (or `user:` in compose): give the data directory to that
+      user](#other-changes)
 
 **Web**
 
-- [ ] [`npm install @hcikn/colibri@^2`: a 1.x web client is refused, with no error on the client](#why-the-server-and-unity-move-together)
-- [ ] [TypeScript 5.0 or newer](#breaking-typescript-and-rxjs-is-yours-now); plain JavaScript: [`colibri-web/docs/js-workaround`](colibri-web/docs/js-workaround)
-- [ ] [Add `rxjs` to your own dependencies](#breaking-typescript-and-rxjs-is-yours-now)
-- [ ] [`@Synced() private x = 0` → `@Synced() accessor x = 0`; drop `experimentalDecorators`](#breaking-synced-needs-standard-decorators)
-- [ ] [`receiveColor` / `receiveColorArray` callbacks get a `ColorValue`, not a `string`](#breaking-colour-callbacks-get-a-colorvalue)
-- [ ] [Pass `name` to `RegisterModelSync` for anything you bundle](#fixed)
+- [ ] [`npm install @hcikn/colibri@^2`. The server refuses 1.x web clients without a client-side
+      error.](#upgrade-order)
+- [ ] [TypeScript 5.0 or newer](#breaking-typescript-and-rxjs). Plain JavaScript:
+      [`colibri-web/docs/js-workaround`](colibri-web/docs/js-workaround)
+- [ ] [Add `rxjs` to your dependencies](#breaking-typescript-and-rxjs)
+- [ ] [`@Synced() private x = 0` becomes `@Synced() accessor x = 0`, without
+      `experimentalDecorators`](#breaking-synced-needs-standard-decorators)
+- [ ] [Colour callbacks get a `ColorValue`, not a
+      `string`](#breaking-colour-callbacks-get-a-colorvalue)
+- [ ] [Pass `name` to `RegisterModelSync` in bundled code](#fixed)
 
 **Unity**
 
 - [ ] [Unity 2022.3 LTS or newer](#breaking-unity-20223-lts)
-- [ ] [Delete your vendored `Newtonsoft.Json.dll`](#breaking-no-more-vendored-newtonsoft)
-- [ ] [Replace every `IObservable` subscription with `+=` / `-=`, and unsubscribe yourself](#breaking-unirx-is-gone-and-was-not-replaced)
-- [ ] [Replace `Connected.Subscribe(...)` with the `OnConnected` / `OnDisconnected` events](#breaking-webserverconnectionconnected-is-a-task)
-- [ ] [Port `ObservableModel<T>` / `ObservableManager<T>` to `SyncBehaviour<T>` / `SyncBehaviourManager<T>`](#breaking-observablemodelt-and-observablemanagert-are-deleted)
-- [ ] [Import any sample your code uses; samples are no longer compiled into your project](#breaking-the-samples-are-no-longer-compiled-into-your-project)
-- [ ] [Replace `LockFreeQueue<T>` with `ConcurrentQueue<T>`](#breaking-lockfreequeue-is-gone)
-- [ ] [*Server supports SSL/TLS?* ticked: the server's TCP port needs TLS now too](#optional-tls)
+- [ ] [Delete your vendored `Newtonsoft.Json.dll`](#breaking-newtonsoftjson-is-a-package-dependency)
+- [ ] [Replace `IObservable` subscriptions with `+=` and `-=`, and unsubscribe
+      yourself](#breaking-unirx-removed)
+- [ ] [Replace `Connected.Subscribe(...)` with `OnConnected` and
+      `OnDisconnected`](#breaking-webserverconnectionconnected-is-a-task)
+- [ ] [Port `ObservableModel<T>` and `ObservableManager<T>` to `SyncBehaviour<T>` and
+      `SyncBehaviourManager<T>`](#breaking-observablemodelt-and-observablemanagert-removed)
+- [ ] [Import the samples your code uses](#breaking-samples-are-not-compiled-into-your-project)
+- [ ] [Replace `LockFreeQueue<T>` with `ConcurrentQueue<T>`](#breaking-lockfreequeue-removed)
+- [ ] [With *Server supports SSL/TLS?* ticked, enable TLS on the server's TCP port too](#tls)
 
-**Everywhere**
+**All components**
 
-- [ ] Read [Behaviour changes that will not fail to compile](#behaviour-changes-that-will-not-fail-to-compile): that is where the surprises are
+- [ ] Read [Behaviour changes that will not fail to compile](#behaviour-changes-that-will-not-fail-to-compile)
 - [ ] Go through [After upgrading, check these](#after-upgrading-check-these)
 
 ---
 
-## Why the server and Unity move together
+## Upgrade order
 
-colibri-unity 2.0.0 speaks a [new binary TCP protocol](colibri-server/docs/protocol.md) and
-**requires colibri-server ≥ 2.0.0**. There is no version negotiation: a 1.x Unity client cannot
-talk to a 2.0.0 server, nor a 2.0.0 Unity client to a 1.x server, so both sides have to be upgraded
-together.
+colibri-unity 2.0.0 uses a [new binary TCP protocol](colibri-server/docs/protocol.md) and **requires
+colibri-server 2.0.0 or newer**. There is no version negotiation, so upgrade both together.
 
-The failure is at least diagnosable now. The server's log (the admin UI's log page, and since 2.0
-also the server's console output, so `docker logs` for a container) says what is wrong:
+The server log names clients on the wrong version. It is on the admin UI's log page and, since 2.0,
+in the console output (`docker logs` for a container).
 
-- **A 1.x Unity client** cannot even send a handshake the server can read, so the server can
-  neither check its version nor tell it anything. It recognizes the 1.x wire format instead and
-  logs a warning, at most once a minute per address, that names the client's address and says to
-  upgrade the Colibri Unity package (`de.uni.kn.colibri`) to 2.x. The client is never told why: a
-  1.3.1 client typically shows no error at all, so the server's log is where to look.
-- **A client whose handshake the server can read, but whose protocol version it does not speak**,
-  is refused: the server logs the client and both versions, and tells the client why on the
-  `colibri` channel. A 2.0.0 Unity client logs that, shows it in `Window → Colibri Status`, and
-  stops reconnecting.
+| Client | Server | Client side |
+| --- | --- | --- |
+| Unity 1.x | Cannot read the handshake, so it cannot check the version or reply. Recognizes the 1.x wire format and logs a warning with the client's address and the fix, upgrading the Colibri Unity package (`de.uni.kn.colibri`) to 2.x. At most once a minute per address. | No reason given. A 1.3.1 client typically shows no error. |
+| Readable handshake, other protocol version | Refuses the client, logs it with both versions, and sends the reason on the `colibri` channel. | A 2.0.0 Unity client logs the reason, shows it in `Window → Colibri Status` and stops reconnecting. |
+| colibri-web 1.x | Refuses it, since it announces `version: '1'` in the handshake query. Logs the client, its address and both versions. | No 1.x release (the last is 1.3.2) handles `protocol::rejected`. The rejection arrives as an ordinary message on `Colibri.messages`, which nothing listens to. Socket.IO does not reconnect after a server-side disconnect. **The client connects once and stops, with no error.** |
 
-See [Version checking](colibri-server/docs/protocol.md#version-checking).
+For web clients, this refusal is the only break, since Socket.IO did not change. colibri-web 2.0.0
+logs a refusal and reports it on `Colibri.protocolMismatch`. See
+[Version checking](colibri-server/docs/protocol.md#version-checking).
 
-**Web clients are covered by the same check**, even though Socket.IO itself did not change.
-`colibri-web` 1.x announces `version: '1'` in its handshake query, so a 2.0.0 server refuses it.
-This is the one place the version check is a breaking change for web, and the symptom is quiet:
+**Clients upgraded first** can only suspect an old server, since a 1.x server has no version check.
+A 2.0.0 or newer server announces itself to web clients on connect.
 
-- No 1.x release of `colibri-web` (the last is 1.3.2) knows `protocol::rejected`. The client
-  receives the rejection as an ordinary message on `Colibri.messages`, which nothing is listening
-  for, and is then disconnected.
-- Socket.IO does not reconnect after a server-side disconnect, so **it connects once and then
-  stops, with no error on the client at all**.
-- The server's log line, which names the client, its address and both versions, is the diagnostic.
-- `colibri-web` 2.0.0 logs a refusal itself and exposes it on `Colibri.protocolMismatch`.
+- A current web client warns if that announcement is missing after 5 seconds, and **stays
+  connected**. The connection works, since the Socket.IO envelope did not change (verified against
+  real 1.1.1 and 1.3.1 servers, with traffic in both directions).
+- A current Unity client cannot connect to a 1.x server. After three connections in a row that were
+  accepted and ended before a frame could be read, it reports a likely protocol mismatch, and keeps
+  retrying.
 
-**Upgrading in the other order (clients first) is noticed too, though only as a suspicion.** The
-version check lives on the server, and a 1.x server has none, so neither client can be *told* it is
-talking to one. A 2.0.0+ server therefore announces itself to web clients on connect, and its
-silence is the signal:
-
-- A current web client warns after five seconds and **stays connected**. It works: the Socket.IO
-  envelope did not change, verified against real 1.1.1 and 1.3.1 servers with traffic flowing both
-  ways.
-- A current Unity client cannot connect to a 1.x server at all. It reports a likely protocol
-  mismatch after three connections that were accepted and then ended before a frame could be read,
-  and keeps retrying.
-
-Details: [Detecting an out-of-date server](colibri-server/docs/protocol.md#detecting-an-out-of-date-server).
-
-So the safe order is: **upgrade the server first** (from then on its log names every client that is
-still on 1.x), then Unity, then the web clients, which cannot be left on 1.x either.
+Details:
+[Detecting an out-of-date server](colibri-server/docs/protocol.md#detecting-an-out-of-date-server).
 
 ---
 
@@ -106,12 +92,12 @@ still on 1.x), then Unity, then the web clients, which cannot be left on 1.x eit
 
 ### Breaking
 
-**Node 24.** The runtime moved from `node:20-alpine` (end of life) to `node:24-alpine`, and
-`src/server` is native ESM: `"type": "module"`, explicit `.js` import extensions, no `__filename`.
-If you have forked or patched the server, that is the change that touches every file.
+**Node 24.** The runtime moved from `node:20-alpine` (end of life) to `node:24-alpine`. `src/server`
+is native ESM: `"type": "module"`, explicit `.js` import extensions, no `__filename`. In a fork or
+patched server, this touches every file.
 
-**The v3 TCP protocol.** The old FlatBuffers framing with its ASCII length header is gone,
-replaced by a fixed binary format:
+**v3 TCP protocol.** A fixed binary format replaces the FlatBuffers framing with its ASCII length
+header:
 
 ```
 [u32 LE totalLength][u8 type][body]        totalLength = 1 (type) + body.length
@@ -120,103 +106,99 @@ replaced by a fixed binary format:
   0x02 message     [u16 LE channelLen][channel][u16 LE commandLen][command][payload bytes]
 ```
 
-Anything you wrote that speaks TCP to Colibri has to be rewritten against
-[`docs/protocol.md`](colibri-server/docs/protocol.md). Socket.IO clients are unaffected. Two of
-the server's rules matter to such a client:
+Port your own TCP clients using [`docs/protocol.md`](colibri-server/docs/protocol.md). Socket.IO
+clients are not affected. For TCP clients:
 
-- It sends nothing, not even a heartbeat, until it has accepted the handshake, so the client has to
-  send its handshake first. A refused client gets the refusal and nothing else.
-- It disconnects a TCP client that has sent nothing for 10 seconds (`TCP_IDLE_TIMEOUT_SECONDS`),
-  one that never handshakes included. Echoing every heartbeat, as colibri-unity does, keeps a
-  client well inside that.
+- The server sends nothing, not even a heartbeat, before it accepts the handshake. Send the
+  handshake first. A refused client receives only the refusal.
+- The server disconnects a TCP client that sends nothing for 10 seconds
+  (`TCP_IDLE_TIMEOUT_SECONDS`), including one that never sends a handshake. Echoing every heartbeat,
+  as colibri-unity does, stays well within this.
 
-**The voice packet format.** A voice packet has an 11-byte header now: the 7 bytes 1.x had, with
-a header version in the high 4 bits of the codec byte, then an app id, the 32-bit FNV-1a hash of
-the app name. The server passes a packet on only to the voice clients with the same app id. It
-drops a 1.x client's voice packets, which have no app id, and logs a warning naming the client's
-address, so Colibri 1.x voice clients are not compatible with a 2.0 server or with 2.0 clients.
-Anything of your own that sends or receives voice has to follow
+**Voice packet format.** The header grew to 11 bytes: the 7 bytes of 1.x, with a header version in
+the high 4 bits of the codec byte, then an app id, the 32-bit FNV-1a hash of the app name. The
+server forwards a packet only to voice clients with the same app id. It drops 1.x voice packets,
+which have no app id, and logs a warning with the client's address. Colibri 1.x voice clients
+therefore work neither with a 2.0 server nor with 2.0 clients. Port your own voice code to
 [Voice packets](colibri-server/docs/protocol.md#voice-packets-udp).
 
-**The `flatbuffers` dependency is gone**, along with `body-parser`, `uuid` and
-`source-map-support`.
+**Removed dependencies:** `flatbuffers`, `body-parser`, `uuid` and `source-map-support`.
 
-### Worth knowing
+### Other changes
 
-**If you run the published image without a version tag** (`hcikn/colibri`, which means `latest`),
-the next pull can take a 1.x server to 2.x, and that cuts off every 1.x client. Pin the version
-you run, and change it when you upgrade the clients.
+**Pin the image version.** Untagged, `hcikn/colibri` means `latest`, and the next pull can move a
+1.x server to 2.x and cut off every 1.x client. Pin the version you run, and change it when you
+upgrade the clients.
 
-**The Docker image is multi-stage now.** It ships only `dist/` and production dependencies, sets
-`NODE_ENV=production`, starts `node` directly instead of `npm start` (so the server is PID 1 and
-shuts down cleanly on `docker stop`), and has a `HEALTHCHECK` on the web port.
+**Multi-stage image.** The image ships only `dist/` and production dependencies, sets
+`NODE_ENV=production` and has a `HEALTHCHECK` on the web port. It starts `node` directly instead of
+`npm start`, so the server is PID 1 and shuts down cleanly on `docker stop`.
 
-**The server no longer runs as root.** The container starts as root only long enough to hand
-`/srv/colibri/data` to the image's `node` user (uid 1000), then runs the server as `node`. A
-`./data` that Docker creates, or the root-owned one 1.x left behind, therefore works without any
-manual step, but on the host it now belongs to uid 1000. That is the only directory it hands over,
-so keep mounting your data there rather than pointing `DATA_ROOT` somewhere else.
+**Non-root server.** The container starts as root only to hand `/srv/colibri/data` to the image's
+`node` user (uid 1000), then runs the server as `node`. A `./data` created by Docker, or the
+root-owned one from 1.x, works without manual steps, but on the host it now belongs to uid 1000.
+Only this directory is handed over, so mount your data there rather than pointing `DATA_ROOT`
+elsewhere.
 
-- Started with `docker run --user …` (or `user:` in compose), the container cannot change
-  ownership, so the data directory has to belong to that user already: give a host directory to
-  it yourself, e.g. `sudo chown -R 1001:1001 ./data` for `--user 1001:1001`. A new named volume
-  belongs to uid 1000, so it only works as it is with `--user 1000:1000`.
-- If the server cannot write its data directory, it says so on stderr at startup, with the fix,
-  and keeps running without saving anything.
+- With `docker run --user …` (or `user:` in compose), the container cannot change ownership. Give
+  the data directory to that user first, for example `sudo chown -R 1001:1001 ./data` for
+  `--user 1001:1001`. A new named volume belongs to uid 1000, so it works unchanged only with
+  `--user 1000:1000`.
+- If the server cannot write its data directory, it prints the problem and the fix on stderr at
+  startup, and runs on without saving anything.
 
-**The server's log reaches `docker logs`.** In 1.x its log messages only appeared on the admin
-UI's log page. They are now also printed to stdout, errors and warnings to stderr, including the
-refusals and the 1.x-client warning above and the log lines clients send through Unity's
-`[RemoteLogger]` prefab or colibri-web's `RemoteLogger`.
+**Console log.** The server log, in 1.x only on the admin UI's log page, now also goes to stdout,
+errors and warnings to stderr, and so to `docker logs`. This includes the refusals, the 1.x client
+warning, and the lines clients send through Unity's `[RemoteLogger]` prefab or colibri-web's
+`RemoteLogger`.
 
-- `CONSOLE_LOG_LEVEL` (`error`, `warn`, `info` or `debug`; default `info`) sets how much is
-  printed, and broadcast traffic is only printed with `CONSOLE_LOG_BROADCAST_TRAFFIC=true`.
 - The bundled `docker-compose.yml` caps the container log at five files of 10 MB.
-- If your compose file came from the 1.x README, remove its `tty: true`: with a TTY, `docker logs`
-  has no stderr, and the warnings and errors are mixed into stdout with CRLF line endings.
+- Remove `tty: true` from a compose file based on the 1.x README. With a TTY, `docker logs` has no
+  stderr, and warnings and errors are mixed into stdout with CRLF line endings.
 
-**New limits keep one client, or many clients together, from overloading the server.** Each is an
-environment variable, described in [`.env.example`](colibri-server/.env.example):
+**New settings**, described in [`.env.example`](colibri-server/.env.example):
 
-- `CLIENT_MESSAGE_RATE_LIMIT` (default 1000, `0` for none) and `CLIENT_MESSAGE_RATE_BURST`
-  (default 2000): how many broadcasts and model updates a second one client, Unity or web, may
-  send. Beyond that its broadcasts are dropped, and its model updates are held back and merged per
-  object, so the latest value of every field still arrives.
-- `TCP_INBOUND_BACKLOG_LIMIT` (default 2000, `0` for none): how many messages from Unity clients
-  may be waiting for the server's main thread before it treats their broadcasts and model updates
-  the same way.
-- `TCP_IDLE_TIMEOUT_SECONDS` (default 10, `0` for never): a Unity client that sends nothing for
-  this long is disconnected. A headset that drops off the Wi-Fi or goes to sleep does not close
-  its connection, and used to count as connected, keeping its app's synced objects alive, until
-  the operating system gave up on it many minutes later.
-- `APP_CLIENT_WARNING_THRESHOLD` (default 8, `0` for never): a warning when one app has more
-  clients than this. Every message goes to each of an app's other clients, so the server's work
-  grows with the square of an app's size; this usually happens when several projects on one server
-  use the same app name, such as `test` or the one from an example.
+| Variable | Default | Description |
+| --- | --- | --- |
+| `CONSOLE_LOG_LEVEL` | `info` | Least severe level printed: `error`, `warn`, `info` or `debug`. |
+| `CONSOLE_LOG_BROADCAST_TRAFFIC` | `false` | Print broadcast traffic. |
+| `CLIENT_MESSAGE_RATE_LIMIT` | `1000` | Broadcasts and model updates a second per client, Unity or web. Above it, broadcasts are dropped, and model updates are held back and merged per object, so the latest value of every field still arrives. `0`: no limit. |
+| `CLIENT_MESSAGE_RATE_BURST` | `2000` | Burst size of the rate limit. |
+| `TCP_INBOUND_BACKLOG_LIMIT` | `2000` | Messages from Unity clients that may wait for the server's main thread before their broadcasts and model updates are handled the same way. `0`: no limit. |
+| `TCP_IDLE_TIMEOUT_SECONDS` | `10` | Disconnect a Unity client that sends nothing for this long. `0`: never. |
+| `APP_CLIENT_WARNING_THRESHOLD` | `8` | Log a warning when an app has more clients than this. `0`: never. |
+| `MODEL_TOMBSTONE_SECONDS` | `600` | How long the server remembers a deleted model. `0`: not at all. |
 
-A stretch of dropping or holding back that goes on for a second is logged as one warning then,
-naming the client for the rate limit, and one summary with the counts once it is over. A shorter
-one is only a debug line, unless it lost model updates: one client can have updates held back for
-at most 1000 objects, and an update for one more is lost, which is a warning however short the
-stretch. The rate limit's default is far above what one client of a typical prototype sends: even
-ten objects each sending in every frame at 72 Hz make 720 updates a second.
+The load limits keep one client, or many clients together, from overloading the server.
 
-**The server remembers deleted models for ten minutes** (`MODEL_TOMBSTONE_SECONDS`, default 600,
-`0` for not at all). Meanwhile it ignores updates for a deleted id, so an update another client
-sent before the delete reached it no longer brings the object back for everyone, and it tells a
-client asking for the object again after a reconnect to delete its copy. colibri-unity and
-colibri-web 2.x do their part by themselves.
+- A headset that leaves the Wi-Fi or goes to sleep does not close its connection. Before the idle
+  timeout, it counted as connected, and kept its app's synced objects alive, until the operating
+  system gave up on it many minutes later.
+- The server's work grows with the square of an app's size, since every message goes to each of the
+  app's other clients. A large app usually means that several projects on one server use the same
+  app name, such as `test` or one from an example.
+- Dropping or holding back that lasts a second is logged then as one warning, naming the client for
+  the rate limit, and as one summary with the counts when it ends. A shorter stretch is only a debug
+  line, unless it lost model updates.
+- One client can have updates held back for at most 1000 objects. An update for one more is lost and
+  logged as a warning, however short the stretch.
+- The default rate limit is far above typical traffic. Ten objects sending in every frame at 72 Hz
+  make 720 updates a second.
 
-A client of your own that speaks the protocol directly has to tell the server which kind of
-request it sends: `model::request { id }` for an object it has in its scene now or is creating,
-which lifts such a tombstone (without it, the updates for an id deleted a moment ago are ignored),
-and `{ id, again: true }` when it asks again after a reconnect for an object it held before. See
-[Deleted models](colibri-server/docs/protocol.md#deleted-models).
+**Deleted models.** For `MODEL_TOMBSTONE_SECONDS`, the server ignores updates for a deleted id, so
+an update another client sent before it received the delete no longer brings the object back for
+everyone. A client that asks for the object again after a reconnect is told to delete its copy.
+colibri-unity and colibri-web 2.x handle this. Your own client of the protocol must send:
 
-**Voice recordings have a new file name** (`VOICE_RECORDING=true`):
-`rec_<start time>_app_<app id>_ID_<voice id>_port_<source port>.wav` instead of
-`rec_<start time>_ID_<voice id>.wav`. Change anything that finds recordings by name. See
-[Voice packets](colibri-server/docs/protocol.md#voice-packets-udp).
+- `model::request { id }` for an object it has in its scene or is creating. This lifts the
+  tombstone. Without it, updates for an id deleted a moment ago are ignored.
+- `{ id, again: true }` when it asks again after a reconnect for an object it held before.
+
+See [Deleted models](colibri-server/docs/protocol.md#deleted-models).
+
+**Voice recording file name** (`VOICE_RECORDING=true`): `rec_<start time>_app_<app id>_ID_<voice
+id>_port_<source port>.wav` instead of `rec_<start time>_ID_<voice id>.wav`. Update anything that
+finds recordings by name. See [Voice packets](colibri-server/docs/protocol.md#voice-packets-udp).
 
 ---
 
@@ -224,9 +206,9 @@ and `{ id, again: true }` when it asks again after a reconnect for an object it 
 
 ### Breaking: `@Synced()` needs standard decorators
 
-`@Synced()` now uses TypeScript's standard TC39 `accessor` decorators instead of the legacy
-`experimentalDecorators` ones. Remove `experimentalDecorators` from your `tsconfig.json`, and turn
-every synced member into an `accessor`:
+`@Synced()` uses TypeScript's standard TC39 `accessor` decorators instead of the legacy
+`experimentalDecorators` ones. Remove `experimentalDecorators` from `tsconfig.json`, and make every
+synced member an `accessor`:
 
 ```ts
 // 1.x
@@ -240,16 +222,16 @@ class Player extends SyncModel<Player> {
 }
 ```
 
-This is not only a syntax change: field synchronization never worked correctly under the legacy
-decorator in frameworks that re-create instances, React among them. Those bugs go away with it.
+This also fixes field synchronization in frameworks that re-create instances, such as React, which
+never worked correctly with the legacy decorator.
 
-### Breaking: TypeScript, and `rxjs` is yours now
+### Breaking: TypeScript and `rxjs`
 
-Colibri targets TypeScript 5.0+. The plain-JavaScript sample ports were removed; a project tied to
-plain JavaScript can use the workaround in `colibri-web/docs/js-workaround`.
+Colibri targets TypeScript 5.0 or newer. The plain JavaScript sample ports were removed. For
+projects tied to plain JavaScript, `colibri-web/docs/js-workaround` documents a workaround.
 
-`rxjs` moved from a dependency to a **peer dependency**, because its types are part of the public
-API (`SyncModel`, `RegisterModelSync`, `Colibri.messages`). Add it to your own `package.json`:
+`rxjs` is now a **peer dependency**, because its types are part of the public API (`SyncModel`,
+`RegisterModelSync`, `Colibri.messages`):
 
 ```sh
 npm install rxjs
@@ -257,11 +239,10 @@ npm install rxjs
 
 ### Breaking: colour callbacks get a `ColorValue`
 
-A colour reaches a web client as the string `"#RRGGBBAA"` from Unity, but as an `[r, g, b, a]`
-array from another web client. 1.x typed the `receiveColor` callback as `string` either way, so a
-web-to-web colour was an array passed off as a string. The callbacks of `receiveColor` and
-`receiveColorArray` now get a `ColorValue` (either form), and the new `toHexColor()` and
-`toRgbaColor()` turn one into the shape you want:
+A colour arrives from Unity as the string `"#RRGGBBAA"` and from another web client as an
+`[r, g, b, a]` array. 1.x typed the `receiveColor` callback as `string` in both cases. Callbacks of
+`receiveColor` and `receiveColorArray` now get a `ColorValue`, which is either form. The new
+`toHexColor()` and `toRgbaColor()` convert it:
 
 ```ts
 // 1.x
@@ -272,47 +253,44 @@ import { toHexColor } from '@hcikn/colibri';
 Sync.receiveColor('tint', colour => setTint(toHexColor(colour)));
 ```
 
-Under `strict`, a callback typed `string` no longer compiles; without it, it compiles and goes on
-receiving arrays from web peers. A value that is not a colour makes both functions warn and return
-opaque black instead of throwing. `sendColor` accepts either form too; what goes on the wire is
-unchanged.
+- With `strict`, a callback typed `string` no longer compiles. Without `strict`, it compiles and
+  still receives arrays from web clients.
+- For a value that is not a colour, both functions warn and return opaque black instead of throwing.
+- `sendColor` accepts either form. The wire format is unchanged.
 
 ### Fixed
 
-- `import { ColibriError } from '@hcikn/colibri'` works. It was a default export, which `export *`
-  does not re-export, so it silently imported `undefined`.
-- `require()` consumers now get their own `.d.cts` declarations.
-- A stray `console.log` on every model registration is gone, which for anyone using
-  `RemoteLogger` was also a stream of pointless network traffic.
-- The server address can be written the way a browser shows it:
-  `new Colibri('my-app', 'http://192.168.0.10:9011')` works, as do `https://`, `ws://` and
-  `wss://`, a port in the address and a trailing slash. The port is the one in the address, else
-  the third argument, else 9011, for `https://` too. An address that 1.x turned into a URL that
-  could never connect now throws a `ColibriError` instead: a path after the host (the admin UI's
-  own `…/log`, say), an unknown scheme, a port that is not a whole number, or a port in the address
-  that disagrees with the port argument.
+- `import { ColibriError } from '@hcikn/colibri'` works. As a default export, which `export *` does
+  not re-export, it used to import as `undefined`.
+- `require()` consumers get their own `.d.cts` declarations.
+- The `console.log` on every model registration is gone. With `RemoteLogger`, it also caused
+  needless network traffic.
+- The server address can be written as a browser shows it, such as `'http://192.168.0.10:9011'`.
+  `https://`, `ws://`, `wss://`, a port in the address and a trailing slash work too. The port is
+  the one in the address, else the third argument, else 9011, also for `https://`.
+- An address that 1.x turned into a URL that could never connect now throws a `ColibriError`: a path
+  after the host (such as the admin UI's `…/log`), an unknown scheme, a port that is not a whole
+  number, or a port in the address that differs from the port argument.
 - `Sync.receive*`, `RegisterChannel`, `RegisterModelSync` and `new RemoteLogger()` may come before
-  `new Colibri()`; they take effect once it is constructed.
-- `RegisterModelSync` names its channel after the class unless you pass `name`, and a minifier
-  renames classes, so a minified build can end up on a different channel from Unity and from other
-  builds, without any error. It now warns when the class name looks minified. Pass `name` for
-  anything you bundle: `RegisterModelSync({ name: 'player', type: Player })`.
+  `new Colibri()`. They take effect once it exists.
+- Without `name`, `RegisterModelSync` names its channel after the class. A minifier renames classes,
+  so a minified build could end up on a different channel than Unity and other builds, without an
+  error. Colibri now warns when the class name looks minified. Pass `name` in bundled code:
+  `RegisterModelSync({ name: 'player', type: Player })`.
 
 ---
 
 ## colibri-unity
 
-This is where most of the work is.
-
 ### Breaking: Unity 2022.3 LTS
 
-The manifest previously claimed 2019.4 while using APIs that were never available there. It now
-says what it means.
+The manifest declared 2019.4 but used APIs that were never available there. It now declares 2022.3
+LTS.
 
-### Breaking: UniRx is gone, and was not replaced
+### Breaking: UniRx removed
 
-There is no reactive layer any more. `SyncBehaviour<T>.ModelCreated()` and `ModelDestroyed()` were
-methods returning `IObservable<>`; they are now plain static events:
+UniRx was removed without a replacement. `SyncBehaviour<T>.ModelCreated()` and `ModelDestroyed()`
+returned `IObservable<>`. They are now static events:
 
 ```csharp
 // 1.x
@@ -325,14 +303,14 @@ private void OnEnable() => SyncBehaviour<Player>.ModelCreated += Register;
 private void OnDisable() => SyncBehaviour<Player>.ModelCreated -= Register;
 ```
 
-**Read that second half carefully.** A UniRx subscription with `AddTo(this)` unsubscribed itself
-when the component was destroyed. A static event does not. Miss the `-=` and you leak the handler
-and the destroyed object behind it, and with *Enter Play Mode Options → Disable Domain Reload* on,
-the leak survives into the next Play session and everything fires twice.
+**Unsubscribe yourself.** A UniRx subscription with `AddTo(this)` ended with the component. A static
+event subscription does not. A missing `-=` leaks the handler and the destroyed object behind it.
+With *Enter Play Mode Options → Disable Domain Reload* on, the leak survives into the next Play
+session and everything fires twice.
 
-`this.ObserveEveryValueChanged(...)` has no replacement either. Colibri's own change detection now
-runs in one `Update` for the whole application; if you were using UniRx for your own polling, that
-is now your own dependency to add.
+`this.ObserveEveryValueChanged(...)` has no replacement either. Colibri's own change detection runs
+in one `Update` for the whole application. For your own polling with UniRx, add UniRx as your own
+dependency.
 
 ### Breaking: `WebServerConnection.Connected` is a `Task`
 
@@ -344,21 +322,19 @@ await WebServerConnection.Instance.Connected;
 WebServerConnection.Instance.Connected.Subscribe(isConnected => ...);
 ```
 
-For the subscription form, use the `OnConnected` / `OnDisconnected` events instead.
-`OnDisconnected` is raised exactly once for every `OnConnected`, and never for an attempt that did
-not connect.
+Replace the subscription with the `OnConnected` and `OnDisconnected` events. `OnDisconnected` is
+raised exactly once for every `OnConnected`, and never for an attempt that did not connect.
 
-"Connected" now means the server has spoken: the task completes, and `OnConnected` fires, once the
-first frame from the server arrives, not as soon as the TCP connection is accepted. While
-disconnected, `Connected` is a fresh task that waits for the next connection. It is cancelled when
-the component is disabled and when the server refuses this client's protocol version, so an `await`
-on it can throw `TaskCanceledException`.
+The task completes, and `OnConnected` fires, when the first frame from the server arrives, not when
+the TCP connection is accepted. While disconnected, `Connected` is a new task that waits for the
+next connection. It is cancelled when the component is disabled and when the server refuses this
+client's protocol version, so an `await` on it can throw `TaskCanceledException`.
 
-### Breaking: `ObservableModel<T>` and `ObservableManager<T>` are deleted
+### Breaking: `ObservableModel<T>` and `ObservableManager<T>` removed
 
-They spoke `channel::register`, `channel::deregister` and bare `add`/`update`/`request`/`remove`. A
-2.0 server registers none of those commands, so the API was already dead against the server it
-targeted. Port to `SyncBehaviour<T>` and `SyncBehaviourManager<T>`, which cover the same ground:
+They used commands a 2.0 server does not register: `channel::register`, `channel::deregister` and
+the bare `add`, `update`, `request` and `remove`. Port to `SyncBehaviour<T>` and
+`SyncBehaviourManager<T>`, which cover the same ground:
 
 ```csharp
 public class Player : SyncBehaviour<Player>
@@ -370,52 +346,50 @@ public class Player : SyncBehaviour<Player>
 public class PlayerManager : SyncBehaviourManager<Player> { }
 ```
 
-Put `PlayerManager` in the scene with a prefab in its `Template` field, and a `Player` created by
-any client appears on all of them.
+Put `PlayerManager` in the scene with a prefab in its `Template` field. A `Player` created by any
+client then appears on all clients.
 
-### Breaking: no more vendored Newtonsoft
+### Breaking: Newtonsoft.Json is a package dependency
 
-`Assets/Colibri/Plugins/Newtonsoft.Json.dll` is gone, replaced by the
-`com.unity.nuget.newtonsoft-json` package, declared as a real dependency. **Delete your own copy if
-you have one**: two Newtonsoft assemblies in one project is a compile error, not a warning.
+The `com.unity.nuget.newtonsoft-json` package, declared as a dependency, replaces
+`Assets/Colibri/Plugins/Newtonsoft.Json.dll`. **Delete your own copy if you have one.** Two
+Newtonsoft assemblies in one project are a compile error, not a warning.
 
-Installing Colibri is now one git URL and nothing else: no UniRx, no UniTask, no NuGetForUnity.
+Installing Colibri now takes one git URL, without UniRx, UniTask or NuGetForUnity.
 
-### Breaking: the samples are no longer compiled into your project
+### Breaking: samples are not compiled into your project
 
-`Samples/` was a live package folder, so every consumer compiled `HCIKonstanz.Colibri.Samples.*`
-into the Colibri assembly whether they wanted it or not, and *Package Manager → Import Sample*
-then made a second copy of the same types.
+In 1.x, every project compiled `Samples/` (`HCIKonstanz.Colibri.Samples.*`) into the Colibri
+assembly, and *Package Manager → Import Sample* added a second copy of the same types. Samples now
+live in `Samples~`, which Unity does not compile. Their types exist only after you import the
+sample, and then belong to your project, in `Assets/Samples/` and `Assembly-CSharp`.
 
-Samples now live in `Samples~`, which Unity does not compile. Those types exist only after you
-import the sample, and then they are yours, in `Assets/Samples/`, in `Assembly-CSharp`. **Code that
-referenced a sample type without importing the sample no longer compiles**; import the sample, or
-copy the two files you actually wanted.
+**Code that uses a sample type without importing the sample no longer compiles.** Import the sample,
+or copy the files you need. Prefabs are unaffected. `[RemoteLogger]` and `[SyncTransformManager]`
+can still be dragged from `Packages/Colibri/Prefabs`.
 
-Prefabs are unaffected. `[RemoteLogger]` and `[SyncTransformManager]` are still draggable straight
-out of `Packages/Colibri/Prefabs`.
+### Breaking: `LockFreeQueue` removed
 
-### Breaking: `LockFreeQueue` is gone
-
-`LockFreeQueue<T>`, `LockFreeLinkPool<T>`, `SingleLinkNode<T>` and `SyncMethods` were public in
-`HCIKonstanz.Colibri.Networking`. Colibri no longer uses them, and they were only safe with a single
-producer, so they were deleted. If your code used them, use
-`System.Collections.Concurrent.ConcurrentQueue<T>`, which is safe with any number of producers and
-consumers.
+The public types `LockFreeQueue<T>`, `LockFreeLinkPool<T>`, `SingleLinkNode<T>` and `SyncMethods` in
+`HCIKonstanz.Colibri.Networking` were removed. Colibri no longer used them, and they were safe only
+with a single producer. Use `System.Collections.Concurrent.ConcurrentQueue<T>`, which is safe with
+any number of producers and consumers.
 
 ---
 
-## Optional TLS
+## TLS
 
-TLS is optional in 2.0. To turn it on, set `TLS_CERT` and `TLS_KEY` on the server and tick *Server
-supports SSL/TLS?* in each Unity app (see TLS in the [server](colibri-server/docs/guide.md#tls) and
-[Unity](colibri-unity/docs/guide.md#tls) guides). That setting (`ColibriConfig.IsSSL`) now covers
-the TCP connection too, not only the Store. A deployment with only the web port behind a TLS proxy,
-such as nginx on 443, and a plain TCP port 9012 therefore needs TLS for 9012 as well once the
-setting is ticked: `TLS_CERT` and `TLS_KEY`, or TLS termination for 9012 in the proxy. Otherwise
-the client reports that the server did not answer the TLS handshake. Existing `ColibriConfig`
-assets load unchanged, with both new certificate settings off or empty. 1.x clients cannot use
-TLS. The protocol version does not change.
+TLS is optional in 2.0. To turn it on, set `TLS_CERT` and `TLS_KEY` on the server, and tick
+*Server supports SSL/TLS?* in each Unity app (see TLS in the
+[server](colibri-server/docs/guide.md#tls) and [Unity](colibri-unity/docs/guide.md#tls) guides).
+
+- The setting (`ColibriConfig.IsSSL`) now covers the TCP connection too, not only the Store.
+- With the setting ticked, a deployment with only the web port behind a TLS proxy, such as nginx on
+  443, and a plain TCP port 9012 needs TLS on 9012 as well. Set `TLS_CERT` and `TLS_KEY`, or
+  terminate TLS for 9012 in the proxy. Otherwise the client reports that the server
+  `did not answer the TLS handshake`.
+- Existing `ColibriConfig` assets load unchanged, with both new certificate settings off or empty.
+- 1.x clients cannot use TLS. The protocol version does not change.
 
 ---
 
