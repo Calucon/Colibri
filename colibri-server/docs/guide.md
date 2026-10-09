@@ -137,46 +137,40 @@ TLS files stop it too ([Startup errors](#startup-errors)).
 
 ## TLS
 
-With `TLS_CERT` and `TLS_KEY` set, the server encrypts both client ports with one certificate: the
-TCP port (9012) accepts only TLS, and the web port (9011) serves only HTTPS and WSS, the admin UI
-included. With neither set, nothing changes. There is no mixed mode, so once TLS is on, every
-client has to use it:
+With `TLS_CERT` and `TLS_KEY` set, the TCP port (9012) accepts only TLS and the web port (9011) serves
+only HTTPS and WSS, admin UI included, both with one certificate. Without them, both stay
+unencrypted. There is no mixed mode, so every client must use TLS:
 
-- **Unity:** tick *Server supports SSL/TLS?* in the Colibri configuration; see
-  [TLS](../../colibri-unity/docs/guide.md#tls) in the Unity guide.
-- **Web clients and the admin UI:** use `https://<host>:9011` or `wss://<host>:9011`; see
-  [TLS](../../colibri-web/docs/guide.md#tls) in the web guide. `http://<host>:9011` then gets no
-  answer: the connection is closed, not redirected.
+- **Unity:** tick *Server supports SSL/TLS?* in the Colibri configuration
+  ([Unity guide](../../colibri-unity/docs/guide.md#tls)).
+- **Web clients and admin UI:** use `https://<host>:9011` or `wss://<host>:9011`
+  ([web guide](../../colibri-web/docs/guide.md#tls)). `http://<host>:9011` is closed without an
+  answer, not redirected.
 
-Inside TLS the frames are the same, and the protocol version does not change (see
-[TLS](protocol.md#tls) in the protocol docs). TLS encrypts the connections, but does not
-authenticate clients: anyone who can reach the ports can still join any app. The voice relay (UDP)
-stays unencrypted.
+Frames and protocol version are unchanged inside TLS ([protocol](protocol.md#tls)). TLS does not
+authenticate clients: anyone who can reach the ports can still join any app. Voice (UDP) stays
+unencrypted.
 
 ### Enabling TLS
 
-| variable | |
-| --- | --- |
-| `TLS_CERT` | PEM file of the certificate, followed by its chain (Let's Encrypt: `fullchain.pem`) |
-| `TLS_KEY` | PEM file of its private key, without a passphrase (Let's Encrypt: `privkey.pem`) |
-
-Set both or neither. Use absolute paths: a relative one is resolved like `DATA_ROOT`, from
-`dist/server`. RSA and EC certificates both work. The server never makes a certificate itself: use
-one from a certificate authority, such as Let's Encrypt or your institution, or a
+Set `TLS_CERT` to the PEM file of the certificate, followed by its chain (Let's Encrypt:
+`fullchain.pem`), and `TLS_KEY` to the PEM file of its private key, without a passphrase (Let's
+Encrypt: `privkey.pem`). Set both or neither, as absolute paths. Relative paths resolve from
+`dist/server`, like `DATA_ROOT`. RSA and EC certificates both work. The server does not create
+certificates. Use one from a certificate authority such as Let's Encrypt or your institution, or a
 [self-signed one](#a-self-signed-certificate).
 
-At startup the log then says `Web server listening on 0.0.0.0:9011, HTTPS and WSS only` and
-`Starting Colibri TCP server on 0.0.0.0:9012, TLS only`, and names the certificate:
+At startup the log shows `Web server listening on 0.0.0.0:9011, HTTPS and WSS only`,
+`Starting Colibri TCP server on 0.0.0.0:9012, TLS only` and the certificate:
 
 ```
 TLS is on, with the certificate in /srv/colibri/certs/fullchain.pem and the key in /srv/colibri/certs/privkey.pem: for DNS:colibri.example.org, IP Address:192.0.2.10, self-signed, valid until 2036-10-05T12:00:00.000Z; SHA-256 fingerprint 83:88:B1:CD:...
 ```
 
-The fingerprint is what a Unity app can pin as its *Server certificate SHA-256*; case and colons do
-not matter there. A certificate issued by itself is called `self-signed`: openssl's default
-self-signed certificate, a server-only one such as PowerShell's `New-SelfSignedCertificate` makes,
-or colibri-unity's test certificate. For those the line goes on to say how a Unity app and a
-browser come to accept it. A certificate from an authority says `issued by <issuer>` instead.
+A Unity app can pin the fingerprint as *Server certificate SHA-256*. Case and colons are ignored
+there. A self-issued certificate shows as `self-signed`, e.g. openssl's default, a server-only one from
+PowerShell's `New-SelfSignedCertificate`, or colibri-unity's test certificate. The line then says how
+a Unity app and a browser can accept it. A certificate from an authority shows `issued by <issuer>`.
 
 ### A self-signed certificate
 
@@ -184,13 +178,12 @@ browser come to accept it. A certificate from an authority says `issued by <issu
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -keyout privkey.pem -out fullchain.pem -days 3650 -subj "/CN=colibri.example.org" -addext "subjectAltName=DNS:colibri.example.org,IP:192.0.2.10"
 ```
 
-Replace `colibri.example.org` and `192.0.2.10` with the name and the IP address clients connect
-to. For RSA, replace `-newkey ec -pkeyopt ec_paramgen_curve:prime256v1` with `-newkey rsa:2048`. On
-Windows, Git for Windows ships openssl (in `usr/bin`). The certificate is valid for 10 years.
+Replace `colibri.example.org` and `192.0.2.10` with the name and IP address clients connect to. For
+RSA, use `-newkey rsa:2048` instead of `-newkey ec -pkeyopt ec_paramgen_curve:prime256v1`. Git for
+Windows ships openssl in `usr/bin`. The certificate is valid for 10 years.
 
-Unity apps accept it by its fingerprint (see [TLS](../../colibri-unity/docs/guide.md#tls) in the
-Unity guide). A browser has to be told once to trust it: open `https://<host>:9011` and accept it,
-or install it.
+Unity apps accept it by fingerprint ([Unity guide](../../colibri-unity/docs/guide.md#tls)). A browser
+must trust it once: open `https://<host>:9011` and accept it, or install it.
 
 ### TLS with Docker
 
@@ -203,87 +196,87 @@ or install it.
       - ./certs:/srv/colibri/certs:ro
 ```
 
-- **Mount the directory, not the two files.** A bind mount of a single file stays on the file it
-  found at start, so a renewal that replaces the file is never seen.
-- **uid 1000 has to be able to read the key**: the server runs as the image's `node` user. openssl
-  writes `privkey.pem` readable for its owner only, so give it to uid 1000
-  (`sudo chown 1000 certs/privkey.pem`) if that is not you.
-- **Let's Encrypt** needs one more step. Its `live/` entries are symbolic links into
-  `../../archive`, which resolve only with the whole `/etc/letsencrypt` mounted, and it keeps
-  `privkey.pem` readable for root only. Copy both files instead, with a certbot deploy hook, which
-  certbot runs again after every renewal. For example, as
-  `/etc/letsencrypt/renewal-hooks/deploy/colibri.sh` (executable), with `/opt/colibri/certs`
-  mounted at `/srv/colibri/certs`:
+- **Mount the directory, not the two files.** A single-file bind mount stays on the file it found at
+  start and misses a renewal that replaces it.
+- **uid 1000 must be able to read the key.** The server runs as the image's `node` user. openssl
+  creates `privkey.pem` readable by its owner only. If that is not uid 1000:
+  `sudo chown 1000 certs/privkey.pem`.
+- **Let's Encrypt:** `live/` holds symbolic links into `../../archive`, which resolve only with all of
+  `/etc/letsencrypt` mounted, and `privkey.pem` is readable by root only. Copy both files with a
+  certbot deploy hook, which certbot runs after every renewal. Example
+  `/etc/letsencrypt/renewal-hooks/deploy/colibri.sh` (executable), with `/opt/colibri/certs` mounted
+  at `/srv/colibri/certs`:
 
   ```sh
   #!/bin/sh
   install -o 1000 -g 1000 -m 600 "$RENEWED_LINEAGE/fullchain.pem" "$RENEWED_LINEAGE/privkey.pem" /opt/colibri/certs/
   ```
 
-  Run it once by hand for the certificate you have now, with
+  Run it once manually for the current certificate, with
   `RENEWED_LINEAGE=/etc/letsencrypt/live/<your domain>`.
-- The `docker-compose.yml` in `colibri-server` has these lines, commented out.
-- With TLS on, the image's health check uses HTTPS without checking the certificate, so a container
-  with a self-signed certificate is healthy too.
+- `colibri-server/docker-compose.yml` has these lines, commented out.
+- With TLS on, the health check uses HTTPS without verifying the certificate, so a container with a
+  self-signed certificate is reported healthy.
 
 ### Renewal
 
-The server reads both files every 10 s, and uses new contents once two reads in a row agree, so a
-renewed certificate is in use within about 20 s, without a restart. Open connections keep the
-certificate they started with.
+The server reads both files every 10 s and switches once two consecutive reads match, so a renewed
+certificate is in use within about 20 s, without a restart. Open connections keep their certificate.
 
-New contents it cannot use (for example, the certificate renewed but the key not replaced yet), or
-files it cannot read, get one warning, and the old certificate stays in use. The server also warns
-once when the certificate is not valid yet, expires within 7 days (a short-lived certificate: in the
-last fifth of its lifetime), or has expired.
+If the new contents cannot be used, e.g. the certificate is renewed but the key not yet replaced, or
+the files cannot be read, the server warns once and keeps the old certificate. It also warns once when
+the certificate is not valid yet, has expired, or expires within 7 days or within the last fifth of its
+lifetime, whichever is shorter.
 
 ### Startup errors
 
-With TLS configured, the server refuses to start, with a message that names the variable, the file
-and the fix, when:
+With TLS configured, these stop the server at startup. Each message names the variable, the file and
+the fix.
 
-- only one of `TLS_CERT` and `TLS_KEY` is set;
-- a file is missing, or is a directory;
-- the server's uid cannot read it;
-- the certificate and the key are swapped;
-- the key belongs to another certificate, including an RSA key with an EC certificate or the other
-  way round, which OpenSSL alone would accept and then fail every handshake;
-- the key has a passphrase.
+| Message | Cause | Fix |
+| --- | --- | --- |
+| `TLS_CERT is set, but TLS_KEY is not.` or the reverse | Only one is set | Set both or neither |
+| `Cannot read TLS_CERT (<path>): ...` or `TLS_KEY` | Missing, a directory, or not readable for the server's uid | Name a PEM file the server can read |
+| `TLS_CERT (<path>) holds no certificate the server can use ...` | Not a PEM certificate, e.g. swapped with the key | Point `TLS_CERT` at the certificate |
+| `TLS_KEY (<path>) holds no private key the server can use ...` | Not a PEM private key | Point `TLS_KEY` at the key |
+| `TLS_KEY (<path>) is not the private key of the certificate in TLS_CERT ...` | Key of another certificate, also an RSA key with an EC certificate or the reverse, which OpenSSL alone accepts and then fails every handshake | Use the key that belongs to the certificate |
+| `TLS_KEY (<path>) is protected by a passphrase ...` | The key has a passphrase | `openssl pkey -in <protected key> -out <key>` |
 
 ### TLS in the log
 
-| message | what it means |
-| --- | --- |
-| WARN `Refusing a connection from <address> (Unity client '<name>', app '<app>'): it does not use TLS, and this server's TCP port accepts only TLS connections ...` | A Unity app without *Server supports SSL/TLS?* ticked. A Colibri 1.x client, which cannot use TLS, gets its own variant |
-| WARN `Refusing a connection from <address>: it starts a TLS handshake, but this server's TCP port does not use TLS ...` | A Unity app with the setting ticked, on a server without TLS: untick it, or set `TLS_CERT` and `TLS_KEY` |
-| INFO `TLS handshake with <address> failed: ...` | Says why. When the client refused the certificate, or hung up during the handshake (which is how many clients refuse one), it adds what to check about the certificate |
-| WARN `TLS_CERT or TLS_KEY has changed, but cannot be used: ... Still serving the certificate with SHA-256 fingerprint ...` | A renewal is incomplete or broken; see [Renewal](#renewal) |
+| Message | Cause | Fix |
+| --- | --- | --- |
+| WARN `Refusing a connection from <address> (Unity client '<name>', app '<app>'): it does not use TLS ...` | *Server supports SSL/TLS?* not ticked | Tick it |
+| WARN `Refusing a connection from <address>: it looks like a Colibri 1.x client, which cannot use TLS ...` | Colibri 1.x client | Upgrade to 2.x |
+| WARN `Refusing a connection from <address>: it starts a TLS handshake, but this server's TCP port does not use TLS ...` | *Server supports SSL/TLS?* ticked, server without TLS | Untick it, or enable TLS |
+| INFO `TLS handshake with <address> failed: ...` | Gives the reason. If the client refused the certificate or hung up during the handshake, as many clients do to refuse one, it adds what to check. | See the message |
+| WARN `TLS_CERT or TLS_KEY has changed, but cannot be used: ... Still serving the certificate with SHA-256 fingerprint ...` | Incomplete or broken renewal | See [Renewal](#renewal) |
 
-The first three are logged at most once a minute per address, the repeats at debug level.
+Refusals and failed handshakes are logged at most once a minute per address, repeats at debug level.
 
 ### Reverse proxy
 
-TLS can also end in a reverse proxy you already run, in front of a server with `TLS_CERT` and
-`TLS_KEY` unset: for the TCP port, nginx's `stream` module with `listen 9012 ssl`, or a Traefik TCP
-router with TLS. Colibri needs no change for that. The drawback: the server then sees every client
-at the proxy's address, in the log and in the warnings it limits per address.
+TLS can instead terminate in an existing reverse proxy, with `TLS_CERT` and `TLS_KEY` unset. For the
+TCP port, use nginx's `stream` module with `listen 9012 ssl`, or a Traefik TCP router with TLS.
+Colibri needs no changes, but then sees every client at the proxy's address, in the log and in the
+per-address limits on warnings.
 
 ### Performance
 
-Measured on a shared 4-core Linux host with Node 24, TLS against plain, with 30 to 60 Unity-like
+TLS compared with unencrypted, on a shared 4-core Linux host with Node 24, with 30 to 60 Unity-like
 clients sending 10 objects each at 20 to 30 Hz, and as many web clients:
 
-- **Bytes:** about 15% more from Unity to the server (29 bytes per TLS 1.2 record, on frames of
-  about 190 bytes), 11% more from the server to Unity, and 3 to 4% more on WSS.
-- **CPU:** the TCP worker thread, which encrypts and decrypts the Unity traffic, uses 4 to 5
-  percentage points more (about +10%). The main thread uses 11 to 17 points less, because Node packs
-  many small WSS frames into fewer TLS records and send calls; behind a TLS-terminating proxy, that
-  saving does not happen.
-- **Latency:** the median is unchanged, within noise.
-- **Connecting:** about 1 ms more for the TCP connect, and a median TLS handshake of 4 to 5 ms
-  while 120 clients connect at once.
+- **Bytes:** about +15% from Unity to the server (29 bytes per TLS 1.2 record, frames of about 190
+  bytes), +11% from the server to Unity, +3 to 4% on WSS.
+- **CPU:** +4 to 5 percentage points (about +10%) on the TCP worker thread, which encrypts and
+  decrypts the Unity traffic. 11 to 17 points less on the main thread, because Node packs many small
+  WSS frames into fewer TLS records and send calls. Behind a TLS-terminating proxy, this saving is
+  lost.
+- **Latency:** median unchanged, within noise.
+- **Connecting:** about +1 ms for the TCP connect. Median TLS handshake 4 to 5 ms with 120 clients
+  connecting at once.
 
-The cost of TLS on a headset itself was not measured.
+The cost of TLS on a headset was not measured.
 
 ## Features
 
