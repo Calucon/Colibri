@@ -213,82 +213,65 @@ The detection is a guess, so by design:
 
 ### Heartbeat / latency
 
-The server sends a `heartbeat` frame every 100ms to each TCP client whose handshake it accepted,
-until the connection closes, carrying `process.hrtime.bigint()` as the ping timestamp; a client
-whose previous heartbeat is still waiting to go out is skipped (see [Backpressure](#backpressure)).
-A client is expected to echo the frame back verbatim. The server relays an echoed heartbeat into
-the normal message pipeline as a synthetic `colibri`/`latency` message so `MeasureLatency`'s
-round-trip accounting handles it the same way it handles a web client's latency ping - this is the
-only place a `heartbeat` frame travels client→server. Merging the heartbeat and the latency ping
-into one frame halves the idle per-client packet rate compared to running them as two independent
-100ms timers.
+Every 100 ms, the server sends a `heartbeat` frame with `process.hrtime.bigint()` as ping timestamp to
+each TCP client whose handshake it accepted, until the connection closes. A client whose previous
+heartbeat has not gone out yet is skipped ([Backpressure](#backpressure)). The client echoes the frame
+unchanged, the only `heartbeat` frame sent from client to server. The server feeds the echo into the
+message pipeline as a synthetic `colibri`/`latency` message, so `MeasureLatency` computes the round
+trip as for a web client's latency ping. One frame for both halves the idle packet rate per client.
 
-Because the server is never silent for long, a client can treat silence as a dead connection:
-colibri-unity drops a session after 2s without any frame - including while it waits for the
-first one - and reconnects.
+The server is never silent for long, so a client can treat silence as a dead connection. colibri-unity
+drops a session after 2 s without a frame, also while waiting for the first one, and reconnects.
 
-The server does the same the other way round. It takes a TCP client that has sent nothing at
-all - no heartbeat echo, no message - for `TCP_IDLE_TIMEOUT_SECONDS` (10 s by default, `0` turns
-this off) for gone, e.g. a headset that left the Wi-Fi without closing its connection. It logs a
-warning naming the client, closes the connection and handles it like any other disconnect: the
-other clients of the app see `client::disconnected`, and the app loses its models if that was its
-last client. Echoing every heartbeat is enough to stay connected, as long as the echo comes from a
-thread that keeps running while the application is busy; colibri-unity echoes from its receive
-loop, off Unity's main thread. A connection that has not sent a handshake within the same time is
-closed too. Every connection also has TCP keepalive switched on. Socket.IO clients are not covered
-by this setting: Socket.IO's own ping notices one that has gone, by default within 45 s.
+The server does the same. A TCP client that sends nothing, neither heartbeat echo nor message, for
+`TCP_IDLE_TIMEOUT_SECONDS` (default 10 s, `0` disables it) counts as gone, e.g. a headset that left the
+Wi-Fi without closing its connection. The server logs a warning naming it, closes the connection and
+handles it like any disconnect: the app's other clients receive `client::disconnected`, and the app
+loses its models if it was the last client. Echoing every heartbeat keeps a client connected, if the
+echo comes from a thread that keeps running while the application is busy. colibri-unity echoes from
+its receive loop, off Unity's main thread. A connection without a handshake within the same time is
+closed too. All connections have TCP keepalive enabled. Socket.IO clients are not covered: Socket.IO's
+own ping detects a lost one, by default within 45 s.
 
-A message larger than 64 KiB has no heartbeat inside it, so a client reading one can echo nothing
-until it is through. Nor can the server watch it being read: the kernel's send buffer, and those of
-a proxy in between such as Docker's port forwarding, take megabytes at once. So until a client
-echoes a heartbeat sent after the latest such message written to it, it may stay silent one more
-`TCP_IDLE_TIMEOUT_SECONDS` for every 64 KiB of the largest one written to it since it last did,
-the rate the heartbeat after every 64 KiB allows for (about 6.4 KiB/s at the default), but at most
-6 more: 70 s in all at the default, enough for a 4 MiB message read at about 60 KB/s or faster. A
-client that reads it more slowly is disconnected, and the warning names the size of the message it
-was given extra time for. A client that is gone by the time such a message is sent to it, or goes
-while it is being read, is noticed that much later. The extra time ends only once the client
-echoes a heartbeat sent after the latest such message, so a client that does not echo heartbeats
-keeps it from its first such message on.
+A message over 64 KiB contains no heartbeat, so a client reading it cannot echo until it is through.
+The server cannot observe the reading, since the kernel's send buffer, and those of a proxy such as
+Docker's port forwarding, take megabytes at once. Until a client echoes a heartbeat sent after the
+latest such message, it may stay silent one extra `TCP_IDLE_TIMEOUT_SECONDS` per 64 KiB of the largest
+such message since its last echo, the rate a heartbeat every 64 KiB assumes (about 6.4 KiB/s at the
+default), at most 6 extra. That is 70 s in total at the default, enough for a 4 MiB message at about
+60 KB/s or faster. A slower client is disconnected, and the warning names the message size. A client
+that is gone when such a message is sent, or goes while reading it, is detected that much later. A
+client that never echoes heartbeats keeps the extra time from its first such message on.
 
-Socket.IO clients are not sent that frame - they get a `colibri`/`latency` event directly, also
-every 100ms, from the same `MeasureLatency` timer.
-
-**This is not a version signal.** The latency broadcast looks like one - only a current server
-sends it, surely? - but it was added in colibri-server **1.2.0**, so every 1.2.x and 1.3.x server
-sends it while still speaking the old protocol. Detecting an out-of-date server keys on
-`protocol::accepted` instead, for exactly this reason.
+Socket.IO clients get no heartbeat frame but a `colibri`/`latency` event every 100 ms from
+`MeasureLatency`. It is not a version signal: colibri-server 1.2.0 and later send it
+([Detecting an out-of-date server](#detecting-an-out-of-date-server)).
 
 ### Message
 
-Carries an application message: `channel` and `command` identify the message (e.g. channel
-`myApp::position`, command `model::update`), and `payload` is an opaque byte range - when the
-server relays the message (see [Relayed messages](#relayed-messages)), it passes the
-payload on verbatim to other TCP clients without ever decoding it as a string, and only decodes it
-(via `Payload.fromBytes(...).asValue()`) when a hook needs to inspect it or when relaying
-cross-transport to a Socket.IO client. The one exception is a `model::update` that was held back
-and merged (see [Inbound limits](#inbound-limits)), which is passed on re-encoded.
+An application message. `channel` and `command` identify it, e.g. channel `myApp::position`, command
+`model::update`. `payload` is an opaque byte range, passed to other TCP clients byte for byte and
+decoded (`Payload.fromBytes(...).asValue()`) only when a hook inspects it or when relaying to a
+Socket.IO client. Exception: a `model::update` that was held back and merged
+([Inbound limits](#inbound-limits)) is passed on re-encoded.
 
 ### `broadcast::` commands
 
-The `broadcast::` prefix of a `command` is what makes the server relay the message to the other
-clients of the sender's app (see [Relayed messages](#relayed-messages)). Nothing else
-on the wire marks such a message: the prefix is part of the `command` string. colibri-unity's
-`Sync.Send` and colibri-web's `Sync.send*` use it for state, position and similar continuous
-updates, with the commands below. `BroadcastLogger`
-(`src/server/modules/command-hooks/broadcast-logger.ts`) matches on that prefix and logs each one
-at Debug level, tagged `metadata.broadcastTraffic = true`. The admin log page's "Sync traffic"
-toggle filters on that tag specifically - independent of the Error/Warn/Info/Debug level
-checkboxes - since this traffic is typically continuous and would otherwise drown out everything
-else; see `WebLog.isVisibleToClient` (`src/server/modules/web/web-log.ts`).
+The `broadcast::` prefix of `command` makes the server relay the message
+([Relayed messages](#relayed-messages)). Nothing else on the wire marks it. colibri-unity's `Sync.Send`
+and colibri-web's `Sync.send*` use the commands in [Payload shapes](#payload-shapes) for state, position
+and other continuous updates.
+
+`BroadcastLogger` (`src/server/modules/command-hooks/broadcast-logger.ts`) logs each one at debug level
+with `metadata.broadcastTraffic = true`. The admin UI's *Sync traffic* toggle filters on that tag,
+independent of the level checkboxes, because this continuous traffic would drown out everything else.
+See `WebLog.isVisibleToClient` (`src/server/modules/web/web-log.ts`).
 
 #### Payload shapes
 
-The server never inspects a `broadcast::` payload, so the shape is an agreement between the
-clients alone. It went unwritten through v1 and v2, and each implementation duly invented its own
-for colour. This is the agreement:
+The server never inspects a `broadcast::` payload, so the shape is a convention between the clients:
 
-| command | JSON payload | colibri-unity | colibri-web |
+| Command | JSON payload | colibri-unity | colibri-web |
 | --- | --- | --- | --- |
 | `broadcast::bool` | `true` | `Send(ch, bool)` | `sendBool` |
 | `broadcast::int` | `5` | `Send(ch, int)` | none (see below) |
@@ -300,121 +283,109 @@ for colour. This is the agreement:
 | `broadcast::color` | `"#RRGGBBAA"` **or** `[r, g, b, a]` | `Send(ch, Color)` → string | `sendColor` → array |
 | `broadcast::json` | any JSON value (colibri-web sends an object) | `Send(ch, JToken)` | `sendJson` |
 
-Every command except `broadcast::json` also has an array form: append `[]`, and the payload is
-an array of the above (so `broadcast::vector3[]` is `[[x,y,z], …]`). Two commands need more
-than a row:
+Every command except `broadcast::json` has an array form: append `[]`, and the payload is an array of
+the values above, e.g. `broadcast::vector3[]` carries `[[x,y,z], …]`.
 
-**Colour has two forms on the wire, and receivers must accept both.** Unity writes the HTML string
-`ColorUtility.ToHtmlStringRGBA` produces; colibri-web writes `[r, g, b, a]` with each component
-0-1. Neither can be changed now without breaking the peers already sending it, so both clients
-take either form on receive - `JsonExtensions.ToColor` in colibri-unity, `ColorValue` plus the
-exported `toHexColor`/`toRgbaColor` in colibri-web - and a wrong-shaped payload warns and falls
-back to opaque black rather than throwing. A `[Sync] Color` model field is subject to the same
-split, since it serializes through the same conversions.
+**Receivers must accept both colour forms.** Unity writes the HTML string from
+`ColorUtility.ToHtmlStringRGBA`. colibri-web writes `[r, g, b, a]` with components from 0 to 1.
+Changing either would break peers already sending it, so both clients accept both forms:
+`JsonExtensions.ToColor` in colibri-unity, `ColorValue` and the exported `toHexColor`/`toRgbaColor` in
+colibri-web. A wrong-shaped payload logs a warning and falls back to opaque black instead of throwing.
+A `[Sync] Color` model field uses the same conversions and has the same two forms.
 
-**`broadcast::int` is send-side Unity-only.** JavaScript has one number type, so colibri-web
-cannot tell `5` from `5.0` and always emits `broadcast::float`; `sendInt` is an alias kept for
-API symmetry with Unity. Unity routes the two commands to separate listener lists, so a Unity
-client must receive web-sent numbers with `Sync.Receive<float>`. The reverse works: colibri-web's
-`receiveNumber` listens for both commands.
+**Only Unity sends `broadcast::int`.** JavaScript has one number type, so colibri-web cannot tell `5`
+from `5.0` and always sends `broadcast::float`. `sendInt` is an alias kept for symmetry with the Unity
+API. Unity routes the two commands to separate listener lists, so a Unity client receives numbers from
+web clients with `Sync.Receive<float>`. colibri-web's `receiveNumber` listens for both commands.
 
-**`log` is the one channel that is not JSON.** `ClientLogger` treats a payload on it as human
-readable text, so colibri-unity sends it as raw utf8 (`WebServerConnection.EncodePayload`) and the
-server unwraps a JSON string value before logging it - otherwise a web client's log line reaches
-the admin UI with the JSON quotes still around it.
+**The `log` channel is not JSON.** `ClientLogger` treats its payload as text, so colibri-unity sends it
+as raw UTF-8 (`WebServerConnection.EncodePayload`). The server unwraps a JSON string value before
+logging it, so a web client's log line reaches the admin UI without JSON quotes.
 
 ### Frame parsing
 
-`FrameReader` (`src/server/modules/networking/protocol.ts`) is a growable buffer with read/write
-cursors that TCP data events are appended into. It yields every complete frame currently
-buffered and only copies the trailing partial frame (never the whole stream) when compacting -
-this is what keeps a long-lived, frequently-fragmented connection from paying an
-O(streamLength²) `Buffer.concat` cost. A malformed or oversized frame (declared length `<= 0` or
-greater than the reader's configured max) throws `FrameError`, which the caller treats as fatal
-for that connection: it logs the error and closes the connection.
+`FrameReader` (`src/server/modules/networking/protocol.ts`) is a growable buffer with read and write
+cursors that TCP data is appended to. It returns every complete frame buffered. When compacting, it
+copies only the trailing partial frame, which avoids an O(streamLength²) `Buffer.concat` cost on a
+long-lived, often fragmented connection. A malformed or oversized frame (declared length `<= 0` or above
+the reader's maximum) throws `FrameError`, which is fatal for the connection. The server logs
+`Invalid frame from client <id>, discarding buffer and terminating connection: <reason>` and closes it.
 
-When the bytes that failed are the Colibri 1.x framing - three NUL bytes, then `h` or an ASCII
-digit - it throws the subclass `V1FramingError` instead, which is how the server recognises a 1.x
-client (see [Version checking](#version-checking)). No v3 frame can start that way, since those
-four bytes read as a length of at least 16 MiB. The 1.x handshake starts `\0\0\0h`, which reads
-as `Invalid frame length: 1744830464` (`0x68000000`, `'h' << 24`).
+If the failing bytes are the Colibri 1.x framing (three NUL bytes, then `h` or an ASCII digit), it
+throws the subclass `V1FramingError`, which is how the server detects a 1.x client
+([Version checking](#version-checking)). No v3 frame can start that way, because these four bytes read
+as a length of at least 16 MiB. The 1.x handshake starts with `\0\0\0h`, which reads as
+`Invalid frame length: 1744830464` (`0x68000000`, `'h' << 24`).
 
 ### TLS
 
-With `TLS_CERT` and `TLS_KEY` set (see [TLS](guide.md#tls) in the guide), the TCP port accepts only
-TLS. TLS wraps the framing above unchanged, and the protocol version is not bumped: past the TLS
-handshake, a client sends and receives exactly the frames it would without TLS.
+With `TLS_CERT` and `TLS_KEY` set ([TLS](guide.md#tls) in the guide), the TCP port accepts only TLS.
+TLS wraps the framing unchanged, and the protocol version stays the same: after the TLS handshake, a
+client sends and receives the same frames as without TLS.
 
-On the TLS port the server reads the first 2 bytes of a connection. `0x16 0x03` starts a TLS
-handshake record. Read as a v3 length field, those bytes would mean a frame of at least 790 bytes
-(`0x0316`), longer than any handshake frame a client sends, so an unencrypted client is not
-mistaken for one with TLS. An unencrypted client on the TLS port is closed with nothing sent, and
-the server logs a warning naming it. On a port without TLS, a client whose first bytes are a TLS
-handshake is refused with a warning, rather than left waiting for a frame that never completes.
-Both warnings are logged at most once a minute per address.
+On the TLS port, the server reads the first 2 bytes of each connection. `0x16 0x03` starts a TLS
+handshake record. As a v3 length field, these bytes would mean a frame of at least 790 bytes
+(`0x0316`), longer than any client handshake frame, so an unencrypted client is never mistaken for a
+TLS client. An unencrypted client on the TLS port is closed with nothing sent, with a warning naming
+it. On a port without TLS, a client whose first bytes are a TLS handshake is refused with a warning
+instead of waiting for a frame that never completes. Both warnings are logged at most once a minute
+per address.
 
-Web clients are not affected beyond the transport: with TLS on, the web port serves only HTTPS and
-WSS, and the [Socket.IO envelope](#socketio-envelope-web-clients) is the same.
+For web clients only the transport changes: with TLS on, the web port serves only HTTPS and WSS, and
+the [Socket.IO envelope](#socketio-envelope-web-clients) is unchanged.
 
 ### Backpressure
 
-Before writing a relayed frame to a TCP client's socket, the server checks how much relayed
-traffic is still waiting in the client's write buffer against a 1 MiB high-water mark. Past it,
-the frame is dropped (not queued), whatever it carries: a `broadcast::` message, a `model::update`
-or `model::delete`, a `client::connected`. The server logs a warning when a client starts falling
-behind, and another, with the number of frames dropped, once it has caught up. That keeps the
-server's memory bounded for a client that cannot keep up, but the client is not told what it
-missed. A continuous `broadcast::` stream gets over a dropped message with the next one, while a
-one-off broadcast is lost. A `model::update` usually carries only the fields that changed, so a
-dropped one can leave a field out of date on that client until it changes again, and a dropped
-`model::delete` leaves the object in place. A client that reconnects asks for the current models
-again (see [After a reconnect](#after-a-reconnect)).
+Before writing a relayed frame to a TCP client, the server compares the relayed traffic waiting in the
+client's write buffer with a 1 MiB high-water mark. Above it, the frame is dropped, not queued, whatever
+it carries: `broadcast::`, `model::update`, `model::delete` or `client::connected`. The server warns when
+a client starts falling behind, and again with the number of dropped frames once it has caught up. This
+bounds memory, but the client does not learn what it missed. A continuous `broadcast::` stream recovers
+with the next message, a one-off broadcast is lost. A dropped `model::update`, usually carrying only the
+changed fields, can leave a field out of date on that client until it changes again. A dropped
+`model::delete` leaves the object in place. A client that reconnects requests the current models again
+([After a reconnect](#after-a-reconnect)).
 
-Two kinds of frame are exempt:
+Two kinds of frames are exempt:
 
-- **Answers to the client's own requests are never dropped for being behind**: the `model::update`
-  and `model::delete` frames answering its `model::request`, and the `client::connected` frames
-  answering its `client::request`. Nothing would ever send them again, and the answer to a request
-  for a whole channel is one frame per model, all written at once, so a late joiner on a slow link
-  would otherwise get only part of the store. They are queued, and do not count towards the
-  high-water mark, so a client still reading its answer also gets the updates made meanwhile. Only
-  past 64 MiB of answers waiting for one client are further answers dropped, with a warning naming
-  the client, and another once it takes answers again.
-- **Heartbeats are never dropped either**, and one goes out ahead of the next message once 64 KiB
-  have been written to the client since the last one. A client that sends nothing of its own stays
-  connected by echoing heartbeats, and it can only echo the ones it has read, so this keeps a live
-  client that is still reading a long answer from being disconnected as idle. A single message
-  larger than 64 KiB has none inside it; [Heartbeat / latency](#heartbeat--latency) says how long a
-  client reading one may stay silent. The 100 ms heartbeat is not queued behind one that still
-  waits, though, so a client that keeps sending but never reads is not sent ten a second.
+- **Answers to the client's own requests:** the `model::update` and `model::delete` frames answering its
+  `model::request`, and the `client::connected` frames answering its `client::request`. Nothing would
+  send them again, and a whole-channel answer is one frame per model written at once, which a late
+  joiner on a slow link would otherwise get only in part. They are queued outside the high-water mark,
+  so a client still reading its answer also receives the updates made meanwhile. Only above 64 MiB of
+  answers waiting for one client are further answers dropped, with a warning naming the client, and
+  another when it accepts answers again.
+- **Heartbeats.** One goes out ahead of the next message once 64 KiB have been written since the last
+  one, so a client reading a long answer can keep echoing and is not disconnected as idle. A single
+  message over 64 KiB contains none ([Heartbeat / latency](#heartbeat--latency)). The 100 ms heartbeat is
+  not queued behind one still waiting, so a client that keeps sending but never reads is not sent ten a
+  second.
 
-This is the outgoing side. For what the server does when clients send more than it can process,
-see [Inbound limits](#inbound-limits).
+For incoming traffic, see [Inbound limits](#inbound-limits).
 
 ## Socket.IO envelope (web clients)
 
-A web client connects with the handshake query `?app=<app>&version=2`; a connection without an
-`app` is logged and disconnected. A message is a Socket.IO event named after the `channel`, with
-a `{ command, payload }` envelope as its data; an event without a string `command` is logged and
-ignored. `payload` is a plain JSON value, not a byte buffer - no framing is needed since
-Socket.IO already handles message boundaries. The envelope is unchanged from 1.x.
-`ConnectionPool.broadcast()` uses a Socket.IO **room per app** so a message to N web clients of
-the same app is encoded once, not N times.
+A web client connects with the handshake query `?app=<app>&version=2`. A connection without `app` is
+logged and disconnected. A message is a Socket.IO event named after the `channel`, with a
+`{ command, payload }` envelope as data. An event without a string `command` is logged and ignored.
+`payload` is a plain JSON value, not a byte buffer. Socket.IO handles message boundaries, so no framing
+is needed. The envelope is unchanged from 1.x. `ConnectionPool.broadcast()` uses one Socket.IO **room
+per app**, so a message to N web clients of an app is encoded once, not N times.
 
 ## Size limits
 
-Every way into the server takes messages of up to about 5 MiB, so whatever one client can send,
-the others can receive:
+Every way into the server accepts messages of up to about 5 MiB, so whatever one client can send, the
+others can receive:
 
-| path | limit | beyond it |
+| Path | Limit | Beyond the limit |
 | --- | --- | --- |
-| TCP frame | 5 MiB (5,242,880 bytes) for type and body, so a payload gets that minus its channel, its command and 5 bytes | `FrameError`: the server closes the connection |
-| Socket.IO packet | 5 MiB plus room for the largest channel and command, about 5.13 MiB | engine.io drops the connection, and the message with it |
+| TCP frame | 5 MiB (5,242,880 bytes) for type and body. A payload gets that minus its channel, its command and 5 bytes. | `FrameError`: the server closes the connection |
+| Socket.IO packet | 5 MiB plus room for the largest channel and command, about 5.13 MiB | engine.io drops the connection and the message |
 | REST request body | 5 MiB | `413` |
 
-On TCP, channel and command are each at most 65,535 bytes of utf8 (a `u16` length). A message
-from a web client that does not fit into a TCP frame is not relayed to TCP clients; the server
-logs `Dropping unencodable message` instead.
+On TCP, channel and command are each at most 65,535 bytes of UTF-8 (a `u16` length). A web client's
+message that does not fit into a TCP frame is not relayed to TCP clients. The server logs
+`Dropping unencodable message` instead.
 
 ## Inbound limits
 
