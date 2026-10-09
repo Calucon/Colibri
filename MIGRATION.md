@@ -480,7 +480,8 @@ they have rather than creating duplicates.
   more `model::request`, on the channel `colibri::reconnect`, to tell when the answers are over. A
   Unity client does so after every reconnect, and also when an object's first answer arrives
   outside that round after the object changed members of its own (see below); colibri-web also does
-  so after asking for every model and after asking for one of its models once more.
+  so after asking for every model, after asking for one of its models once more, and after the first
+  update for a model it registers when it does neither.
   See [After a reconnect](colibri-server/docs/protocol.md#after-a-reconnect).
 - While a Unity client is disconnected, what it sends waits in one queue and goes out in order when
   the connection is back. Past 256 broadcasts and log lines the oldest are dropped, with one
