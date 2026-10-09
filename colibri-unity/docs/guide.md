@@ -86,139 +86,133 @@ If nothing arrives, see [Troubleshooting](#troubleshooting).
 
 ## Configuration
 
-Upon installation, a configuration window should show up:
+*Window → Colibri Configuration* opens the Colibri Setup window, which also opens automatically
+while the project has no configuration. *Save Config* writes `Assets/Resources/ColibriConfig`.
 
 <img src="../img/config.png" alt="Config Screen" width=400/>
 
-- Enter the address of your (shared) [server](../../colibri-server): a host name or an IP address, without `http://`. The preset is the public test server `colibri.hci.uni-konstanz.de`, which this package can only use while it runs colibri-server 2.x (see [Requirements](#requirements)). Otherwise run your own colibri-server 2.x, or connect to another 2.x instance you have access to.
-- On a headset or phone, `localhost` is the device itself. Enter the IPv4 address of the machine running the server on your local network instead.
-- Choose a unique *app name*. Though a server supports multiple clients, data is only synchronized between clients with identical *app names*!
-- Unique means that nobody else on the server uses it. Everyone with the same app name is in one app: they see each other's objects and messages, and since every update goes to every other client in the app, the server's work grows with the square of their number. The window warns about names many people use: `myAppName`, which the web client's samples use, and names such as `test`, `demo`, `app` or `colibri`.
-- To adjust the Colibri Configuration you can reopen the window in Unity under "Window" -> "Colibri Configuration" 
-- *Save Config* saves the configuration to `Resources/ColibriConfig`. A valid change takes effect at once, so Play mode uses it even before you save. A value the window marks as an error, such as port 0, is neither used nor saved: that setting keeps its last valid value, and the window shows what you typed until you correct it or close the window. Changes made elsewhere, such as in the asset's Inspector, show in the window and are kept.
+| Setting | Default | Description |
+|---|---|---|
+| App Name | empty | Required. Only clients with the same app name exchange data. |
+| Server Address | `colibri.hci.uni-konstanz.de` | Host name or IP address of the [server](../../colibri-server), without `http://`. The preset public test server works only while it runs colibri-server 2.x. |
+
+- Use an app name nobody else on the server uses. All clients with one app name see each other's
+  objects and messages, and the server's load grows with the square of their number.
+- The window warns about common app names, in any case: `myAppName` (used by the web client's
+  samples), `myApp`, `appName`, `app`, `test`, `testApp`, `demo`, `example`, `colibri`, `default`.
+- On a headset or phone, `localhost` is the device. Enter the server's LAN IPv4 address.
+- Valid changes take effect immediately, in Play mode too, before saving.
+- Invalid values, such as port 0, are marked as errors and neither used nor saved. The setting keeps
+  its last valid value. The window shows the typed value until you correct it or close the window.
+- Changes made elsewhere, such as in the asset's Inspector, appear in the window and are kept.
 
 ### Advanced Configuration
 
-If your server is running a non-default configuration, the advanced configuration allows you to modify server ports.
-The ports must match the server's, so change them only if the server does not use the defaults.
+Under *Optional Config*, ports, TLS and the voice sampling rate must match the server. Change them
+only if the server does not use the defaults.
 
-The Remote Store talks to the server over REST. With *Server supports SSL/TLS?* off those requests
-go out as plain `http`, and Unity blocks cleartext HTTP by default. **Loopback is exempt**, so a
-server on `localhost` needs no change at all; this only comes up once the server is a real
-remote host that is not on HTTPS (and from a headset, every server is a remote host). In that case
-set *Project Settings → Player → Other Settings → **Allow downloads over HTTP*** to *Always
-allowed*, or turn [TLS](#tls) on at the server and tick *Server supports SSL/TLS?*. Colibri checks
-this for every build target (see [Meta Quest and Android](#meta-quest-and-android)).
+| Setting | Default | Description |
+|---|---|---|
+| Server supports SSL/TLS? | off | Server has `TLS_CERT` and `TLS_KEY` set ([TLS](#tls)) |
+| Allow self-signed certificate | off | Only with TLS ([Certificates](#certificates)) |
+| Server certificate SHA-256 | empty | Only with TLS ([Certificates](#certificates)) |
+| Web server Port | `9011` | Server's `WEBSERVER_PORT`, used by the Store |
+| TCP server Port | `9012` | Server's `TCP_PORT` |
+| Voice server Port | `9013` | Server's `VOICE_PORT` |
+| Voice Sampling Rate | `48000` | Server's `VOICE_SAMPLING_RATE` |
+| Max Send Rate (Hz) | `30` | Updates per second per synced object, `0` for no limit ([Send rate](#send-rate)) |
 
-When using the voice chat, Colibri allows to adjust the sampling rate on the server. In this case, clients need to manually set the `Voice Sampling Rate` setting in the configuration.
-
-`Max Send Rate (Hz)` caps how many updates per second each synced object sends (see [Send rate](#send-rate)).
-
-Default values:
-
-- Web server Port: `9011`
-- TCP server Port: `9012`
-- Voice server Port: `9013`
-- Voice Sampling Rate: `48000`
-- Max Send Rate: `30` (updates per second per synced object; `0` = no limit)
+With TLS off, the Store's REST requests use plain `http`, which Unity blocks except to loopback
+addresses such as `localhost`. For any other server, which on a headset means every server, set
+*Project Settings → Player → Other Settings → **Allow downloads over HTTP*** to *Always allowed*, or
+use [TLS](#tls). Colibri checks this setting ([Build settings check](#build-settings-check)).
 
 ## TLS
 
-*Server supports SSL/TLS?* (`ColibriConfig.IsSSL`, under *Optional Config*) encrypts the TCP
-connection to colibri-server and switches the Store to `https`. The server needs TLS turned on,
-with `TLS_CERT` and `TLS_KEY` (see [TLS](../../colibri-server/docs/guide.md#tls) in the server
-guide), and the setting has to match it: a server with TLS accepts only TLS on its TCP port, and
-one without TLS accepts none. Inside TLS run the same v3 frames; the protocol version is
-unchanged.
+*Server supports SSL/TLS?* (`ColibriConfig.IsSSL`) encrypts the TCP connection and switches the
+Store to `https`.
 
-- The TLS handshake has to finish within the same 5 s connect timeout.
+- The server needs `TLS_CERT` and `TLS_KEY` ([TLS](../../colibri-server/docs/guide.md#tls) in the
+  server guide).
+- The setting must match the server, whose TCP port accepts either only TLS or no TLS.
+- Frames and protocol version inside TLS are unchanged.
+- The handshake must finish within the 5 s connect timeout.
 - Unity's TLS backend negotiates TLS 1.2.
-- The client sends the configured *Server Address* as SNI, and checks the certificate against it.
+- The client sends the *Server Address* as SNI and checks the certificate against it.
 - Voice chat (UDP) stays unencrypted.
+- The server log quotes the Setup window's labels exactly. Colibri's console messages write *Server
+  supports SSL/TLS?* without the question mark: 'Server supports SSL/TLS'.
 
-The Setup window's labels are *Server supports SSL/TLS?*, *Allow self-signed certificate* and
-*Server certificate SHA-256*, and the server's log uses exactly these. Unity's own console messages
-call the first one 'Server supports SSL/TLS', without the question mark.
+### Certificates
 
-### Which certificates are accepted
+| Certificate | Setting | Result |
+|---|---|---|
+| Issued by a CA, e.g. Let's Encrypt | none | The device's trust store decides, also on Android and the Quest. |
+| Self-signed, pinned | *Server certificate SHA-256* (`ColibriConfig.ServerCertificateSha256`) | Only this certificate is accepted, trusted or not. Its names are ignored, so IP address certificates work. |
+| Self-signed, not pinned | *Allow self-signed certificate* (`ColibriConfig.AllowSelfSignedCertificate`) | Untrusted certificates are accepted. The connection is encrypted, but nothing checks that it reaches your server. The console warns once per session with the fingerprint to pin. |
 
-- **From a certificate authority** (Let's Encrypt, or your institution's): nothing more to set. The
-  device's trust store decides, on Android and the Quest too.
-- **Self-signed:** paste the server's fingerprint into *Server certificate SHA-256*
-  (`ColibriConfig.ServerCertificateSha256`). Then only that certificate is accepted, trusted or
-  not, and its names are ignored, so a certificate for an IP address works too. Case and colons do
-  not matter; anything but 64 hexadecimal digits (or nothing) is an error in the Setup window, and
-  is neither used nor saved.
-- **Self-signed, without a fingerprint:** *Allow self-signed certificate*
-  (`ColibriConfig.AllowSelfSignedCertificate`) accepts a certificate the device does not trust.
-  The connection is still encrypted, but nothing checks that it goes to your server, and the
-  console warns once per session, with the fingerprint to pin instead.
-
-Both settings appear in the Setup window only with *Server supports SSL/TLS?* ticked. A
-configuration saved before they existed loads with both off and empty, so only certificates the
-device trusts are accepted.
-
-The fingerprint is in the server's startup log (`TLS is on, ... SHA-256 fingerprint AB:CD:...`), in
-Colibri's warning or rejection message, and in the *SHA-256* row of *Window → Colibri Status*,
-which can be selected and copied. Do not pin a certificate from Let's Encrypt: it changes with
-every renewal, and the pin then rejects the server.
-
-The Store's `https` requests follow the same two settings; with neither set, the system checks the
-certificate, as before. *Window → Colibri Status* shows TLS next to the server address, how the
-certificate was accepted (`trusted by this device`, `matches 'Server certificate SHA-256'`, or
-`not trusted, accepted because 'Allow self-signed certificate' is on`), and its fingerprint.
+- The fingerprint ignores case and colons. Anything but 64 hexadecimal digits or empty is an error
+  in the Setup window and is neither used nor saved.
+- Both settings appear only with *Server supports SSL/TLS?* ticked. Configurations saved before they
+  existed load with both off, which accepts only trusted certificates.
+- The Store's `https` requests follow both settings. With neither set, the system checks the
+  certificate, as in 1.x.
+- Do not pin Let's Encrypt certificates. They change with every renewal, and the pin then rejects
+  the server.
+- The fingerprint is in the server's startup log (`TLS is on, ... SHA-256 fingerprint AB:CD:...`),
+  in Colibri's warning or rejection message, and in the selectable *SHA-256* row of *Window →
+  Colibri Status*.
+- The Status window also shows TLS next to the server address, and how the certificate was accepted:
+  `trusted by this device`, `matches 'Server certificate SHA-256'` or
+  `not trusted, accepted because 'Allow self-signed certificate' is on`.
 
 ### TLS errors
 
-| Console | What to do |
-|---|---|
-| `<host:port> did not answer the TLS handshake …` | The server has no TLS: set `TLS_CERT` and `TLS_KEY` there, or untick *Server supports SSL/TLS?* |
-| `rejected the certificate of <host:port>: it is self-signed …` | Pin its fingerprint, or tick *Allow self-signed certificate* |
-| `… it expired on <date>` | Renew the certificate on the server |
-| `… it is not issued for '<address>'` | Connect by a name the certificate covers, or pin it, or allow self-signed certificates |
-| `… its SHA-256 fingerprint is <X>, not the one in 'Server certificate SHA-256' …` | The server's certificate was replaced: copy the new fingerprint from the server's log |
-| `… This usually means a protocol mismatch … tick 'Server supports SSL/TLS' …` | A client without TLS is talking to a server with TLS: tick the setting |
+| Message | Cause | Fix |
+|---|---|---|
+| `<host:port> did not answer the TLS handshake …` or `<host:port> accepted the connection but did not answer the TLS handshake within 5 s` | The server has no TLS | Set `TLS_CERT` and `TLS_KEY` on the server, or untick *Server supports SSL/TLS?* |
+| `rejected the certificate of <host:port>: it is self-signed …` | Self-signed certificate, neither pinned nor allowed | Pin its fingerprint, or tick *Allow self-signed certificate* |
+| `… it expired on <date>` | Expired certificate | Renew it on the server |
+| `… it is not issued for '<address>'` | The certificate does not cover the *Server Address* | Connect by a name it covers, pin it, or allow self-signed certificates |
+| `… its SHA-256 fingerprint is <X>, not the one in 'Server certificate SHA-256' …` | The server's certificate was replaced | Copy the new fingerprint from the server log |
+| `… This usually means a protocol mismatch … tick 'Server supports SSL/TLS' …` | TLS on the server only | Tick *Server supports SSL/TLS?* |
 
-Each is logged as an error once, and then only noted while the client retries with the usual
-backoff, so fixing the server needs no restart of the app. `LastConnectFailure` and the Status
-window show the latest one.
+Each error is logged as an error once, then as a plain line on each retry. The client keeps
+retrying, so a server fix needs no app restart. `LastConnectFailure` and the Status window show the
+latest error.
 
 ## Meta Quest and Android
 
-A Meta Quest app is an Android build: switch the platform to Android under *File → Build
-Settings* (*File → Build Profiles* on Unity 6). Quest needs the ARM64 architecture, which on
-Android requires the IL2CPP scripting backend.
+Quest apps are Android builds. Switch the platform to Android in *File → Build Settings* (*File →
+Build Profiles* in Unity 6). The Quest needs ARM64, which on Android requires IL2CPP.
 
-Colibri checks two Player settings that otherwise only fail in the built app, where there is no
-console to say why. It warns in the console after every script reload and at the start of every
-player build, and *Window → Colibri Configuration* lists the problems in an **Android / Meta Quest**
-section (**Player build** with another target active), each with a button that fixes it:
+### Build settings check
 
-- **Internet Access** must be *Require* (*Player → Other Settings*), checked with the Android target
-  active. Colibri connects with plain sockets, and with *Auto* the build may lack Android's INTERNET
-  permission: the app starts and never connects. The warning starts with `Colibri (Android build):`.
-- **Allow downloads over HTTP** must be *Always allowed* while *Server supports SSL/TLS?* is off
-  and the server is not `localhost`, on every build target. *Allowed in development builds* passes
-  for development builds only. Otherwise every `Store` call fails with "Insecure connection not
-  allowed". The warning starts with `Colibri (build):`. With [TLS](#tls) on, this does not apply.
+Colibri checks two Player settings that otherwise fail only in the built app, without a console to
+show why. It warns after every script reload, including a build target switch, and at the start of
+every player build, without stopping it. *Window → Colibri Configuration* lists the issues with fix
+buttons under **Android / Meta Quest** (Android target) or **Player build** (other targets).
 
-Also worth knowing:
+| Setting (*Player → Other Settings*) | Required | Checked | Warning | Otherwise |
+|---|---|---|---|---|
+| *Internet Access* | *Require* | Android target | `Colibri (Android build): Internet Access is set to Auto. …` | The build may lack the INTERNET permission that Colibri's sockets need. The app starts and never connects. |
+| *Allow downloads over HTTP* | *Always allowed* | All targets, with TLS off and a server other than `localhost` or a loopback address | `Colibri (build): Allow downloads over HTTP is '…' …` | Every `Store` call fails with "Insecure connection not allowed". |
 
-- **Server address.** On the headset, `localhost` is the headset. Enter the IPv4 address of the
-  machine running the server on your local network; voice chat only works over IPv4 anyway. A
-  headset that cannot reach that address keeps retrying, and
-  `WebServerConnection.Instance.LastConnectFailure` says why, for example `… did not answer within
-  5 s` (see [Troubleshooting](#troubleshooting)).
+*Allowed in development builds* passes the HTTP check for development builds only.
+
+### Platform notes
+
+- **Server address:** `localhost` is the headset. Enter the server's LAN IPv4 address. Voice chat
+  works only over IPv4. A headset that cannot reach the server keeps retrying, and
+  [`LastConnectFailure`](#connection-and-outages) holds the reason.
 - **Run In Background** has no effect on Android.
-- **Managed code stripping.** `[Sync]` members are kept by Unity's managed code stripping on
-  their own. Your own classes that only Newtonsoft JSON touches (sent with `JToken.FromObject`, read
-  with `ToObject<T>`, or saved with `Store`) are only reached through reflection, so
-  stripping may remove their members once *Managed Stripping Level* is above *Minimal*. Keep it
-  at *Minimal*, or preserve those classes yourself with `[Preserve]` or a `link.xml`.
-- **`[Sync]` fields on IL2CPP.** A `[Sync]` property is read through a direct delegate, but a
-  `[Sync]` field is read through reflection, which allocates for a value type (`int`, `float`,
-  `Vector3`, …) every frame. With many synced objects, make such members properties.
-  `SyncTransform` only uses properties.
+- **Managed code stripping** keeps `[Sync]` members. Your classes that only Newtonsoft JSON uses
+  (`JToken.FromObject`, `ToObject<T>`, `Store`) are reached only through reflection, so stripping
+  above *Minimal* may remove their members. Keep *Managed Stripping Level* at *Minimal*, or preserve
+  these classes with `[Preserve]` or a `link.xml`.
+- **`[Sync]` fields on IL2CPP** are read through reflection, which allocates every frame for a value
+  type (`int`, `float`, `Vector3`, …). Properties use a direct delegate. With many synced objects,
+  use properties, as `SyncTransform` does.
 
 ## Samples
 
