@@ -1,6 +1,6 @@
 import { AfterViewInit, ChangeDetectionStrategy, Component, ElementRef, OnDestroy, afterRenderEffect, computed, effect, inject, signal, untracked, viewChild } from '@angular/core';
 import { DatePipe } from '@angular/common';
-import { LogMessage, LogService } from '../../services';
+import { LogMessage, LogService, SocketIOService } from '../../services';
 import { LogMessageComponent } from '../../components/log-message/log-message.component';
 import { LogToolbarComponent } from '../../components/log-toolbar/log-toolbar.component';
 import { matchesSearch } from '../../components/log-message/log-format';
@@ -30,6 +30,7 @@ interface EmptyState {
 })
 export class LogComponent implements AfterViewInit, OnDestroy {
     log = inject(LogService);
+    private socketio = inject(SocketIOService);
 
     private scroller = viewChild.required<ElementRef<HTMLElement>>('scroller');
 
@@ -63,6 +64,9 @@ export class LogComponent implements AfterViewInit, OnDestroy {
     /** How many lines arrived since the page was paused. */
     newLines = computed(() => this.frozen() ? this.log.appended() - this.appendedAtPause() : 0);
 
+    /** When the connection was lost, while it is. */
+    offline = computed(() => this.socketio.state() === 'reconnecting' ? this.socketio.lostAt() : null);
+
     /** The rows that start a new day, which get the date above them. */
     dayStarts = computed(() => {
         const starts = new Set<string>();
@@ -77,6 +81,7 @@ export class LogComponent implements AfterViewInit, OnDestroy {
 
     empty = computed<EmptyState | null>(() => {
         if (this.rows().length > 0) return null;
+        if (this.socketio.state() === 'connecting') return { text: 'Connecting to the server…' };
         if (this.log.loading()) return { text: 'Loading the log…' };
 
         const clear = { label: 'Clear filters', run: () => this.log.clearFilters() };

@@ -144,4 +144,16 @@ describe('LogComponent', () => {
         component.empty()?.action?.run();
         expect(log.filter()).toBe('');
     });
+
+    it('shows that the connection is lost', () => {
+        const { fixture } = create();
+        history([ message({ id: 'a' }) ]);
+        expect(fixture.nativeElement.querySelector('.banner')).toBeNull();
+
+        state.set('reconnecting');
+        lostAt.set(new Date(2026, 9, 10, 12, 30, 5).getTime());
+        fixture.detectChanges();
+
+        expect(fixture.nativeElement.querySelector('.banner').textContent).toContain('Connection to the server lost at 12:30:05.');
+    });
 });

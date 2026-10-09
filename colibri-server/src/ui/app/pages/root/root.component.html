@@ -9,6 +9,11 @@
       <a [routerLink]="tab.path" routerLinkActive="active" ariaCurrentWhenActive="page">{{ tab.label }}</a>
     }
   </nav>
+
+  <span class="status {{ state() }}" role="status" [title]="statusTitle()">
+    <span class="dot" aria-hidden="true"></span>
+    <span class="label">{{ statusLabel() }}</span>
+  </span>
 </header>
 
 <main class="content">

@@ -63,6 +63,45 @@
     }
 }
 
+.status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+    padding: 4px 10px;
+
+    color: var(--text-muted);
+    font-size: 13px;
+    border-radius: 12px;
+    background: var(--bg);
+
+    .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--text-muted);
+    }
+
+    &.connected .dot {
+        background: var(--ok);
+    }
+
+    &.reconnecting {
+        color: var(--warn);
+
+        .dot {
+            background: var(--warn);
+            animation: pulse 1.2s ease-in-out infinite;
+        }
+    }
+}
+
+@keyframes pulse {
+    50% {
+        opacity: 0.3;
+    }
+}
+
 .content {
     position: relative;
     min-width: 0;
@@ -76,6 +115,18 @@
 
         span {
             display: none;
+        }
+    }
+
+    .status {
+        padding: 8px;
+
+        .label {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            overflow: hidden;
+            clip-path: inset(50%);
         }
     }
 }
