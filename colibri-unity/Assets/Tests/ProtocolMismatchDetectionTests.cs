@@ -214,7 +214,8 @@ namespace HCIKonstanz.Colibri.E2E
         /// ended cleanly or on an undecodable frame, so a session ended by a reset or by the
         /// watchdog neither counted nor cleared anything, and the suspicion outlived the server
         /// that caused it. Now the first decoded frame clears both at once, and every session that
-        /// ends without one counts, however it ends.
+        /// ends without one counts, however it ends, unless the watchdog ended it: see
+        /// <see cref="SessionsTheWatchdogEndsBeforeAnyFrameAreReportedAsSilenceNotAsAMismatch"/>.
         /// </summary>
         [UnityTest]
         public IEnumerator AnyDecodedFrameClearsTheSuspicionAndTheCountAtOnce()
