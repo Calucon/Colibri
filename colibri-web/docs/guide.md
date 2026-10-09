@@ -89,6 +89,10 @@ new Colibri('app_name', '<your-server>', 9011);
 Browsers block plain `ws://` and `http://` connections from a page served over `https://` (mixed content), so such a
 page has to use `wss://` or `https://`, which needs [TLS](#tls) on the server or a proxy in front of it.
 
+A page in a background tab may reconnect late after an outage (90 s in a test with Chrome), because browsers throttle
+timers in hidden tabs, Socket.IO's reconnect backoff included; once the tab is shown again, it reconnects within
+seconds.
+
 For server setup, refer to [colibri-server](../../colibri-server/).
 
 ### TLS
