@@ -22,7 +22,7 @@ rationale, migration steps, and what the Editor verification did and did not cov
   protocol](../colibri-server/docs/protocol.md) and **requires colibri-server ≥ 2.0.0**. It cannot
   talk to a 1.x server, and a 1.x client cannot talk to a 2.0.0 server. There is no version
   negotiation: both sides must be upgraded together.
-- **Voice packets carry the App Name.** The voice header has a header version and an app id, the
+- **Voice packets carry an app id.** The voice header has a header version and an app id, the
   32-bit FNV-1a hash of the App Name, and colibri-server 2.0.0 passes a packet on only to the
   clients with the same app id. Voice ids only have to be unique within an app now, and 1.x and
   2.0.0 clients do not hear each other. See
