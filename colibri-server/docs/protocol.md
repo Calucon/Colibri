@@ -90,9 +90,9 @@ app keeps its models.
 ### Version checking
 
 The server compares `version` with `PROTOCOL_VERSION` in
-[`protocol.ts`](../src/server/modules/networking/protocol.ts), currently `2`. The server supports one
-version at a time and **refuses** every other one. There is no negotiation or downgrade, since v1 and
-v3 share no subset.
+[`protocol.ts`](../src/server/modules/networking/protocol.ts), currently `2`. It supports one version
+at a time and **refuses** every other one. There is no negotiation or downgrade, since v1 and v3 share
+no subset.
 
 A refused client never joins its app's broadcast set or `clientConnected$`, so it does not appear in
 the admin UI. The server logs an error naming the client, its address and both versions, e.g.
@@ -115,7 +115,7 @@ same `colibri` / `protocol::rejected` event before being disconnected. A client 
 refused with `clientVersion: ""` and a reason containing `'(none)'`. The admin UI (`app === 'colibri'`)
 ships with the server and is only warned about, so a mismatch cannot lock you out of it.
 
-Known gaps, all deliberate:
+Known gaps (all deliberate):
 
 - **A client with other framing cannot read the refusal.** The first packet of a Colibri 1.x Unity
   client, its handshake, does not parse as a v3 frame ([Frame parsing](#frame-parsing)), and the client
@@ -126,8 +126,8 @@ Known gaps, all deliberate:
 - **colibri-web 1.x does not handle `protocol::rejected`.** It receives the refusal as an ordinary
   message, logs nothing, and stays disconnected, since Socket.IO does not reconnect after a
   server-side `disconnect()`. The server log is the only diagnostic ([MIGRATION.md](../../MIGRATION.md)).
-  It is refused although its messages would still work: the Socket.IO envelope did not change, but it
-  announces `1`. Upgrade it together with the server.
+  It is refused because it announces `1`, although the Socket.IO envelope did not change and its
+  messages would still work. Upgrade it together with the server.
 - **The admin UI exemption goes by app name.** Any Socket.IO client with the app name `colibri` skips
   the check. The name is reserved for the admin UI and collides with the `colibri` control channel.
 - **The check cannot detect an out-of-date server**, since it runs on the server. Clients can only
@@ -255,10 +255,10 @@ Socket.IO clients get no heartbeat frame but a `colibri`/`latency` event every 1
 
 ### Message
 
-An application message. `channel` and `command` identify it, e.g. channel `myApp::position`, command
-`model::update`. `payload` is an opaque byte range, passed to other TCP clients byte for byte and
-decoded (`Payload.fromBytes(...).asValue()`) only when a hook inspects it or when relaying to a
-Socket.IO client. Exception: a `model::update` that was held back and merged
+A `message` frame carries an application message. `channel` and `command` identify it, e.g. channel
+`myApp::position`, command `model::update`. `payload` is an opaque byte range, passed to other TCP
+clients byte for byte and decoded (`Payload.fromBytes(...).asValue()`) only when a hook inspects it or
+when relaying to a Socket.IO client. Exception: a `model::update` that was held back and merged
 ([Inbound limits](#inbound-limits)) is passed on re-encoded.
 
 ### `broadcast::` commands
@@ -423,9 +423,9 @@ a limit:
   objects at once, e.g. a scene with many synced objects loading, can hit this.
 
 Nothing a client sends overtakes its held updates. They go on before its next message that is not
-limited, before a second handshake, and on disconnect before its app receives `client::disconnected`. So
-a `model::delete` cannot arrive ahead of an update to the same object and have that update bring it
-back.
+limited, before a second handshake, and on disconnect before its app receives `client::disconnected`.
+As a result, a `model::delete` cannot arrive ahead of an update to the same object and have that
+update bring it back.
 
 Clients are not notified. The app's other clients receive fewer, later updates, each possibly carrying
 the changes of several. Synced objects move less smoothly, and `broadcast::` streams have gaps.
@@ -741,9 +741,9 @@ The server drops these packets, reporting at most one per source address and por
 | from source port 0 | error `Ignoring malformed voice packet from <address>:<port>: its source port is 0, ...` |
 
 The app id keeps the voice of different apps apart, as the app name does on TCP. It is not access
-control: anyone who knows an app's name can send voice to its clients and receive theirs. Two app names
-can have the same app id, by chance about 1 in 4 billion for any two, and their voice clients then hear
-each other. Voice is never encrypted: [TLS](#tls) covers only the TCP and web ports.
+control. Anyone who knows an app's name can send voice to its clients and receive theirs. Two app
+names can have the same app id, by chance about 1 in 4 billion for any two, and their voice clients
+then hear each other. Voice is never encrypted. [TLS](#tls) covers only the TCP and web ports.
 
 ## Known limits
 
