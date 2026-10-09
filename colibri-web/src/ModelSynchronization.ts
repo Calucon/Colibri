@@ -166,12 +166,14 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
     let roundEnd: string | undefined;
 
     // While updates made before the server had what this client sends now may still arrive (see
-    // guardFrom): the id asked for by the request whose answer comes after them.
-    let guardEnd: string | undefined;
+    // guardFrom): the ids asked for by the requests whose answers come after them, oldest first.
+    let guardEnds: string[] = [];
 
-    // For each model, own or not, the fields kept out of every update for it until guardEnd's answer
-    // comes, by the names they are sent under.
-    let keptOut = new WeakMap<T, Set<string>>();
+    // For each model, own or not, the fields kept out of every update for it, by the names they are
+    // sent under, each until the answer for the last id in guardEnds when it was sent. A later answer
+    // is too late: another client may set the field once the server has this client's value, and its
+    // update can come before that answer.
+    let keptOut = new WeakMap<T, Map<string, string>>();
 
     // When this client last heard from the server before the connection was lost (see lastHeardFrom).
     let lastHeardBeforeOutage = 0;
@@ -222,26 +224,32 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
 
     // From now until the answer to a request sent now, the fields this client sends for a model are
     // kept out of every update for it. The answer to a request sent before, made before the server had
-    // them, may still be on its way: the server answers the request for every model with what it has
-    // when it reads that request, and reads a change sent just after it only then. Applied, that
-    // answer undid the change on this client alone, for good, since the server relays an update to
-    // every client but the one that sent it. Every update that arrives before the answer to the
-    // request sent now was made before the server read these fields, another client's too, so what
-    // it shows for them is older.
+    // them, may still be on its way: the server answers a request, for every model or for an own
+    // model's id (see takeAnswer), with what it has when it reads that request, and reads a change
+    // sent just after it only then. Applied, that answer undid the change on this client alone, for
+    // good, since the server relays an update to every client but the one that sent it. Every update
+    // that arrives before the answer to the request sent now was made before the server read these
+    // fields, another client's too, so what it shows for them is older.
     const guardFrom = (colibri: Colibri) => {
-        guardEnd = askForEnd(colibri);
+        guardEnds.push(askForEnd(colibri));
     };
 
     const keepOut = (model: T, update: object) => {
-        if (guardEnd === undefined) return;
+        const end = guardEnds.at(-1);
+        if (end === undefined) return;
         let kept = keptOut.get(model);
-        if (!kept) keptOut.set(model, (kept = new Set<string>()));
-        for (const key of Object.keys(update)) if (key !== 'id') kept.add(key);
+        if (!kept) keptOut.set(model, (kept = new Map<string, string>()));
+        for (const key of Object.keys(update)) if (key !== 'id') kept.set(key, end);
     };
 
-    const endGuard = () => {
-        guardEnd = undefined;
-        keptOut = new WeakMap<T, Set<string>>();
+    const keptOutOf = (model: T) =>
+        [...(keptOut.get(model) ?? [])].filter(([, end]) => guardEnds.includes(end)).map(([key]) => key);
+
+    // The answer for `end` has come, and with it those to the requests sent before; or, without
+    // `end`, none of them is going to.
+    const endGuard = (end?: string) => {
+        guardEnds = end === undefined ? [] : guardEnds.slice(guardEnds.indexOf(end) + 1);
+        if (guardEnds.length === 0) keptOut = new WeakMap<T, Map<string, string>>();
     };
 
     // initial data fetch - and the same again after every reconnect, since an update relayed while
@@ -312,9 +320,9 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
     RegisterChannel(END_CHANNEL, (message: Message) => {
         if (message.command !== 'model::update') return;
         const id = (message.payload as { id?: unknown } | undefined)?.id;
-        if (id === undefined) return;
+        if (typeof id !== 'string') return;
         if (id === roundEnd) endRound();
-        if (id === guardEnd) endGuard();
+        if (guardEnds.includes(id)) endGuard(id);
         const confirmed = [...confirming].find(([, confirmation]) => confirmation.end === id);
         if (confirmed) endWait(confirmed[0]);
     });
@@ -354,8 +362,12 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
     // of values the server had, the model is asked for again, with one more request after that
     // (see askForEnd); the changes made from then on are held back too, and what was sent is kept
     // out of every update until the answer to that one, when every answer made before the server
-    // had it has come (see endWait). When the changes are what the server had anyway, nothing is
-    // asked: an answer still on its way has the same values, and applying them changes nothing.
+    // had it has come (see endWait). When the changes are what the server had anyway, or there are
+    // none, nothing is asked: an answer still on its way has the same values for them, or ones
+    // another client set since. A change made after that goes out at once, though, and that answer,
+    // made before the server had it, undid it here only. So what this client sends from then on is
+    // kept out of every update until the answer to one more request (see guardFrom); asking for
+    // every model, when that comes next, does the same.
     //
     // After a reconnect, what the server answers for a model it had answered for before may also
     // show that a change this client sent before the outage never reached the server (see
@@ -419,7 +431,7 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
         awaitingAnswer.delete(id);
         const held = releaseHeldChanges(model);
         applyUpdate(model, withoutChanges(modelData, model, held));
-        if (!sendOnTop(id, asker, model, modelData, held, [])) catchUpOnceAnswered();
+        if (!sendOnTop(id, asker, model, modelData, held, []) && !catchUpOnceAnswered()) guardFrom(asker);
     };
 
     // The answers to asking again after a reconnect are over (see takeAnswer): each own model asked
@@ -603,8 +615,7 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
 
     const applyUpdate = (model: T | undefined, modelData: Partial<T>) => {
         if (model) {
-            const kept = keptOut.get(model);
-            const update = kept ? withoutKeys(modelData, kept) : modelData;
+            const update = withoutKeys(modelData, keptOutOf(model));
             if (ownModels.has(model)) remember(model, update);
 
             // Update existing model

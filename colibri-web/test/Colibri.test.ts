@@ -1027,10 +1027,11 @@ describe('sending its own models again after a reconnect', () => {
         fakeSocket.emit.mockClear();
 
         deliver('own', { command: 'model::update', payload: { id: 'w1', label: 'kept' } });
-        expect(sent('model::request')).toEqual([]);
+        // Not for every model yet: only the request whose answer comes after w1's, in case this was not it.
+        expect(sentInOrder()).toEqual([endRequest]);
 
         deliver('own', { command: 'model::update', payload: { id: 'w2' } });
-        expect(sentInOrder()).toEqual([['model::update', { id: 'w2', label: '' }], ...everything]);
+        expect(sentInOrder().slice(1)).toEqual([['model::update', { id: 'w2', label: '' }], ...everything]);
     });
 
     // Socket.IO buffers what is sent while disconnected and sends it on the reconnect, ahead of the
@@ -1380,7 +1381,9 @@ describe('registering a model whose id the server may already have', () => {
         await settle();
 
         expect([pair.a, pair.b]).toEqual(['server-a', 'server-b']);
-        expect(sentInOrder()).toEqual([['model::request', { id: 'p1' }]]);
+        // The update taken for the answer may not be it (see 'keeping a change made after
+        // registerModel'): nothing more is sent than the request whose answer comes after it.
+        expect(sentInOrder()).toEqual([['model::request', { id: 'p1' }], endRequest]);
         expect(latest(models$)).toEqual([pair]);
     });
 
@@ -1393,7 +1396,7 @@ describe('registering a model whose id the server may already have', () => {
         await settle();
 
         expect([pair.a, pair.b]).toEqual(['server-a', 'server-b']);
-        expect(sentInOrder()).toEqual([['model::request', { id: 'p1' }]]);
+        expect(sentInOrder()).toEqual([['model::request', { id: 'p1' }], endRequest]);
         expect(latest(models$)).toEqual([pair]);
     });
 
@@ -1495,7 +1498,7 @@ describe('registering a model whose id the server may already have', () => {
         // The copy no longer sends its changes.
         copy.a = 'changed on the copy';
         await settle();
-        expect(sentInOrder()).toEqual([['model::request', { id: 'p1' }]]);
+        expect(sentInOrder()).toEqual([['model::request', { id: 'p1' }], endRequest]);
     });
 
     it('does nothing when the model listed is registered again', async () => {
@@ -1667,6 +1670,93 @@ describe('keeping a change made after registerModel', () => {
         await settle();
         expect(sentInOrder()).toHaveLength(4);
         expect([pair.a, pair.b]).toEqual(['changed', 'server-b']);
+    });
+
+    // With nothing held when the update taken for the answer came, a change made after it went out at
+    // once, and the answer, made before the server had the change, undid it here only.
+    it("keeps a change made after another client's update came first, and the answer after it", async () => {
+        const { pair } = await registeredLate();
+        // The end of the answers to the request for every model, then another client's update.
+        endOfAnswers();
+        deliver('reg', { command: 'model::update', payload: { id: 'p1', b: 'theirs' } });
+        pair.a = 'changed';
+        await settle();
+        expect(sentOnChannel()).toEqual([
+            ['model::request', { id: 'p1' }],
+            ['model::update', { id: 'p1', a: 'changed' }]
+        ]);
+
+        // The answer to the request for the id.
+        deliver('reg', { command: 'model::update', payload: { ...server, b: 'theirs' } });
+        expect([pair.a, pair.b]).toEqual(['changed', 'theirs']);
+
+        // Once the answers are over, an update is applied as it comes.
+        endOfAnswers();
+        deliver('reg', { command: 'model::update', payload: { id: 'p1', a: 'theirs too' } });
+        expect(pair.a).toBe('theirs too');
+    });
+
+    it('keeps a change made after the answer for every model came first, and the answer after it', async () => {
+        const { pair } = await registeredLate();
+        deliver('reg', { command: 'model::update', payload: server });
+        // The end of the answers to the request for every model.
+        endOfAnswers(1);
+        pair.a = 'changed';
+        await settle();
+        expect(sentOnChannel()).toEqual([
+            ['model::request', { id: 'p1' }],
+            ['model::update', { id: 'p1', a: 'changed' }]
+        ]);
+
+        deliver('reg', { command: 'model::update', payload: server });
+        expect([pair.a, pair.b]).toEqual(['changed', 'server-b']);
+    });
+
+    // A change held that the server had anyway is not asked for once more, so the next one goes out at
+    // once too.
+    it('keeps a change made after a held one that the server had anyway', async () => {
+        const { pair } = await registeredLate();
+        endOfAnswers();
+        pair.a = 'server-a';
+        // Another client's update.
+        deliver('reg', { command: 'model::update', payload: { id: 'p1', a: 'server-a' } });
+        await settle();
+        pair.a = 'changed';
+        await settle();
+        expect(sentOnChannel()).toEqual([
+            ['model::request', { id: 'p1' }],
+            ['model::update', { id: 'p1', a: 'server-a' }],
+            ['model::update', { id: 'p1', a: 'changed' }]
+        ]);
+
+        deliver('reg', { command: 'model::update', payload: server });
+        expect([pair.a, pair.b]).toEqual(['changed', 'server-b']);
+    });
+
+    // A field sent before that request is kept out only until the answer to the request after asking
+    // for every model: what another client sets once the server has it comes after that answer.
+    it('takes what another client sets after a field sent before it, once the server has that', async () => {
+        new Colibri('app', 'localhost', 9011);
+        const [models$, registerModel] = RegisterModelSync({ name: 'reg', type: Pair });
+        connectSocket();
+        await nextTask();
+        // The answer to the request for every model, in two parts: another client's model, and 'p1'.
+        deliver('reg', { command: 'model::update', payload: { id: 'theirs', a: 'A', b: 'B' } });
+        const [theirs] = latest(models$);
+        theirs.a = 'mine';
+        await settle();
+        const pair = new Pair('p1');
+        registerModel(pair);
+        deliver('reg', { command: 'model::update', payload: server });
+        endOfAnswers(1);
+        pair.a = 'changed';
+        await settle();
+
+        deliver('reg', { command: 'model::update', payload: { id: 'theirs', a: 'later' } });
+        // The answer to the request for 'p1'.
+        deliver('reg', { command: 'model::update', payload: server });
+
+        expect([theirs.a, pair.a]).toEqual(['later', 'changed']);
     });
 
     // Registered at the top of a module, before new Colibri(), the usual order.
@@ -1902,7 +1992,8 @@ describe('keeping a change made after registerModel', () => {
 
         expect(sentInOrder()).toEqual([
             ['model::request', { id: 'n1' }],
-            ['model::update', { id: 'n1', text: undefined }]
+            ['model::update', { id: 'n1', text: undefined }],
+            endRequest
         ]);
         fakeSocket.emit.mockClear();
         note.text = 'later';
