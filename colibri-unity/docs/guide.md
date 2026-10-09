@@ -729,16 +729,16 @@ reconnecting. Queued and later messages are dropped with a one-time warning. `Se
 
 <img src="../img/weblogger.png" alt="WebLogger" width=400/>
 
-The web logger sends diagnostic data, currently console logs, to the server's web interface. Use it
-on devices without an accessible console, such as VR headsets and smartphones.
+`[RemoteLogger]` sends the Unity console log to the server's web interface, for devices without an
+accessible console such as headsets and phones.
 
-Add the `[RemoteLogger]` prefab to the scene. The Unity log then appears at
+Add the `[RemoteLogger]` prefab to the scene. The log then appears at
 `http://<your-server-ip>:9011`.
 
 - Log lines are sent once per second. Identical lines in one batch are sent once.
-- Between two sends, at most the newest 1000 lines are kept. During an outage, this covers the whole
-  outage, and the lines are sent once the connection is back.
-- Where older lines were dropped, the server log shows one line instead:
+- Between two sends, at most the newest 1000 lines are kept. During an outage, the interval spans
+  the whole outage, and the lines are sent once the connection is back.
+- In place of dropped lines, the server log shows one line:
   `Colibri: N log lines are missing here …`. The device's own log keeps everything.
 - If the server refuses the client's protocol version, the kept lines are discarded.
 
@@ -753,7 +753,6 @@ public VoiceBroadcast Broadcast;
 
 void Start()
 {
-    // Create random voice id
     short voiceId = (short)UnityEngine.Random.Range(1, 32000);
     Broadcast.StartBroadcast(voiceId);
 }
@@ -762,9 +761,9 @@ void Start()
 On Android (Meta Quest), `VoiceBroadcast` requests the microphone permission when it starts. If the
 permission is refused, it logs an error and does not broadcast.
 
-`VoiceReceiver` plays the voice of one voice id. Add it to a GameObject, usually a user
-representation such as an avatar. Adding it also adds an `AudioSource`. For several receivers, make
-a prefab. Call `StartPlayback` with the voice id to play. Distribute voice ids with `Sync.Send`:
+`VoiceReceiver` plays one voice id. Add it to a GameObject, usually an avatar. It adds an
+`AudioSource`. For several receivers, make a prefab. Call `StartPlayback` with the voice id.
+Distribute voice ids with `Sync.Send`:
 
 ```c#
 void Start()
@@ -779,35 +778,35 @@ private void OnIdArrived(int id)
 }
 ```
 
-The `Samples/VoiceChat` sample is a complete voice chat, with a `VoiceManager` that handles voice
-ids and instantiates `VoiceReceiver` prefabs.
+The `Samples/VoiceChat` sample is a complete voice chat. Its `VoiceManager` distributes voice ids
+and instantiates `VoiceReceiver` prefabs.
 
-- **Codec:** raw PCM by default. To reduce bandwidth, enable *Use Opus Codec* on both
-  `VoiceBroadcast` and `VoiceReceiver`. Opus works on Windows, Linux and Android.
-- **Spatial audio:** the voice plays at the `VoiceReceiver`'s position. Enable *Spatialize* on the
-  `AudioSource` and set *Spatial Blend* to `1` (3D). Spatializer plugins set in the audio settings
-  also work.
-- **IPv4:** the voice server listens on IPv4 only. Colibri sends voice to an IPv4 address of the
-  server, so `localhost` also works on Windows, where it resolves to `::1` first. If the address has
-  no IPv4 address or cannot be resolved, Colibri logs an error and turns voice chat off.
-- **Apps:** the server forwards voice only to clients with the same *App Name*, so voice ids must be
-  unique only within an app. Each voice packet carries an app id, a hash of the App Name ([Voice
+- Audio is raw PCM by default. To reduce bandwidth, enable *Use Opus Codec* on both `VoiceBroadcast`
+  and `VoiceReceiver`. Opus works on Windows, Linux and Android.
+- The voice plays at the `VoiceReceiver`'s position. For spatial audio, enable *Spatialize* on the
+  `AudioSource` and set *Spatial Blend* to `1`. Spatializer plugins set in the audio settings also
+  work.
+- The voice server listens on IPv4 only. Colibri sends voice to an IPv4 address of the server, so
+  `localhost` also works on Windows, which resolves it to `::1` first. If the server address has no
+  IPv4 address or cannot be resolved, Colibri logs an error and turns voice chat off.
+- The server forwards voice only to clients with the same App Name, so voice ids must be unique only
+  within an app. Each voice packet carries an app id, a hash of the App Name ([Voice
   packets](../../colibri-server/docs/protocol.md#voice-packets-udp)). Without an App Name, no voice
   is sent, and Colibri logs an error once.
-- **App Name changes at runtime:** voice moves to the new app from the next frame on. Synced objects
-  and `Sync` messages, such as voice ids sent with `Sync.Send`, stay in the old app until
+- After an App Name change at runtime, voice moves to the new app from the next frame. Synced
+  objects and `Sync` messages, such as voice ids sent with `Sync.Send`, stay in the old app until
   `WebServerConnection` reconnects. Disable and re-enable that component to move them too.
-- **Colibri 1.x clients** are not heard. The server drops their voice packets, which have no app id.
-- A client receives voice only while its own `VoiceBroadcast` is broadcasting, because the server
-  registers voice clients by the voice they send.
+- Colibri 1.x clients are not heard. Their voice packets have no app id, and the server drops them.
+- A client receives voice only while its own `VoiceBroadcast` is broadcasting. The server registers
+  voice clients by the packets they send.
 
 ### Limitations
 
-- Limited scalability: each voice packet goes to every other broadcasting client of the app.
-- Limited security: the app id separates apps like the App Name does for synced objects, but it is
-  not access control. Anyone who knows the App Name can receive the app's voice. Voice is not
-  encrypted, even with TLS on.
-- High bandwidth without Opus.
+- Each voice packet goes to every other broadcasting client of the app, which limits scalability.
+- The app id separates apps as the App Name does for synced objects. It is not access control.
+  Anyone who knows the App Name can receive the app's voice.
+- Voice is not encrypted, even with TLS on.
+- Without Opus, bandwidth is high.
 
 ## Related documents
 
