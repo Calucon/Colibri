@@ -655,125 +655,124 @@ and lost in a second drop soon after is still recognised.
 
 ## REST store
 
-A small key-value store over HTTP, on the web port, separate from the model store: values are
-kept per app in `store.json` in the server's data directory (`DATA_ROOT`) and survive restarts.
-colibri-unity's `Store` and colibri-web's `getRestObject` / `setRestObject` use it.
+A key-value store over HTTP on the web port, separate from the model store. Values are kept per app in
+`store.json` in the data directory (`DATA_ROOT`) and survive restarts. colibri-unity's `Store` and
+colibri-web's `getRestObject` / `setRestObject` use it.
 
-| request | answer |
+| Request | Response |
 | --- | --- |
 | `GET /api/store` | `200` with the app names, `["app1", …]` |
-| `GET /api/store/:app` | `200` with the value names of that app; `404` if the app is unknown |
-| `GET /api/store/:app/:name` | `200` with the stored JSON value; `404` if there is none |
-| `PUT /api/store/:app/:name` | stores the request body: any JSON value - an object, an array, a number, a string, `true`, `null` - sent as `Content-Type: application/json`, up to 5 MiB. `201` if it is new, `200` if it replaced a value, each with `{ "result": "…", "data": <the value> }`. `400` for malformed JSON, and for no JSON body at all - none, an empty one, or one sent as `text/plain` or any other `Content-Type` except form data (see below) - in which case nothing is stored; `413` for a body over 5 MiB. |
-| `DELETE /api/store/:app` | `200`, and every value of the app is gone; `404` if the app is unknown |
-| `DELETE /api/store/:app/:name` | `200`; `404` if there is no such value |
+| `GET /api/store/:app` | `200` with the value names of that app. `404` if the app is unknown. |
+| `GET /api/store/:app/:name` | `200` with the stored JSON value. `404` if there is none. |
+| `PUT /api/store/:app/:name` | Stores the request body, any JSON value (object, array, number, string, `true`, `null`), sent as `Content-Type: application/json`, up to 5 MiB. `201` if new, `200` if it replaced a value, each with `{ "result": "…", "data": <the value> }`. `400`, storing nothing, for malformed JSON or no JSON body: none, an empty one, or one sent as `text/plain` or any other `Content-Type` except form data (see below). `413` for a body over 5 MiB. |
+| `DELETE /api/store/:app` | `200`, and every value of the app is gone. `404` if the app is unknown. |
+| `DELETE /api/store/:app/:name` | `200`. `404` if there is no such value. |
 
-Any other request under `/api`, such as a `POST`, or a `PUT` without a value name, answers `404`.
-Errors are JSON, `{ "error": "…" }`, and never carry a stack trace. Any app or value name is
-allowed, `__proto__` and `constructor` included. Each is one segment of the path, so a name with
-`/`, `#`, `?`, `%` or a space in it has to be percent-encoded, as `encodeURIComponent` does;
-colibri-web and colibri-unity's `Store` encode both names, so the two address the same values.
-Only `.` and `..` cannot be reached: a URL resolves them as a step in the path, encoded or not.
-Every response allows any origin (CORS), so a page served from somewhere else can use the store
-too.
+Any other request under `/api`, e.g. a `POST`, or a `PUT` without a value name, returns `404`. Errors
+are JSON, `{ "error": "…" }`, never with a stack trace. Any app or value name is allowed, `__proto__`
+and `constructor` included. Each name is one path segment, so a name with `/`, `#`, `?`, `%` or a space
+must be percent-encoded, as `encodeURIComponent` does. colibri-web and colibri-unity's `Store` encode
+both names, so the two address the same values. Only `.` and `..` cannot be reached, since a URL
+resolves them as a path step, encoded or not. Every response allows any origin (CORS), so a page served
+from elsewhere can use the store too.
 
-A body sent as form data, `Content-Type: application/x-www-form-urlencoded`, is the exception: it
-is accepted, parsed into an object of its fields with string values (an array for a field given
-twice) and stored, up to 100 kB, with `413` above that. Neither client sends form data, but
-`curl -d` does unless you add `-H 'Content-Type: application/json'`, so
-`curl -X PUT -d '{"x":1}' …/api/store/app/name` answers `201` and stores `{"{\"x\":1}": ""}`,
-not `{"x": 1}`.
+Form data, `Content-Type: application/x-www-form-urlencoded`, is the exception. It is accepted up to
+100 kB (`413` above), parsed into an object of its fields with string values (an array for a field
+given twice), and stored. Neither client sends form data, but `curl -d` does unless you add
+`-H 'Content-Type: application/json'`. `curl -X PUT -d '{"x":1}' …/api/store/app/name` therefore returns
+`201` and stores `{"{\"x\":1}": ""}`, not `{"x": 1}`.
 
-Writes reach `store.json` within 250ms, together with any made in the meantime, and the file is
-replaced atomically (written to `store.json.tmp`, then renamed). A save that fails is logged and
-tried again with the next one. When the server shuts down - on `docker stop`, Ctrl+C or an
-uncaught error - it writes whatever is not saved yet, and leaves `store.json` alone if that is
-nothing.
+Writes reach `store.json` within 250 ms, together with any made meanwhile. The file is replaced
+atomically: written to `store.json.tmp`, then renamed. A failed save is logged and retried with the
+next one. On shutdown (`docker stop`, Ctrl+C or an uncaught error), the server writes whatever is not
+saved yet, and leaves `store.json` untouched if that is nothing.
 
 ## Voice packets (UDP)
 
-colibri-unity's voice chat sends each audio frame to the voice port (`VOICE_PORT`, UDP 9013) as
-one datagram: an 11-byte header, then the audio. All integers are little-endian.
+colibri-unity's voice chat sends each audio frame to the voice port (`VOICE_PORT`, UDP 9013) as one
+datagram: an 11-byte header, then the audio. All integers are little-endian.
 
 ```
 [i16 userId][i16 sequence][i16 frameSize][u8 version and codec][u32 appId][data]
 ```
 
-| offset | size | field |
+| Offset | Size | Field |
 | --- | --- | --- |
-| 0 | 2 | `userId`: the voice id the sender broadcasts as. Receivers do not play `0`. |
+| 0 | 2 | `userId`: the sender's voice id. Receivers do not play `0`. |
 | 2 | 2 | `sequence`: colibri-unity sends `0` |
-| 4 | 2 | `frameSize`: the number of samples in the frame, at the voice sampling rate (`VOICE_SAMPLING_RATE`, 48000 by default) |
-| 6 | 1 | version and codec: the header version, `2`, in the high 4 bits; the codec in the low 4 bits, `0` for PCM and `1` for Opus |
+| 4 | 2 | `frameSize`: samples in the frame, at the voice sampling rate (`VOICE_SAMPLING_RATE`, default 48000) |
+| 6 | 1 | version and codec: header version `2` in the high 4 bits, codec in the low 4 bits, `0` for PCM and `1` for Opus |
 | 7 | 4 | `appId`: the app id of the sender's app, see below |
 | 11 | rest | PCM: mono `i16` samples. Opus: one Opus packet. |
 
-`appId` is the 32-bit FNV-1a hash of the app name's UTF-8 bytes: start with `0x811c9dc5`, then for
-each byte XOR it in and multiply by `0x01000193`, modulo 2^32. The empty name hashes to
-`0x811c9dc5`, `a` to `0xe40c292c`. colibri-unity hashes the *App Name* of its Colibri
-configuration (`VoicePacketCodec.AppId`); the server's implementation is `voiceAppId` in
+`appId` is the 32-bit FNV-1a hash of the app name's UTF-8 bytes: start with `0x811c9dc5`, then for each
+byte XOR it in and multiply by `0x01000193`, modulo 2^32. The empty name hashes to `0x811c9dc5`, `a` to
+`0xe40c292c`. colibri-unity hashes the *App Name* of its Colibri configuration
+(`VoicePacketCodec.AppId`). The server's implementation is `voiceAppId` in
 `src/server/modules/web/voice-packet.ts`.
 
-The server registers the sender of a valid packet as a voice client, by its address and port, and
-passes the packet on unchanged to every other voice client with the same `appId`. A client that
-sends with another `appId` from the same address and port moves to that app. A client is dropped
-after 2 to 3 s without a packet, so a client hears voice only while it sends voice itself, as
-colibri-unity's `VoiceBroadcast` does while it broadcasts. With `VOICE_RECORDING=true` the server
-also saves the samples of each client's PCM packets as a `.wav` file in the data directory, named
-after the time of the client's first packet (UTC), its app id, its voice id and its source port:
+The server registers the sender of a valid packet as a voice client, by address and port, and passes
+the packet on unchanged to every other voice client with the same `appId`. A client sending another
+`appId` from the same address and port moves to that app. A client is dropped after 2 to 3 s without a
+packet, so it hears voice only while it sends voice itself, as colibri-unity's `VoiceBroadcast` does
+while broadcasting. With `VOICE_RECORDING=true`, the server also saves the samples of each client's PCM
+packets as a `.wav` file in the data directory, named after the time of the client's first packet
+(UTC), its app id, its voice id and its source port:
 `rec_2026-10-09T11_07_58.502Z_app_0xe40c292c_ID_1_port_52114.wav`.
 
-The server drops the packets below, and reports at most one of them per source address and port
-every 10 s:
+The server drops these packets, reporting at most one per source address and port every 10 s:
 
-| packet | log |
+| Packet | Log |
 | --- | --- |
 | header version `0`: a Colibri 1.x client, whose 7-byte header has no `appId` and has the codec, `0` or `1`, at offset 6 | warning `Ignoring voice packet from <address>:<port>: it looks like a Colibri 1.x client ...`, which says to upgrade the Unity package to 2.x |
 | a header version other than `0` and `2` | error `Ignoring malformed voice packet from <address>:<port>: its header version is <n>, not 2` |
 | shorter than the 11-byte header | error `Ignoring malformed voice packet from <address>:<port>: <n> bytes is shorter than the 11-byte header` |
 | from source port 0 | error `Ignoring malformed voice packet from <address>:<port>: its source port is 0, ...` |
 
-The app id keeps the voice of different apps apart, as the app name does on TCP; it is not access
-control. Anyone who knows an app's name can send voice to its clients and receive theirs. Two app
-names can have the same app id, by chance about 1 in 4 billion for any two; their voice clients
-then hear each other. Voice is never encrypted: [TLS](#tls) covers the TCP and web ports only.
+The app id keeps the voice of different apps apart, as the app name does on TCP. It is not access
+control: anyone who knows an app's name can send voice to its clients and receive theirs. Two app names
+can have the same app id, by chance about 1 in 4 billion for any two, and their voice clients then hear
+each other. Voice is never encrypted: [TLS](#tls) covers only the TCP and web ports.
 
 ## Known limits
 
-**A reconnect catches up on deletions only for a while.** Both clients ask for the models again
-after every reconnect (see [After a reconnect](#after-a-reconnect)), and a model deleted while a
-client was away is removed from it when its re-request reaches the server within
-`MODEL_TOMBSTONE_SECONDS` of the delete. Later than that, the re-request is answered with the bare
-id, the client sends the model again, and it comes back for everyone. colibri-web re-requests only
-the models it registered itself: one it got from another client and that was deleted while it was
-away stays in its list, since the answer for the whole channel only lists the models that exist.
-A model the server has forgotten comes back in full only from a client that sends it again after
-reconnecting: colibri-web sends the models it registered, colibri-unity each synced object the
-server answers with the bare id. Until then, a change to it creates it with only the fields that
-changed. That includes a colibri-unity object that changed while the client was offline: the
-update goes out ahead of the request, so the server has those fields when it answers, and the
-full state is not sent. Its other fields reach the server only when they change, and a client that
-joins in the meantime has its own starting values for them: the template's, or, for an object
-placed in the scene, the scene's.
+**A reconnect catches up on deletions only for a while.** A model deleted while a client was away is
+removed from it if its re-request ([After a reconnect](#after-a-reconnect)) reaches the server within
+`MODEL_TOMBSTONE_SECONDS` of the delete. Later, the re-request is answered with the bare id, the client
+sends the model again, and it comes back for everyone. colibri-web re-requests only the models it
+registered itself. A model it got from another client, deleted while it was away, stays in its list,
+since the answer for the whole channel lists only the models that exist.
 
-**A lost change is told from another client's change by its value alone** (see
-[After a reconnect](#after-a-reconnect)). Another client that sets a member or field back during
-the outage, to a value the reconnecting client had in the 10 s before the outage, looks like a lost
-change: the reconnecting client sends its own value over it. Both clients judge every update that
-arrives before the end of the answers like that, even one another client made after the
-reconnect. Both clients may miss a member or field that changed more than about 8 times within
-100 ms of when they last heard from the server, which for colibri-unity takes a send-rate limit
-above about 80 updates a second. colibri-unity may also miss a member that changed more than once
-between a reconnect and a second drop before the end of the answers. It does not send again a
-member whose very first value was lost, having held nothing before it, and colibri-web checks only
-the models it registered. In the same way, colibri-web sends again a field it sent on top of an
-answer when the server still shows the value it replaced once it has asked for the model once more
-(see [Requests](#requests)), even if another client set it back in that round trip. A value sent
-again can cross a change another client makes right after the answers, like any two changes made at
-the same time. A `model::delete` colibri-unity sends again after an outage also removes an object
-another client has created under the same id since, as a delete sent during the outage does.
+**A forgotten model comes back in full only from a client that sends it again after reconnecting.**
+colibri-web sends the models it registered, colibri-unity each synced object the server answers with
+the bare id. Until then, a change to the model creates it with only the changed fields. This includes a
+colibri-unity object that changed while the client was offline. The update with only the changed members
+goes out ahead of the request, so the server has those members when it answers, answers with them
+instead of the bare id, and the full state is not sent. The other fields reach the server only when
+they change. A client joining meanwhile has its own starting values for them: the template's, or for an
+object placed in the scene, the scene's.
 
-**Nobody is authenticated.** Any client that can reach the server can join any app under any name,
-read and change its models and its REST store, and send and receive its voice. The version check
-is not access control.
-Colibri is meant for a local network you trust.
+**A lost change is told from another client's change by its value alone**
+([After a reconnect](#after-a-reconnect)):
+
+- Another client that sets a member or field back during the outage, to a value the reconnecting client
+  had in the 10 s before the outage, looks like a lost change, and the reconnecting client sends its
+  own value over it. Both clients judge every update arriving before the end of the answers this way,
+  even one another client made after the reconnect.
+- Both clients may miss a member or field that changed more than about 8 times within 100 ms of the
+  last time they heard from the server. For colibri-unity, that takes a send-rate limit above about 80
+  updates a second.
+- colibri-unity may miss a member that changed more than once between a reconnect and a second drop
+  before the end of the answers. It does not send again a member whose very first value was lost,
+  since it held nothing before it.
+- colibri-web checks only the models it registered. It sends again a field it sent on top of an answer
+  when the server still shows the replaced value once the model was requested once more
+  ([Requests](#requests)), even if another client set it back in that round trip.
+- A value sent again can cross a change another client makes right after the answers, like any two
+  simultaneous changes.
+- A `model::delete` colibri-unity sends again after an outage also removes an object another client has
+  created under the same id since, as a delete sent during the outage does.
+
+**No authentication.** Any client that can reach the server can join any app under any name, read and
+change its models and its REST store, and send and receive its voice. The version check is not access
+control. Run Colibri on a trusted local network.
