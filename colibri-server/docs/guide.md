@@ -6,22 +6,22 @@ is in [protocol.md](protocol.md), and everything that changed since 1.x in
 [v2-changelog.md](v2-changelog.md).
 
 - [Setup](#setup)
-  - [Docker (recommended)](#docker-recommended): [data directory](#data-directory),
+  - [Docker](#docker): [data directory](#data-directory),
     [running as another user](#running-as-another-user),
-    [when the server cannot save](#when-the-server-cannot-save),
+    [unwritable data directory](#unwritable-data-directory),
     [settings and ports](#settings-and-ports)
-  - [Node](#node)
+  - [Node.js](#nodejs)
   - [Configuration](#configuration)
-- [TLS](#tls): [turning it on](#turning-it-on),
+- [TLS](#tls): [enabling TLS](#enabling-tls),
   [a self-signed certificate](#a-self-signed-certificate), [Docker](#tls-with-docker),
-  [renewal](#renewal), [what stops the server](#what-stops-the-server-at-startup),
-  [the log](#tls-in-the-log), [a reverse proxy instead](#a-reverse-proxy-instead),
+  [renewal](#renewal), [startup errors](#startup-errors),
+  [the log](#tls-in-the-log), [reverse proxy](#reverse-proxy),
   [performance](#performance)
 - [Features](#features)
   - [Logs](#logs)
   - [Load limits](#load-limits)
-  - [Lost connections](#lost-connections)
-- [Protocol](#protocol)
+  - [Idle timeout](#idle-timeout)
+- [Protocol version](#protocol-version)
 - [Development](#development)
 
 The server connects the Unity clients (TCP) and web clients (Socket.IO) of each app: it relays
@@ -34,9 +34,10 @@ its data, and read the log. Run it on a network you trust.
 
 ## Setup
 
-### [Docker](https://hub.docker.com/r/hcikn/colibri) _(recommended)_
+### Docker
 
-Save the following as `docker-compose.yml` and run `docker compose up -d`:
+Recommended. Image: [`hcikn/colibri`](https://hub.docker.com/r/hcikn/colibri). Save the following
+as `docker-compose.yml` and run `docker compose up -d`:
 
 ```yaml
 services:
@@ -106,7 +107,7 @@ e.g. `sudo chown -R 1001:1001 ./data` for `--user 1001:1001`. A new named volume
 `--user 1000:1000`. For any other uid, use a host directory you gave to that uid, or drop
 `--user` and let the container hand the directory to `node` itself.
 
-#### When the server cannot save
+#### Unwritable data directory
 
 If the server cannot write to its data directory, it says so at startup on stderr, with the path,
 the error, the uid it runs as and what to do about that error: give the directory to that uid,
@@ -123,7 +124,7 @@ container as they are. If you do set `WEBSERVER_PORT`, publish that port instead
 `"9111:9111"`; the image's health check follows `WEBSERVER_PORT` and `WEBSERVER_HOST` wherever
 they are set.
 
-### Node
+### Node.js
 
 Requirements: NodeJS 24+
 
@@ -152,7 +153,7 @@ short:
 | `CONSOLE_LOG_BROADCAST_TRAFFIC` | `false` | `true` also prints every `broadcast::` message, whatever the level |
 | `TCP_INBOUND_BACKLOG_LIMIT` | `2000` | messages from Unity clients that may wait for the server's main thread before it holds back `model::update` and drops `broadcast::` messages, so an overloaded server's memory and delay stay bounded; `0`: no limit |
 | `CLIENT_MESSAGE_RATE_LIMIT`, `CLIENT_MESSAGE_RATE_BURST` | `1000`, `2000` | `model::update` and `broadcast::` messages a second that one client, Unity or web, may send, and how many at once after a quieter stretch; beyond that, the same happens to its messages. Catches a runaway send loop. `0` turns the limit off; the burst must be at least 1 |
-| `TCP_IDLE_TIMEOUT_SECONDS` | `10` | seconds a Unity client may send nothing at all, not even its heartbeat replies, before it is disconnected as gone, e.g. a headset that left the Wi-Fi; a connection that has not handshaked by then is closed too. A client reading a message larger than 64 KiB gets up to 6 times this much more (see [Lost connections](#lost-connections)). `0`: never |
+| `TCP_IDLE_TIMEOUT_SECONDS` | `10` | seconds a Unity client may send nothing at all, not even its heartbeat replies, before it is disconnected as gone, e.g. a headset that left the Wi-Fi; a connection that has not handshaked by then is closed too. A client reading a message larger than 64 KiB gets up to 6 times this much more (see [Idle timeout](#idle-timeout)). `0`: never |
 | `APP_CLIENT_WARNING_THRESHOLD` | `8` | log a warning when one app has more clients than this, Unity and web together, the admin UI not counted; usually separate projects that kept the same app name. `0`: never |
 | `MODEL_TOMBSTONE_SECONDS` | `600` | seconds the server remembers that a synced object (model) was deleted. Meanwhile it ignores updates for it, so one another client sent before the delete reached it cannot create the object again, and it tells a client that asks for the object again after a reconnect to delete its copy. A client that has the object in its scene again, such as a scene with placed objects loaded again, ends this early. Forgotten with the app's models once its last client has left. `0`: not remembered. See [Deleted models](protocol.md#deleted-models) |
 | `TLS_CERT`, `TLS_KEY` | empty | PEM files of the certificate (with its chain) and of its private key. Set both, and the TCP port and the web port serve TLS only; see [TLS](#tls) |
@@ -165,7 +166,7 @@ mount the data at `/srv/colibri/data` instead (see [Data directory](#data-direct
 A port that is not an integer from 1 to 65535, a sampling rate, stack trace limit or burst that is
 not a positive integer, any other number that is not a whole number of 0 or more, or an unknown
 log level stops the server at startup, with a message naming the variable. So does a `TLS_CERT`
-or `TLS_KEY` it cannot use (see [What stops the server at startup](#what-stops-the-server-at-startup)).
+or `TLS_KEY` it cannot use (see [Startup errors](#startup-errors)).
 See [Load limits](#load-limits) for what the limits are for.
 
 ## TLS
@@ -186,7 +187,7 @@ Inside TLS the frames are the same, and the protocol version does not change (se
 authenticate clients: anyone who can reach the ports can still join any app. The voice relay (UDP)
 stays unencrypted.
 
-### Turning it on
+### Enabling TLS
 
 | variable | |
 | --- | --- |
@@ -270,7 +271,7 @@ files it cannot read, get one warning, and the old certificate stays in use. The
 once when the certificate is not valid yet, expires within 7 days (a short-lived certificate: in the
 last fifth of its lifetime), or has expired.
 
-### What stops the server at startup
+### Startup errors
 
 With TLS configured, the server refuses to start, with a message that names the variable, the file
 and the fix, when:
@@ -294,7 +295,7 @@ and the fix, when:
 
 The first three are logged at most once a minute per address, the repeats at debug level.
 
-### A reverse proxy instead
+### Reverse proxy
 
 TLS can also end in a reverse proxy you already run, in front of a server with `TLS_CERT` and
 `TLS_KEY` unset: for the TCP port, nginx's `stream` module with `listen 9012 ssl`, or a Traefik TCP
@@ -326,7 +327,7 @@ The cost of TLS on a headset itself was not measured.
   connected clients and their latency.
 - **Model synchronization** and **broadcasts** between the Unity and web clients of an app, see
   [protocol.md](protocol.md). Only `broadcast::` messages and model changes are passed on to other
-  clients; see [What the server relays](protocol.md#what-the-server-relays).
+  clients; see [Relayed messages](protocol.md#relayed-messages).
 - **REST store** at `/api/store` on the web port, saved to `store.json` in the data directory, see
   [REST store](protocol.md#rest-store).
 - **Voice relay** on UDP port 9013. Each voice packet goes to the other clients of the sender's app
@@ -377,7 +378,7 @@ process; fewer synced objects, a lower sync rate or fewer clients per app reduce
 rate warning names one client that sends far more than the others, usually because something
 sends every frame without a rate cap.
 
-### Lost connections
+### Idle timeout
 
 The server sends every Unity client a heartbeat ten times a second, and the client echoes it. A
 Unity client that has sent nothing at all for `TCP_IDLE_TIMEOUT_SECONDS` (10 s) is disconnected
@@ -402,7 +403,7 @@ and then it does: when you debug with long breakpoints against a server of your 
 `TCP_IDLE_TIMEOUT_SECONDS` or set it to `0`. Web clients are not affected; Socket.IO's own ping
 notices a web client that has gone, within about 45 s.
 
-## Protocol
+## Protocol version
 
 Web clients talk to the server over Socket.IO, and Unity clients over TCP using a custom binary
 protocol; [protocol.md](protocol.md) describes both. **v2.0.0 introduces a v3 framing format that

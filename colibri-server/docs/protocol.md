@@ -17,7 +17,7 @@ except in a handful of hooks (`ModelSynchronization`, `MeasureLatency`, `WebLog`
 Voice is separate: Unity clients send it to the voice port over UDP, in the
 [voice packet format](#voice-packets-udp).
 
-## What the server relays
+## Relayed messages
 
 The server does not forward messages in general. Of what a client sends, it relays exactly two
 kinds, to the other clients of the sender's app - Unity and web alike, the sender excluded:
@@ -40,7 +40,7 @@ clients a message of your own, give it a command that starts with `broadcast::`,
 Under overload, or from a client that sends too fast, the server holds back and merges
 `model::update` messages and drops `broadcast::` messages; see [Inbound limits](#inbound-limits).
 
-## v3 TCP framing (breaking change from v1)
+## v3 TCP framing
 
 > **This is a breaking protocol change.** A `colibri-unity` client built against the old v1
 > flatbuffer framing cannot talk to a v2.0.0+ server, and vice versa. There is no version
@@ -122,7 +122,7 @@ own console is worse than the mismatch it detects.
 
 - The refusal only reaches a client whose *framing* the server still speaks. A Colibri 1.x Unity
   client fails before its version is ever read: its first packet, the 1.x handshake, does not
-  parse as a v3 frame (see [Reading frames off the wire](#reading-frames-off-the-wire)), and it
+  parse as a v3 frame (see [Frame parsing](#frame-parsing)), and it
   could not decode a refusal anyway. The server recognises the 1.x framing instead, closes the
   connection and logs a warning naming the remote address: it looks like a Colibri 1.x client,
   the server speaks protocol v2, and the Unity package (`de.uni.kn.colibri`) in that app has to
@@ -296,7 +296,7 @@ sends it while still speaking the old protocol. Detecting an out-of-date server 
 
 Carries an application message: `channel` and `command` identify the message (e.g. channel
 `myApp::position`, command `model::update`), and `payload` is an opaque byte range - when the
-server relays the message (see [What the server relays](#what-the-server-relays)), it passes the
+server relays the message (see [Relayed messages](#relayed-messages)), it passes the
 payload on verbatim to other TCP clients without ever decoding it as a string, and only decodes it
 (via `Payload.fromBytes(...).asValue()`) when a hook needs to inspect it or when relaying
 cross-transport to a Socket.IO client. The one exception is a `model::update` that was held back
@@ -305,7 +305,7 @@ and merged (see [Inbound limits](#inbound-limits)), which is passed on re-encode
 ### `broadcast::` commands
 
 The `broadcast::` prefix of a `command` is what makes the server relay the message to the other
-clients of the sender's app (see [What the server relays](#what-the-server-relays)). Nothing else
+clients of the sender's app (see [Relayed messages](#relayed-messages)). Nothing else
 on the wire marks such a message: the prefix is part of the `command` string. colibri-unity's
 `Sync.Send` and colibri-web's `Sync.send*` use it for state, position and similar continuous
 updates, with the commands below. `BroadcastLogger`
@@ -356,7 +356,7 @@ readable text, so colibri-unity sends it as raw utf8 (`WebServerConnection.Encod
 server unwraps a JSON string value before logging it - otherwise a web client's log line reaches
 the admin UI with the JSON quotes still around it.
 
-### Reading frames off the wire
+### Frame parsing
 
 `FrameReader` (`src/server/modules/networking/protocol.ts`) is a growable buffer with read/write
 cursors that TCP data events are appended into. It yields every complete frame currently
@@ -523,7 +523,7 @@ Unity and web together), the server logs a warning that starts `App '<app>' now 
 
 ## Server messages
 
-Besides relaying (see [What the server relays](#what-the-server-relays)), the server speaks on a
+Besides relaying (see [Relayed messages](#relayed-messages)), the server speaks on a
 few channels of its own. Applications should not use these channel names, or the app name
 `colibri`.
 

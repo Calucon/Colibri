@@ -82,7 +82,7 @@ data, and read the log. Run the server on a trusted network.
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| Startup error on stderr about the data directory | The server cannot write there. It keeps running but saves nothing. | Apply the fix named in the message ([details](docs/guide.md#when-the-server-cannot-save)) |
+| Startup error on stderr about the data directory | The server cannot write there. It keeps running but saves nothing. | Apply the fix named in the message ([details](docs/guide.md#unwritable-data-directory)) |
 | A client is missing from the admin UI, and the log shows `Refusing ...` | A 1.x client, or the Unity app's *Server supports SSL/TLS?* does not match the server | Update the client to 2.x, or fix the TLS setting ([TLS in the log](docs/guide.md#tls-in-the-log)) |
 | A Unity client disconnects while stopped at a breakpoint | The debugger also pauses heartbeat replies | Raise `TCP_IDLE_TIMEOUT_SECONDS` or set it to `0` |
 | `App 'MyApp' now has 9 clients, more than 8 ...` | Separate projects use the same app name | Give each project its own app name |
