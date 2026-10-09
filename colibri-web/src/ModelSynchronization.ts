@@ -116,9 +116,16 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
     // reconnect but before the server answered for it (see registerModel).
     const heldChanges = new WeakMap<T, Set<string>>();
 
-    // Changes to own models made while nothing was held back, waiting for SyncModel to report them
-    // (it buffers for 1 ms) to go out together.
+    // Changes to models, own ones made while nothing was held back, waiting for SyncModel to report
+    // them (it buffers for 1 ms) to go out together. An update that arrives before then leaves them
+    // as they are (see applyUpdate).
     const changesToSend = new WeakMap<T, Set<string>>();
+
+    const noteChangeToSend = (model: T, change: string) => {
+        const toSend = changesToSend.get(model);
+        if (toSend) toSend.add(change);
+        else changesToSend.set(model, new Set([change]));
+    };
 
     // Own models asked for again after sending the changes held back for them (see takeAnswer),
     // until the answers to that are over: by id, the fields sent that replaced a value the server
@@ -613,9 +620,13 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
         return Object.fromEntries(Object.entries(modelData).filter(([key]) => !drop.has(key))) as Partial<T>;
     };
 
+    // A change SyncModel has not reported yet is left as it is: the update was made before the server
+    // had the change, which reaches the server after it. Applied over it, the update undid the
+    // change, and the report sent the update's value in its place.
     const applyUpdate = (model: T | undefined, modelData: Partial<T>) => {
         if (model) {
-            const update = withoutKeys(modelData, keptOutOf(model));
+            const unsent = [...(changesToSend.get(model) ?? [])];
+            const update = withoutKeys(withoutChanges(modelData, model, unsent), keptOutOf(model));
             if (ownModels.has(model)) remember(model, update);
 
             // Update existing model
@@ -624,7 +635,11 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
         } else if (modelData.id) {
             const newModel = new registration.type(modelData.id);
 
+            newModel.modelChanges.subscribe(change => {
+                noteChangeToSend(newModel, change);
+            });
             newModel.modelChanges$.subscribe(changes => {
+                changesToSend.delete(newModel);
                 const update = newModel.toJson(changes);
                 SendMessage(name, 'model::update', update);
                 keepOut(newModel, update);
@@ -710,13 +725,8 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
         // became all of it, the answer had fields in it, and the rest was never sent again.
         const mustHold = () => !Colibri.getInstance(false) || disconnected || awaitingAnswer.has(model.id);
         model.modelChanges.subscribe(change => {
-            if (mustHold()) {
-                holdChanges(model, [change]);
-                return;
-            }
-            const toSend = changesToSend.get(model);
-            if (toSend) toSend.add(change);
-            else changesToSend.set(model, new Set([change]));
+            if (mustHold()) holdChanges(model, [change]);
+            else noteChangeToSend(model, change);
         });
         model.modelChanges$.subscribe({
             next: () => {

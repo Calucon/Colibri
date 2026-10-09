@@ -1304,6 +1304,25 @@ describe('keeping a change sent just after asking for every model', () => {
 
         expect([theirs.a, theirs.b]).toEqual(['A2', 'B2']);
     });
+
+    // SyncModel reports a change 1 ms after it is made. An update that came in between was applied
+    // over it, and the report sent that update's value in its place.
+    it('keeps a change to a model another client made when an update for it comes before it is sent', async () => {
+        new Colibri('app', 'localhost', 9011);
+        const [models$] = RegisterModelSync({ name: 'own', type: Pair });
+        connectSocket();
+        await nextTask();
+        deliver('own', { command: 'model::update', payload: { id: 'theirs', a: 'A', b: 'B' } });
+        endOfAnswers();
+        const [theirs] = latest(models$);
+
+        theirs.b = 'B2';
+        deliver('own', { command: 'model::update', payload: { id: 'theirs', a: 'A2', b: 'B3' } });
+        await settle();
+
+        expect([theirs.a, theirs.b]).toEqual(['A2', 'B2']);
+        expect(sentInOrder().at(-1)).toEqual(['model::update', { id: 'theirs', b: 'B2' }]);
+    });
 });
 
 // The server may already have a model under the id registered: another client created it, or this
@@ -1694,6 +1713,24 @@ describe('keeping a change made after registerModel', () => {
         endOfAnswers();
         deliver('reg', { command: 'model::update', payload: { id: 'p1', a: 'theirs too' } });
         expect(pair.a).toBe('theirs too');
+    });
+
+    // SyncModel reports a change 1 ms after it is made. The answer that came in between was applied
+    // over it, and the report sent the server's old value in its place, to every client.
+    it("keeps a change made after another client's update came first, when the answer comes before it is sent", async () => {
+        const { pair } = await registeredLate();
+        endOfAnswers();
+        deliver('reg', { command: 'model::update', payload: { id: 'p1', b: 'theirs' } });
+        pair.a = 'changed';
+        // The answer to the request for the id.
+        deliver('reg', { command: 'model::update', payload: { ...server, b: 'theirs' } });
+        await settle();
+
+        expect([pair.a, pair.b]).toEqual(['changed', 'theirs']);
+        expect(sentOnChannel()).toEqual([
+            ['model::request', { id: 'p1' }],
+            ['model::update', { id: 'p1', a: 'changed' }]
+        ]);
     });
 
     it('keeps a change made after the answer for every model came first, and the answer after it', async () => {
