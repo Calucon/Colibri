@@ -41,23 +41,30 @@ namespace HCIKonstanz.Colibri.Samples
             {
                 if (_renderer)
                     _renderer.material.color = value;
-                LocalColor = value;
+                LocalColor = _appliedColor = value;
             }
         }
 
         public Color LocalColor;
 
+        // The color last applied, so that Update applies LocalColor only once it is edited.
+        private Color _appliedColor;
+
         private Renderer _renderer;
         protected override void Awake()
         {
-            base.Awake();
+            // Before base.Awake(), which reads every [Sync] member once: the server's first answer
+            // replaces each member that still reads that value, and keeps each one that does not.
             _renderer = GetComponent<Renderer>();
+            Color = LocalColor;
+            base.Awake();
         }
 
         private void Update()
         {
             // apply updates from unity editor (for demo purposes)
-            Color = LocalColor;
+            if (LocalColor != _appliedColor)
+                Color = LocalColor;
         }
     }
 }
