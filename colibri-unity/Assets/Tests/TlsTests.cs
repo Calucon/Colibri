@@ -250,6 +250,29 @@ namespace HCIKonstanz.Colibri.E2E
                 "Three silent sessions in a row should be named as such, once");
         }
 
+        /// <summary>
+        /// A TLS-terminating proxy whose backend refuses the connection: the TLS handshake completes,
+        /// and then the proxy hangs up without a frame. Past a completed TLS handshake that is not a
+        /// mismatch, so it is named with the silent links. It used to be reported as a suspected
+        /// protocol mismatch, as an error that named only the server's version.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator ALinkThatCompletesTheTlsHandshakeAndThenHangsUpIsNotReportedAsAMismatch()
+        {
+            var server = _cleanup.Add(FakeColibriServer.Start(FakeColibriServer.Behaviour.HangUpAfterHandshake, useTls: true));
+            ConnectionTo(allowSelfSigned: false, pin: TestTls.CertificateSha256, tcpPort: server.Port);
+
+            // Three sessions, 500 ms and 1000 ms apart, and the fourth accepted 2 s after the third.
+            yield return E2EServer.WaitUntil(() => server.Accepted >= 4,
+                "The client stopped retrying a link that completes the TLS handshake and then hangs up", 20f);
+
+            Assert.That(Connection.SuspectedProtocolMismatch, Is.Null,
+                "A link that completed the TLS handshake and then hung up was reported as a suspected protocol mismatch");
+            Assert.That(Connection.ConsecutiveEarlyFrameFailures, Is.Zero);
+            Assert.That(Logged(LogType.Warning, Unanswered).Length, Is.EqualTo(1),
+                "Three sessions in a row closed without a frame should be named as such, once");
+        }
+
 
         /*
          *  Everything else, inside TLS
