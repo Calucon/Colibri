@@ -23,8 +23,8 @@ For installing it and getting two clients to talk, the [README](../README.md) is
   - [Connection and outages](#connection-and-outages)
   - [Web Interface for Logging](#web-interface-for-logging)
   - [Voice Chat](#voice-chat)
-- [Other documents](#other-documents)
-- [For maintainers](#for-maintainers)
+- [Related documents](#related-documents)
+- [Development](#development)
 
 ## Requirements
 
@@ -865,16 +865,16 @@ ids and instantiates `VoiceReceiver` prefabs.
   encrypted, even with TLS on.
 - High bandwidth without Opus.
 
-## Other documents
+## Related documents
 
-- [MIGRATION.md](../../MIGRATION.md): upgrading a Colibri 1.x project, for all three components;
-  read it together with the change log's [Breaking changes](../CHANGELOG.md#breaking-changes)
-- [CHANGELOG.md](../CHANGELOG.md): everything that changed in `1.3.1` → `2.0.0`
-- [v2-ease-of-use-and-performance.md](v2-ease-of-use-and-performance.md): how the sync
-  loop and the diagnostics work, why they were built that way, and how to migrate an existing project
+- [MIGRATION.md](../../MIGRATION.md): upgrading a Colibri 1.x project, for all three components.
+  Read it with the changelog's [Breaking changes](../CHANGELOG.md#breaking-changes).
+- [CHANGELOG.md](../CHANGELOG.md): all changes from `1.3.1` to `2.0.0`
+- [v2-ease-of-use-and-performance.md](v2-ease-of-use-and-performance.md): design of the sync loop
+  and the diagnostics, and migrating an existing project
 - [colibri-server/docs/protocol.md](../../colibri-server/docs/protocol.md): the v3 wire protocol
 
-## For maintainers
+## Development
 
 ### Running the tests
 
@@ -886,77 +886,74 @@ node colibri-unity/run-tests.mjs --editmode --stripping   # plus the code-stripp
 node colibri-unity/run-tests.mjs --tls        # plus the PlayMode suite again, over TLS
 ```
 
-Two suites, and they need different things:
+| Suite | Location | Description |
+|---|---|---|
+| EditMode | `Assets/Colibri/Tests/Editor/` | NUnit tests of the framing, JSON conversions, diagnostics, outage queue, message dispatch, `[Sync]` accessors (including the IL2CPP path), send-rate limit, connect timeout, build settings check, app-name warning, and the voice server address, packet format and packet queue. No server needed, runs wherever Unity runs. |
+| PlayMode | `Assets/Tests/` | A Unity client and a raw v3 peer against a running `colibri-server`. Reconnects go through a proxy the test can cut. Mismatch detection runs against a scripted stand-in server. |
 
-- **EditMode** (`Assets/Colibri/Tests/Editor/`) is plain NUnit over the framing, the JSON
-  conversions, the diagnostics, the outage queue, message dispatch, the `[Sync]` accessors
-  (including the IL2CPP path), the send-rate limit, the connect timeout, the Android build check,
-  the app-name warning, and the voice server address, packet format and packet queue. No server
-  needed, runs anywhere Unity does.
-- **PlayMode** (`Assets/Tests/`) is the real thing: a Unity client and a raw v3 peer talking to a
-  running `colibri-server`. The script starts one with `docker compose` and stops it again, unless
-  something is already listening on the port, which it uses as it stands and leaves running.
-  Reconnects go through a proxy the test can cut, and the mismatch detection runs against a
-  scripted stand-in server.
+The script starts the PlayMode server with `docker compose` and stops it afterwards. A server
+already listening on the port is used as it is and left running.
 
-`--stripping` adds a third check, off by default, for what neither suite can see: whether `[Sync]`
-members survive managed code stripping. An editor never strips, so it builds a Release IL2CPP
-player of `Assets/StrippingCheck/` for the desktop platform the editor runs on, with *Managed
-Stripping Level* High, and runs it. The player checks that every `[Sync]` member of
-`SyncTransform` and of a test model (a private serialized field, public value and reference fields,
-a property) is still there with its `[Sync]`, then applies an update to each and checks the values
-arrived. It exits 1 on any failure, and the result lines are printed. It needs no server, takes a
-few minutes, and needs the IL2CPP module for that platform; without it, the check is skipped with a
-notice rather than failed. The project's `ProjectSettings` are put back exactly as they were after
-the build.
+`--stripping`, off by default, checks whether `[Sync]` members survive managed code stripping. The
+Editor never strips, so the script builds a Release IL2CPP player of `Assets/StrippingCheck/` for
+the Editor's desktop platform with *Managed Stripping Level* High, and runs it.
 
-For the PlayMode suite, the script also starts a second server with TLS on, from
-`tls-test-server/compose.yml` (see its [README](../tls-test-server/README.md)), on 9111 (https) and
-9112 (TLS), for `TlsTests` and `StoreOverTlsTests`. Without that server those tests are skipped,
-and the script says so. `--tls` runs the PlayMode suite a second time with every connection over
-TLS, the tests' own fake server and proxy included, into `TestResults/PlayMode-TLS.xml` and `.log`.
-`ProtocolMismatchDetectionTests` skip themselves in that run. Without the TLS server, `--tls`
-fails rather than skips. The certificate files in `tls-test-server/` (`cert.pem`, `key.pem`,
-`cert.pfx`) are public and for tests only.
+- The player checks that every `[Sync]` member of `SyncTransform` and of a test model (a private
+  serialized field, public value and reference fields, a property) still has its `[Sync]`, applies
+  an update to each, and checks the values.
+- It prints the result lines and exits with 1 on any failure.
+- The check needs no server, takes a few minutes, and needs the IL2CPP module for the platform.
+  Without the module, it is skipped with a notice.
+- `ProjectSettings` are restored exactly after the build.
 
-Results land in `TestResults/` as NUnit XML plus the editor log. Without a reachable server the
-end-to-end tests report as *skipped* with the command that fixes it, rather than failing.
+For PlayMode, the script also starts a TLS server from `tls-test-server/compose.yml`
+([README](../tls-test-server/README.md)) on ports 9111 (https) and 9112 (TLS), for `TlsTests` and
+`StoreOverTlsTests`. Without it, these tests are skipped, and the script reports this.
 
-The connect-timeout tests that need a port that never answers are skipped on Windows, which
-refuses a connection to a full listen backlog instead of leaving it unanswered:
-`ConnectTimeoutTests.AnAttemptNothingAnswersIsGivenUpAfterTheTimeout` and
-`.CancellingGivesUpTheAttemptAtOnce`, and
-`ProtocolMismatchDetectionTests.AnAttemptNothingAnswersIsGivenUpAfterFiveSecondsAndRetried`. Check
-the timeout there by hand: with an unreachable server address, the client should leave
-*Connecting* after 5 s.
+- `--tls` runs the PlayMode suite again with every connection over TLS, including the tests' own
+  fake server and proxy, into `TestResults/PlayMode-TLS.xml` and `.log`.
+  `ProtocolMismatchDetectionTests` skip themselves in that run. Without the TLS server, `--tls`
+  fails.
+- The certificate files in `tls-test-server/` (`cert.pem`, `key.pem`, `cert.pfx`) are public and for
+  tests only.
 
-| Variable | Meaning |
-| --- | --- |
-| `COLIBRI_E2E_SERVER` | Host of a server to use instead of starting one. Setting it means the script never starts or stops anything. |
-| `COLIBRI_E2E_PORT` | Web/Socket.IO port, default `9011` |
-| `COLIBRI_E2E_TCP_PORT` | Binary v3 port, default `9012` |
-| `COLIBRI_E2E_NO_BUILD` | Skip `docker compose --build` |
-| `COLIBRI_E2E_TLS_PORT` | The TLS server's web port (https), default `9111` |
-| `COLIBRI_E2E_TLS_TCP_PORT` | The TLS server's binary v3 port (TLS), default `9112` |
-| `COLIBRI_E2E_TLS_CERT` | The TLS server's certificate, default `tls-test-server/cert.pem` |
-| `COLIBRI_E2E_TLS` | `1` runs the PlayMode suite over TLS; `run-tests.mjs --tls` sets it |
-| `COLIBRI_E2E_TLS_PFX` | The certificate the tests' own fake server and proxy serve over TLS, default `tls-test-server/cert.pfx` |
-| `UNITY_PATH` | The editor to use, if it is not where Unity Hub puts it |
+Results go to `TestResults/` as NUnit XML plus the Editor log. Without a reachable server, the
+end-to-end tests are skipped, not failed, and name the command that fixes it. The script reports a
+suite in which every test was skipped as failed.
 
-The script insists on the exact editor version in `ProjectSettings/ProjectVersion.txt` unless
-`UNITY_PATH` says otherwise: opening the project with a different one upgrades it in place, which
-turns a test run into a diff across the manifest and half of `ProjectSettings`. If that version is
-not installed it lists the ones that are, with the `UNITY_PATH` to use; the upgrade is then yours to
-commit deliberately, rather than something that arrives attached to an unrelated change.
+Windows refuses connections to a full listen backlog instead of leaving them unanswered, so these
+connect-timeout tests are skipped there:
+`ConnectTimeoutTests.AnAttemptNothingAnswersIsGivenUpAfterTheTimeout`,
+`ConnectTimeoutTests.CancellingGivesUpTheAttemptAtOnce` and
+`ProtocolMismatchDetectionTests.AnAttemptNothingAnswersIsGivenUpAfterFiveSecondsAndRetried`. On
+Windows, check manually that a client with an unreachable server address leaves *Connecting* after
+5 s.
 
-The package itself supports **2022.3 LTS and newer**; the version pinned here is only what the
-development project is opened with.
+| Variable | Default | Description |
+|---|---|---|
+| `COLIBRI_E2E_SERVER` | unset | Host of a server to use instead of starting one. When set, the script never starts or stops anything. |
+| `COLIBRI_E2E_PORT` | `9011` | Web/Socket.IO port |
+| `COLIBRI_E2E_TCP_PORT` | `9012` | Binary v3 port |
+| `COLIBRI_E2E_NO_BUILD` | unset | Skip `docker compose --build` |
+| `COLIBRI_E2E_TLS_PORT` | `9111` | TLS server's web port (https) |
+| `COLIBRI_E2E_TLS_TCP_PORT` | `9112` | TLS server's binary v3 port (TLS) |
+| `COLIBRI_E2E_TLS_CERT` | `tls-test-server/cert.pem` | TLS server's certificate |
+| `COLIBRI_E2E_TLS` | unset | `1` runs the PlayMode suite over TLS. `--tls` sets it. |
+| `COLIBRI_E2E_TLS_PFX` | `tls-test-server/cert.pfx` | Certificate the tests' own fake server and proxy serve over TLS |
+| `UNITY_PATH` | Unity Hub's location | Editor to use |
 
-Both suites can also be run from **Window → General → Test Runner** in the editor. The end-to-end
-ones need *Run In Background* on, which they set for themselves. For the TLS tests, start the TLS
-server by hand (`docker compose -f colibri-unity/tls-test-server/compose.yml up -d --build`). For a
-run over TLS, also set `COLIBRI_E2E_TLS=1` in the environment the Editor starts with.
+The script requires the exact Editor version in `ProjectSettings/ProjectVersion.txt` unless
+`UNITY_PATH` is set. Another version would upgrade the project in place, turning a test run into a
+diff across the manifest and half of `ProjectSettings`. If the version is missing, the script lists
+the installed ones with the `UNITY_PATH` to use. Commit such an upgrade deliberately, not with an
+unrelated change. The package supports Unity 2022.3 LTS and newer. The pinned version is only what
+the development project is opened with.
 
-Voice chat has no end-to-end coverage: it needs a microphone. Only the choice of the server's
-address, the packet format with its app id, and the queue that hands received packets to the main
-thread are unit-tested.
+Both suites also run in **Window → General → Test Runner**. The end-to-end tests enable *Run In
+Background* themselves. For the TLS tests, start the TLS server with
+`docker compose -f colibri-unity/tls-test-server/compose.yml up -d --build`. For a run over TLS,
+also set `COLIBRI_E2E_TLS=1` in the Editor's environment.
+
+Voice chat has no end-to-end tests, because they need a microphone. Unit tests cover only the server
+address choice, the packet format with its app id, and the queue that hands received packets to the
+main thread.
