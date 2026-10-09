@@ -381,10 +381,11 @@ The cost of TLS on a headset was not measured.
 
 ## Features
 
-- **Admin UI** at `http://<server-ip>:9011` (`https://` with [TLS](#tls)). The *Log* page shows the
-  log of the server and every connected client, filtered by app and level, with a *Sync traffic*
-  switch for the continuous `broadcast::` messages. The *Statistics* page shows the connected clients
-  and their latency.
+- **Admin UI** at `http://<server-ip>:9011` (`https://` with [TLS](#tls)), on a phone too. The *Log*
+  page shows the log of the server and every connected client, filtered by app and level, with a
+  search and a *Sync traffic* switch for the continuous `broadcast::` messages. Scrolling up pauses
+  it; click a line for its details. The *Statistics* page shows the connected clients and their
+  latency.
 - **Model synchronization** and **broadcasts** between the Unity (TCP) and web (Socket.IO) clients of
   an app. The server keeps a copy of each app's models. Only `broadcast::` messages and model changes
   are relayed to other clients ([Relayed messages](protocol.md#relayed-messages)).
@@ -404,8 +405,10 @@ Server messages, and lines clients send through colibri-unity's `RemoteLogging` 
   and warnings on stderr. `docker logs colibri` shows them, including refused clients, failed
   `store.json` writes and client errors. `CONSOLE_LOG_LEVEL` sets the minimum level (default:
   everything but debug). `broadcast::` messages appear only with `CONSOLE_LOG_BROADCAST_TRAFFIC=true`.
-- **Admin UI *Log* page:** the last 20,000 messages of every level, in memory, repeats merged into one
-  entry. Lost on restart.
+- **Admin UI *Log* page:** the last 20,000 messages of every level, in memory, repeats of a line from
+  one app merged into one entry. The page loads the newest 10,000 that match its filters and shows a
+  repeat where it last occurred. Lost on restart. Times are the browser's local time; hover one for
+  UTC, as `docker logs` prints it.
 
 ### Load limits
 

@@ -510,19 +510,35 @@ The endpoints are documented under [REST store](./protocol.md#rest-store).
   *Sync traffic* switch, off by default, for the `broadcast::` messages. The server applies both
   filters, so the page is only sent what it shows.
 - Repeated log lines are merged into one entry with a count however much other traffic arrives in
-  between, and a merged entry updates on screen.
+  between, and a merged entry updates on screen. Lines from different apps are no longer merged,
+  and an entry records when it first occurred.
+- The Log page works at any width, phones included; below 1365px it used to be cut off at the
+  right. Each line shows its time, level (ERR, WRN, INF, DBG), app and client or server source, and
+  message in columns, a repeat as `×10` at the end. A click shows a line's details; clicking an app
+  shows only that app. The filters are in a toolbar of the page, folded away on a phone, with a
+  search over the loaded lines and a count per level.
+- Scrolling up in any way pauses the log and keeps the lines still, with a button to jump to the
+  new ones. Only the mouse wheel paused it before.
+- The history arrives as one message, in the order the lines last occurred, so merged lines no
+  longer appear out of time order; until it arrives, the page drops live lines filtered by its
+  previous settings. After a lost connection the page asks for the log again, keeps its lines and
+  marks the gap. The app bar shows whether the page is connected.
+- A web client's refusal, malformed events and rate limit warnings carry its app, so the app filter
+  shows them.
+- The Statistics page is dark like the rest, its chart fits its card, and a table lists the clients
+  with their latency.
 - The SPA fallback no longer adds a log entry every time an admin UI page is loaded.
 - The admin UI keeps its dark theme whatever colour scheme the visitor's system prefers.
 - Replaced the dead Karma/Protractor `test`/`server-app-e2e` targets in `angular.json` (both pointed
   at files that never existed) with Angular's first-party `@angular/build:unit-test` builder
-  (Vitest runner); specs for `LogService`, `ClientService` and the log filters run in CI as
-  `npm run gui:test`.
+  (Vitest runner); specs for `LogService`, `ClientService` and the Log and Statistics pages run in
+  CI as `npm run gui:test`.
 - Replaced `socketio.service.ts`'s `_.throttle` NgZone-batching with RxJS `throttleTime`; `lodash`
   and `@types/lodash` are removed from `package.json`.
 - Fixed the services barrel (`src/ui/app/services/index.ts`) to re-export `ClientService`, matching
   `SocketIOService`/`LogService`.
-- Replaced `RootComponent`'s direct `location.pathname` read with the Angular `Router`, fixing the
-  tab-underline indicator not updating on browser back/forward navigation.
+- The tab underline follows browser back/forward navigation; `RootComponent` read
+  `location.pathname` once.
 - Self-hosted fonts via `@fontsource/roboto` and `@fontsource/fira-mono`, and dropped the Material
   Icons webfont in favor of the already-loaded `primeicons`; the UI no longer loads anything from
   `fonts.googleapis.com`/`fonts.gstatic.com` at runtime.
