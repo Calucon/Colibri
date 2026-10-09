@@ -420,6 +420,20 @@ rationale, migration steps, and what the Editor verification did and did not cov
   the component was disabled) and then silently dropped the next genuine local change. Received
   values are now latched as the known state instead, and `TriggerSync` sends the full state in one
   message.
+- **A change made before the server's state arrives is no longer undone.** An object asks the
+  server for its state when it registers, in `Awake`, and the answer arrives a round trip later, or
+  once the connection is up. A member changed in between, in `Start`, in an `OnConnected` handler or
+  right after entering Play mode, was latched without being sent, and the answer then put the
+  server's value over it: the change was undone on this client and never reached another (in 1.3.1
+  too). The answer now compares each member with the value it had when the object registered. A
+  member that differs keeps its value and goes out as an ordinary update; every other member takes
+  the server's value, so values from the scene or the prefab never go out over it. The answer to a
+  manager's request for its whole channel, and an update another client sent before the server read
+  the change, hold the older value too: `Sync` sends one more `model::request` on
+  `colibri::reconnect` ahead of the change, and until its answer the member takes nothing from them.
+  In the round after a reconnect, the member is kept until that round ends instead. An object a
+  manager builds from another client's update takes that update as it is. See
+  [SyncTransform](docs/guide.md#synctransform).
 - **Objects built from a disabled `Template` come to life.** A copy starts out as its template is,
   and a manager's template is often kept switched off in the scene. A copy that is switched off
   never runs `Awake`, so it never registered for its own updates or with the ticker: it stayed as
@@ -694,12 +708,16 @@ otherwise spend on their prototype, so:
   including the one a member held 10 s before the outage, and how they are compared as JSON on the
   wire, and `ModelResyncTests` what an object does with them, also when the connection drops again
   before the answers or before the value sent again arrives, and when the object changes right
-  after the reconnect. `ProtocolMismatchDetectionTests` walk the client through scripted
-  sessions against a `FakeColibriServer` that hangs up, stays silent, heartbeats or refuses: the
+  after the reconnect. `ModelResyncTests` also cover a change made before an object's first answer,
+  kept over that answer and the ones still on their way, also in the round after a reconnect, and
+  the members left as they were, which take the answer; `ReconnectTests` an object placed during
+  the outage and changed as the client reconnects. `ProtocolMismatchDetectionTests` walk the
+  client through scripted sessions against a `FakeColibriServer` that hangs up, stays silent, heartbeats or refuses: the
   growing backoff, the suspected mismatch and what clears it, the watchdog before the first frame,
   a refusal in the first frame, and the pairing of `OnConnected` and `OnDisconnected`.
   `SyncTransformTests` cover hiding, showing and deleting, including an object hidden when this
-  client quits; `SyncModelTests` a value from another client followed by a local change;
+  client quits and one hidden as the client connects, before the server's answer;
+  `SyncModelTests` a value from another client followed by a local change;
   `LifecycleTests` a listener registered after the connection was rebuilt.
 - The send-rate limit, the connect timeout and the outbox cap have tests of their own. In EditMode,
   `SendRateTests` drive the limit on a clock of their own: the leading edge, a burst, the held
