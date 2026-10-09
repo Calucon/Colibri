@@ -255,24 +255,68 @@ namespace HCIKonstanz.Colibri.E2E
         }
 
         /// <summary>
-        /// A port that accepts and never says anything is exactly what the hint is for, and the only
-        /// thing that ends such a session is the watchdog. That exit used to count for nothing.
+        /// A port that accepts and then says nothing, until the watchdog ends the session: a proxy
+        /// or port forwarding whose backend is down, a captive portal, a firewall, or a server that
+        /// does not answer. Not a protocol mismatch: a 1.x server heartbeats from the moment it
+        /// accepts, and a server with TLS on closes the connection. These sessions used to count
+        /// towards the suspected mismatch, so an outage was reported as a version problem.
         /// </summary>
         [UnityTest]
-        public IEnumerator SessionsTheWatchdogEndsBeforeAnyFrameCountTowardsTheSuspicion()
+        public IEnumerator SessionsTheWatchdogEndsBeforeAnyFrameAreReportedAsSilenceNotAsAMismatch()
         {
             IgnoreTheExpectedFailures();
 
             _scriptedServer = FakeColibriServer.Start(FakeColibriServer.Behaviour.Silent);
-            yield return PointConnectionAt(_scriptedServer.Port);
+            var connection = ConnectionTo(_scriptedServer.Port);
 
-            // Three silent sessions of 2 s each, 500 ms and 1000 ms apart.
-            yield return E2EServer.WaitUntil(() => Connection.SuspectedProtocolMismatch != null,
-                "Sessions dropped by the watchdog before a single frame never raised the suspicion", 20f);
+            var silenceWarnings = 0;
+            void OnLog(string message, string stackTrace, LogType type)
+            {
+                if (type == LogType.Warning && message.Contains("were accepted, but nothing was received on any of them"))
+                    Interlocked.Increment(ref silenceWarnings);
+            }
 
-            Assert.That(_scriptedServer.Accepted, Is.EqualTo(3));
-            Assert.That(Connection.Status, Is.Not.EqualTo(ConnectionStatus.ProtocolMismatch),
-                "A guess must not settle into the status reserved for a refusal the server actually sent");
+            Application.logMessageReceivedThreaded += OnLog;
+            _cleanup.Add(() => Application.logMessageReceivedThreaded -= OnLog);
+
+            // Three silent sessions of 2 s each, 500 ms and 1000 ms apart, and the fourth accepted
+            // 2 s after the third ended.
+            yield return E2EServer.WaitUntil(() => _scriptedServer.Accepted >= 4,
+                "The client stopped retrying a server that accepts the connection and then says nothing", 20f);
+
+            Assert.That(connection.SuspectedProtocolMismatch, Is.Null,
+                "Sessions on which nothing was received before the watchdog ended them were reported as a suspected protocol mismatch");
+            Assert.That(connection.ConsecutiveEarlyFrameFailures, Is.Zero);
+            Assert.That(silenceWarnings, Is.EqualTo(1),
+                "Three silent sessions in a row should be named as such, once");
+            Assert.That(connection.Status, Is.Not.EqualTo(ConnectionStatus.ProtocolMismatch));
+        }
+
+        /// <summary>
+        /// A silent session between two that end without a frame breaks the row either way, so
+        /// each warning means what it says: that many sessions in a row ended that way.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator ASilentSessionBreaksTheRowOfSessionsThatEndWithoutAFrame()
+        {
+            IgnoreTheExpectedFailures();
+
+            _scriptedServer = FakeColibriServer.Start(FakeColibriServer.Behaviour.HangUpAfterHandshake);
+            var connection = ConnectionTo(_scriptedServer.Port);
+
+            yield return E2EServer.WaitUntil(() => connection.ConsecutiveEarlyFrameFailures == 2,
+                "Two sessions that ended without a frame were not counted", 10f);
+
+            // The third session is silent, and the watchdog ends it.
+            _scriptedServer.Mode = FakeColibriServer.Behaviour.Silent;
+            yield return E2EServer.WaitUntil(() => _scriptedServer.Accepted >= 3,
+                "The client did not try again after two sessions that ended without a frame", 10f);
+            _scriptedServer.Mode = FakeColibriServer.Behaviour.HangUpAfterHandshake;
+
+            yield return E2EServer.WaitUntil(() => connection.ConsecutiveEarlyFrameFailures == 1,
+                "The session after the silent one was not counted from one again", 15f);
+            Assert.That(connection.SuspectedProtocolMismatch, Is.Null,
+                "A silent session was counted as a third session that ended without a frame");
         }
 
         /// <summary>

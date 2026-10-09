@@ -61,6 +61,7 @@ namespace HCIKonstanz.Colibri.Networking
         /// our frames and we cannot decode its. What that looks like from here is a session that
         /// faults before a single frame is read, over and over. After this many in a row, say so:
         /// the alternative is an infinite reconnect loop whose log gives no hint of the cause.
+        /// The same number of silent sessions in a row gets a hint of its own.
         /// </summary>
         private const int EARLY_FRAME_FAILURES_BEFORE_HINT = 3;
 
@@ -237,6 +238,11 @@ namespace HCIKonstanz.Colibri.Networking
             // Session-scoped: set once the session has decoded anything at all. Only a session that
             // ends *before* this is set counts towards the framing hint.
             public volatile bool DecodedAnyFrame;
+
+            // Session-scoped: set by the watchdog in Update() when it drops a session the server has
+            // not sent a frame on. Such a session counts towards a hint of its own, not the framing
+            // hint: neither a 1.x server nor one with TLS on stays silent.
+            public volatile bool EndedSilent;
 
             // The run itself: completes once it has ended and cleaned up after its last session.
             public Task Run;
@@ -472,6 +478,7 @@ namespace HCIKonstanz.Colibri.Networking
 
         // Connection loop only (the receive loop is part of it), except for the test accessor.
         private int _consecutiveEarlyFrameFailures;
+        private int _consecutiveSilentSessions;
         private volatile string _suspectedProtocolMismatch;
 
         // Whether the current session uses TLS, read from the configuration when it started.
@@ -674,6 +681,8 @@ namespace HCIKonstanz.Colibri.Networking
                 }
                 else
                 {
+                    // Before the session loop sees the socket closed: see CountSessionWithoutAFrame.
+                    loop.EndedSilent = true;
                     Debug.Log($"Colibri: {_serverAddress}:{_tcpPort} accepted the connection but has not sent anything in "
                         + $"{HEARTBEAT_TIMEOUT_THRESHOLD_MS / 1000f:0.#} s, dropping it");
                 }
@@ -1041,6 +1050,7 @@ namespace HCIKonstanz.Colibri.Networking
                 {
                     loop.DecodedAnyFrame = false;
                     loop.ReachedHandshake = false;
+                    loop.EndedSilent = false;
                     await RunSession(loop, address, _tcpPort, handshakeApp, _useTls).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
@@ -1160,6 +1170,13 @@ namespace HCIKonstanz.Colibri.Networking
         /// first frame a session decodes (<see cref="OnFrameDecoded"/>), not here, so "consecutive"
         /// means what it says: it used to be updated only on a clean hang-up or an undecodable
         /// frame, and a session ended by a reset or the watchdog neither counted nor cleared it.
+        ///
+        /// A session the watchdog ended, with no frame in the time it waited, is counted apart, with
+        /// a hint of its own. Neither cause of the framing hint looks like that: a 1.x server
+        /// heartbeats from the moment it accepts, which fails to decode at once, and a server with
+        /// TLS on hangs up on a client without it. Silence is something that accepts connections
+        /// and forwards nothing, or a server that does not answer. Each kind of session breaks the
+        /// other's row.
         /// </summary>
         private void CountSessionWithoutAFrame(ConnectionLoop loop)
         {
@@ -1171,6 +1188,23 @@ namespace HCIKonstanz.Colibri.Networking
             if (loop.DecodedAnyFrame)
                 return;
 
+            if (loop.EndedSilent)
+            {
+                _consecutiveEarlyFrameFailures = 0;
+                _consecutiveSilentSessions++;
+                if (_consecutiveSilentSessions == EARLY_FRAME_FAILURES_BEFORE_HINT)
+                {
+                    Debug.LogWarning(
+                        $"Colibri: {_consecutiveSilentSessions} connections in a row to {_serverAddress}:{_tcpPort} were accepted, " +
+                        $"but nothing was received on any of them within {HEARTBEAT_TIMEOUT_THRESHOLD_MS / 1000f:0.#} s. " +
+                        "Something accepts connections there but forwards nothing (a proxy or port forwarding whose backend is down, " +
+                        "a captive portal, a firewall), or the server there does not answer or is not a colibri-server. " +
+                        "Check that colibri-server is running and reachable at this address and port. Retrying...");
+                }
+                return;
+            }
+
+            _consecutiveSilentSessions = 0;
             _consecutiveEarlyFrameFailures++;
             if (_consecutiveEarlyFrameFailures != EARLY_FRAME_FAILURES_BEFORE_HINT)
                 return;
@@ -1200,12 +1234,13 @@ namespace HCIKonstanz.Colibri.Networking
         {
             loop.DecodedAnyFrame = true;
             _consecutiveEarlyFrameFailures = 0;
+            _consecutiveSilentSessions = 0;
             _suspectedProtocolMismatch = null;
         }
 
         /// <summary>
-        /// How many sessions in a row got past the handshake and then ended without a frame.
-        /// Exists for the test suite; nothing in the library reads it.
+        /// How many sessions in a row got past the handshake and then ended without a frame, other
+        /// than by the watchdog. Exists for the test suite; nothing in the library reads it.
         /// </summary>
         internal int ConsecutiveEarlyFrameFailures => Volatile.Read(ref _consecutiveEarlyFrameFailures);
 
@@ -1832,7 +1867,9 @@ namespace HCIKonstanz.Colibri.Networking
         /// Why a protocol mismatch is *suspected*, or null if it is not. Set when several
         /// connections in a row were accepted but ended before a frame could be read - the only
         /// symptom available when the server's framing differs so much that it cannot send, and
-        /// this client cannot decode, the explicit refusal.
+        /// this client cannot decode, the explicit refusal. A connection on which no frame arrived
+        /// before the heartbeat watchdog dropped it does not count: silence is logged as a warning
+        /// of its own, since neither an out-of-date server nor one with TLS on stays silent.
         ///
         /// Unlike <see cref="ProtocolMismatchReason"/> this is a guess, not something the server
         /// said: it reads the same whether the server is out of date or the address points at
