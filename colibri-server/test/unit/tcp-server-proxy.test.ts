@@ -306,6 +306,40 @@ describe('TCPServerProxy', () => {
         });
     });
 
+    // The worker compiles its own trust function from the list, so it has to be sent the same list
+    // the main thread trusts for X-Forwarded-For, restarted or not.
+    describe('the trusted proxies and TCP_PROXY_PROTOCOL', () => {
+        let sent: { channel: string; content: Record<string, unknown> }[];
+
+        beforeEach(() => {
+            sent = [];
+            vi.spyOn(WorkerServiceProxy.prototype as unknown as { postMessage(channel: string, content?: Record<string, unknown>): void }, 'postMessage')
+                .mockImplementation((channel, content) => {
+                    sent.push({ channel, content: content ?? {} });
+                });
+        });
+
+        const startOptions = () => sent.filter(m => m.channel === 'm:start').map(m => m.content.options);
+
+        it('go to the worker with the start message, and to a restarted one again', () => {
+            vi.useFakeTimers();
+            try {
+                vi.spyOn(WorkerServiceProxy.prototype as unknown as { restartWorker(): boolean }, 'restartWorker').mockReturnValue(true);
+                proxy.start(9012, '0.0.0.0', { trustedProxies: ['loopback', '172.20.0.0/16'], proxyProtocol: true });
+
+                (proxy as unknown as ProxyInternals).onWorkerExited();
+                vi.advanceTimersByTime(1000);
+
+                expect(startOptions()).toHaveLength(2);
+                for (const options of startOptions()) {
+                    expect(options).toMatchObject({ trustedProxies: ['loopback', '172.20.0.0/16'], proxyProtocol: true });
+                }
+            } finally {
+                vi.useRealTimers();
+            }
+        });
+    });
+
     // The worker serves TLS with whatever certificate it was last sent: the one in the start
     // message, then each renewed one. A restarted worker must start with the latest.
     describe('the TLS certificate', () => {

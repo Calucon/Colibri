@@ -131,6 +131,26 @@ describe('Config', () => {
         });
     });
 
+    describe('TCP_PROXY_PROTOCOL', () => {
+        it('is off unless set to true', async () => {
+            expect((await loadConfig({ TCP_PROXY_PROTOCOL: undefined })).TCP_PROXY_PROTOCOL).toBe(false);
+            expect((await loadConfig({ TCP_PROXY_PROTOCOL: '' })).TCP_PROXY_PROTOCOL).toBe(false);
+            expect((await loadConfig({ TCP_PROXY_PROTOCOL: 'false' })).TCP_PROXY_PROTOCOL).toBe(false);
+            expect((await loadConfig({ TCP_PROXY_PROTOCOL: 'True', TRUSTED_PROXIES: 'loopback' })).TCP_PROXY_PROTOCOL).toBe(true);
+        });
+
+        it.each(['yes', '1', 'ture'])('refuses to start with "%s"', async (raw) => {
+            await expect(loadConfig({ TCP_PROXY_PROTOCOL: raw, TRUSTED_PROXIES: 'loopback' }))
+                .rejects.toThrow(`Invalid TCP_PROXY_PROTOCOL: "${raw}" is not true or false`);
+        });
+
+        // Every header would come from a peer that is not trusted, and be refused.
+        it('refuses to start without TRUSTED_PROXIES', async () => {
+            await expect(loadConfig({ TCP_PROXY_PROTOCOL: 'true', TRUSTED_PROXIES: '' }))
+                .rejects.toThrow('TCP_PROXY_PROTOCOL is true, but TRUSTED_PROXIES is empty');
+        });
+    });
+
     describe('TLS_CERT and TLS_KEY', () => {
         let dir: string;
         let server: TestCertificate;

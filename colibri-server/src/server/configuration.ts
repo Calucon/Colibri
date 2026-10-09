@@ -65,6 +65,25 @@ const parseTlsFiles = function (rawCert: string | undefined, rawKey: string | un
 
 const tlsFiles = parseTlsFiles(process.env.TLS_CERT, process.env.TLS_KEY);
 
+// Strictly true or false: TCP_PROXY_PROTOCOL mistyped and taken as false would leave every Unity
+// connection through the proxy failing, with nothing at startup to say why.
+const parseBoolean = function (name: string, raw: string | undefined, fallback: boolean): boolean {
+    const value = raw?.trim().toLowerCase() ?? '';
+    if (value === '') return fallback;
+    if (value === 'true') return true;
+    if (value === 'false') return false;
+    throw new Error(`Invalid ${name}: "${raw}" is not true or false`);
+};
+
+const trustedProxies = parseTrustedProxies(process.env.TRUSTED_PROXIES);
+const tcpProxyProtocol = parseBoolean('TCP_PROXY_PROTOCOL', process.env.TCP_PROXY_PROTOCOL, false);
+if (tcpProxyProtocol && trustedProxies.length === 0) {
+    throw new Error(
+        'TCP_PROXY_PROTOCOL is true, but TRUSTED_PROXIES is empty, so every PROXY protocol header would be refused. ' +
+            'Set TRUSTED_PROXIES to the address of the proxy, e.g. loopback; or TCP_PROXY_PROTOCOL to false.'
+    );
+}
+
 export const Config = {
     TCP_HOST: process.env.TCP_HOST || '0.0.0.0',
     TCP_PORT: parsePort('TCP_PORT', process.env.TCP_PORT, 9012),
@@ -126,5 +145,8 @@ export const Config = {
 
     // The reverse proxies whose word on a client's address is taken (see trusted-proxies.ts);
     // empty: none, and every client is logged at the address it comes from.
-    TRUSTED_PROXIES: parseTrustedProxies(process.env.TRUSTED_PROXIES),
+    TRUSTED_PROXIES: trustedProxies,
+    // Whether a connection to the TCP port from one of them has to start with a PROXY protocol
+    // header, which names the Unity client (see TCPServerWorker.handleProxyProtocolConnection).
+    TCP_PROXY_PROTOCOL: tcpProxyProtocol,
 };

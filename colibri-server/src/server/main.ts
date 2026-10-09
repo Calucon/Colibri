@@ -28,7 +28,8 @@ const tlsCertificate = Config.TLS_CERT && Config.TLS_KEY
     ? new colibri.TlsCertificate(Config.TLS_CERT, Config.TLS_KEY)
     : undefined;
 
-// Behind these proxies, a web client's address is taken from X-Forwarded-For.
+// Behind these proxies, a web client's address is taken from X-Forwarded-For. The TCP worker
+// compiles its own from the same list, for the PROXY protocol.
 const trustProxy = colibri.compileTrustedProxies(Config.TRUSTED_PROXIES);
 
 const webServer = new colibri.WebServer(
@@ -102,6 +103,8 @@ const startup = async () => {
         inboundBacklogLimit: Config.TCP_INBOUND_BACKLOG_LIMIT,
         rateLimit,
         idleTimeoutMillis: Config.TCP_IDLE_TIMEOUT_SECONDS * 1000,
+        trustedProxies: Config.TRUSTED_PROXIES,
+        proxyProtocol: Config.TCP_PROXY_PROTOCOL,
     }, tlsCertificate);
     voiceServer.start(Config.VOICE_PORT, Config.VOICE_HOST);
 };
