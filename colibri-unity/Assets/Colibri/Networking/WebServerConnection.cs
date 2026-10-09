@@ -82,8 +82,10 @@ namespace HCIKonstanz.Colibri.Networking
         /// Android, without a retry or a word in the log. On a local network a connection opens in
         /// milliseconds; 5 s still leaves room for two lost SYNs on bad Wi-Fi. With TLS the
         /// handshake has to finish within the same time: a server without TLS may never answer it.
+        /// A placed body waits as long for a server before it is simulated without the server's
+        /// state (see Sync.StopsWaitingForServer).
         /// </summary>
-        private const int CONNECT_TIMEOUT_MS = 5000;
+        internal const int CONNECT_TIMEOUT_MS = 5000;
 
         /// <summary>
         /// How often a connect in progress looks whether its socket has been closed, which on Mono

@@ -139,12 +139,21 @@ namespace HCIKonstanz.Colibri.Synchronization
         private new Rigidbody rigidbody;
 #endif
 
+        // Simulated although the server's state is not known: no server was reached in time.
+        private bool _isSimulatedWithoutServerState;
+
         void Start()
         {
             rigidbody = GetComponent<Rigidbody>();
         }
 
-        void FixedUpdate()
+        void FixedUpdate() => HoldOrSimulate(Time.unscaledTimeAsDouble);
+
+        /// <summary>
+        /// FixedUpdate at <paramref name="now"/>, on SyncTicker's clock. Internal so the EditMode
+        /// tests can run it on a clock of their own.
+        /// </summary>
+        internal void HoldOrSimulate(double now)
         {
             if (rigidbody)
             {
@@ -153,7 +162,15 @@ namespace HCIKonstanz.Colibri.Synchronization
                 // a client that joined later it fell from its spot in the scene meanwhile. That
                 // counted as a change made before the answer, and went out over the position the
                 // other clients shared.
-                if (PhysicsAuthority && KnowsServerState)
+                //
+                // Without a server, though, it stayed frozen for good. So once this client has
+                // been without one for the connect timeout, the body is simulated anyway, and goes
+                // on being simulated when the connection comes up, rather than stopping in mid-air
+                // until its answer arrives.
+                if (PhysicsAuthority && !KnowsServerState && !_isSimulatedWithoutServerState)
+                    _isSimulatedWithoutServerState = Sync.StopsWaitingForServer(now);
+
+                if (PhysicsAuthority && (KnowsServerState || _isSimulatedWithoutServerState))
                     rigidbody.isKinematic = isKinematic;
                 else
                     rigidbody.isKinematic = true;

@@ -2,6 +2,7 @@ using HCIKonstanz.Colibri.Networking;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using UnityEngine;
 
@@ -107,8 +108,51 @@ namespace HCIKonstanz.Colibri.Synchronization
                 _heardStamps = 0;
                 _heardAt = double.NegativeInfinity;
                 _heardAtHeld = false;
+
+                // Without a server from here on, unless something else made the connection and
+                // connected it before: the [RemoteLogger], say, whose OnConnected came before this
+                // class listened.
+                _withoutServerSince = _connection.Status == ConnectionStatus.Connected
+                    ? double.PositiveInfinity
+                    : Time.unscaledTimeAsDouble;
             }
             return _connection;
+        }
+
+        /// <summary>
+        /// Since when this client has been without a server, on SyncTicker's clock: since it took up
+        /// its connection, or noticed that the connection was gone. Positive infinity while
+        /// connected. NaN at the start of a session: without a connection taken up then, it counts
+        /// from when <see cref="StopsWaitingForServer"/> is first asked.
+        /// </summary>
+        private static double _withoutServerSince = double.NaN;
+
+        private static bool _hasWarnedAboutNoServer;
+
+        /// <summary>
+        /// For a placed body that waits for the server's state before it is simulated (see
+        /// GenericSyncTransform): whether it stops waiting at <paramref name="now"/>, on
+        /// SyncTicker's clock. It does once this client has been without a server for the connect
+        /// timeout. The first body that stops waiting in a session says so in the console.
+        /// </summary>
+        internal static bool StopsWaitingForServer(double now)
+        {
+            if (double.IsNaN(_withoutServerSince))
+                _withoutServerSince = now;
+
+            var timeout = WebServerConnection.CONNECT_TIMEOUT_MS / 1000.0;
+            if (now - _withoutServerSince < timeout)
+                return false;
+
+            if (!_hasWarnedAboutNoServer)
+            {
+                _hasWarnedAboutNoServer = true;
+                Debug.LogWarning($"Colibri: no connection to a server for {timeout.ToString("0.#", CultureInfo.InvariantCulture)} s, "
+                    + "so placed SyncTransforms with a Rigidbody and PhysicsAuthority ticked are simulated without the server's state; "
+                    + "once a server answers, the positions they reached replace the shared ones. Start colibri-server, or check the "
+                    + "server address in the Colibri configuration. Said once per session.");
+            }
+            return true;
         }
 
         /// <summary>
@@ -154,6 +198,7 @@ namespace HCIKonstanz.Colibri.Synchronization
         internal static void OnDisconnected(double now)
         {
             _disconnectedAt = now;
+            _withoutServerSince = now;
 
             var madeAtTheDrop = LocallyDeletedModels.Since(LastHeardAt(now) - 1, now);
 
@@ -380,6 +425,9 @@ namespace HCIKonstanz.Colibri.Synchronization
         /// </summary>
         private static void OnConnected()
         {
+            // A body that waits for the server's state waits for its answer now: see StopsWaitingForServer.
+            _withoutServerSince = double.PositiveInfinity;
+
             var connection = _connection;
             if (connection == null || connection.ConnectedSessions < 2)
                 return;
@@ -927,6 +975,10 @@ namespace HCIKonstanz.Colibri.Synchronization
             _heardAt = double.NegativeInfinity;
             _heardAskedAt = double.NegativeInfinity;
             _heardAtHeld = false;
+
+            // When the previous session went without a server, and whether it said so.
+            _withoutServerSince = double.NaN;
+            _hasWarnedAboutNoServer = false;
         }
 
         // `track` is off for the model channels: they are Colibri's own SyncBehaviour plumbing,
