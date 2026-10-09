@@ -123,8 +123,8 @@ go out as plain `http`, and Unity blocks cleartext HTTP by default. **Loopback i
 server on `localhost` needs no change at all; this only comes up once the server is a real
 remote host that is not on HTTPS (and from a headset, every server is a remote host). In that case
 set *Project Settings → Player → Other Settings → **Allow downloads over HTTP*** to *Always
-allowed*, or turn [TLS](#tls) on at the server and tick *Server supports SSL/TLS?*. With the
-Android target active, Colibri checks this for you (see [Meta Quest and Android](#meta-quest-and-android)).
+allowed*, or turn [TLS](#tls) on at the server and tick *Server supports SSL/TLS?*. Colibri checks
+this for every build target (see [Meta Quest and Android](#meta-quest-and-android)).
 
 When using the voice chat, Colibri allows to adjust the sampling rate on the server. In this case, clients need to manually set the `Voice Sampling Rate` setting in the configuration.
 
@@ -205,17 +205,18 @@ A Meta Quest app is an Android build: switch the platform to Android under *File
 Settings* (*File → Build Profiles* on Unity 6). Quest needs the ARM64 architecture, which on
 Android requires the IL2CPP scripting backend.
 
-With the Android target active, Colibri checks two Player settings that otherwise only fail on the
-headset, where there is no console to say why. It warns in the console after every script reload,
-and *Window → Colibri Configuration* lists the problems in an **Android / Meta Quest** section, each
-with a button that fixes it:
+Colibri checks two Player settings that otherwise only fail in the built app, where there is no
+console to say why. It warns in the console after every script reload and at the start of every
+player build, and *Window → Colibri Configuration* lists the problems in an **Android / Meta Quest**
+section (**Player build** with another target active), each with a button that fixes it:
 
-- **Internet Access** must be *Require* (*Player → Other Settings*). Colibri connects with plain
-  sockets, and with *Auto* the build may lack Android's INTERNET permission: the app starts and
-  never connects.
+- **Internet Access** must be *Require* (*Player → Other Settings*), checked with the Android target
+  active. Colibri connects with plain sockets, and with *Auto* the build may lack Android's INTERNET
+  permission: the app starts and never connects. The warning starts with `Colibri (Android build):`.
 - **Allow downloads over HTTP** must be *Always allowed* while *Server supports SSL/TLS?* is off
-  and the server is not `localhost`. Otherwise every `Store` call fails with "Insecure connection
-  not allowed". With [TLS](#tls) on, this does not apply.
+  and the server is not `localhost`, on every build target. *Allowed in development builds* passes
+  for development builds only. Otherwise every `Store` call fails with "Insecure connection not
+  allowed". The warning starts with `Colibri (build):`. With [TLS](#tls) on, this does not apply.
 
 Also worth knowing:
 
@@ -272,7 +273,7 @@ Colibri also reports the common mistakes in the console rather than failing quie
 | Symptom | What Colibri tells you |
 |---|---|
 | Nothing arrives, no errors | `a float arrived on channel 'chat', but the listener registered there expects string…`: the channel *and* the type have to match |
-| Nothing connects, no errors | `Colibri is not configured yet. Open Window → Colibri Configuration…` |
+| Nothing connects, no errors | `Colibri is not configured yet. Open Window -> Colibri Configuration…` |
 | Never connects, and nothing answers at all | `Colibri: 192.168.0.10:9012 did not answer within 5 s. Check the server address, and that this device is on the same network as the server.` A wrong IP, a server on another network or subnet, a Wi-Fi with client isolation, or a firewall dropping the packets: fix the address or the network |
 | Never connects, and the connection is refused | `Colibri: connection to 192.168.0.10 failed (ConnectionRefused), retrying...` The machine is reachable, but nothing listens on that TCP port: start colibri-server, or check the *TCP server Port* |
 | Two clients don't see each other | The connect log names the app name in use; both clients must show the same one |
@@ -282,7 +283,7 @@ Colibri also reports the common mistakes in the console rather than failing quie
 | `Store.Get`/`Put` reports a failure | The log names the operation, the object, the URL, the transport error and the HTTP status; requests give up after 10 s rather than hanging |
 | Never connects, although something answers on the port | `invalid frame from server` errors if the server sends anything, then `3 connections in a row were accepted but ended before a single frame could be read. This usually means a protocol mismatch…`: the server is probably 1.x, or the address is not a colibri-server, or the server has [TLS](#tls) on and *Server supports SSL/TLS?* is off. With that setting off, a proxy or port forwarding whose backend is not running ends connections the same way |
 | Never connects, although the port accepts the connection | `… accepted the connection but has not sent anything in 2 s, dropping it` (with TLS also `server closed the connection`), then `3 connections in a row to 192.168.0.10:9012 were accepted, but nothing was received on any of them: each was closed by the other end or dropped after 2 s of silence…`: something accepts connections there and then closes them or forwards nothing, such as a proxy or port forwarding whose backend is down, a captive portal or a firewall, or the server does not answer or is not a colibri-server. Check that colibri-server is running and reachable at that address and port |
-| Works in the Editor, not on the Quest | With the Android target active: `Colibri (Android build): …` in the console, and the *Android / Meta Quest* section of *Window → Colibri Configuration* |
+| Works in the Editor, not on the Quest or in a build | `Colibri (Android build): …` or `Colibri (build): …` in the console, and the *Android / Meta Quest* or *Player build* section of *Window → Colibri Configuration* |
 | Never connects, with TLS on either side | `… did not answer the TLS handshake …` or `rejected the certificate of …`: see [TLS errors](#tls-errors) |
 
 Other failures to connect name their socket error the same way, such as `failed (HostUnreachable)`
