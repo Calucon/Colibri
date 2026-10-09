@@ -124,8 +124,8 @@ with listeners and the last 20 messages. All console messages: [guide](docs/guid
 | `a float arrived on channel 'chat', but the listener registered there expects string…` | Type mismatch | Send and receive the same type on a channel |
 | `… did not answer within 5 s` | Wrong address, another network, Wi-Fi client isolation or a firewall | Check the address and the network |
 | `… failed (ConnectionRefused), retrying...` | No process listens on the TCP port | Start colibri-server or correct *TCP server Port* |
-| `… This usually means a protocol mismatch…` | 1.x server, not a colibri-server, or TLS on the server only | Use a 2.x server, correct the address or tick *Server supports SSL/TLS?* |
-| `… nothing was received on any of them within 2 s…` | A proxy, port forwarding, captive portal or firewall that forwards nothing, or a server that does not answer or is not a colibri-server | Check that colibri-server is running and reachable at that address and port |
+| `… This usually means a protocol mismatch…` | 1.x server, not a colibri-server, TLS on the server only, or (TLS off) a proxy or port forwarding whose backend is down | Use a 2.x server, correct the address, tick *Server supports SSL/TLS?* or start the server behind the proxy |
+| `… nothing was received on any of them…` | A proxy, port forwarding, captive portal or firewall that closes connections or forwards nothing, or a server that does not answer or is not a colibri-server | Check that colibri-server is running and reachable at that address and port |
 | `… did not answer the TLS handshake` or `rejected the certificate of …` | TLS settings do not match the server | See [TLS errors](docs/guide.md#tls-errors) |
 | A `SyncBehaviour` object never syncs | `void Awake()` hides the base method (warning CS0114) | Declare it `protected override` and call `base.Awake()` |
 | `Store.Get` or `Store.Put` fails | Wrong server address, or plain HTTP blocked ("Insecure connection not allowed") | Check the URL in the log. Allow HTTP or enable TLS, see [Configuration](#configuration). |
