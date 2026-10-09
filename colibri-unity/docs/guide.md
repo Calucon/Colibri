@@ -831,41 +831,35 @@ node colibri-unity/run-tests.mjs --tls        # plus the PlayMode suite again, o
 
 | Suite | Location | Description |
 |---|---|---|
-| EditMode | `Assets/Colibri/Tests/Editor/` | NUnit tests of the framing, JSON conversions, diagnostics, outage queue, message dispatch, `[Sync]` accessors (including the IL2CPP path), send-rate limit, connect timeout, build settings check, app-name warning, and the voice server address, packet format and packet queue. No server needed, runs wherever Unity runs. |
+| EditMode | `Assets/Colibri/Tests/Editor/` | NUnit tests of the framing, JSON conversions, diagnostics, outage queue, message dispatch, `[Sync]` accessors (including the IL2CPP path), send-rate limit, connect timeout, build settings check, app-name warning, and the voice server address, packet format and packet queue. Needs no server and runs wherever Unity runs. |
 | PlayMode | `Assets/Tests/` | A Unity client and a raw v3 peer against a running `colibri-server`. Reconnects go through a proxy the test can cut. Mismatch detection runs against a scripted stand-in server. |
 
-The script starts the PlayMode server with `docker compose` and stops it afterwards. A server
-already listening on the port is used as it is and left running.
-
-`--stripping`, off by default, checks whether `[Sync]` members survive managed code stripping. The
-Editor never strips, so the script builds a Release IL2CPP player of `Assets/StrippingCheck/` for
-the Editor's desktop platform with *Managed Stripping Level* High, and runs it.
-
-- The player checks that every `[Sync]` member of `SyncTransform` and of a test model (a private
-  serialized field, public value and reference fields, a property) still has its `[Sync]`, applies
-  an update to each, and checks the values.
-- It prints the result lines and exits with 1 on any failure.
-- The check needs no server, takes a few minutes, and needs the IL2CPP module for the platform.
-  Without the module, it is skipped with a notice.
-- `ProjectSettings` are restored exactly after the build.
-
-For PlayMode, the script also starts a TLS server from `tls-test-server/compose.yml`
-([README](../tls-test-server/README.md)) on ports 9111 (https) and 9112 (TLS), for `TlsTests` and
-`StoreOverTlsTests`. Without it, these tests are skipped, and the script reports this.
-
-- `--tls` runs the PlayMode suite again with every connection over TLS, including the tests' own
-  fake server and proxy, into `TestResults/PlayMode-TLS.xml` and `.log`.
-  `ProtocolMismatchDetectionTests` skip themselves in that run. Without the TLS server, `--tls`
-  fails.
-- The certificate files in `tls-test-server/` (`cert.pem`, `key.pem`, `cert.pfx`) are public and for
-  tests only.
+For PlayMode, the script starts colibri-server with `docker compose` and stops it afterwards. A
+server already listening on the port is used and left running. The script also starts a TLS server
+from `tls-test-server/compose.yml` ([README](../tls-test-server/README.md)) on ports 9111 (https)
+and 9112 (TLS) for `TlsTests` and `StoreOverTlsTests`. Without it, these tests are skipped, and the
+script reports this. The certificate files in `tls-test-server/` (`cert.pem`, `key.pem`, `cert.pfx`)
+are public and for tests only.
 
 Results go to `TestResults/` as NUnit XML plus the Editor log. Without a reachable server, the
-end-to-end tests are skipped, not failed, and name the command that fixes it. The script reports a
-suite in which every test was skipped as failed.
+end-to-end tests are skipped and name the command that fixes it. A suite whose tests were all
+skipped counts as failed.
 
-Windows refuses connections to a full listen backlog instead of leaving them unanswered, so these
-connect-timeout tests are skipped there:
+`--tls` runs the PlayMode suite again with every connection over TLS, including the tests' own fake
+server and proxy, into `TestResults/PlayMode-TLS.xml` and `.log`. `ProtocolMismatchDetectionTests`
+skip themselves in that run. Without the TLS server, `--tls` fails.
+
+`--stripping` checks that `[Sync]` members survive managed code stripping, which the Editor never
+applies. It builds and runs a Release IL2CPP player of `Assets/StrippingCheck/` for the Editor's
+desktop platform with *Managed Stripping Level* High. The player checks that every `[Sync]` member
+of `SyncTransform` and of a test model (a private serialized field, public value and reference
+fields, a property) keeps its `[Sync]`, applies an update to each and checks the values. It prints
+the results and exits with 1 on any failure. The check takes a few minutes and needs the platform's
+IL2CPP module but no server. Without the module, it is skipped with a notice. `ProjectSettings` are
+restored exactly after the build.
+
+These connect-timeout tests are skipped on Windows, which refuses connections to a full listen
+backlog instead of leaving them unanswered:
 `ConnectTimeoutTests.AnAttemptNothingAnswersIsGivenUpAfterTheTimeout`,
 `ConnectTimeoutTests.CancellingGivesUpTheAttemptAtOnce` and
 `ProtocolMismatchDetectionTests.AnAttemptNothingAnswersIsGivenUpAfterFiveSecondsAndRetried`. On
@@ -885,14 +879,13 @@ Windows, check manually that a client with an unreachable server address leaves 
 | `COLIBRI_E2E_TLS_PFX` | `tls-test-server/cert.pfx` | Certificate the tests' own fake server and proxy serve over TLS |
 | `UNITY_PATH` | Unity Hub's location | Editor to use |
 
-The script requires the exact Editor version in `ProjectSettings/ProjectVersion.txt` unless
-`UNITY_PATH` is set. Another version would upgrade the project in place, turning a test run into a
-diff across the manifest and half of `ProjectSettings`. If the version is missing, the script lists
-the installed ones with the `UNITY_PATH` to use. Commit such an upgrade deliberately, not with an
-unrelated change. The package supports Unity 2022.3 LTS and newer. The pinned version is only what
-the development project is opened with.
+Unless `UNITY_PATH` is set, the script requires the exact Editor version in
+`ProjectSettings/ProjectVersion.txt`. Another version would upgrade the project in place and change
+the manifest and half of `ProjectSettings`. If that version is not installed, the script lists the
+installed ones and the `UNITY_PATH` to use. Commit such an upgrade on its own. The package supports
+Unity 2022.3 LTS and newer. The pinned version applies only to the development project.
 
-Both suites also run in **Window → General → Test Runner**. The end-to-end tests enable *Run In
+Both suites also run in *Window → General → Test Runner*. The end-to-end tests enable *Run In
 Background* themselves. For the TLS tests, start the TLS server with
 `docker compose -f colibri-unity/tls-test-server/compose.yml up -d --build`. For a run over TLS,
 also set `COLIBRI_E2E_TLS=1` in the Editor's environment.
