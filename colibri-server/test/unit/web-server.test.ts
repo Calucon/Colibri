@@ -15,6 +15,7 @@ import { WebServer } from '../../src/server/modules/web/web-server.js';
 import { RestAPI } from '../../src/server/modules/web/rest-api.js';
 import { SocketIOServer } from '../../src/server/modules/networking/socket-io-server.js';
 import { MAX_FRAME_LENGTH, PROTOCOL_VERSION } from '../../src/server/modules/networking/protocol.js';
+import { TrustProxy, compileTrustedProxies } from '../../src/server/modules/networking/trusted-proxies.js';
 import { TestCertificate, createTestCertificate } from '../tls-test-certificate.js';
 
 // Unlike rest-api.test.ts, which drives the router directly, these go through the real
@@ -432,6 +433,41 @@ describe('WebServer with a BASE_URL', () => {
             await closed;
             await rm(webRoot, { recursive: true, force: true });
         }
+    });
+});
+
+// req.ip has to name the same client as SocketIOServer does. The requests come from 127.0.0.1,
+// standing in for the proxy.
+describe('WebServer behind a reverse proxy', () => {
+    const ipOf = async function (trustProxy: TrustProxy | undefined, forwardedFor: string): Promise<unknown> {
+        const webRoot = await mkdtemp(path.join(tmpdir(), 'colibri-web-server-proxy-'));
+        const webServer = new WebServer('127.0.0.1', 0, webRoot, '', undefined, trustProxy);
+        webServer.addApi('/ip', (req, res) => {
+            res.json({ ip: req.ip });
+        });
+        const httpServer = webServer.start();
+        try {
+            await once(httpServer, 'listening');
+            const response = await fetch(`http://127.0.0.1:${(httpServer.address() as AddressInfo).port}/api/ip`, {
+                headers: { 'X-Forwarded-For': forwardedFor },
+            });
+            return (await response.json() as { ip: unknown }).ip;
+        } finally {
+            const closed = once(httpServer, 'close');
+            webServer.stop();
+            httpServer.closeAllConnections();
+            await closed;
+            await rm(webRoot, { recursive: true, force: true });
+        }
+    };
+
+    it('takes req.ip from a trusted proxy\'s X-Forwarded-For, right-most untrusted entry first', async () => {
+        expect(await ipOf(compileTrustedProxies(['loopback']), '6.6.6.6, 198.51.100.7')).toBe('198.51.100.7');
+    });
+
+    it('ignores X-Forwarded-For from a peer it does not trust, and by default', async () => {
+        expect(await ipOf(compileTrustedProxies(['10.0.0.1']), '198.51.100.7')).toBe('127.0.0.1');
+        expect(await ipOf(undefined, '198.51.100.7')).toBe('127.0.0.1');
     });
 });
 

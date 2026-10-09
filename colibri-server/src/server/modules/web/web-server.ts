@@ -7,6 +7,7 @@ import { Subscription } from 'rxjs';
 
 import { Service, TlsCredentialSource, TlsCredentials } from '../core/index.js';
 import { MAX_FRAME_LENGTH } from '../networking/protocol.js';
+import { TrustProxy, trustNoProxy } from '../networking/trusted-proxies.js';
 
 // Requests whose application/json body was empty; see hasEmptyJsonBody.
 const emptyJsonBodies = new WeakSet<http.IncomingMessage>();
@@ -35,12 +36,14 @@ export class WebServer extends Service {
     private tlsChanges: Subscription | undefined;
 
     // `tls`: serve HTTPS (and Socket.IO's WSS) only, with this certificate and each renewed one.
+    // `trustProxy`: the proxies whose X-Forwarded-For names the client; see TRUSTED_PROXIES.
     public constructor(
         private hostname: string,
         private webPort: number,
         private webRoot: string,
         private baseUrl: string,
-        private readonly tls?: TlsCredentialSource
+        private readonly tls?: TlsCredentialSource,
+        trustProxy: TrustProxy = trustNoProxy
     ) {
         super();
 
@@ -48,6 +51,10 @@ export class WebServer extends Service {
         // has succeeded, and the console sink prints that line too.
         this.app = express();
         this.app.set('port', this.webPort);
+        // So that req.ip names the same client as SocketIOServer does. It also lets a trusted proxy
+        // set req.protocol and req.hostname (X-Forwarded-Proto and X-Forwarded-Host), which nothing
+        // here reads.
+        this.app.set('trust proxy', trustProxy);
 
         // enable CORS - first, so that every response carries the headers, including the
         // errors of the body parsers below: a browser hides a cross-origin response without

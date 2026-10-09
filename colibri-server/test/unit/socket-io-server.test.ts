@@ -9,6 +9,7 @@ import { MAX_HELD_OBJECTS } from '../../src/server/modules/networking/inbound-li
 import { Service } from '../../src/server/modules/core/service.js';
 import { LogLevel, LogMessage } from '../../src/server/modules/core/log-message.js';
 import { NetworkClient, NetworkMessage } from '../../src/server/modules/command-hooks/connection-pool.js';
+import { TrustProxy, compileTrustedProxies } from '../../src/server/modules/networking/trusted-proxies.js';
 
 interface ColibriEvent {
     command: string;
@@ -391,5 +392,104 @@ describe('SocketIOServer rate limit', () => {
         expect(lost).toHaveLength(1);
         expect(lost[0]).toContain('disconnected while briefly over the message rate limit');
         expect(lost[0]).toContain(`more objects than the ${MAX_HELD_OBJECTS} one client can have held back at once`);
+    });
+});
+
+// Behind a reverse proxy every client comes from the proxy's address; a trusted one names the client
+// in X-Forwarded-For. These clients connect from 127.0.0.1, standing in for the proxy.
+describe('SocketIOServer behind a reverse proxy', () => {
+    let http: HttpServer;
+    let server: SocketIOServer;
+    let port: number;
+    let clients: ClientSocket[];
+    let logs: LogMessage[];
+    let logSubscription: Subscription;
+    let connected: NetworkClient[];
+
+    const start = async function (trustProxy?: TrustProxy): Promise<void> {
+        http = createServer();
+        await new Promise<void>(resolve => http.listen(0, '127.0.0.1', resolve));
+        port = (http.address() as AddressInfo).port;
+
+        server = new SocketIOServer();
+        server.start(http, { trustProxy });
+        server.clientConnected$.subscribe(c => connected.push(c));
+    };
+
+    beforeEach(() => {
+        clients = [];
+        logs = [];
+        connected = [];
+        logSubscription = Service.output$.subscribe(msg => logs.push(msg));
+    });
+
+    afterEach(async () => {
+        logSubscription.unsubscribe();
+        for (const client of clients) client.disconnect();
+        server.stop();
+        await new Promise(resolve => http.once('close', resolve));
+    });
+
+    const connect = function (
+        forwardedFor: string | undefined,
+        transport: 'websocket' | 'polling' = 'websocket',
+        version = PROTOCOL_VERSION
+    ): Promise<ColibriEvent> {
+        const socket = connectClient(`http://127.0.0.1:${port}`, {
+            query: { app: 'appA', version },
+            transports: [transport],
+            extraHeaders: forwardedFor === undefined ? {} : { 'X-Forwarded-For': forwardedFor },
+            reconnection: false,
+            forceNew: true,
+        });
+        clients.push(socket);
+        return new Promise(resolve => socket.once('colibri', (msg: ColibriEvent) => resolve(msg)));
+    };
+
+    const logged = (level: LogLevel): string[] => logs.filter(l => l.level === level).map(l => l.message);
+
+    describe.each(['websocket', 'polling'] as const)('over %s', (transport) => {
+        it('names a client by the right-most address in a trusted proxy\'s X-Forwarded-For', async () => {
+            await start(compileTrustedProxies(['loopback']));
+
+            await connect('6.6.6.6, 198.51.100.7', transport);
+
+            expect(connected.map(c => c.name)).toEqual(['198.51.100.7']);
+            expect(logged(LogLevel.Debug)).toContainEqual(expect.stringMatching(/^New client \(.+\) connected from 198\.51\.100\.7 through 127\.0\.0\.1, waiting/));
+        });
+    });
+
+    it('ignores X-Forwarded-For from a peer it does not trust', async () => {
+        await start(compileTrustedProxies(['10.0.0.1']));
+
+        await connect('198.51.100.7');
+
+        expect(connected.map(c => c.name)).toEqual(['127.0.0.1']);
+        expect(logged(LogLevel.Debug)).toContainEqual(expect.stringMatching(/connected from 127\.0\.0\.1, waiting/));
+    });
+
+    it('trusts no proxy unless told to', async () => {
+        await start();
+
+        await connect('198.51.100.7');
+
+        expect(connected.map(c => c.name)).toEqual(['127.0.0.1']);
+    });
+
+    it('keeps a trusted proxy\'s own address for a client it sends no X-Forwarded-For for', async () => {
+        await start(compileTrustedProxies(['loopback']));
+
+        await connect(undefined);
+
+        expect(connected.map(c => c.name)).toEqual(['127.0.0.1']);
+    });
+
+    it('names the forwarded address when it refuses a client', async () => {
+        await start(compileTrustedProxies(['loopback']));
+
+        const refusal = await connect('198.51.100.7', 'websocket', '1');
+
+        expect(refusal.command).toBe('protocol::rejected');
+        expect(logged(LogLevel.Error)).toContainEqual(expect.stringMatching(/^Refusing client .+ from 198\.51\.100\.7: /));
     });
 });

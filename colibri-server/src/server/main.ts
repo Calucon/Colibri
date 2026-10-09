@@ -28,12 +28,16 @@ const tlsCertificate = Config.TLS_CERT && Config.TLS_KEY
     ? new colibri.TlsCertificate(Config.TLS_CERT, Config.TLS_KEY)
     : undefined;
 
+// Behind these proxies, a web client's address is taken from X-Forwarded-For.
+const trustProxy = colibri.compileTrustedProxies(Config.TRUSTED_PROXIES);
+
 const webServer = new colibri.WebServer(
     Config.WEBSERVER_HOST,
     Config.WEBSERVER_PORT,
     Config.WEBSERVER_ROOT,
     Config.BASE_URL,
-    tlsCertificate
+    tlsCertificate,
+    trustProxy
 );
 const voiceServer = new colibri.VoiceServer(Config.VOICE_SAMPLING_RATE, Config.DATA_ROOT, Config.VOICE_RECORDING);
 
@@ -93,7 +97,7 @@ const startup = async () => {
 
     const rateLimit = { messagesPerSecond: Config.CLIENT_MESSAGE_RATE_LIMIT, burst: Config.CLIENT_MESSAGE_RATE_BURST };
     const httpServer = webServer.start();
-    socketioServer.start(httpServer, { rateLimit });
+    socketioServer.start(httpServer, { rateLimit, trustProxy });
     tcpServer.start(Config.TCP_PORT, Config.TCP_HOST, {
         inboundBacklogLimit: Config.TCP_INBOUND_BACKLOG_LIMIT,
         rateLimit,

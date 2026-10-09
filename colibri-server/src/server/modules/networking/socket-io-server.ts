@@ -27,6 +27,7 @@ import {
     rateLimitStartWarning,
     warnsAtEnd,
 } from './inbound-limits.js';
+import { TrustProxy, forwardedClientAddress, trustNoProxy } from './trusted-proxies.js';
 
 // How often held-back updates are passed on as a limited client's tokens refill, and finished
 // episodes reported.
@@ -35,6 +36,8 @@ const RATE_LIMIT_SWEEP_MILLIS = 100;
 export interface SocketIoServerOptions {
     // Per client; see InboundRateLimiter.
     rateLimit?: RateLimit;
+    // The proxies whose X-Forwarded-For names the client; see TRUSTED_PROXIES. None if left out.
+    trustProxy?: TrustProxy;
 }
 
 // The largest packet a web client may send. engine.io's default is 1e6 bytes, past which the
@@ -72,9 +75,11 @@ export class SocketIOServer extends Service implements NetworkServer {
     private rateLimiter = this.createRateLimiter(DEFAULT_RATE_LIMIT);
     private readonly heldUpdates = new Map<SocketIoClient, HeldUpdates>();
     private rateLimitSweep: NodeJS.Timeout | undefined;
+    private trustProxy: TrustProxy = trustNoProxy;
 
     public start(server: HttpServer, options: SocketIoServerOptions = {}): void {
         this.rateLimiter = this.createRateLimiter(options.rateLimit ?? DEFAULT_RATE_LIMIT);
+        this.trustProxy = options.trustProxy ?? trustNoProxy;
         // Never the reason the process stays alive.
         this.rateLimitSweep = setInterval(() => this.sweepRateLimit(performance.now()), RATE_LIMIT_SWEEP_MILLIS);
         this.rateLimitSweep.unref();
@@ -261,11 +266,15 @@ export class SocketIOServer extends Service implements NetworkServer {
         // promises a string clientVersion (docs/protocol.md), and JSON drops an undefined
         // field altogether.
         const version = socket.handshake.query.version;
+        // Behind a trusted proxy, the client's own address, from the X-Forwarded-For of the
+        // request that opened the connection. It is the client's name in the admin UI.
+        const peer = socket.handshake.address;
+        const address = forwardedClientAddress(peer, socket.handshake.headers['x-forwarded-for'], this.trustProxy);
         const client: SocketIoClient = {
             id: socket.id,
             app: socket.handshake.query.app as string,
             version: typeof version === 'string' ? version : '',
-            name: socket.handshake.address as string,
+            name: address,
             metadata: {},
             socket
         };
@@ -284,7 +293,7 @@ export class SocketIOServer extends Service implements NetworkServer {
             if (client.app === COLIBRI_CHANNEL) {
                 this.logWarning(`Admin UI client ${client.id} announced protocol version '${client.version || '(none)'}'; expected v${PROTOCOL_VERSION}`);
             } else {
-                this.logError(`Refusing client ${client.id} from ${socket.handshake.address}: ${rejection.reason}`, false);
+                this.logError(`Refusing client ${client.id} from ${address}: ${rejection.reason}`, false);
                 socket.emit(COLIBRI_CHANNEL, { command: PROTOCOL_REJECTED_COMMAND, payload: rejection });
                 // Not disconnect(true): forcing the transport shut can truncate the rejection
                 // that was just queued. The unforced form writes the namespace disconnect
@@ -295,7 +304,8 @@ export class SocketIOServer extends Service implements NetworkServer {
         }
 
         if (client.app !== 'colibri') { // ignore colibri web interface clients
-            this.logDebug(`New client (${client.id}) connected from ${socket.handshake.address}, waiting for app name`);
+            const through = address === peer ? '' : ` through ${peer}`;
+            this.logDebug(`New client (${client.id}) connected from ${address}${through}, waiting for app name`);
             this.logDebug(`Setting app of new colibri client '${client.name}' (${client.id}, v${client.version}) to "${client.app}"`, {
                 clientApp: client.app,
                 clientName: client.name,
