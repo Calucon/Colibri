@@ -225,8 +225,8 @@ For a payload that is not a colour, both functions warn and return opaque black 
 
 ### SyncModel
 
-`SyncModel` synchronizes data models between clients, for example in a model-view-controller architecture. It is the
-counterpart of [SyncBehaviour](../../colibri-unity/docs/guide.md#syncbehaviour) in Unity.
+`SyncModel` synchronizes data models between clients. Unity counterpart:
+[SyncBehaviour](../../colibri-unity/docs/guide.md#syncbehaviour).
 
 ```ts
 import { SyncModel, Synced } from '@hcikn/colibri';
@@ -249,7 +249,7 @@ under the given name. `@Synced()` needs TypeScript's standard decorators, the de
 
 **From 1.x:** remove `experimentalDecorators` and turn every synced field into an `accessor`
 (`@Synced() private age = 0;` becomes `@Synced() accessor age = 0;`). This also fixes field synchronization in
-frameworks such as React, which never worked with the legacy decorator.
+frameworks that re-create instances, such as React. It never worked correctly with the legacy decorator.
 
 Register the class:
 
@@ -279,16 +279,19 @@ const mySample = new SampleClass('myId'); // not synchronized yet
 registerExampleClass(mySample); // synchronized with the other clients from now on
 ```
 
+Sample: [model-sync](../samples/model-sync.ts) (`npm run samples/model-sync`).
+
 #### Registering an instance
 
-The id identifies the instance on every client and must be unique. `registerModel` first asks the server for it.
+The id identifies the instance on every client and must be unique. `registerModel` first requests the model with that
+id from the server.
 
-- If the server has the id, its values replace the instance's. This happens if another client created it, or if this
-  page did and was reloaded while another client stayed connected. Changes made after `registerModel` are sent on top
-  and kept, even if another client's update arrives before the server's answer.
+- If the server has it, its values replace the instance's. This happens if another client created it, or if this page
+  did and was reloaded while another client stayed connected. Changes made after `registerModel` are sent on top and
+  kept, even if another client's update arrives before the server's answer.
 - Otherwise, the instance is sent in full.
 
-The observable lists the new instance with its constructor values in the same tick, so a bound UI briefly shows the
+`SampleClasses$` lists the new instance with its constructor values in the same tick, so a bound UI briefly shows the
 defaults. Nothing is sent before the server's answer.
 
 A registered instance replaces a listed one with the same id, such as a copy from the server. The replaced one stops
@@ -296,14 +299,15 @@ syncing, with a console warning if this client registered it. Registering the sa
 
 #### Reconnects
 
-- `RegisterModelSync` and `registerModel` may run before `new Colibri()`. The server is asked once it exists.
-- After a reconnect, Colibri asks again for each instance this client registered, then for all others, and applies
-  what changed.
-- A change made while the server's answer is on its way is kept, whether the answer follows the registration, a
-  reconnect or a request from another `RegisterModelSync` on the channel. The server made the answer before it had the
-  change.
-- So is a change not yet sent when an update for the instance arrives. `SyncModel` sends changes 1 ms after they are
-  made, and the server reads the change after that update.
+- `RegisterModelSync` and `registerModel` may run before `new Colibri()`. The request is sent once `new Colibri()`
+  runs.
+- After a reconnect, Colibri requests again each instance this client registered, then all others, and applies what
+  changed.
+- A change made while the server's answer is in transit is kept, since the server built the answer before the change.
+  This applies to the answer after `registerModel`, after a reconnect, and after a request from another
+  `RegisterModelSync` on the channel.
+- A change not yet sent when an update for the instance arrives is also kept. `SyncModel` sends changes 1 ms after
+  they are made, so the server receives the change after that update.
 - The server keeps models in memory only, per app name. It forgets them on restart and when the app's last client
   disconnects, as in a lone client's outage. This client then resends its registered instances in full. Other models
   come back only from a client that has them.
@@ -315,26 +319,23 @@ Details: [After a reconnect](../../colibri-server/docs/protocol.md#after-a-recon
 
 #### Changes lost in a dropped connection
 
-Socket.IO notices a connection that dies without closing, as on a Wi-Fi dropout, only after its ping timeout, up to
-about 45 s with the server's defaults. Changes sent until then are lost.
+Socket.IO detects a connection that dies without closing, such as on a Wi-Fi dropout, only after its ping timeout (up
+to about 45 s with the server's defaults). Changes sent until then are lost.
 
-The server's answer after the reconnect, or another client's update before the answers are over, may show an earlier
-value that a field had here in the 10 s before the connection stopped working. Colibri then keeps the local value and
-resends it once the answers are over, however many changes were made meanwhile. A value this client never had is
-another client's and is applied. This also holds if the connection dies again before the answer or the resent value
-arrives.
+If the server's answer after the reconnect, or another client's update that arrives before the last answer, shows a
+field at a value it had on this client in the 10 s before the drop, Colibri keeps the local value. It resends that value
+after the last answer, regardless of changes made meanwhile. A value this client never had comes from another client
+and is applied. This also holds if the connection dies again before the answer or the resent value arrives.
 
-Sample: [model-sync](../samples/model-sync.ts) (`npm run samples/model-sync`).
-
-#### Limitations
+#### SyncModel limitations
 
 - colibri-web cannot delete an instance for other clients. `delete()` only stops the instance sending its changes. An
-  instance another client deletes, such as a Unity client, is removed from the list.
+  instance deleted by another client, such as Unity, is removed from the list.
 - A lost change is resent only for a registered instance. On a model listed from the server, the server's value wins.
 - A field changed more than about 8 times within roughly 100 ms of the last message from the server before the drop,
   as in a fast drag on a slow link, may not be recognized as lost. The server's value is then applied.
-- Another client setting a field back, during the outage or right after the reconnect, to a value it had here in the
-  10 s before the drop looks like a lost change. This client's value replaces it.
+- If another client sets a field back, during the outage or right after the reconnect, to a value the field had on
+  this client in the 10 s before the drop, this looks like a lost change. This client's value replaces it.
 - A field changed while waiting for the server's answer after `registerModel` or a reconnect is resent if the server
   still shows the replaced value a round trip later, even if another client set it back meanwhile.
 - Two `RegisterModelSync` calls on one channel in one page do not receive each other's updates. They share the page's
