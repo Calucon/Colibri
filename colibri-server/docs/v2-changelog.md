@@ -297,8 +297,7 @@ EditMode tests, which `npm run test:vectors` checks in CI.
 
 - **A voice packet reaches only the sender's app.** Every packet used to go to every other voice
   client on the server, whatever its app: every client received all voice traffic, anyone could
-  listen to any app, and two apps using the same voice id, such as two projects started from the
-  voice sample, heard each other.
+  listen to any app, and two apps using the same fixed voice id heard each other.
 - The header is 11 bytes: the 7 bytes 1.x had, with a header version (`2`) in the high 4 bits of
   the codec byte, then the app id, the 32-bit FNV-1a hash of the app name. See
   [Voice packets](protocol.md#voice-packets-udp). `voice-packet.ts` holds the format and the hash.

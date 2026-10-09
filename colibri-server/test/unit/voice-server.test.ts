@@ -283,8 +283,8 @@ describe('VoiceServer', () => {
             const b2 = await openClient();
             const received = [ a1, a2, b1, b2 ].map(inbox);
 
-            // Two apps with voice ids 1 and 2 each, as two projects started from the same
-            // sample have. Every voice packet used to go to every other voice client.
+            // Two apps with voice ids 1 and 2 each, as two projects with fixed voice ids can
+            // have. Every voice packet used to go to every other voice client.
             const a1Joins = voicePacket(1, 0, [], A);
             const a2Joins = voicePacket(2, 0, [], A);
             const b1Joins = voicePacket(1, 0, [], B);
