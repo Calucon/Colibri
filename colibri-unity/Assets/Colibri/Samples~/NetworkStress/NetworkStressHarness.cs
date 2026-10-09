@@ -628,9 +628,17 @@ namespace HCIKonstanz.Colibri.Samples
 
             if (_probesEchoed == 0)
             {
-                GUILayout.Label(_probesSent == 0
-                    ? "No probes sent yet."
-                    : "No probe echoed yet. Start a second client with this scene.");
+                // A second client can be running with nothing coming back: over the server's rate
+                // limit, which the scene's defaults are, every probe or echo is dropped once the
+                // client's burst allowance is spent.
+                if (_probesSent == 0)
+                    GUILayout.Label("No probes sent yet.");
+                else if (_probesLost == 0)
+                    GUILayout.Label("No probe echoed yet. Start a second client with this scene.");
+                else
+                    GUILayout.Label("No probe echoed yet. Start a second client with this scene. If one is "
+                        + "running and the server log warns about CLIENT_MESSAGE_RATE_LIMIT, lower Objects on "
+                        + "the client it names.", _warningStyle);
                 return;
             }
 
