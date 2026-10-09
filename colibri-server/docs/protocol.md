@@ -485,8 +485,9 @@ names, or the app name `colibri`.
 | `colibri::clients` | `client::request` | by a client, to ask who is connected | the server answers with one `client::connected` per client of the requester's app, with `version` added |
 | `log` | `debug`, `info`, `warn` / `warning`, `error` | by a client, to write to the server log at that level (any other command: debug) | text |
 
-`name` is the handshake name for a TCP client and the IP address for a Socket.IO client. The admin UI
-also uses `colibri::log` and `colibri::latency`.
+`name` is the handshake name for a TCP client and the IP address for a Socket.IO client, taken from
+`X-Forwarded-For` behind a trusted proxy ([Behind a reverse proxy](guide.md#behind-a-reverse-proxy)).
+The admin UI also uses `colibri::log` and `colibri::latency`.
 
 ## Model synchronization
 

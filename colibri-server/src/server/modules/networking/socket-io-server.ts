@@ -267,7 +267,8 @@ export class SocketIOServer extends Service implements NetworkServer {
         // field altogether.
         const version = socket.handshake.query.version;
         // Behind a trusted proxy, the client's own address, from the X-Forwarded-For of the
-        // request that opened the connection. It is the client's name in the admin UI.
+        // request that opened the connection. It is the client's name in colibri::clients, sent
+        // to the admin UI and to every client of its app.
         const peer = socket.handshake.address;
         const address = forwardedClientAddress(peer, socket.handshake.headers['x-forwarded-for'], this.trustProxy);
         const client: SocketIoClient = {

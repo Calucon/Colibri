@@ -163,7 +163,9 @@ client's address:
 - **Web port:** from a trusted peer, the client is the right-most `X-Forwarded-For` entry that is not
   itself a trusted proxy. A client can write anything into the header, and each proxy appends the
   address it got the request from, so the entries left of that are ignored. A peer that is not
-  trusted is shown at its own address. Express's `req.ip` follows the same rule.
+  trusted is shown at its own address. Express's `req.ip` follows the same rule. As without a proxy,
+  the address is also the client's `name` in `colibri::clients`, which every client of its app
+  receives ([Server messages](protocol.md#server-messages)).
 - **TCP port:** with `TCP_PROXY_PROTOCOL=true`, a connection from a trusted peer must start with a
   PROXY protocol header, version 1 or 2, which names the Unity client
   ([PROXY protocol](protocol.md#proxy-protocol)). Other peers connect as before.

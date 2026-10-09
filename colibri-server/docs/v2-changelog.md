@@ -123,8 +123,8 @@ this is the server's full detail.
   [Behind a reverse proxy](./guide.md#behind-a-reverse-proxy).
 - **Web port:** from a trusted peer, a Socket.IO client's address is the right-most
   `X-Forwarded-For` entry that is not itself a trusted proxy, so a client cannot choose it by
-  sending the header itself. It names the client in the log and the admin UI. Express's `req.ip`
-  agrees.
+  sending the header itself. It names the client in the log and the admin UI, and is its `name` in
+  `colibri::clients`, which every client of the app receives. Express's `req.ip` agrees.
 - **TCP port:** with new `TCP_PROXY_PROTOCOL=true`, a connection from a trusted peer must start
   with a PROXY protocol header, version 1 (nginx's `proxy_protocol on`) or 2. It is read ahead of a
   TLS handshake, also when it arrives in pieces. The client it names is the one in every log line
