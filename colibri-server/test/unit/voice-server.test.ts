@@ -23,11 +23,11 @@ const voicePacket = function (userId: number, sequence: number, data: number[] =
     return encodeVoicePacket({ appId, userId, sequence, frameSize: 960, codec: VoiceCodec.PCM, data: Buffer.from(data) });
 };
 
-// A PCM packet carrying `samples` as 16-bit little-endian values.
-const pcmPacket = function (userId: number, sequence: number, samples: number[]): Buffer {
+// A PCM packet of `appId` carrying `samples` as 16-bit little-endian values.
+const pcmPacket = function (userId: number, sequence: number, samples: number[], appId = APP): Buffer {
     const data = Buffer.alloc(samples.length * 2);
     samples.forEach((sample, i) => data.writeInt16LE(sample, i * 2));
-    return Buffer.concat([ voicePacket(userId, sequence, []), data ]);
+    return Buffer.concat([ voicePacket(userId, sequence, [], appId), data ]);
 };
 
 interface VoiceServerInternals {
@@ -632,6 +632,44 @@ describe('VoiceServer recordings', () => {
         expect(await readSamples(files[0]!)).toEqual(first);
         expect(await readSamples(files[1]!)).toEqual(second);
         expect(savedLogs()).toHaveLength(2);
+    });
+
+    // After a restart or a dropped network every client registers again within one 20 ms frame,
+    // and two apps may use the same voice id. The file name used to hold only the start time
+    // and the voice id, so the second of two such recordings replaced the first.
+    it('keeps apart the recordings of clients with the same voice id that start in the same millisecond', async () => {
+        const A = voiceAppId('app-a');
+        const B = voiceAppId('app-b');
+        const a1 = await openClient();
+        const b1 = await openClient();
+        const a2 = await openClient();
+        const speakers: [ dgram.Socket, number, number[] ][] = [
+            [ a1, A, someSamples(480, 10) ],
+            [ b1, B, someSamples(480, 11) ],
+            // The same app and voice id too, from another source port.
+            [ a2, A, someSamples(480, 12) ],
+        ];
+
+        vi.useFakeTimers({ toFake: [ 'Date' ] });
+        try {
+            vi.setSystemTime(new Date('2026-10-09T11:07:58.502Z'));
+            for (const [ socket, appId, samples ] of speakers) {
+                const packet = pcmPacket(1, 0, samples, appId);
+                internals.udpSocket.emit('message', packet, { ...socket.address(), size: packet.length });
+            }
+        } finally {
+            vi.useRealTimers();
+        }
+
+        await server.stop();
+
+        const expected = speakers.map(([ socket, appId, samples ]) =>
+            [ `rec_2026-10-09T11_07_58.502Z_app_${appHex(appId)}_ID_1_port_${(socket.address() as AddressInfo).port}.wav`, samples ] as const);
+        expect(await recordings()).toEqual(expected.map(([ name ]) => name).sort());
+        for (const [ name, samples ] of expected) {
+            expect(await readSamples(name)).toEqual(samples);
+        }
+        expect(savedLogs()).toHaveLength(3);
     });
 
     it('waits for a save the disconnect check started before it saves the rest', async () => {
