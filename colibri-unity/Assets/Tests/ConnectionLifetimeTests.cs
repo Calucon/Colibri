@@ -484,6 +484,59 @@ namespace HCIKonstanz.Colibri.E2E
         }
 
         /// <summary>
+        /// The ended loop's cleanup, held until the next loop's session is Connected and let go
+        /// then: the session stays Connected, and what is sent goes out on it. On its own the ended
+        /// loop has cleaned up long before the next session is up, which the test above cannot get
+        /// past.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator AnEndedLoopThatCleansUpLateLeavesTheNextSessionAlone()
+        {
+            _server = StartServer();
+            var connection = ConnectionTo(_server.Port);
+            var events = Record(connection);
+            yield return E2EServer.WaitUntil(() => events.Count == 1, "The client never connected", 10f);
+
+            // Holds the first loop to get there, the one the disable ends.
+            var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var held = 0;
+            connection.BeforeSessionCleanup = () => Interlocked.Increment(ref held) == 1 ? release.Task : Task.CompletedTask;
+            var ended = connection.CurrentLoop;
+
+            try
+            {
+                connection.enabled = false;
+                connection.enabled = true;
+
+                yield return E2EServer.WaitUntil(() => Volatile.Read(ref held) == 1, "The ended loop never got to its cleanup", 5f);
+                yield return E2EServer.WaitUntil(() => events.Count == 3, "The client never connected again after it was enabled", 10f);
+                Assert.That(ended.IsCompleted, Is.False, "The ended loop should still be waiting to clean up");
+
+                release.SetResult(true);
+                yield return E2EServer.Await(ended, "The ended loop never finished its cleanup", 5f);
+
+                // One Update, to raise whatever the cleanup changed.
+                yield return null;
+                Assert.That(connection.Status, Is.EqualTo(ConnectionStatus.Connected), "The ended loop's cleanup changed the next session's status");
+
+                var sent = connection.SendCommandAsync("late-cleanup-test", "broadcast::int", 1);
+                yield return E2EServer.Await(sent, "What was sent after the ended loop's cleanup was not written", 2f);
+                Assert.That(sent.Result, Is.True);
+
+                yield return E2EServer.WaitUntil(() => _server.Received.Any(received => received.Frame.Channel == "late-cleanup-test"),
+                    "The server did not receive the message", 2f);
+                Assert.That(_server.Received.Where(received => received.Frame.Channel == "late-cleanup-test").Select(received => received.Session),
+                    Is.EqualTo(new[] { 2 }), "The message should have gone out on the session the enable started");
+                Assert.That(events, Is.EqualTo(new[] { "connected", "disconnected", "connected" }));
+            }
+            finally
+            {
+                connection.BeforeSessionCleanup = null;
+                release.TrySetResult(true);
+            }
+        }
+
+        /// <summary>
         /// Twice over: of the two loops started in one frame, the first is ended at once and the
         /// second connects, and neither the first nor the one before it says or changes anything.
         /// </summary>

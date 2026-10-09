@@ -236,6 +236,9 @@ namespace HCIKonstanz.Colibri.Networking
             // ends *before* this is set counts towards the framing hint.
             public volatile bool DecodedAnyFrame;
 
+            // The run itself: completes once it has ended and cleaned up after its last session.
+            public Task Run;
+
             public ConnectionLoop()
             {
                 Token = Lifetime.Token;
@@ -244,6 +247,24 @@ namespace HCIKonstanz.Colibri.Networking
 
         /// <remarks>Internal for the tests, which shrink its send buffer to stand in for a slow link.</remarks>
         internal Socket CurrentSocket => _loop?.Socket;
+
+        /// <summary>
+        /// The connection loop the last OnEnable started, until OnDisable ends it. Completes once the
+        /// loop has cleaned up after its last session.
+        /// </summary>
+        /// <remarks>Internal for the tests, which wait for an ended loop to finish its cleanup.</remarks>
+        internal Task CurrentLoop => _loop?.Run;
+
+        /// <summary>
+        /// Awaited by a connection loop when a session has ended, before it cleans up after it. Null
+        /// outside the tests.
+        /// </summary>
+        /// <remarks>
+        /// Internal for the tests, which hold a loop that OnDisable has ended there until the next
+        /// loop's session is Connected. On its own it unwinds within milliseconds, long before that,
+        /// so a cleanup that changed the next session's status or outbox would go unnoticed.
+        /// </remarks>
+        internal volatile Func<Task> BeforeSessionCleanup;
 
         private string _hostname = "";
 
@@ -561,7 +582,7 @@ namespace HCIKonstanz.Colibri.Networking
             _reportedTlsFailure = null;
 
             _loop = new ConnectionLoop();
-            _ = RunConnectionLoop(_loop);
+            _loop.Run = RunConnectionLoop(_loop);
         }
 
         private void RefreshConfig()
@@ -1081,6 +1102,10 @@ namespace HCIKonstanz.Colibri.Networking
                 }
                 finally
                 {
+                    var beforeCleanup = BeforeSessionCleanup;
+                    if (beforeCleanup != null)
+                        await beforeCleanup().ConfigureAwait(false);
+
                     // This loop's own, whatever the next loop is doing by now (see ConnectionLoop).
                     loop.IsWatchdogArmed = false;
                     CloseSocket(loop.Socket);
