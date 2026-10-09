@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using HCIKonstanz.Colibri.Core;
 using HCIKonstanz.Colibri.Networking;
 using HCIKonstanz.Colibri.Synchronization;
@@ -1159,6 +1160,113 @@ namespace HCIKonstanz.Colibri.Tests
 
             Assert.That(model.Label, Is.EqualTo("theirs"));
             Assert.That(Sent(model), Is.Null);
+        }
+
+
+        /*
+         *  A body whose PhysicsAuthority is ticked in the scene has it on every client until the
+         *  first answer. Simulated meanwhile, it fell, and that counted as a change made here.
+         */
+
+        /// <summary>A Unity message of GenericSyncTransform's, which edit mode never sends.</summary>
+        private static void Deliver(ResyncTransform sync, string message)
+            => typeof(GenericSyncTransform<ResyncTransform>)
+                .GetMethod(message, BindingFlags.Instance | BindingFlags.NonPublic)
+                .Invoke(sync, null);
+
+        /// <summary>
+        /// One fixed step: SyncTransform's FixedUpdate, then gravity, as the physics engine would
+        /// apply it to a body that is not kinematic.
+        /// </summary>
+        private static void FixedStep(ResyncTransform sync)
+        {
+            Deliver(sync, "FixedUpdate");
+            if (sync.GetComponent<Rigidbody>().isKinematic)
+                return;
+
+            var position = sync.transform.position;
+            sync.transform.position = new Vector3(position.x, position.y - 0.01f, position.z);
+        }
+
+        /// <summary>
+        /// A ball with a dynamic Rigidbody and PhysicsAuthority ticked, at (0, 1, 0), awake and
+        /// started. Placed in the scene, it has the id the scene gave it; created here, it makes
+        /// one in Awake.
+        /// </summary>
+        private ResyncTransform SpawnBall(bool placed)
+        {
+            var sync = Spawn<ResyncTransform>("ball");
+            sync.gameObject.AddComponent<Rigidbody>();
+            sync.transform.position = new Vector3(0f, 1f, 0f);
+            if (placed)
+                sync.Id = System.Guid.NewGuid().ToString();
+            sync.PhysicsAuthority = true;
+            sync.Wake();
+            Deliver(sync, "Start");
+            return sync;
+        }
+
+        /// <summary>
+        /// Another client had the authority, and the ball lies where it threw it. A client that
+        /// joins takes that position, and gives up the authority, without sending the one its own
+        /// simulation reached before the answer.
+        /// </summary>
+        [Test]
+        public void APlacedBodyWithPhysicsAuthorityTickedTakesTheSharedPositionAtTheFirstAnswer()
+        {
+            var sync = SpawnBall(placed: true);
+
+            FixedStep(sync);
+            Poll(sync);
+            FixedStep(sync);
+            Poll(sync);
+            sync.OnModelUpdate(new JObject
+            {
+                { "id", sync.Id },
+                { "active", true },
+                { "position", new JArray(3f, 0f, 3f) },
+                { "physicsid", "another client's" },
+            });
+            FixedStep(sync);
+            Poll(sync);
+
+            Assert.That(sync.transform.position, Is.EqualTo(new Vector3(3f, 0f, 3f)), "The ball did not take the shared position");
+            Assert.That(Sent(sync), Is.Null, "The position the ball fell to before the answer went out over the shared one");
+            Assert.That(sync.PhysicsAuthority, Is.False);
+            Assert.That(sync.GetComponent<Rigidbody>().isKinematic, Is.True);
+        }
+
+        /// <summary>The first client keeps the authority, and simulates once the answer is in.</summary>
+        [Test]
+        public void APlacedBodyWithPhysicsAuthorityTickedIsSimulatedOnceTheFirstAnswerIsIn()
+        {
+            var sync = SpawnBall(placed: true);
+
+            FixedStep(sync);
+            Assert.That(sync.GetComponent<Rigidbody>().isKinematic, Is.True, "Simulated before the server's state was known");
+
+            sync.OnModelUpdate(Bare(sync.Id));
+            FixedStep(sync);
+            Poll(sync);
+
+            Assert.That(sync.GetComponent<Rigidbody>().isKinematic, Is.False);
+            var sent = Sent(sync);
+            Assert.That(sent, Is.Not.Null, "The fall never went out");
+            Assert.That(Members(sent), Is.EqualTo(new[] { "id", "position" }), $"{sent}");
+        }
+
+        /// <summary>
+        /// A ball created here, thrown at once: the server holds nothing for an id made in Awake,
+        /// so the body does not wait for the answer, and the throw is not lost.
+        /// </summary>
+        [Test]
+        public void ABodyCreatedHereIsSimulatedBeforeTheFirstAnswer()
+        {
+            var sync = SpawnBall(placed: false);
+
+            FixedStep(sync);
+
+            Assert.That(sync.GetComponent<Rigidbody>().isKinematic, Is.False);
         }
     }
 }
