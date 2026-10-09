@@ -292,9 +292,12 @@ private void MyListener(float myNumber) {
 }
 ```
 
+- Register the listener before data is sent.
+- Channel and type must match on both sides. On a mismatch, the console warns and names the fix
+  ([Console messages](#console-messages)).
 - A listener that is a method of a `MonoBehaviour`, or a lambda written inside one, is removed when
-  the component or its GameObject is destroyed. Destroyed objects are never called and cannot throw
-  `MissingReferenceException` in Colibri's message loop.
+  the component or its GameObject is destroyed. Colibri's message loop never calls a destroyed
+  object, so it cannot throw `MissingReferenceException`.
 - `Sync.Unregister` removes a listener while its object lives on:
 
   ```c#
@@ -329,28 +332,18 @@ private void MyListener(JToken jtoken) {
 }
 ```
 
-Newtonsoft JSON converts your own classes. `[Serializable]` is optional:
+Newtonsoft JSON converts your own classes, with or without `[Serializable]`:
 
 ```c#
-using System;
-
-[Serializable]
 public class ExampleClass
 {
     public int Id;
     public string Name;
 }
-```
 
-```c#
-ExampleClass exampleObject = new ExampleClass();
-exampleObject.Id = 1234;
-exampleObject.Name = "Charly Sharp";
-
+var exampleObject = new ExampleClass { Id = 1234, Name = "Charly Sharp" };
 Sync.Send("example", JToken.FromObject(exampleObject));
-```
 
-```c#
 Sync.Receive<JToken>("example", MyListener);
 
 private void MyListener(JToken jtoken) {
@@ -358,8 +351,8 @@ private void MyListener(JToken jtoken) {
 }
 ```
 
-Newtonsoft JSON cannot convert a `Vector3`, `Quaternion` or `Color` inside your class. A plain
-`JToken.FromObject` throws a `JsonSerializationException`, for a `Vector3` with
+Newtonsoft JSON cannot convert a `Vector3`, `Quaternion` or `Color` inside your class.
+`JToken.FromObject` throws a `JsonSerializationException`, for a `Vector3`
 `Self referencing loop detected for property 'normalized'`. Pass `ColibriJson.Serializer`, which
 converts `Vector2`, `Vector3`, `Vector4`, `Quaternion` and `Color` to arrays of their components and
 back:
@@ -390,14 +383,8 @@ private void OnSpawn(JToken jtoken) {
 }
 ```
 
-Colibri converts a `Vector3`, `Quaternion` or `Color` that is sent directly or is a `[Sync]` member,
-so these need neither.
-
-### Limitations
-
-- Register the listener before data is sent.
-- Channel and type must match on both sides. On a mismatch, the console names the channel, both
-  types and the fix.
+A `Vector3`, `Quaternion` or `Color` sent directly or as a `[Sync]` member needs no `ColibriJson`.
+Colibri converts it.
 
 ## SyncTransform
 
