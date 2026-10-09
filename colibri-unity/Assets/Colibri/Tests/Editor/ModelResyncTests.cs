@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Threading;
 using HCIKonstanz.Colibri.Core;
 using HCIKonstanz.Colibri.Networking;
 using HCIKonstanz.Colibri.Synchronization;
@@ -1305,6 +1306,19 @@ namespace HCIKonstanz.Colibri.Tests
             }
         }
 
+        /// <summary>
+        /// The status of the connection the balls took up, set as its connection loop would set it,
+        /// and back to Disconnected, where edit mode leaves it, once disposed: the connection is a
+        /// singleton, not the test's own.
+        /// </summary>
+        private sealed class ConnectionStatusSet : System.IDisposable
+        {
+            public void To(ConnectionStatus status)
+                => Assert.That(WebServerConnection.Instance.TrySetStatus(status, CancellationToken.None), Is.True);
+
+            public void Dispose() => WebServerConnection.Instance.TrySetStatus(ConnectionStatus.Disconnected, CancellationToken.None);
+        }
+
         /// <summary>While the client connects, the body waits for the server's state.</summary>
         [Test]
         public void APlacedBodyIsHeldWhileTheClientConnects()
@@ -1398,6 +1412,68 @@ namespace HCIKonstanz.Colibri.Tests
             Assert.That(sync.PhysicsAuthority, Is.False);
             Assert.That(sync.GetComponent<Rigidbody>().isKinematic, Is.True);
             Assert.That(warnings.Messages, Is.Empty);
+        }
+
+        /// <summary>
+        /// The connection comes up on a worker thread, and OnConnected follows in the next Update,
+        /// after that frame's FixedUpdates. A connection up by then is a server reached in time.
+        /// </summary>
+        [Test]
+        public void APlacedBodyWaitsForTheAnswerOfAConnectionUpBeforeOnConnected()
+        {
+            using var warnings = new NoServerWarnings();
+            var sync = SpawnBall(placed: true);
+            var start = Time.unscaledTimeAsDouble;
+            using var status = new ConnectionStatusSet();
+
+            FixedStepAt(sync, start);
+            Poll(sync);
+            status.To(ConnectionStatus.Connected);
+            FixedStepAt(sync, start + ConnectTimeout + 0.01);
+            Poll(sync);
+            Assert.That(sync.GetComponent<Rigidbody>().isKinematic, Is.True, "Simulated while the connection was up");
+
+            Sync.OnConnected();
+            sync.OnModelUpdate(new JObject
+            {
+                { "id", sync.Id },
+                { "active", true },
+                { "position", new JArray(3f, 0f, 3f) },
+                { "physicsid", "another client's" },
+            });
+            FixedStepAt(sync, start + ConnectTimeout + 0.03);
+            Poll(sync);
+
+            Assert.That(sync.transform.position, Is.EqualTo(new Vector3(3f, 0f, 3f)));
+            Assert.That(Sent(sync), Is.Null);
+            Assert.That(warnings.Messages, Is.Empty);
+        }
+
+        /// <summary>
+        /// A connect attempt gives up after the connect timeout itself, and may have started after
+        /// the frame the time is counted from. The body waits for it, the first or a later one, and
+        /// stops waiting when it fails.
+        /// </summary>
+        [TestCase(ConnectionStatus.Connecting)]
+        [TestCase(ConnectionStatus.Reconnecting)]
+        public void APlacedBodyWaitsForAConnectAttemptUnderWay(ConnectionStatus attempt)
+        {
+            using var warnings = new NoServerWarnings();
+            var sync = SpawnBall(placed: true);
+            var start = Time.unscaledTimeAsDouble;
+            using var status = new ConnectionStatusSet();
+
+            FixedStepAt(sync, start);
+            status.To(attempt);
+            FixedStepAt(sync, start + ConnectTimeout + 1);
+            Assert.That(sync.GetComponent<Rigidbody>().isKinematic, Is.True, "Simulated during a connect attempt");
+            Assert.That(warnings.Messages, Is.Empty);
+
+            status.To(ConnectionStatus.Disconnected);
+            FixedStepAt(sync, start + ConnectTimeout + 1.5);
+
+            Assert.That(sync.GetComponent<Rigidbody>().isKinematic, Is.False, "Still held after the attempt failed");
+            Assert.That(warnings.Messages, Has.Count.EqualTo(1));
         }
 
         /// <summary>
