@@ -1,7 +1,7 @@
 import { TestBed } from '@angular/core/testing';
 import { Subject } from 'rxjs';
 import { FLUSH_INTERVAL, LogMessage, LogService, MAX_MESSAGES } from './log.service';
-import { SocketIOService } from './socketio.service';
+import { Reconnect, SocketIOService } from './socketio.service';
 
 const message = (overrides: Partial<LogMessage>): LogMessage => ({
     id: '1',
@@ -19,6 +19,7 @@ const message = (overrides: Partial<LogMessage>): LogMessage => ({
 describe('LogService', () => {
     let logChannel: Subject<{ command: string; payload: unknown }>;
     let emit: ReturnType<typeof vi.fn>;
+    let reconnected: Subject<Reconnect>;
 
     const live = (overrides: Partial<LogMessage>) => logChannel.next({ command: 'message', payload: message(overrides) });
     const history = (request: number | null, messages: LogMessage[]) => logChannel.next({ command: 'history', payload: { request, messages } });
@@ -35,11 +36,12 @@ describe('LogService', () => {
         vi.useFakeTimers();
         logChannel = new Subject();
         emit = vi.fn();
+        reconnected = new Subject();
 
         TestBed.configureTestingModule({
             providers: [{
                 provide: SocketIOService,
-                useValue: { listen: () => logChannel.asObservable(), emit }
+                useValue: { listen: () => logChannel.asObservable(), emit, reconnected$: reconnected.asObservable() }
             }]
         });
     });
@@ -193,6 +195,28 @@ describe('LogService', () => {
         expect(service.messages().length).toBe(MAX_MESSAGES);
         expect(service.messages()[0].id).toBe('1');
         expect(service.messages().at(-1)?.id).toBe('new');
+    });
+
+    it('keeps its lines after a reconnect, marks the gap and adds the history after it', () => {
+        const service = start();
+
+        live({ id: 'before' });
+        live({ id: 'repeated', count: 0 });
+        vi.advanceTimersByTime(FLUSH_INTERVAL);
+
+        reconnected.next({ lostAt: 5000, at: 9000 });
+        expect(emit).toHaveBeenLastCalledWith('colibri::log', 'requestLog', expect.objectContaining({ request: 2 }));
+
+        history(2, [
+            message({ id: 'before' }),
+            message({ id: 'meanwhile', created: 6000 }),
+            message({ id: 'repeated', count: 1, created: 7000 })
+        ]);
+
+        const rows = service.messages();
+        expect(rows.map(m => m.id)).toEqual([ 'before', 'reconnect-9000', 'meanwhile', 'repeated' ]);
+        expect(rows[1]).toEqual(expect.objectContaining({ reconnect: true, first: 5000, created: 9000 }));
+        expect(rows[3].count).toBe(1);
     });
 
     it('remembers every app it has seen, across filter changes', () => {

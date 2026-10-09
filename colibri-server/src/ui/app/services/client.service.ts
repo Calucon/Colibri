@@ -56,6 +56,12 @@ export class ClientService {
 
         // retrieve initial clients
         socketio.emit('colibri::clients', 'client::request', {});
+
+        // clients that left while the connection was down were never reported
+        socketio.reconnected$.subscribe(() => {
+            this._clients.set([]);
+            socketio.emit('colibri::clients', 'client::request', {});
+        });
     }
 
 }

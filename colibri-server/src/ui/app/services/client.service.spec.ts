@@ -1,15 +1,19 @@
 import { TestBed } from '@angular/core/testing';
 import { Subject } from 'rxjs';
 import { ClientService, ColibriClient } from './client.service';
-import { SocketIOService } from './socketio.service';
+import { Reconnect, SocketIOService } from './socketio.service';
 
 describe('ClientService', () => {
     let latencyChannel: Subject<{ command: string; payload: Record<string, [number, number][]> }>;
     let clientsChannel: Subject<{ command: string; payload: Partial<ColibriClient> }>;
+    let reconnected: Subject<Reconnect>;
+    let emit: ReturnType<typeof vi.fn>;
 
     beforeEach(() => {
         latencyChannel = new Subject();
         clientsChannel = new Subject();
+        reconnected = new Subject();
+        emit = vi.fn();
 
         TestBed.configureTestingModule({
             providers: [{
@@ -17,10 +21,22 @@ describe('ClientService', () => {
                 useValue: {
                     listen: (channel: string) =>
                         (channel === 'colibri::latency' ? latencyChannel : clientsChannel).asObservable(),
-                    emit: vi.fn()
+                    emit,
+                    reconnected$: reconnected.asObservable()
                 }
             }]
         });
+    });
+
+    it('asks for the clients again after a reconnect, forgetting the old ones', () => {
+        const service = TestBed.inject(ClientService);
+
+        clientsChannel.next({ command: 'client::connected', payload: { id: 'a', app: 'colibri', name: 'A', version: '1' } });
+        reconnected.next({ lostAt: 1000, at: 2000 });
+
+        expect(service.clients()).toEqual([]);
+        expect(emit).toHaveBeenCalledTimes(2);
+        expect(emit).toHaveBeenLastCalledWith('colibri::clients', 'client::request', {});
     });
 
     it('adds a client on client::connected', () => {

@@ -14,6 +14,11 @@ export interface LogMessage {
     /** How often the line repeated: 0 for a line that occurred once. */
     count: number;
     metadata: Record<string, unknown>;
+    /**
+     * Set on a row the page adds itself where the connection to the server was lost and back:
+     * `first` is when it was lost, `created` when it was back.
+     */
+    reconnect?: true;
 }
 
 interface LogHistory {
@@ -102,6 +107,24 @@ export class LogService {
                 this.requestLog();
             });
             location.hash = filter || '';
+        });
+
+        // The lines from before stay. The history fills in what was logged meanwhile, below a
+        // row that marks the gap; after a server restart that is the new server's whole log.
+        this.socketio.reconnected$.subscribe(({ lostAt, at }) => {
+            this.add([ {
+                id: `reconnect-${at}`,
+                origin: '',
+                level: 2,
+                message: '',
+                group: '',
+                created: at,
+                first: lostAt,
+                count: 0,
+                metadata: {},
+                reconnect: true
+            } ]);
+            this.requestLog();
         });
     }
 
