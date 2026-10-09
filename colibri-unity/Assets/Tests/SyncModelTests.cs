@@ -71,10 +71,9 @@ namespace HCIKonstanz.Colibri.E2E
         private const string Channel = "e2esyncmodel";
 
         /// <summary>
-        /// A model does not report changes until the server has answered its <c>model::request</c>
-        /// with the state it already holds - otherwise a local value would overwrite the shared one
-        /// the moment it arrived. So every test here has to let that round trip finish before it
-        /// touches a field, or the change is latched and never sent.
+        /// A model sends nothing until the server has answered its <c>model::request</c>, and then
+        /// sends what changed since it registered, together. So every test here lets that round
+        /// trip finish before it touches a field, and each change goes out on its own.
         /// </summary>
         private static IEnumerator LetInitialStateArrive() => E2EServer.Settle(1.5f);
 

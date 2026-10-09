@@ -957,6 +957,84 @@ namespace HCIKonstanz.Colibri.E2E
         }
 
         /// <summary>
+        /// An object placed during an outage asks for its state then, and again once the client is
+        /// back, and both answers arrive in the round after the reconnect. Changed in the frame the
+        /// client reconnects, before either answer, it keeps the change through the round, and the
+        /// other clients and the server get it; the count, not changed here, takes the server's
+        /// value.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator AnObjectChangedAtTheReconnectBeforeItsFirstAnswerKeepsTheChange()
+        {
+            const string channel = "e2esyncmodel";
+            var spawned = new List<GameObject>();
+            var checker = new TcpPeer();
+            var id = System.Guid.NewGuid().ToString();
+            E2ESyncModel model = null;
+            var changed = false;
+            System.Action change = () =>
+            {
+                model.Label = "mine";
+                changed = true;
+            };
+
+            try
+            {
+                _peer.Send(channel, "model::update", new JObject { { "id", id }, { "label", "theirs" }, { "_count", 3 } });
+                _peer.Send(channel, "model::request", new JObject { { "id", id } });
+                yield return _peer.Expect(channel, "model::update",
+                    frame => Assert.That((int?)TcpPeer.Json(frame)["_count"], Is.EqualTo(3), "Precondition: the server holds the object"));
+
+                _proxy.HoldNewConnections = true;
+                yield return CutTheConnection();
+
+                var gameObject = new GameObject("placed-during-the-outage");
+                spawned.Add(gameObject);
+                gameObject.SetActive(false);
+                model = gameObject.AddComponent<E2ESyncModel>();
+                model.Id = id;
+                gameObject.SetActive(true);
+
+                Connection.OnConnected += change;
+                _proxy.HoldNewConnections = false;
+                yield return E2EServer.WaitUntil(() => changed, "The client never reconnected after the outage", 20f);
+
+                yield return _peer.Expect(channel, "model::update", frame =>
+                {
+                    var payload = (JObject)TcpPeer.Json(frame);
+                    Assert.That((string)payload["id"], Is.EqualTo(id));
+                    Assert.That((string)payload["label"], Is.EqualTo("mine"), $"Got {payload}");
+                });
+
+                // Long enough for both answers, and for the end of them.
+                yield return E2EServer.Settle(1f);
+                Assert.That(model.Label, Is.EqualTo("mine"), "An answer put the server's value over the change");
+                Assert.That(model.Count, Is.EqualTo(3), "The count, not changed here, did not take the server's value");
+
+                yield return checker.Connect("changed-at-the-reconnect-checker");
+                yield return E2EServer.Settle(0.3f);
+                checker.Send(channel, "model::request", new JObject { { "id", id } });
+                yield return checker.Expect(channel, "model::update", frame =>
+                {
+                    var payload = (JObject)TcpPeer.Json(frame);
+                    Assert.That((string)payload["label"], Is.EqualTo("mine"), $"The server holds {payload}");
+                    Assert.That((int?)payload["_count"], Is.EqualTo(3), $"The server holds {payload}");
+                });
+            }
+            finally
+            {
+                Connection.OnConnected -= change;
+                checker.Dispose();
+
+                foreach (var gameObject in spawned)
+                {
+                    if (gameObject)
+                        Object.DestroyImmediate(gameObject);
+                }
+            }
+        }
+
+        /// <summary>
         /// The server clears an app's models when its last client leaves, so a client that was
         /// alone when its connection dropped comes back to a server that holds nothing of its
         /// objects, and the request each object makes again is answered with a bare { id }.

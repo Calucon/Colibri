@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Linq;
 using HCIKonstanz.Colibri.Core;
+using HCIKonstanz.Colibri.Networking;
 using HCIKonstanz.Colibri.Synchronization;
 using Newtonsoft.Json.Linq;
 using NUnit.Framework;
@@ -349,6 +350,126 @@ namespace HCIKonstanz.Colibri.E2E
             => UnityCompat.FindAll<SyncTransform>(FindObjectsInactive.Include)
                 .Where(s => s.Id == id)
                 .ToArray();
+
+
+        /*
+         *  A change made before the server's first answer for the object: in Start, in an
+         *  OnConnected handler, or by a user right after Play. The answer put the server's value
+         *  over it, and no other client ever saw it.
+         */
+
+        /// <summary>The proxy a test put between this client and the server, if any.</summary>
+        private TcpProxy _proxy;
+
+        /// <summary>
+        /// The trace from Unity on Windows: a SyncTransform placed in the scene, hidden right after
+        /// the client connected, was shown again by the server's answer, and the other client never
+        /// saw it hidden. Here another client has moved the object before, so the server holds its
+        /// state, and a manager on the channel asks for every model too, the object included. The
+        /// object is hidden in the frame the client connects, before either answer arrives: it
+        /// stays hidden here, is hidden on the other client and on the server, and takes the
+        /// position the other client set, which it did not change.
+        /// </summary>
+        [UnityTest]
+        public IEnumerator AnObjectHiddenBeforeTheServersAnswerStaysHiddenAndIsHiddenElsewhere()
+        {
+            var id = Guid.NewGuid().ToString();
+            Peer.Send(Channel, "model::update", new JObject
+            {
+                { "id", id },
+                { "active", true },
+                { "position", new JArray(1f, 2f, 3f) }
+            });
+            Peer.Send(Channel, "model::request", new JObject { { "id", id } });
+            yield return Peer.Expect(Channel, "model::update",
+                frame => Assert.That(TcpPeer.Json(frame)["position"], Is.Not.Null, "Precondition: the server holds the object"));
+
+            // The client starts up through a proxy that holds its connection: the object and the
+            // manager ask for their state, and the requests wait in the queue.
+            _proxy = TcpProxy.Start(E2EServer.Host, E2EServer.TcpPort, terminateTls: E2EServer.OverTls);
+            _proxy.HoldNewConnections = true;
+            yield return DestroyConnection();
+            E2EServer.ConfigureInProcess(_proxy.Port);
+            var connection = WebServerConnection.Instance;
+
+            var sync = SpawnConfigured<SyncTransform>("hidden-before-the-answer", s => s.Id = id);
+            var templateObject = Spawn("hidden-before-the-answer-template");
+            templateObject.SetActive(false);
+            var manager = Spawn<SyncTransformManager>("hidden-before-the-answer-manager");
+            manager.Template = templateObject.AddComponent<SyncTransform>();
+            yield return null;
+
+            var hidden = false;
+            Action hide = () =>
+            {
+                sync.gameObject.SetActive(false);
+                hidden = true;
+            };
+            connection.OnConnected += hide;
+            try
+            {
+                _proxy.HoldNewConnections = false;
+                yield return E2EServer.WaitUntil(() => hidden, "The client never connected through the proxy", 20f);
+            }
+            finally
+            {
+                connection.OnConnected -= hide;
+            }
+
+            yield return Peer.Expect(Channel, "model::update", frame => AssertActive(frame, id, false));
+
+            // Long enough for both answers, and for the end of them.
+            yield return E2EServer.Settle(1f);
+            Assert.That(sync.gameObject.activeSelf, Is.False, "An answer showed the object again");
+            Assert.That(sync.transform.position, Is.EqualTo(new Vector3(1f, 2f, 3f)),
+                "The position, not changed here, did not take the other client's");
+
+            var checker = new TcpPeer();
+            try
+            {
+                yield return checker.Connect("hidden-before-the-answer-checker");
+                yield return E2EServer.Settle(0.3f);
+                checker.Send(Channel, "model::request", new JObject { { "id", id } });
+                yield return checker.Expect(Channel, "model::update", frame =>
+                {
+                    var payload = (JObject)TcpPeer.Json(frame);
+                    Assert.That((bool?)payload["active"], Is.False, $"The server holds {payload}");
+                    Assert.That(payload["position"].ToVector3(), Is.EqualTo(new Vector3(1f, 2f, 3f)), $"The server holds {payload}");
+                });
+            }
+            finally
+            {
+                checker.Dispose();
+            }
+        }
+
+        /// <summary>
+        /// Points the connection back at the server after a test that put a proxy in between,
+        /// before the fixture deletes what the test spawned.
+        /// </summary>
+        [UnityTearDown]
+        public IEnumerator ConnectDirectlyAgain()
+        {
+            if (_proxy == null)
+                yield break;
+
+            yield return DestroyConnection();
+            _proxy.Dispose();
+            _proxy = null;
+            E2EServer.Configure();
+        }
+
+        private static IEnumerator DestroyConnection()
+        {
+            var existing = Object.FindAnyObjectByType<WebServerConnection>();
+            if (existing != null)
+            {
+                // OnDisable cancels the loop and closes the socket; the frame after is what lets
+                // the cancelled loop unwind before anything rebuilds it.
+                Object.DestroyImmediate(existing.gameObject);
+                yield return null;
+            }
+        }
 
 
         /*
