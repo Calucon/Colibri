@@ -58,6 +58,11 @@ const isBare = (modelData: object) => Object.keys(modelData).every(key => key ==
 // the same connection, and a bare { id } there is that instance's answer, not a model.
 const ownOnChannel = new Map<string, Set<(id: string) => boolean>>();
 
+// For each channel, how each RegisterModelSync on it starts keeping the fields it sends out of every
+// update until the answer for an id (see guardFrom): every one of them receives the answers to the
+// requests the others send.
+const guardsOnChannel = new Map<string, Set<(end: string) => void>>();
+
 // The channel the requests that tell when the answers to the earlier ones are over go out on (see
 // askForEnd), the one colibri-unity uses after a reconnect. No model is ever put on it.
 const END_CHANNEL = 'colibri::reconnect';
@@ -193,6 +198,13 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
     if (onChannel) onChannel.add(hasOwn);
     else ownOnChannel.set(name, new Set([hasOwn]));
 
+    const guard = (end: string) => {
+        guardEnds.push(end);
+    };
+    const guards = guardsOnChannel.get(name);
+    if (guards) guards.add(guard);
+    else guardsOnChannel.set(name, new Set([guard]));
+
     // Asks the server for an own model by id; onUpdate or onDelete takes the answer. The server
     // answers with what it has - or, for a model it does not have, a bare { id }, and only then
     // does onUpdate send the model's full state. What the server does have is applied rather than
@@ -236,9 +248,11 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
     // sent just after it only then. Applied, that answer undid the change on this client alone, for
     // good, since the server relays an update to every client but the one that sent it. Every update
     // that arrives before the answer to the request sent now was made before the server read these
-    // fields, another client's too, so what it shows for them is older.
+    // fields, another client's too, so what it shows for them is older. Every RegisterModelSync on
+    // the channel receives the answers to this one's requests, so each of them does the same.
     const guardFrom = (colibri: Colibri) => {
-        guardEnds.push(askForEnd(colibri));
+        const end = askForEnd(colibri);
+        for (const guardOnChannel of guardsOnChannel.get(name) ?? []) guardOnChannel(end);
     };
 
     const keepOut = (model: T, update: object) => {
@@ -279,6 +293,10 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
         setTimeout(catchUpOnceAnswered, 0);
         onColibriDisconnected(colibri, () => {
             disconnected = true;
+            // The answers to the requests sent on this connection are not going to come. Ended here
+            // rather than on the reconnect, by when another RegisterModelSync on the channel may
+            // have sent the next one (see guardFrom).
+            endGuard();
             // Not before the answers to asking again after the last reconnect are over: the
             // connection died again before that, and a change lost in the one before is still in
             // question, so it is judged from when this client last heard from the server then.
@@ -292,7 +310,6 @@ export const RegisterModelSync = <T extends SyncModel<T>>(registration: ModelSyn
             awaitingAnswer.clear();
             deletedWhileAwaited.clear();
             askedAfterOutage.clear();
-            endGuard();
             for (const id of [...confirming.keys()]) {
                 const confirmation = endConfirmation(id);
                 const model = models.value.find(m => m.id === id);

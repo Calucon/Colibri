@@ -1285,6 +1285,56 @@ describe('keeping a change sent just after asking for every model', () => {
         expect(pair.b).toBe('B2');
     });
 
+    // Every RegisterModelSync on a channel receives the answer to another one's request for every
+    // model, created later on a re-render say.
+    it('keeps a change to an own model sent just after another RegisterModelSync on the channel asked', async () => {
+        const { pair } = connectedWithOwnPair();
+        await nextTask();
+        endOfAnswers();
+        RegisterModelSync({ name: 'own', type: Pair });
+        await nextTask();
+        pair.b = 'B2';
+        await settle();
+        expect(sentInOrder().slice(-2)).toEqual([
+            ['model::request', {}],
+            ['model::update', { id: 'p1', b: 'B2' }]
+        ]);
+
+        deliver('own', { command: 'model::update', payload: { id: 'p1', a: 'A', b: 'B' } });
+        expect([pair.a, pair.b]).toEqual(['A', 'B2']);
+
+        // The answers to it are over: from now on an update is applied as it comes.
+        endOfAnswers();
+        deliver('own', { command: 'model::update', payload: { id: 'p1', b: 'theirs' } });
+        expect(pair.b).toBe('theirs');
+    });
+
+    // On a reconnect, the one registered first asks for every model at once; the other one, still
+    // waiting for the answer for its own model, only later.
+    it('keeps a change sent just after another RegisterModelSync on the channel asked on a reconnect', async () => {
+        new Colibri('app', 'localhost', 9011);
+        RegisterModelSync({ name: 'own', type: Pair });
+        const [models$, registerModel] = RegisterModelSync({ name: 'own', type: Pair });
+        registerModel(new Pair('p1'));
+        connectSocket();
+        await nextTask();
+        deliver('own', { command: 'model::update', payload: { id: 'p1' } });
+        deliver('own', { command: 'model::update', payload: { id: 'theirs', a: 'A', b: 'B' } });
+        endOfAnswers();
+        const [, theirs] = latest(models$);
+        disconnectSocket();
+        connectSocket();
+        fakeSocket.emit.mockClear();
+
+        theirs.b = 'B2';
+        await settle();
+        expect(sentInOrder()).toEqual([['model::update', { id: 'theirs', b: 'B2' }]]);
+        // The answer to the other one's request for every model.
+        deliver('own', { command: 'model::update', payload: { id: 'theirs', a: 'A', b: 'B' } });
+
+        expect([theirs.a, theirs.b]).toEqual(['A', 'B2']);
+    });
+
     it('keeps a change to a model another client made, sent just after it', async () => {
         new Colibri('app', 'localhost', 9011);
         const [models$] = RegisterModelSync({ name: 'own', type: Pair });
