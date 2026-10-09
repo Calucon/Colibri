@@ -236,6 +236,42 @@ describe('RegisterModelSync twice on one channel', () => {
 
         expect(latest(other$)).toEqual([]);
     });
+
+    // The other one is created later, on a re-render say, and asks for every model. Its answer, made
+    // before the server had a change this one sent just after, undid the change on this page only.
+    it('keeps a change sent just after the other one asked for every model', async () => {
+        const app = uniqueApp('modelsync-two-asking');
+        const channel = uniqueApp('shared');
+        const peer = await createClient(app);
+        const link = await startLinkProxy(25);
+        const page = await createClientThrough(app, link);
+        const [, registerModel] = RegisterModelSync<Shared>({ name: channel, type: Shared });
+        const session = new Shared('session');
+        session.value = 'running';
+        registerModel(session);
+        // The answer for the id, then the one for every model, and the request after it.
+        await listed(page);
+        await roundTrip(page);
+
+        RegisterModelSync<Shared>({ name: channel, type: Shared });
+        // Asked for every model by now.
+        await new Promise(resolve => setTimeout(resolve, 0));
+        session.value = 'mine';
+
+        const peerSaw = await updatesDuring(peer, channel, async () => {
+            for (let i = 0; i < 3; i++) await roundTrip(page);
+            await roundTrip(peer);
+        });
+        expect({
+            page: session.value,
+            server: await storedOn(peer, channel, 'session'),
+            peerLastSaw: peerSaw.at(-1)
+        }).toEqual({
+            page: 'mine',
+            server: { id: 'session', value: 'mine' },
+            peerLastSaw: { id: 'session', value: 'mine' }
+        });
+    });
 });
 
 // The server forgets an app's models when its last client leaves, and a model a client had
