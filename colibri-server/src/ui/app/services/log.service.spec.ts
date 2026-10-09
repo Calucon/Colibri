@@ -219,6 +219,45 @@ describe('LogService', () => {
         expect(rows[3].count).toBe(1);
     });
 
+    it('counts the loaded lines of each level, without the reconnect rows', () => {
+        const service = start();
+
+        live({ id: '1', level: 0 });
+        live({ id: '2', level: 3 });
+        live({ id: '3', level: 3 });
+        vi.advanceTimersByTime(FLUSH_INTERVAL);
+        reconnected.next({ lostAt: 5000, at: 9000 });
+
+        expect(service.levelCounts()).toEqual([ 1, 0, 0, 2 ]);
+    });
+
+    it('clears every filter, the search included, with one new request', () => {
+        const service = start();
+        service.filter.set('demo');
+        service.setLevels([ 0 ]);
+        service.showBroadcastTraffic.set(true);
+        service.search.set('asset');
+        TestBed.flushEffects();
+        const requests = emit.mock.calls.length;
+
+        service.clearFilters();
+        TestBed.flushEffects();
+
+        expect([ service.filter(), [ ...service.levels() ], service.showBroadcastTraffic(), service.search() ])
+            .toEqual([ '', [ 0, 1, 2, 3 ], false, '' ]);
+        expect(emit.mock.calls.length).toBe(requests + 1);
+    });
+
+    it('follows the app in the address when it changes on the open page', () => {
+        const service = start();
+
+        location.hash = 'other-app';
+        window.dispatchEvent(new HashChangeEvent('hashchange'));
+
+        expect(service.filter()).toBe('other-app');
+        location.hash = '';
+    });
+
     it('remembers every app it has seen, across filter changes', () => {
         const service = start();
 

@@ -1,104 +1,81 @@
-@use '../../../sass/nord' as *;
-
 :host {
-    position: relative;
-
     display: grid;
-    grid-template-rows: [padding] 10px [header] 80px [main] 1fr;
+    // minmax(0, 1fr), not the implicit auto column: that one grew to the header's widest
+    // content and laid the whole page out 1365px wide on any smaller screen.
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
 
-    width: 100%;
-    height: 100%;
+    height: 100vh;
+    height: 100dvh;
+}
 
-    overflow: hidden;
+.appbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    height: 48px;
+    padding: 0 max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left));
 
-    .header {
-        grid-row: header;
+    background: var(--surface-1);
+    border-bottom: 1px solid var(--border);
+}
 
-        $margin: 20px;
-        margin-left: $margin;
-        margin-right: $margin;
+.brand {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-right: 16px;
 
-        width: calc(100% - #{$margin * 2});
-        height: 100%;
+    color: var(--text-strong);
+    font-size: 18px;
+    font-weight: 500;
 
+    img {
+        height: 28px;
+    }
+}
 
+.tabs {
+    display: flex;
+    align-self: stretch;
+
+    a {
         display: flex;
-        flex-direction: row;
         align-items: center;
-        justify-content: space-between;
+        padding: 0 12px;
 
-        .selector {
-            display: flex;
-            flex-direction: row;
-            align-items: center;
-            gap: 16px;
+        color: var(--text-muted);
+        font-size: 14px;
+        font-weight: 500;
+        border-bottom: 2px solid transparent;
+        // the bottom border sits on the app bar's own border
+        margin-bottom: -1px;
+
+        &:hover {
+            color: var(--text-strong);
         }
 
-        .logo {
-            display: flex;
-            flex-direction: row;
-            justify-content: center;
-            align-items: center;
-            margin-right: 50px;
-
-            img {
-                height: 100%;
-                width: 100px;
-            }
-
-            h1 {
-                margin-left: 10px;
-                margin-right: 10px;
-            }
-        }
-
-        .tabs {
-            $tab-width: 100px;
-
-            position: relative;
-
-            width: 100%;
-            height: 100%;
-
-            display: flex;
-            flex-direction: row;
-            justify-content: flex-start;
-            align-items: center;
-
-            gap: 20px;
-
-            font-weight: bold;
-
-            a {
-                width: $tab-width;
-                text-align: center;
-            }
-
-            a.active {
-                color: $nord9;
-            }
-
-            .active-indicator {
-                position: absolute;
-                bottom: 0;
-                height: 6px;
-                width: $tab-width;
-                background-color: $nord9;
-                border-radius: 10px;
-
-                transition: left 0.3s;
-            }
+        &.active {
+            color: var(--text-strong);
+            border-bottom-color: var(--accent);
         }
     }
+}
 
-    .content {
-        grid-row: main;
-        background-color: $nord0;
+.content {
+    position: relative;
+    min-width: 0;
+    min-height: 0;
+    overflow: auto;
+}
 
-        height: 100%;
-        width: 100%;
-        overflow-y: scroll;
+@media (max-width: 479.98px) {
+    .brand {
+        margin-right: 4px;
 
-        position: relative;
+        span {
+            display: none;
+        }
     }
 }

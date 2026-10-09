@@ -1,0 +1,379 @@
+:host {
+    display: block;
+    background: var(--surface-1);
+    border-bottom: 1px solid var(--border);
+}
+
+// Wide screens: one row. Below 1100px the search, app and sync controls take a second row, and
+// on a phone they fold away behind the Filters button.
+.bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+    padding: 8px max(16px, env(safe-area-inset-right)) 8px max(16px, env(safe-area-inset-left));
+}
+
+.levels {
+    display: flex;
+    gap: 6px;
+    min-width: 0;
+}
+
+.chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 32px;
+    padding: 0 10px;
+
+    color: var(--text-muted);
+    background: transparent;
+    border: 1px solid var(--surface-3);
+    border-radius: 16px;
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap;
+    cursor: pointer;
+
+    .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        border: 1.5px solid currentColor;
+        box-sizing: border-box;
+    }
+
+    .tag {
+        display: none;
+    }
+
+    .n {
+        // not --text-muted: that is under 4.5:1 on the chip's own background when on
+        color: #c0c8d6;
+        font-weight: 400;
+        font-variant-numeric: tabular-nums;
+    }
+
+    &:hover {
+        border-color: var(--text-muted);
+    }
+
+    &.on {
+        color: var(--text-strong);
+        background: var(--surface-2);
+        border-color: var(--surface-2);
+
+        .dot {
+            border: 0;
+        }
+
+        &.level-0 .dot { background: var(--err); }
+        &.level-1 .dot { background: var(--warn); }
+        &.level-2 .dot { background: var(--info); }
+        &.level-3 .dot { background: var(--debug); }
+
+        &:hover {
+            border-color: var(--surface-3);
+        }
+    }
+}
+
+.follow,
+.more-toggle,
+.clear,
+.active-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 32px;
+    padding: 0 12px;
+
+    color: var(--text);
+    background: transparent;
+    border: 1px solid var(--surface-3);
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap;
+    cursor: pointer;
+
+    &:hover {
+        background: var(--surface-2);
+    }
+
+    .pi {
+        font-size: 12px;
+    }
+}
+
+.follow {
+    order: 2;
+    margin-left: auto;
+
+    &.paused {
+        color: var(--bg);
+        background: var(--warn);
+        border-color: var(--warn);
+    }
+}
+
+.more-toggle {
+    display: none;
+
+    .badge {
+        min-width: 18px;
+        padding: 0 5px;
+        box-sizing: border-box;
+
+        color: var(--bg);
+        background: var(--accent);
+        border-radius: 9px;
+        font-size: 11px;
+        line-height: 18px;
+        text-align: center;
+    }
+}
+
+.more {
+    display: flex;
+    flex: 1 1 auto;
+    align-items: center;
+    gap: 8px 16px;
+    min-width: 0;
+}
+
+.search {
+    position: relative;
+    display: flex;
+    align-items: center;
+    flex: 0 1 280px;
+    min-width: 160px;
+
+    .pi-search {
+        position: absolute;
+        left: 10px;
+        color: var(--text-muted);
+        font-size: 13px;
+        pointer-events: none;
+    }
+
+    input {
+        width: 100%;
+        height: 32px;
+        box-sizing: border-box;
+        padding: 0 10px 0 30px;
+
+        color: var(--text);
+        background: var(--bg);
+        border: 1px solid #77839b;
+        border-radius: 6px;
+        font: 13px var(--sans);
+
+        &::placeholder {
+            color: var(--text-muted);
+        }
+
+        &:hover {
+            border-color: var(--text-muted);
+        }
+
+        &:focus-visible {
+            outline-offset: 0;
+            border-color: var(--accent);
+        }
+    }
+
+    .matches {
+        position: absolute;
+        right: 32px;
+        color: var(--text-muted);
+        font-size: 12px;
+        pointer-events: none;
+    }
+
+    &.counted input {
+        padding-right: 100px;
+    }
+}
+
+.apps {
+    flex: 0 1 240px;
+    min-width: 160px;
+    font-size: 13px;
+}
+
+.option {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    width: 100%;
+
+    .clients {
+        color: var(--text-muted);
+        font-size: 12px;
+    }
+}
+
+.sync {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 32px;
+    font-size: 13px;
+    cursor: pointer;
+
+    small {
+        display: none;
+    }
+}
+
+.clear {
+    border-color: transparent;
+    color: var(--accent);
+}
+
+.active {
+    display: none;
+}
+
+@media (max-width: 1099.98px) {
+    .follow {
+        order: 0;
+    }
+
+    .more {
+        flex-basis: 100%;
+        order: 3;
+    }
+
+    .search {
+        flex-grow: 1;
+        max-width: 360px;
+    }
+}
+
+@media (max-width: 699.98px) {
+    .bar {
+        gap: 6px;
+        padding: 6px max(12px, env(safe-area-inset-right)) 6px max(12px, env(safe-area-inset-left));
+    }
+
+    .levels {
+        flex: 1 1 0;
+        gap: 4px;
+        overflow-x: auto;
+        scrollbar-width: none;
+    }
+
+    // ERR, WRN, INF, DBG in the level's colour, as the rows show them, instead of the dot
+    .chip {
+        gap: 5px;
+        padding: 0 8px;
+
+        .dot,
+        .name {
+            display: none;
+        }
+
+        .tag {
+            display: inline;
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        &.on {
+            &.level-0 .tag { color: var(--err); }
+            &.level-1 .tag { color: var(--warn); }
+            &.level-2 .tag { color: var(--info); }
+            &.level-3 .tag { color: var(--debug); }
+        }
+    }
+
+    // the "Jump to latest" button pauses and resumes on a phone
+    .follow {
+        display: none;
+    }
+
+    .more-toggle {
+        display: inline-flex;
+        margin-left: auto;
+        padding: 0 9px;
+    }
+
+    .more {
+        display: none;
+        flex-direction: column;
+        align-items: stretch;
+        padding: 4px 0 6px;
+
+        &.open {
+            display: flex;
+        }
+    }
+
+    .search,
+    .apps {
+        flex: none;
+        max-width: none;
+    }
+
+    .search input,
+    .chip,
+    .more-toggle {
+        height: 40px;
+    }
+
+    .apps ::ng-deep .p-select-label {
+        padding-top: 11px;
+        padding-bottom: 11px;
+    }
+
+    .sync {
+        min-height: 44px;
+
+        .sync-label {
+            display: flex;
+            flex-direction: column;
+        }
+
+        small {
+            display: block;
+            color: var(--text-muted);
+            font-size: 12px;
+        }
+    }
+
+    .clear {
+        align-self: flex-start;
+        padding: 0;
+        height: 36px;
+    }
+
+    .active {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        padding: 0 12px 8px;
+    }
+
+    .active-chip {
+        height: 28px;
+        padding: 0 10px;
+        border-radius: 14px;
+        background: var(--surface-2);
+        border-color: var(--surface-2);
+        font-weight: 400;
+    }
+}
+
+// the four levels and their counts come first
+@media (max-width: 419.98px) {
+    .more-toggle {
+        padding: 0 11px;
+
+        span:not(.badge) {
+            display: none;
+        }
+    }
+}

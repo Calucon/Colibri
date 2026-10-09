@@ -1,67 +1,195 @@
-import { AfterViewChecked, AfterViewInit, ChangeDetectionStrategy, Component, ElementRef, inject, signal, viewChild } from '@angular/core';
+import { AfterViewInit, ChangeDetectionStrategy, Component, ElementRef, OnDestroy, afterRenderEffect, computed, effect, inject, signal, untracked, viewChild } from '@angular/core';
+import { DatePipe } from '@angular/common';
 import { LogMessage, LogService } from '../../services';
-
 import { LogMessageComponent } from '../../components/log-message/log-message.component';
-import { CdkVirtualScrollableElement, CdkVirtualScrollViewport, CdkFixedSizeVirtualScroll, CdkVirtualForOf } from '@angular/cdk/scrolling';
-import { ButtonModule } from 'primeng/button';
+import { LogToolbarComponent } from '../../components/log-toolbar/log-toolbar.component';
+import { matchesSearch } from '../../components/log-message/log-format';
+
+/**
+ * How many lines are on the page at first, and how many more each "Show older lines" adds: half
+ * as many on a phone. The rows have the height their text needs, so they are not virtualized,
+ * and a page of 10,000 rows would take seconds to build on a phone.
+ */
+export const PAGE_SIZE = 1000;
+const screenPageSize = (): number => window.matchMedia?.('(max-width: 699.98px)').matches ? PAGE_SIZE / 2 : PAGE_SIZE;
+
+/** How close to the end, in px, still counts as at the end. */
+const END_SLACK = 24;
+
+interface EmptyState {
+    text: string;
+    action?: { label: string; run: () => void };
+}
 
 @Component({
     selector: 'app-log',
     templateUrl: './log.component.html',
     styleUrls: ['./log.component.scss'],
-    imports: [CdkVirtualScrollableElement, CdkVirtualScrollViewport, CdkFixedSizeVirtualScroll, CdkVirtualForOf, LogMessageComponent, ButtonModule],
+    imports: [DatePipe, LogMessageComponent, LogToolbarComponent],
     changeDetection: ChangeDetectionStrategy.OnPush
 })
-export class LogComponent implements AfterViewInit, AfterViewChecked {
+export class LogComponent implements AfterViewInit, OnDestroy {
     log = inject(LogService);
 
-    private scrollContainer = viewChild.required<ElementRef>('scrollContainer');
-    manualScroll = signal(false);
+    private scroller = viewChild.required<ElementRef<HTMLElement>>('scroller');
 
-    ngAfterViewInit() {
-        this.scrollContainer().nativeElement.addEventListener('wheel', (ev: WheelEvent) => this.onScroll(ev.deltaY), { passive: true });
-    }
+    /** Whether the page scrolls to new lines as they arrive. */
+    following = signal(true);
 
-    ngAfterViewChecked(): void {
-        this.scrollToBottom();
-    }
+    // While paused, the page shows the lines it had then: new lines, repeats moving to the end and
+    // the oldest lines making room would all shift what is being read.
+    private frozen = signal<ReadonlyArray<LogMessage> | null>(null);
+    private appendedAtPause = signal(0);
+    private readonly pageSize = screenPageSize();
+    private limit = signal(this.pageSize);
 
-    private scrollToBottom(): void {
-        if (!this.manualScroll()) {
-            try {
-                const el = this.scrollContainer().nativeElement;
-                el.scrollTop = el.scrollHeight;
-            } catch (err) {
-                console.error(err);
-            }
+    search = computed(() => this.log.search().toLowerCase());
+
+    matches = computed(() => {
+        const lines = this.frozen() ?? this.log.messages();
+        const search = this.search();
+        return search ? lines.filter(line => matchesSearch(line, search)) : lines;
+    });
+
+    rows = computed(() => {
+        const matches = this.matches();
+        const limit = this.limit();
+        return matches.length > limit ? matches.slice(-limit) : matches;
+    });
+
+    hidden = computed(() => this.matches().length - this.rows().length);
+    olderStep = computed(() => Math.min(this.pageSize, this.hidden()));
+
+    /** How many lines arrived since the page was paused. */
+    newLines = computed(() => this.frozen() ? this.log.appended() - this.appendedAtPause() : 0);
+
+    /** The rows that start a new day, which get the date above them. */
+    dayStarts = computed(() => {
+        const starts = new Set<string>();
+        let previous = '';
+        for (const row of this.rows()) {
+            const day = new Date(row.created).toDateString();
+            if (day !== previous) starts.add(row.id);
+            previous = day;
         }
+        return starts;
+    });
+
+    empty = computed<EmptyState | null>(() => {
+        if (this.rows().length > 0) return null;
+        if (this.log.loading()) return { text: 'Loading the log…' };
+
+        const clear = { label: 'Clear filters', run: () => this.log.clearFilters() };
+        if (this.log.levels().size === 0) return { text: 'All levels are hidden.', action: clear };
+        if (this.search()) return { text: `No lines match "${this.log.search()}".`, action: { label: 'Clear search', run: () => this.log.search.set('') } };
+        if (this.log.filter()) return { text: `No lines from ${this.log.filter()} at these levels.`, action: clear };
+        return { text: 'No log lines yet.' };
+    });
+
+    private lastTop = 0;
+    private lastHeight = 0;
+    private resizeObserver: ResizeObserver | undefined;
+
+    constructor() {
+        afterRenderEffect(() => {
+            this.rows();
+            if (this.following()) this.scrollToEnd();
+        });
+
+        // The server sends a new history for new filters; the paused lines were filtered by the old.
+        effect(() => {
+            this.log.filter();
+            this.log.levels();
+            this.log.showBroadcastTraffic();
+            untracked(() => this.follow());
+        });
     }
 
-    getId(index: number, entry: LogMessage): string {
-        return entry.id;
+    ngAfterViewInit(): void {
+        // a new height (a rotated phone, the filters opening) would leave the end out of view
+        this.resizeObserver = new ResizeObserver(() => {
+            if (this.following()) this.scrollToEnd();
+        });
+        this.resizeObserver.observe(this.scroller().nativeElement);
+
+        // passive, so that the browser never waits for these before it scrolls
+        const el = this.scroller().nativeElement;
+        el.addEventListener('wheel', this.onWheel, { passive: true });
+        el.addEventListener('touchstart', this.onTouchStart, { passive: true });
+        el.addEventListener('touchmove', this.onTouchMove, { passive: true });
     }
 
-    onScroll(deltaY: number): void {
-        const el = this.scrollContainer().nativeElement;
-        if (deltaY < 0) {
-            this.manualScroll.set(true);
-        } else if (el.scrollTop + el.offsetHeight >= el.scrollHeight) {
-            this.manualScroll.set(false);
+    ngOnDestroy(): void {
+        this.resizeObserver?.disconnect();
+        const el = this.scroller().nativeElement;
+        el.removeEventListener('wheel', this.onWheel);
+        el.removeEventListener('touchstart', this.onTouchStart);
+        el.removeEventListener('touchmove', this.onTouchMove);
+    }
+
+    pause(): void {
+        if (!this.following()) return;
+        this.frozen.set(this.log.messages());
+        this.appendedAtPause.set(this.log.appended());
+        this.following.set(false);
+    }
+
+    follow(): void {
+        this.frozen.set(null);
+        this.limit.set(this.pageSize);
+        this.following.set(true);
+    }
+
+    showOlder(): void {
+        this.limit.update(limit => limit + this.pageSize);
+    }
+
+    // Any way of scrolling up pauses: wheel, touch, keys or the scroll bar. The height check tells
+    // them from the list changing size under the scroll position. Back at the end, it follows again.
+    onScroll(): void {
+        const el = this.scroller().nativeElement;
+        const sameContent = el.scrollHeight === this.lastHeight;
+        const atEnd = el.scrollHeight - el.scrollTop - el.clientHeight <= END_SLACK;
+
+        if (sameContent && !atEnd && el.scrollTop < this.lastTop - 1) {
+            this.pause();
+        } else if (sameContent && atEnd && el.scrollTop > this.lastTop && !this.following()) {
+            this.follow();
         }
+
+        this.lastTop = el.scrollTop;
+        this.lastHeight = el.scrollHeight;
     }
 
-    scrollAutomatically(): void {
-        this.manualScroll.set(false);
-        this.scrollToBottom();
+    // The wheel and a finger pause at once, before the first scroll event: under a busy stream, the
+    // next batch of lines would otherwise scroll back to the end under the reader.
+    private onWheel = (event: WheelEvent): void => {
+        const el = this.scroller().nativeElement;
+        if (event.deltaY < 0 && el.scrollHeight > el.clientHeight) this.pause();
+    };
+
+    private touchY = 0;
+
+    private onTouchStart = (event: TouchEvent): void => {
+        this.touchY = event.touches[0]?.clientY ?? 0;
+    };
+
+    // a finger moving down scrolls the log up
+    private onTouchMove = (event: TouchEvent): void => {
+        const el = this.scroller().nativeElement;
+        const y = event.touches[0]?.clientY ?? 0;
+        if (y > this.touchY + 8 && el.scrollHeight > el.clientHeight) this.pause();
+    };
+
+    // Pressing the mouse in the log is the start of reading, selecting or opening a line.
+    onPointerDown(event: PointerEvent): void {
+        if (event.pointerType === 'mouse' && event.button === 0) this.pause();
     }
 
-    isNewDay(index: number): boolean {
-        if (index === 0)
-            return true;
-
-        const messages = this.log.messages();
-        const currentDay = new Date(messages[index].created);
-        const previousDay = new Date(messages[index - 1].created);
-        return currentDay.getDate() !== previousDay.getDate();
+    private scrollToEnd(): void {
+        const el = this.scroller().nativeElement;
+        el.scrollTop = el.scrollHeight;
+        this.lastTop = el.scrollTop;
+        this.lastHeight = el.scrollHeight;
     }
 }

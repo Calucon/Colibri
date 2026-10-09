@@ -1,0 +1,132 @@
+import { TestBed } from '@angular/core/testing';
+import { signal } from '@angular/core';
+import { ClientService, ColibriClient, LogService } from '../../services';
+import { LogToolbarComponent, SEARCH_DELAY } from './log-toolbar.component';
+
+describe('LogToolbarComponent', () => {
+    let log: {
+        filter: ReturnType<typeof signal<string>>;
+        levels: ReturnType<typeof signal<ReadonlySet<number>>>;
+        showBroadcastTraffic: ReturnType<typeof signal<boolean>>;
+        search: ReturnType<typeof signal<string>>;
+        apps: ReturnType<typeof signal<ReadonlySet<string>>>;
+        levelCounts: ReturnType<typeof signal<number[]>>;
+        setLevels: (values: ReadonlyArray<number>) => void;
+        clearFilters: () => void;
+    };
+    let clients: ReturnType<typeof signal<ReadonlyArray<ColibriClient>>>;
+
+    const client = (id: string, app: string): ColibriClient => ({ id, app, name: id, version: '2', latency: [] });
+
+    beforeEach(() => {
+        log = {
+            filter: signal(''),
+            levels: signal<ReadonlySet<number>>(new Set([ 0, 1, 2, 3 ])),
+            showBroadcastTraffic: signal(false),
+            search: signal(''),
+            apps: signal<ReadonlySet<string>>(new Set()),
+            levelCounts: signal([ 0, 0, 0, 0 ]),
+            setLevels: (values) => log.levels.set(new Set(values)),
+            clearFilters: vi.fn()
+        };
+        clients = signal<ReadonlyArray<ColibriClient>>([]);
+
+        TestBed.configureTestingModule({
+            providers: [
+                { provide: LogService, useValue: log },
+                { provide: ClientService, useValue: { clients } }
+            ]
+        });
+    });
+
+    it('turns a level off and on again', () => {
+        const component = TestBed.createComponent(LogToolbarComponent).componentInstance;
+
+        component.toggleLevel(3);
+        expect([ ...log.levels() ]).toEqual([ 0, 1, 2 ]);
+
+        component.toggleLevel(3);
+        expect([ ...log.levels() ]).toEqual([ 0, 1, 2, 3 ]);
+    });
+
+    // filtered to one app, the log holds only that app's lines: the list must not shrink to it
+    it('offers every app seen or connected, and the one filtered to, but not the admin UI', () => {
+        log.apps.set(new Set([ 'seen' ]));
+        log.filter.set('linked');
+        clients.set([ client('a', 'connected'), client('b', 'connected'), client('c', 'seen'), client('d', 'colibri') ]);
+
+        const component = TestBed.createComponent(LogToolbarComponent).componentInstance;
+
+        expect(component.appOptions()).toEqual([
+            { name: 'connected', clients: 2 },
+            { name: 'linked', clients: 0 },
+            { name: 'seen', clients: 1 }
+        ]);
+    });
+
+    // it used to show the placeholder whatever was chosen
+    it('shows the chosen app in the select', async () => {
+        log.filter.set('demo');
+        const fixture = TestBed.createComponent(LogToolbarComponent);
+        fixture.detectChanges();
+        // ngModel writes its value a microtask later
+        await fixture.whenStable();
+        fixture.detectChanges();
+
+        expect(fixture.nativeElement.querySelector('.apps .p-select-label').textContent.trim()).toBe('demo');
+    });
+
+    it('searches once typing pauses', () => {
+        vi.useFakeTimers();
+        try {
+            const component = TestBed.createComponent(LogToolbarComponent).componentInstance;
+
+            component.onSearch('ass');
+            component.onSearch('asset ');
+            expect(log.search()).toBe('');
+
+            vi.advanceTimersByTime(SEARCH_DELAY);
+            expect(log.search()).toBe('asset');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('lists the filters folded away on a phone, each with a way to remove it', () => {
+        log.filter.set('demo');
+        log.search.set('asset');
+        log.showBroadcastTraffic.set(true);
+        const component = TestBed.createComponent(LogToolbarComponent).componentInstance;
+
+        expect(component.activeFilters().map(f => f.label)).toEqual([ 'App: demo', 'Search: asset', 'Sync traffic' ]);
+
+        component.activeFilters()[0].clear();
+        expect(log.filter()).toBe('');
+    });
+
+    it('counts in thousands past 999', () => {
+        const component = TestBed.createComponent(LogToolbarComponent).componentInstance;
+
+        expect([ 7, 999, 1000, 1250, 9999, 10000 ].map(n => component.shortCount(n))).toEqual([ '7', '999', '1k', '1.3k', '10k', '10k' ]);
+    });
+
+    it('moves to the search on /, but not while typing elsewhere', () => {
+        const fixture = TestBed.createComponent(LogToolbarComponent);
+        fixture.detectChanges();
+        document.body.appendChild(fixture.nativeElement);
+        const input: HTMLInputElement = fixture.nativeElement.querySelector('.search input');
+
+        document.body.dispatchEvent(new KeyboardEvent('keydown', { key: '/', bubbles: true }));
+        expect(document.activeElement).toBe(input);
+
+        input.blur();
+        const other = document.createElement('textarea');
+        document.body.appendChild(other);
+        other.focus();
+        other.dispatchEvent(new KeyboardEvent('keydown', { key: '/', bubbles: true }));
+        expect(document.activeElement).toBe(other);
+
+        other.remove();
+        fixture.nativeElement.remove();
+    });
+});

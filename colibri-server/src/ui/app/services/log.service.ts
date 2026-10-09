@@ -1,4 +1,4 @@
-import { Injectable, effect, inject, signal, untracked } from '@angular/core';
+import { Injectable, computed, effect, inject, signal, untracked } from '@angular/core';
 import { SocketIOService } from './socketio.service';
 
 export interface LogMessage {
@@ -73,8 +73,27 @@ export class LogService {
     public readonly levels = signal<ReadonlySet<number>>(new Set(LOG_LEVELS.map(l => l.value)));
     public readonly showBroadcastTraffic = signal(false);
 
+    /** Text to look for in the loaded lines. Unlike the filters above, the page applies it itself. */
+    public readonly search = signal('');
+
+    /** How many of the loaded lines there are of each level. */
+    public readonly levelCounts = computed(() => {
+        const counts = LOG_LEVELS.map(() => 0);
+        for (const message of this._messages()) {
+            if (!message.reconnect && message.level in counts) counts[message.level]++;
+        }
+        return counts;
+    });
+
     public setLevels(values: ReadonlyArray<number>): void {
         this.levels.set(new Set(values));
+    }
+
+    public clearFilters(): void {
+        this.filter.set('');
+        this.showBroadcastTraffic.set(false);
+        this.search.set('');
+        if (this.levels().size !== LOG_LEVELS.length) this.setLevels(LOG_LEVELS.map(l => l.value));
     }
 
     private readonly byId = new Map<string, LogMessage>();
@@ -108,6 +127,9 @@ export class LogService {
             });
             location.hash = filter || '';
         });
+
+        // a link to another app's log opened on this page, or the address edited by hand
+        window.addEventListener('hashchange', () => this.filter.set(readHash()));
 
         // The lines from before stay. The history fills in what was logged meanwhile, below a
         // row that marks the gap; after a server restart that is the new server's whole log.
