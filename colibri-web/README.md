@@ -22,7 +22,7 @@ npm install @hcikn/colibri@2
 ```
 
 Keep the `@2` to avoid installing a 1.x release. If npm reports `No matching version found for @hcikn/colibri@2`,
-[build the package from source](docs/guide.md#installation).
+[build the package from source](docs/guide.md#building-from-source).
 
 ## Quick start
 
