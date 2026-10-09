@@ -240,6 +240,187 @@ describe('VoiceServer', () => {
         expect(malformedReports().length).toBeLessThanOrEqual(100);
         expect(internals.clients.size).toBe(0);
     });
+
+    describe('apps', () => {
+        const A = voiceAppId('app-a');
+        const B = voiceAppId('app-b');
+
+        // Everything `socket` receives from now on.
+        const inbox = (socket: dgram.Socket): Buffer[] => {
+            const received: Buffer[] = [];
+            socket.on('message', msg => received.push(msg));
+            return received;
+        };
+
+        // Resolves once `packet` reaches `socket`. The server relays to a peer in the order the
+        // packets came in, so by then everything relayed to that peer before it has arrived too.
+        const arrival = (socket: dgram.Socket, packet: Buffer): Promise<void> =>
+            new Promise((resolve, reject) => {
+                const onMessage = (msg: Buffer) => {
+                    if (!msg.equals(packet)) return;
+                    clearTimeout(timeout);
+                    socket.off('message', onMessage);
+                    resolve();
+                };
+                const timeout = setTimeout(() => {
+                    socket.off('message', onMessage);
+                    reject(new Error('voice packet not relayed within 2s'));
+                }, 2000);
+                socket.on('message', onMessage);
+            });
+
+        const sendAll = async (packets: [ dgram.Socket, Buffer ][]): Promise<void> => {
+            for (const [ socket, packet ] of packets) await send(socket, packet);
+        };
+
+        it('relays a packet only to the other clients of its app, also where another app uses the same voice ids', async () => {
+            const a1 = await openClient();
+            const a2 = await openClient();
+            const b1 = await openClient();
+            const b2 = await openClient();
+            const received = [ a1, a2, b1, b2 ].map(inbox);
+
+            // Two apps with voice ids 1 and 2 each, as two projects started from the same
+            // sample have. Every voice packet used to go to every other voice client.
+            const a1Joins = voicePacket(1, 0, [], A);
+            const a2Joins = voicePacket(2, 0, [], A);
+            const b1Joins = voicePacket(1, 0, [], B);
+            const b2Joins = voicePacket(2, 0, [], B);
+            const a1Says = voicePacket(1, 1, [ 0xa1, 0 ], A);
+            const b1Says = voicePacket(1, 1, [ 0xb1, 0 ], B);
+            const a2Says = voicePacket(2, 1, [ 0xa2, 0 ], A);
+            const b2Says = voicePacket(2, 1, [ 0xb2, 0 ], B);
+            const arrived = Promise.all([ arrival(a2, a1Says), arrival(b2, b1Says), arrival(a1, a2Says), arrival(b1, b2Says) ]);
+
+            await sendAll([ [ a1, a1Joins ], [ a2, a2Joins ], [ b1, b1Joins ], [ b2, b2Joins ] ]);
+            await sendAll([ [ a1, a1Says ], [ b1, b1Says ], [ a2, a2Says ], [ b2, b2Says ] ]);
+            await arrived;
+
+            expect(received).toEqual([
+                [ a2Joins, a2Says ],
+                [ a1Says ],
+                [ b2Joins, b2Says ],
+                [ b1Says ],
+            ]);
+        });
+
+        it('relays a packet to every other client of its app', async () => {
+            const a1 = await openClient();
+            const a2 = await openClient();
+            const a3 = await openClient();
+            await sendAll([ [ a1, voicePacket(1, 0, [], A) ], [ a2, voicePacket(2, 0, [], A) ], [ a3, voicePacket(3, 0, [], A) ] ]);
+
+            const a3Says = voicePacket(3, 1, [ 0xa3, 0 ], A);
+            const arrived = Promise.all([ arrival(a1, a3Says), arrival(a2, a3Says) ]);
+            await send(a3, a3Says);
+
+            await arrived;
+        });
+
+        it('moves a client to the app its packets name', async () => {
+            const a = await openClient();
+            const c = await openClient();
+            const b = await openClient();
+            const received = [ a, c, b ].map(inbox);
+
+            const cJoins = voicePacket(3, 0, [], A);
+            const aMovesToB = voicePacket(1, 1, [ 1, 0 ], B);
+            const bSays = voicePacket(2, 1, [ 2, 0 ], B);
+            const aMovesBack = voicePacket(1, 2, [ 1, 0 ], A);
+            const cSays = voicePacket(3, 1, [ 3, 0 ], A);
+            const dJoins = voicePacket(4, 0, [], B);
+            const arrived = Promise.all([ arrival(c, aMovesBack), arrival(a, cSays), arrival(b, dJoins) ]);
+
+            await sendAll([ [ a, voicePacket(1, 0, [], A) ], [ c, cJoins ], [ b, voicePacket(2, 0, [], B) ] ]);
+            // In app B, a hears b and not c; c, left on its own in A, is heard by nobody.
+            await sendAll([ [ a, aMovesToB ], [ b, bSays ], [ c, voicePacket(3, 9, [ 3, 0 ], A) ] ]);
+            // Back in A, a hears c again, and b no longer hears a. d is a last client of B, so
+            // that b has received everything once d's packet is there.
+            const d = await openClient();
+            await sendAll([ [ a, aMovesBack ], [ c, cSays ], [ d, dJoins ] ]);
+            await arrived;
+
+            expect(received).toEqual([
+                [ cJoins, bSays, cSays ],
+                [ aMovesBack ],
+                [ aMovesToB, dJoins ],
+            ]);
+            expect(internals.clients.size).toBe(4);
+            const hex = (appId: number) => `0x${appId.toString(16).padStart(8, '0')}`;
+            const aPort = (a.address() as AddressInfo).port;
+            expect(logs.filter(l => l.origin === 'VoiceServer' && /moved from app/.test(l.message)).map(l => [ l.level, l.message ])).toEqual([
+                [ LogLevel.Debug, `Voice client 127.0.0.1:${aPort} ID: 1 moved from app ${hex(A)} to app ${hex(B)}` ],
+                [ LogLevel.Debug, `Voice client 127.0.0.1:${aPort} ID: 1 moved from app ${hex(B)} to app ${hex(A)}` ],
+            ]);
+        });
+
+        // |userId(2)|sequence(2)|frameSize(2)|codec(1)|data|: the header colibri-unity 1.x sends,
+        // which has no app.
+        const v1Packet = function (userId: number, codec: VoiceCodec, data: number[]): Buffer {
+            const header = Buffer.alloc(7);
+            header.writeInt16LE(userId, 0);
+            header.writeInt16LE(0, 2);
+            header.writeInt16LE(960, 4);
+            header.writeUInt8(codec, 6);
+            return Buffer.concat([ header, Buffer.from(data) ]);
+        };
+
+        const v1Reports = () => logs.filter(l => l.origin === 'VoiceServer' && l.level === LogLevel.Warn && /Colibri 1\.x/.test(l.message));
+
+        it('relays nothing from a Colibri 1.x client, and says so once per source per interval', async () => {
+            const a = await openClient();
+            const b = await openClient();
+            const received = inbox(b);
+            await send(b, voicePacket(2, 0, [], APP));
+
+            // PCM with samples, a header on its own, and a short Opus frame: none of them
+            // registers a, and none reaches b.
+            await sendAll([
+                [ a, v1Packet(1, VoiceCodec.PCM, [ 1, 2, 3, 4, 5, 6, 7, 8 ]) ],
+                [ a, v1Packet(1, VoiceCodec.PCM, []) ],
+                [ a, v1Packet(1, VoiceCodec.OPUS, [ 0xf8 ]) ],
+            ]);
+            const aSays = voicePacket(1, 1, [ 1, 0 ], APP);
+            const arrived = arrival(b, aSays);
+            await send(a, aSays);
+            await arrived;
+
+            expect(received).toEqual([ aSays ]);
+            expect(internals.clients.size).toBe(2);
+            expect(malformedReports()).toHaveLength(0);
+            expect(v1Reports()).toHaveLength(1);
+            const message = v1Reports()[0]!.message;
+            expect(message).toContain(`Ignoring voice packet from 127.0.0.1:${(a.address() as AddressInfo).port}: it looks like a Colibri 1.x client`);
+            expect(message).toContain('Upgrade the Colibri Unity package (de.uni.kn.colibri) in that app to 2.x');
+            expect(message).toContain('not reported for 10s');
+
+            // Once the interval has passed, it is reported again.
+            internals.pruneReports(Date.now() + 10000);
+            await send(a, v1Packet(1, VoiceCodec.PCM, [ 1, 2 ]));
+            await roundTrip(a, b, 1);
+            expect(v1Reports()).toHaveLength(2);
+        });
+
+        it('relays nothing with a header version it does not know', async () => {
+            const a = await openClient();
+            const b = await openClient();
+            const received = inbox(b);
+            await send(b, voicePacket(2, 0, [], APP));
+
+            const version3 = voicePacket(1, 1, [ 1, 0 ], APP);
+            version3.writeUInt8(0x30, 6);
+            await send(a, version3);
+            const aSays = voicePacket(1, 2, [ 1, 0 ], APP);
+            const arrived = arrival(b, aSays);
+            await send(a, aSays);
+            await arrived;
+
+            expect(received).toEqual([ aSays ]);
+            expect(malformedReports()).toHaveLength(1);
+            expect(malformedReports()[0]!.message).toContain('its header version is 3, not 2');
+            expect(v1Reports()).toHaveLength(0);
+        });
+    });
 });
 
 describe('VoiceServer startup', () => {
