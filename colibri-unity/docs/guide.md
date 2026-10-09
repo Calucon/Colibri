@@ -84,21 +84,20 @@ If nothing arrives, see [Troubleshooting](#troubleshooting).
 
 ## Configuration
 
-*Window → Colibri Configuration* opens the Colibri Setup window, which also opens automatically
-while the project has no configuration. *Save Config* writes `Assets/Resources/ColibriConfig`.
+*Window → Colibri Configuration* opens the Colibri Setup window. It opens automatically while the
+project has no configuration. *Save Config* writes `Assets/Resources/ColibriConfig`.
 
 <img src="../img/config.png" alt="Config Screen" width=400/>
 
 | Setting | Default | Description |
 |---|---|---|
 | App Name | empty | Required. Only clients with the same app name exchange data. |
-| Server Address | `colibri.hci.uni-konstanz.de` | Host name or IP address of the [server](../../colibri-server), without `http://`. The preset public test server works only while it runs colibri-server 2.x. |
+| Server Address | `colibri.hci.uni-konstanz.de` | Host name or IP address of the [server](../../colibri-server), without `http://`. On a headset or phone, `localhost` is the device. Use the server's LAN IPv4 address. The preset public test server works only while it runs colibri-server 2.x. |
 
-- Use an app name nobody else on the server uses. All clients with one app name see each other's
+- Use an app name that is unique on the server. All clients with one app name see each other's
   objects and messages, and the server's load grows with the square of their number.
-- The window warns about common app names, in any case: `myAppName` (used by the web client's
+- The window warns about these app names, ignoring case: `myAppName` (used by the web client's
   samples), `myApp`, `appName`, `app`, `test`, `testApp`, `demo`, `example`, `colibri`, `default`.
-- On a headset or phone, `localhost` is the device. Enter the server's LAN IPv4 address.
 - Valid changes apply at once, without saving. An open connection keeps its server and App Name
   until it reconnects ([Voice chat](#voice-chat)).
 - Invalid values, such as port 0, are marked as errors and neither used nor saved. The setting keeps
@@ -107,24 +106,24 @@ while the project has no configuration. *Save Config* writes `Assets/Resources/C
 
 ### Advanced configuration
 
-Under *Optional Config*, ports, TLS and the voice sampling rate must match the server. Change them
+Ports, TLS and the voice sampling rate under *Optional Config* must match the server. Change them
 only if the server does not use the defaults.
 
 | Setting | Default | Description |
 |---|---|---|
-| Server supports SSL/TLS? | off | Server has `TLS_CERT` and `TLS_KEY` set ([TLS](#tls)) |
-| Allow self-signed certificate | off | Only with TLS ([Certificates](#certificates)) |
-| Server certificate SHA-256 | empty | Only with TLS ([Certificates](#certificates)) |
+| Server supports SSL/TLS? | off | Use TLS. Tick when the server has `TLS_CERT` and `TLS_KEY` set ([TLS](#tls)) |
+| Allow self-signed certificate | off | Accept a certificate the device does not trust. Only with TLS ([Certificates](#certificates)) |
+| Server certificate SHA-256 | empty | Accept only the certificate with this fingerprint. Only with TLS ([Certificates](#certificates)) |
 | Web server Port | `9011` | Server's `WEBSERVER_PORT`, used by the Store |
 | TCP server Port | `9012` | Server's `TCP_PORT` |
 | Voice server Port | `9013` | Server's `VOICE_PORT` |
 | Voice Sampling Rate | `48000` | Server's `VOICE_SAMPLING_RATE` |
 | Max Send Rate (Hz) | `30` | Updates per second per synced object, `0` for no limit ([Send rate](#send-rate)) |
 
-With TLS off, the Store's REST requests use plain `http`, which Unity blocks except to loopback
-addresses such as `localhost`. For any other server, which on a headset means every server, set
-*Project Settings → Player → Other Settings → **Allow downloads over HTTP*** to *Always allowed*, or
-use [TLS](#tls). Colibri checks this setting ([Build settings check](#build-settings-check)).
+With TLS off, `Store` requests use plain `http`. Unity blocks `http` except to loopback addresses
+such as `localhost`. For other servers, including any server reached from a headset, set *Project
+Settings → Player → Other Settings → **Allow downloads over HTTP*** to *Always allowed*, or use
+[TLS](#tls). Colibri checks this setting ([Build settings check](#build-settings-check)).
 
 ## TLS
 
@@ -133,35 +132,34 @@ Store to `https`.
 
 - The server needs `TLS_CERT` and `TLS_KEY` ([TLS](../../colibri-server/docs/guide.md#tls) in the
   server guide).
-- The setting must match the server, whose TCP port accepts either only TLS or no TLS.
+- The setting must match the server. Its TCP port accepts either only TLS or no TLS.
 - Frames and protocol version inside TLS are unchanged.
 - The handshake must finish within the 5 s connect timeout.
 - Unity's TLS backend negotiates TLS 1.2.
 - The client sends the *Server Address* as SNI and checks the certificate against it.
 - Voice chat (UDP) stays unencrypted.
-- The server log quotes the Setup window's labels exactly. Colibri's console messages write *Server
-  supports SSL/TLS?* without the question mark: 'Server supports SSL/TLS'.
+- The server log uses the Setup window's labels. Colibri's console messages spell the first one
+  'Server supports SSL/TLS', without the question mark.
 
 ### Certificates
 
 | Certificate | Setting | Result |
 |---|---|---|
-| Issued by a CA, e.g. Let's Encrypt | none | The device's trust store decides, also on Android and the Quest. |
+| Issued by a CA, e.g. Let's Encrypt | none | Checked against the device's trust store, also on Android and the Quest |
 | Self-signed, pinned | *Server certificate SHA-256* (`ColibriConfig.ServerCertificateSha256`) | Only this certificate is accepted, trusted or not. Its names are ignored, so IP address certificates work. |
-| Self-signed, not pinned | *Allow self-signed certificate* (`ColibriConfig.AllowSelfSignedCertificate`) | Untrusted certificates are accepted. The connection is encrypted, but nothing checks that it reaches your server. The console warns once per session with the fingerprint to pin. |
+| Self-signed, not pinned | *Allow self-signed certificate* (`ColibriConfig.AllowSelfSignedCertificate`) | Untrusted certificates are accepted. The connection is encrypted, but the server's identity is not checked. The console warns once per session with the fingerprint to pin. |
 
-- The fingerprint ignores case and colons. Anything but 64 hexadecimal digits or empty is an error
-  in the Setup window and is neither used nor saved.
-- Both settings appear only with *Server supports SSL/TLS?* ticked. Configurations saved before they
-  existed load with both off, which accepts only trusted certificates.
+- Case and colons in the fingerprint are ignored. Anything but 64 hexadecimal digits or empty is an
+  error in the Setup window and is neither used nor saved.
+- Both settings appear only with *Server supports SSL/TLS?* ticked. Configurations saved before
+  these settings existed load with both off, accepting only trusted certificates.
 - The Store's `https` requests follow both settings. With neither set, the system checks the
   certificate, as in 1.x.
-- Do not pin Let's Encrypt certificates. They change with every renewal, and the pin then rejects
-  the server.
-- The fingerprint is in the server's startup log (`TLS is on, ... SHA-256 fingerprint AB:CD:...`),
-  in Colibri's warning or rejection message, and in the selectable *SHA-256* row of *Window →
-  Colibri Status*.
-- The Status window also shows TLS next to the server address, and how the certificate was accepted:
+- Do not pin Let's Encrypt certificates. Each renewal changes the fingerprint.
+- The fingerprint appears in the server's startup log
+  (`TLS is on, ... SHA-256 fingerprint AB:CD:...`), Colibri's warning or rejection message, and the
+  selectable *SHA-256* row of *Window → Colibri Status*.
+- Next to the server address, the Status window shows TLS and how the certificate was accepted:
   `trusted by this device`, `matches 'Server certificate SHA-256'` or
   `not trusted, accepted because 'Allow self-signed certificate' is on`.
 
@@ -176,7 +174,7 @@ Store to `https`.
 | `… its SHA-256 fingerprint is <X>, not the one in 'Server certificate SHA-256' …` | The server's certificate was replaced | Copy the new fingerprint from the server log |
 | `… This usually means a protocol mismatch … tick 'Server supports SSL/TLS' …` | TLS on the server only | Tick *Server supports SSL/TLS?* |
 
-Each error is logged as an error once, then as a plain line on each retry. The client keeps
+Each error is logged once as an error, then as an info line on each retry. The client keeps
 retrying, so a server fix needs no app restart. `LastConnectFailure` and the Status window show the
 latest error.
 
