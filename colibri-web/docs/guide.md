@@ -1,7 +1,7 @@
 # colibri-web guide
 
-Full reference for colibri-web. The [README](../README.md) is the short version. Release notes and breaking changes
-since 1.x: [CHANGELOG.md](../CHANGELOG.md). Upgrading all Colibri components to 2.0: [MIGRATION.md](../../MIGRATION.md).
+Overview and quick start: [README](../README.md). Release notes and breaking changes since 1.x:
+[CHANGELOG.md](../CHANGELOG.md). Upgrading all components to 2.0: [MIGRATION.md](../../MIGRATION.md).
 
 - [Installation](#installation)
     - [Building from source](#building-from-source)
@@ -20,21 +20,21 @@ since 1.x: [CHANGELOG.md](../CHANGELOG.md). Upgrading all Colibri components to 
 
 ```sh
 npm install @hcikn/colibri@2
+# or
 yarn add @hcikn/colibri@2
 ```
 
 - Keep the `@2` to avoid getting a 1.x release.
-- colibri-web 2.x needs colibri-server 2.x. A 2.x server refuses 1.x web clients. A 2.x web client warns about a 1.x
-  server ([Protocol version](#protocol-version)).
+- Requires colibri-server 2.x. A 2.x server refuses 1.x web clients. A 2.x web client warns about a 1.x server
+  ([Protocol version](#protocol-version)).
 - Peer dependency: `rxjs` 7.8.1 or a newer 7.x. npm 7 and newer install it. Otherwise, add it to your project.
-- TypeScript 5.0 or newer with standard decorators. `@Synced()` is a TypeScript decorator, and the documentation,
-  samples and tests assume TypeScript. Plain JavaScript: [unsupported workaround](js-workaround/README.md).
+- TypeScript 5.0 or newer with standard decorators, required by `@Synced()`. Docs, samples and tests are TypeScript
+  only. Plain JavaScript: [unsupported workaround](js-workaround/README.md).
 
 ### Building from source
 
-Build the package from this repository, with Node.js 22 or newer, if npm reports
-`No matching version found for @hcikn/colibri@2` (yarn: `Couldn't find any versions`), or to use a version not on npm,
-such as a commit after the latest release.
+Build from source if npm reports `No matching version found for @hcikn/colibri@2` (yarn: `Couldn't find any versions`),
+or for a version not on npm, such as a commit after the latest release. Requires Node.js 22 or newer.
 
 ```sh
 cd colibri-web
@@ -43,10 +43,13 @@ npm run build
 npm pack
 ```
 
-`npm pack` writes `hcikn-colibri-<version>.tgz`, such as `hcikn-colibri-2.0.0.tgz`. Copy it into your project,
-install it with `npm install ./hcikn-colibri-2.0.0.tgz` or `yarn add ./hcikn-colibri-2.0.0.tgz`, and commit it.
-`package.json` refers to the file by its path. Without Git history, these commands print `.git can't be found`, which
-is harmless.
+Without Git history, these commands print `.git can't be found`. Ignore it.
+
+`npm pack` writes `hcikn-colibri-<version>.tgz` with the version from `package.json`, such as `hcikn-colibri-2.0.0.tgz`.
+
+1. Copy the file into your project.
+2. Run `npm install ./hcikn-colibri-2.0.0.tgz` (yarn: `yarn add ./hcikn-colibri-2.0.0.tgz`).
+3. Commit the file. `package.json` refers to it by path.
 
 ## Configuration
 
