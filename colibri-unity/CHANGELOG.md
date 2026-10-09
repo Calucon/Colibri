@@ -22,6 +22,11 @@ rationale, migration steps, and what the Editor verification did and did not cov
   protocol](../colibri-server/docs/protocol.md) and **requires colibri-server ≥ 2.0.0**. It cannot
   talk to a 1.x server, and a 1.x client cannot talk to a 2.0.0 server. There is no version
   negotiation: both sides must be upgraded together.
+- **Voice packets carry the App Name.** The voice header has a header version and an app id, the
+  32-bit FNV-1a hash of the App Name, and colibri-server 2.0.0 passes a packet on only to the
+  clients with the same app id. Voice ids only have to be unique within an app now, and 1.x and
+  2.0.0 clients do not hear each other. See
+  [Voice packets](../colibri-server/docs/protocol.md#voice-packets-udp).
 - **Minimum Unity is 2022.3 LTS** (the package manifest previously claimed 2019.4 while using APIs
   that were never available there).
 - **No more third-party runtime dependencies.** UniRx is gone and was not replaced;
@@ -347,7 +352,9 @@ rationale, migration steps, and what the Editor verification did and did not cov
   `ConcurrentQueue`. They went through a static `LockFreeQueue`, which is only safe with one thread
   enqueueing (and after a quick disable and enable the old receive thread may still be handing over
   a packet while the new one starts), and which, being static, could hand one connection's packets
-  to the next.
+  to the next. `VoicePacketCodec` encodes and decodes the packets, and a received one is played only
+  if it carries this client's app id. A datagram shorter than the header used to throw on the
+  receive thread and log the exception, once per datagram; it is dropped now.
 - **`Store`** serializes with Newtonsoft instead of `JsonUtility`, which cannot handle dictionaries,
   properties, or top-level arrays and so silently disagreed with what `Sync` can carry. What that
   costs a 1.x project is under Breaking changes. A value that cannot be converted, or a saved
@@ -654,10 +661,10 @@ otherwise spend on their prototype, so:
   across two segments, multiple frames coalesced into one segment, a complete frame plus a trailing
   partial, growth and compaction, and the malformed variants (`totalLength <= 0`, oversized, unknown
   type, channel/command length overrunning the body, handshake field-count violations).
-- `ProtocolVectorTests` asserts frames hex-dumped from the server's own encoder byte-for-byte
-  against `FrameCodec`. This is what catches an endianness or off-by-one drift between the two
-  implementations; the round-trip tests alone would pass just as happily with both C# sides wrong in
-  the same direction.
+- `ProtocolVectorTests` asserts frames and voice packets hex-dumped from the server's own encoders
+  byte-for-byte against `FrameCodec` and `VoicePacketCodec`. This is what catches an endianness or
+  off-by-one drift between the two implementations; the round-trip tests alone would pass just as
+  happily with both C# sides wrong in the same direction.
 - `ChannelListenerRegistryTests` covers the type-mismatch diagnostics, including the cases where a
   message must *not* be reported. Registering a listener with `Sync` reaches
   `WebServerConnection.Instance`, which spawns a GameObject, so the registry was split out as plain
@@ -677,9 +684,10 @@ otherwise spend on their prototype, so:
   over a real loopback socket; `RemoteLoggingTests` logging from many threads at once and the
   1000-line bound; `SyncAccessorTests` the IL2CPP accessor path, run in the Editor;
   `SyncStrippingTests` that `[Sync]` is a `PreserveAttribute` and carries `[RequireAttributeUsages]`; `WireNameTests` the wire names under
-  a Turkish culture; `AndroidSettingsCheckTests` the Android build check; and
-  `VoiceServerAddressTests` the choice of the server's IPv4 address. `FrameCodecTests` also covers
-  the colon at either end of a handshake field.
+  a Turkish culture; `AndroidSettingsCheckTests` the Android build check;
+  `VoiceServerAddressTests` the choice of the server's IPv4 address; and `VoicePacketCodecTests`
+  the voice header and the app id, with `VoicePacketQueueTests` which received packets are played.
+  `FrameCodecTests` also covers the colon at either end of a handshake field.
 - New PlayMode assembly `HCIKonstanz.Colibri.E2E` (`Assets/Tests/`, in the development project
   rather than the shipped package). A real Unity client, a real colibri-server and a raw v3 peer as
   the second endpoint: the server excludes the sender from its own broadcasts, so one client can
@@ -767,8 +775,8 @@ otherwise spend on their prototype, so:
   `colibri-unity/Assets/Colibri/Networking/`.
 - Still no GameCI workflow: the Unity suites run locally, since a Unity container in CI needs a
   licence secret. Voice chat has no end-to-end coverage (it needs a microphone); only the choice of
-  the server's address and the queue that hands received packets to the main thread are
-  unit-tested.
+  the server's address, the packet format and the queue that hands received packets to the main
+  thread are unit-tested.
 - `run-tests.mjs --stripping` builds a Release IL2CPP player with *Managed Stripping Level* High and
   checks inside it that every `[Sync]` member survived with its `[Sync]` and still syncs. Off by
   default; skipped with a notice without the platform's IL2CPP module.
