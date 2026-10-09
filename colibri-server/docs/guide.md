@@ -45,8 +45,8 @@ To build from a checkout, run `docker compose up -d` in `colibri-server`, which 
 and keeps the data in `./data`. Or replace the `image:` line with
 `build: <path to the checkout>/colibri-server`.
 
-The image sets `NODE_ENV=production` and runs the server as PID 1, so `docker stop` shuts it down
-cleanly, writing pending store changes and saving voice recordings in progress.
+The image sets `NODE_ENV=production` and runs the server as PID 1. On `docker stop`, the server
+writes pending store changes and saves voice recordings in progress before it exits.
 
 #### Data directory
 
@@ -69,19 +69,26 @@ the server as `node`. On the host, the directory then belongs to uid 1000.
 
 #### Running as another user
 
-With `--user` (or `user:` in the compose file), the container cannot change owners, so the data
+With `--user` (or `user:` in the compose file), the container cannot change owners. The data
 directory must already belong to that user, e.g. `sudo chown -R 1001:1001 ./data` for
-`--user 1001:1001`. A new named volume belongs to uid 1000, as `/srv/colibri/data` does in the image,
-so it works unchanged only with `--user 1000:1000`. For another uid, use a host directory owned by that
-uid, or drop `--user` so the container chowns the directory to `node`.
+`--user 1001:1001`. A new named volume belongs to uid 1000, like `/srv/colibri/data` in the image, so
+it works only with `--user 1000:1000`. For another uid, use a host directory owned by that uid, or
+drop `--user` so the container chowns the directory to `node`.
 
 #### Unwritable data directory
 
 If the server cannot write to its data directory, it prints `DATA_ROOT is not writable: <path>` on
-stderr at startup, with the error, its uid and the fix for that error: chown the directory to that
-uid, drop a read-only (`:ro`) mount, move a file out of the way, or free disk space. The admin UI log
-shows it too. The server keeps running but saves nothing: `store.json` and voice recordings stay in
-memory until it stops.
+stderr at startup, with the error, the server's uid and a fix. The admin UI log shows the error too.
+The server keeps running but saves nothing. `store.json` and voice recordings stay in memory and are
+lost when it stops. Restart the server after the fix.
+
+| Error | Cause | Fix |
+| --- | --- | --- |
+| `EACCES`, `EPERM` | The server's uid may not write there | `chown -R <uid>:<gid> <path>`, with Docker on the host directory |
+| `EROFS` | Read-only mount | Drop `:ro`, or point `DATA_ROOT` at a writable directory |
+| `ENOTDIR`, `EEXIST` | The path or a parent is a file | Move the file, or point `DATA_ROOT` at a directory |
+| `ENOSPC`, `EDQUOT` | Disk or quota full | Free disk space |
+| Other | Not a writable directory | Make the path a directory the server's uid can write to, or point `DATA_ROOT` at one |
 
 #### Settings and ports
 
@@ -122,7 +129,7 @@ with its default.
 | `TCP_INBOUND_BACKLOG_LIMIT` | `2000` | Messages from Unity clients that may wait for the main thread before [load limiting](#load-limits) starts. `0`: no limit. |
 | `CLIENT_MESSAGE_RATE_LIMIT`, `CLIENT_MESSAGE_RATE_BURST` | `1000`, `2000` | `model::update` and `broadcast::` messages per second one Unity or web client may send, and the burst after a quieter period. Beyond that, [load limiting](#load-limits) applies. Catches runaway send loops. `0`: no limit. The burst must be at least 1. |
 | `TCP_IDLE_TIMEOUT_SECONDS` | `10` | Seconds a Unity client may send nothing, heartbeat replies included, before it is disconnected ([Idle timeout](#idle-timeout)). `0`: never. |
-| `APP_CLIENT_WARNING_THRESHOLD` | `8` | Warn when one app has more clients than this, Unity and web together, admin UI excluded. Usually separate projects with the same app name. `0`: never. |
+| `APP_CLIENT_WARNING_THRESHOLD` | `8` | Warn when one app has more clients than this, Unity and web together, admin UI excluded. Common cause: separate projects using the same app name. `0`: never. |
 | `MODEL_TOMBSTONE_SECONDS` | `600` | Seconds a deleted synced object (model) is remembered. Meanwhile updates for it are ignored, so they cannot re-create it, and a re-request after a reconnect is answered with a delete. A client with the object in its scene again ends this early. Cleared with the app's models when its last client leaves. `0`: off. See [Deleted models](protocol.md#deleted-models). |
 | `TLS_CERT`, `TLS_KEY` | empty | PEM files of the certificate with its chain, and of its private key. With both set, the TCP and web ports serve [TLS](#tls) only. |
 
