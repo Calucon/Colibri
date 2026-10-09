@@ -895,6 +895,31 @@ describe('RegisterModelSync registering an id the server already has', () => {
         expect(await storedOn(peer, channel, 'marker')).toEqual({ id: 'marker', value: 'new' });
     });
 
+    // Another client creates the id and deletes it while the request for it is on its way. Its update
+    // came first and was taken for the answer. The answer itself, the bare id since the server read
+    // the request after the delete, was then listed as a model with no fields.
+    it('lists nothing for an id another client creates and deletes while the request is on its way', async () => {
+        const app = uniqueApp('modelsync-created-deleted');
+        const channel = uniqueApp('shared');
+        const peer = await createClient(app);
+        const link = await startLinkProxy(25);
+        const page = await createClientThrough(app, link);
+        const [models$, registerModel] = RegisterModelSync<Shared>({ name: channel, type: Shared });
+        await listed(page);
+
+        const peerSaw = await updatesDuring(peer, channel, async () => {
+            registerModel(new Shared('marker'));
+            // The server reads these before the request for the id, which takes 25 ms more to reach it.
+            peer.sendMessage(channel, 'model::update', { id: 'marker', value: 'theirs' });
+            peer.sendMessage(channel, 'model::delete', { id: 'marker' });
+            for (let i = 0; i < 3; i++) await roundTrip(page);
+            await roundTrip(peer);
+        });
+
+        expect(latest(models$)).toEqual([]);
+        expect(peerSaw).toEqual([]);
+    });
+
     // Registered after the answer to the request for every model, on a button press say, the id is
     // already listed. It used to be listed twice, and the instance registered never saw another
     // client's change again: each went to the copy listed first.
