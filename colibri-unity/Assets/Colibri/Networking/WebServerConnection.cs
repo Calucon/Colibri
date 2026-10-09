@@ -1187,8 +1187,8 @@ namespace HCIKonstanz.Colibri.Networking
         /// handshake is done. What is left is something that accepts connections and then closes
         /// them or forwards nothing, such as a proxy whose backend is down, or a server that does
         /// not answer. Without TLS, a close cannot be told apart from a server with TLS on hanging
-        /// up on this client, so it counts towards the framing hint. Each kind of session breaks the
-        /// other's row.
+        /// up on this client, so it counts towards the framing hint, which names such a proxy as
+        /// well. Each kind of session breaks the other's row.
         /// </summary>
         private void CountSessionWithoutAFrame(ConnectionLoop loop)
         {
@@ -1225,17 +1225,21 @@ namespace HCIKonstanz.Colibri.Networking
 
             var suspicion =
                 $"{_consecutiveEarlyFrameFailures} connections in a row were accepted but ended before a single frame could be read. " +
-                $"This usually means a protocol mismatch: this client speaks v{CLIENT_VERSION} and needs colibri-server >= 2.0.0.";
+                $"This usually means a protocol mismatch: this client speaks v{CLIENT_VERSION} and needs colibri-server >= 2.0.0. " +
+                "Check the server's version.";
 
             // A server with TLS turned on hangs up on a client that is not using it, before a
-            // frame, exactly like this.
+            // frame, exactly like this, and so does a proxy or port forwarding whose backend is down.
             if (!_sessionUsesTls)
-                suspicion += " If the server has TLS turned on, tick 'Server supports SSL/TLS' in the Colibri configuration.";
+            {
+                suspicion += " If the server has TLS turned on, tick 'Server supports SSL/TLS' in the Colibri configuration. " +
+                    "If a proxy or port forwarding is in front of the server, check that the server behind it is running.";
+            }
 
             // Logged before it is published. This runs on the session loop's thread, so whatever
             // polls SuspectedProtocolMismatch on the main thread - the Status window, a test
             // waiting for it - could otherwise act on the value before the line exists.
-            Debug.LogError($"Colibri: {suspicion} Check the server's version.");
+            Debug.LogError($"Colibri: {suspicion}");
             _suspectedProtocolMismatch = suspicion;
         }
 
