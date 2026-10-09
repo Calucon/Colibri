@@ -168,25 +168,20 @@ namespace HCIKonstanz.Colibri.E2E
             yield return LetInitialStateArrive();
 
             SyncSettings.MaxSendRate = 1;
-            try
-            {
-                sync.transform.position = new Vector3(1f, 0f, 0f);
-                yield return Peer.Expect(Channel, "model::update", timeoutSeconds: 0.5f);
+            Cleanup.Add(SyncSettings.ResetMaxSendRate);
 
-                sync.transform.position = new Vector3(2f, 0f, 0f);
-                yield return null;
-                sync.gameObject.SetActive(false);
+            sync.transform.position = new Vector3(1f, 0f, 0f);
+            yield return Peer.Expect(Channel, "model::update", timeoutSeconds: 0.5f);
 
-                yield return Peer.Expect(Channel, "model::update", frame =>
-                {
-                    AssertActive(frame, sync.Id, false);
-                    Assert.That(TcpPeer.Json(frame)["position"].ToString(Newtonsoft.Json.Formatting.None), Is.EqualTo("[2.0,0.0,0.0]"));
-                }, timeoutSeconds: 0.5f);
-            }
-            finally
+            sync.transform.position = new Vector3(2f, 0f, 0f);
+            yield return null;
+            sync.gameObject.SetActive(false);
+
+            yield return Peer.Expect(Channel, "model::update", frame =>
             {
-                SyncSettings.ResetMaxSendRate();
-            }
+                AssertActive(frame, sync.Id, false);
+                Assert.That(TcpPeer.Json(frame)["position"].ToString(Newtonsoft.Json.Formatting.None), Is.EqualTo("[2.0,0.0,0.0]"));
+            }, timeoutSeconds: 0.5f);
         }
 
         /// <summary>
@@ -285,22 +280,15 @@ namespace HCIKonstanz.Colibri.E2E
                 $"The manager never instantiated the object '{id}' it was told about");
 
             var clone = Instances(id).Single();
-            try
-            {
-                Assert.That(clone.gameObject.activeSelf, Is.False, "The object is hidden on the client it came from");
-                Assert.That(clone.transform.position, Is.EqualTo(new Vector3(1f, 2f, 3f)));
+            Assert.That(clone.gameObject.activeSelf, Is.False, "The object is hidden on the client it came from");
+            Assert.That(clone.transform.position, Is.EqualTo(new Vector3(1f, 2f, 3f)));
 
-                Peer.Send(Channel, "model::update", new JObject { { "id", id }, { "active", true } });
-                yield return E2EServer.WaitUntil(() => clone.gameObject.activeSelf,
-                    "The peer showed the object again, but it is still hidden here");
+            Peer.Send(Channel, "model::update", new JObject { { "id", id }, { "active", true } });
+            yield return E2EServer.WaitUntil(() => clone.gameObject.activeSelf,
+                "The peer showed the object again, but it is still hidden here");
 
-                // Applying either state must not send it back.
-                yield return Peer.ExpectNothing(Channel);
-            }
-            finally
-            {
-                Object.Destroy(clone.gameObject);
-            }
+            // Applying either state must not send it back.
+            yield return Peer.ExpectNothing(Channel);
         }
 
         [UnityTest]
@@ -315,21 +303,14 @@ namespace HCIKonstanz.Colibri.E2E
                 $"The manager never instantiated the object '{id}' it was told about");
 
             var clone = Instances(id).Single();
-            try
-            {
-                Assert.That(clone.gameObject.activeSelf, Is.True, "The clone of an inactive template stayed inactive");
-                Assert.That(clone.transform.position, Is.EqualTo(new Vector3(1f, 2f, 3f)));
+            Assert.That(clone.gameObject.activeSelf, Is.True, "The clone of an inactive template stayed inactive");
+            Assert.That(clone.transform.position, Is.EqualTo(new Vector3(1f, 2f, 3f)));
 
-                Peer.Send(Channel, "model::update", new JObject { { "id", id }, { "position", new JArray(4f, 5f, 6f) } });
-                yield return E2EServer.WaitUntil(() => clone.transform.position == new Vector3(4f, 5f, 6f),
-                    $"The clone never moved; it is at {clone.transform.position}");
+            Peer.Send(Channel, "model::update", new JObject { { "id", id }, { "position", new JArray(4f, 5f, 6f) } });
+            yield return E2EServer.WaitUntil(() => clone.transform.position == new Vector3(4f, 5f, 6f),
+                $"The clone never moved; it is at {clone.transform.position}");
 
-                yield return Peer.ExpectNothing(Channel);
-            }
-            finally
-            {
-                Object.Destroy(clone.gameObject);
-            }
+            yield return Peer.ExpectNothing(Channel);
         }
 
         private IEnumerator SpawnManagerWithInactiveTemplate()
@@ -406,15 +387,11 @@ namespace HCIKonstanz.Colibri.E2E
                 hidden = true;
             };
             connection.OnConnected += hide;
-            try
-            {
-                _proxy.HoldNewConnections = false;
-                yield return E2EServer.WaitUntil(() => hidden, "The client never connected through the proxy", 20f);
-            }
-            finally
-            {
-                connection.OnConnected -= hide;
-            }
+            Cleanup.Add(() => connection.OnConnected -= hide);
+
+            _proxy.HoldNewConnections = false;
+            yield return E2EServer.WaitUntil(() => hidden, "The client never connected through the proxy", 20f);
+            connection.OnConnected -= hide;
 
             yield return Peer.Expect(Channel, "model::update", frame => AssertActive(frame, id, false));
 
@@ -424,23 +401,16 @@ namespace HCIKonstanz.Colibri.E2E
             Assert.That(sync.transform.position, Is.EqualTo(new Vector3(1f, 2f, 3f)),
                 "The position, not changed here, did not take the other client's");
 
-            var checker = new TcpPeer();
-            try
+            var checker = Cleanup.Add(new TcpPeer());
+            yield return checker.Connect("hidden-before-the-answer-checker");
+            yield return E2EServer.Settle(0.3f);
+            checker.Send(Channel, "model::request", new JObject { { "id", id } });
+            yield return checker.Expect(Channel, "model::update", frame =>
             {
-                yield return checker.Connect("hidden-before-the-answer-checker");
-                yield return E2EServer.Settle(0.3f);
-                checker.Send(Channel, "model::request", new JObject { { "id", id } });
-                yield return checker.Expect(Channel, "model::update", frame =>
-                {
-                    var payload = (JObject)TcpPeer.Json(frame);
-                    Assert.That((bool?)payload["active"], Is.False, $"The server holds {payload}");
-                    Assert.That(payload["position"].ToVector3(), Is.EqualTo(new Vector3(1f, 2f, 3f)), $"The server holds {payload}");
-                });
-            }
-            finally
-            {
-                checker.Dispose();
-            }
+                var payload = (JObject)TcpPeer.Json(frame);
+                Assert.That((bool?)payload["active"], Is.False, $"The server holds {payload}");
+                Assert.That(payload["position"].ToVector3(), Is.EqualTo(new Vector3(1f, 2f, 3f)), $"The server holds {payload}");
+            });
         }
 
         /// <summary>

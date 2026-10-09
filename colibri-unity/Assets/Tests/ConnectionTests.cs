@@ -91,22 +91,21 @@ namespace HCIKonstanz.Colibri.E2E
         [UnityTest]
         public IEnumerator TheServerRefusesAClientOnAnotherProtocolVersion()
         {
-            using (var stranger = new TcpPeer())
+            var stranger = Cleanup.Add(new TcpPeer());
+
+            yield return stranger.Connect("wrong-version-peer", version: "1");
+
+            yield return stranger.Expect("colibri", "protocol::rejected", frame =>
             {
-                yield return stranger.Connect("wrong-version-peer", version: "1");
+                var body = TcpPeer.Json(frame);
+                Assert.That((string)body["serverVersion"], Is.EqualTo(WebServerConnection.ClientVersion));
+                Assert.That((string)body["clientVersion"], Is.EqualTo("1"));
+                Assert.That((string)body["reason"], Does.Contain("Unsupported protocol version"));
+            });
 
-                yield return stranger.Expect("colibri", "protocol::rejected", frame =>
-                {
-                    var body = TcpPeer.Json(frame);
-                    Assert.That((string)body["serverVersion"], Is.EqualTo(WebServerConnection.ClientVersion));
-                    Assert.That((string)body["clientVersion"], Is.EqualTo("1"));
-                    Assert.That((string)body["reason"], Does.Contain("Unsupported protocol version"));
-                });
-
-                // Refused, not merely warned: the server must not leave a client it will never
-                // talk to sitting on the connection.
-                yield return stranger.ExpectClosed();
-            }
+            // Refused, not merely warned: the server must not leave a client it will never
+            // talk to sitting on the connection.
+            yield return stranger.ExpectClosed();
         }
 
         /// <summary>
@@ -125,24 +124,18 @@ namespace HCIKonstanz.Colibri.E2E
             Action<JToken> handler = _ => seen++;
 
             Sync.Receive("colibri", handler);
-            try
-            {
-                using (var stranger = new TcpPeer())
-                {
-                    yield return stranger.Connect("wrong-version-peer-2", version: "1");
-                    yield return stranger.Expect("colibri", "protocol::rejected");
-                }
+            Cleanup.Add(() => Sync.Unregister("colibri", handler));
 
-                yield return E2EServer.Settle(0.5f);
+            var stranger = Cleanup.Add(new TcpPeer());
 
-                Assert.That(seen, Is.Zero, "Another client's protocol rejection was broadcast to the app");
-                Assert.That(Connection.Status, Is.EqualTo(ConnectionStatus.Connected),
-                    "Refusing one client disturbed another client's connection");
-            }
-            finally
-            {
-                Sync.Unregister("colibri", handler);
-            }
+            yield return stranger.Connect("wrong-version-peer-2", version: "1");
+            yield return stranger.Expect("colibri", "protocol::rejected");
+
+            yield return E2EServer.Settle(0.5f);
+
+            Assert.That(seen, Is.Zero, "Another client's protocol rejection was broadcast to the app");
+            Assert.That(Connection.Status, Is.EqualTo(ConnectionStatus.Connected),
+                "Refusing one client disturbed another client's connection");
         }
 
         /// <summary>

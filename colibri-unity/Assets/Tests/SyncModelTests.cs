@@ -247,38 +247,33 @@ namespace HCIKonstanz.Colibri.E2E
             }
 
             Application.logMessageReceived += OnLog;
-            try
-            {
-                var placed = SpawnConfigured<E2ESyncModel>("placed", _ => { });
-                Spawn<E2ESyncModelManager>("manager-without-template");
+            Cleanup.Add(() => Application.logMessageReceived -= OnLog);
 
-                yield return null;
-                yield return LetInitialStateArrive();
+            var placed = SpawnConfigured<E2ESyncModel>("placed", _ => { });
+            Spawn<E2ESyncModelManager>("manager-without-template");
 
-                // Updates for an object the scene has are no reason to warn.
-                Peer.Send(Channel, "model::update", new JObject { { "id", placed.Id }, { "label", "known" } });
-                yield return E2EServer.WaitUntil(() => placed.Label == "known", "The placed model never received its update");
-                Assert.That(warnings, Is.Empty, "A manager without a template warned before it had anything to build");
+            yield return null;
+            yield return LetInitialStateArrive();
 
-                // Two updates of one unknown model and one of another: a single warning, for the first.
-                var first = Guid.NewGuid().ToString();
-                Peer.Send(Channel, "model::update", new JObject { { "id", first }, { "label", "a" } });
-                Peer.Send(Channel, "model::update", new JObject { { "id", first }, { "label", "b" } });
-                Peer.Send(Channel, "model::update", new JObject { { "id", Guid.NewGuid().ToString() }, { "label", "c" } });
+            // Updates for an object the scene has are no reason to warn.
+            Peer.Send(Channel, "model::update", new JObject { { "id", placed.Id }, { "label", "known" } });
+            yield return E2EServer.WaitUntil(() => placed.Label == "known", "The placed model never received its update");
+            Assert.That(warnings, Is.Empty, "A manager without a template warned before it had anything to build");
 
-                yield return E2EServer.WaitUntil(() => warnings.Count > 0,
-                    "The manager never said that it could not build a model it has no template for");
-                yield return E2EServer.Settle(1f);
+            // Two updates of one unknown model and one of another: a single warning, for the first.
+            var first = Guid.NewGuid().ToString();
+            Peer.Send(Channel, "model::update", new JObject { { "id", first }, { "label", "a" } });
+            Peer.Send(Channel, "model::update", new JObject { { "id", first }, { "label", "b" } });
+            Peer.Send(Channel, "model::update", new JObject { { "id", Guid.NewGuid().ToString() }, { "label", "c" } });
 
-                Assert.That(warnings, Has.Count.EqualTo(1), string.Join("\n", warnings));
-                Assert.That(warnings[0], Does.Contain(first));
-                Assert.That(warnings[0], Does.Not.Contain("  "), "The message has a gap where a value is missing");
-                Assert.That(Instances(first), Is.Empty);
-            }
-            finally
-            {
-                Application.logMessageReceived -= OnLog;
-            }
+            yield return E2EServer.WaitUntil(() => warnings.Count > 0,
+                "The manager never said that it could not build a model it has no template for");
+            yield return E2EServer.Settle(1f);
+
+            Assert.That(warnings, Has.Count.EqualTo(1), string.Join("\n", warnings));
+            Assert.That(warnings[0], Does.Contain(first));
+            Assert.That(warnings[0], Does.Not.Contain("  "), "The message has a gap where a value is missing");
+            Assert.That(Instances(first), Is.Empty);
         }
 
         /// <summary>
@@ -306,31 +301,24 @@ namespace HCIKonstanz.Colibri.E2E
                 $"The manager never instantiated the model '{id}' it was told about");
 
             var clone = Instances(id).Single();
-            try
+            Assert.That(clone.gameObject.activeSelf, Is.True, "The clone of an inactive template stayed inactive");
+            Assert.That(clone.Label, Is.EqualTo("from the peer"));
+            Assert.That(templateObject.activeSelf, Is.False, "The template itself was switched on");
+
+            // Later updates reach it...
+            Peer.Send(Channel, "model::update", new JObject { { "id", id }, { "label", "changed" } });
+            yield return E2EServer.WaitUntil(() => clone.Label == "changed", "The clone never received a later update");
+
+            // ...without being echoed, and its own changes go out.
+            yield return Peer.ExpectNothing(Channel);
+
+            clone.Label = "local";
+            yield return Peer.Expect(Channel, "model::update", frame =>
             {
-                Assert.That(clone.gameObject.activeSelf, Is.True, "The clone of an inactive template stayed inactive");
-                Assert.That(clone.Label, Is.EqualTo("from the peer"));
-                Assert.That(templateObject.activeSelf, Is.False, "The template itself was switched on");
-
-                // Later updates reach it...
-                Peer.Send(Channel, "model::update", new JObject { { "id", id }, { "label", "changed" } });
-                yield return E2EServer.WaitUntil(() => clone.Label == "changed", "The clone never received a later update");
-
-                // ...without being echoed, and its own changes go out.
-                yield return Peer.ExpectNothing(Channel);
-
-                clone.Label = "local";
-                yield return Peer.Expect(Channel, "model::update", frame =>
-                {
-                    var payload = TcpPeer.Json(frame);
-                    Assert.That(payload["id"].Value<string>(), Is.EqualTo(id));
-                    Assert.That(payload["label"].Value<string>(), Is.EqualTo("local"));
-                });
-            }
-            finally
-            {
-                UnityEngine.Object.Destroy(clone.gameObject);
-            }
+                var payload = TcpPeer.Json(frame);
+                Assert.That(payload["id"].Value<string>(), Is.EqualTo(id));
+                Assert.That(payload["label"].Value<string>(), Is.EqualTo("local"));
+            });
         }
 
         /// <summary>
@@ -367,27 +355,19 @@ namespace HCIKonstanz.Colibri.E2E
                 $"The manager never built the model '{id}', or it never took the later update");
 
             var clones = FragileInstances(id);
-            try
-            {
-                Assert.That(clones.Length, Is.EqualTo(1), $"{clones.Length} objects carry the id '{id}'");
-                Assert.That(template.Id, Is.EqualTo(templateId), "The template kept the id of the model it was cloned for");
-                Assert.That(template.enabled, Is.True, "The template was left switched off");
-                Assert.That(clones[0].enabled, Is.True, "The clone was left switched off");
+            Assert.That(clones.Length, Is.EqualTo(1), $"{clones.Length} objects carry the id '{id}'");
+            Assert.That(template.Id, Is.EqualTo(templateId), "The template kept the id of the model it was cloned for");
+            Assert.That(template.enabled, Is.True, "The template was left switched off");
+            Assert.That(clones[0].enabled, Is.True, "The clone was left switched off");
 
-                // An object created here afterwards still sends its state.
-                var local = SpawnConfigured<E2EFragileModel>("fragile-local", m => m.Label = "local");
-                yield return Peer.Expect(channel, "model::update", frame =>
-                {
-                    var payload = TcpPeer.Json(frame);
-                    Assert.That(payload["id"].Value<string>(), Is.EqualTo(local.Id));
-                    Assert.That(payload["label"].Value<string>(), Is.EqualTo("local"));
-                });
-            }
-            finally
+            // An object created here afterwards still sends its state.
+            var local = SpawnConfigured<E2EFragileModel>("fragile-local", m => m.Label = "local");
+            yield return Peer.Expect(channel, "model::update", frame =>
             {
-                foreach (var clone in clones)
-                    UnityEngine.Object.Destroy(clone.gameObject);
-            }
+                var payload = TcpPeer.Json(frame);
+                Assert.That(payload["id"].Value<string>(), Is.EqualTo(local.Id));
+                Assert.That(payload["label"].Value<string>(), Is.EqualTo("local"));
+            });
         }
 
         /// <summary>
@@ -411,34 +391,25 @@ namespace HCIKonstanz.Colibri.E2E
             yield return null;
             yield return LetInitialStateArrive();
 
-            var deleter = new TcpPeer();
+            var deleter = Cleanup.Add(new TcpPeer());
             var id = Guid.NewGuid().ToString();
-            try
-            {
-                yield return deleter.Connect("deleter");
-                yield return E2EServer.Settle(0.3f);
+            yield return deleter.Connect("deleter");
+            yield return E2EServer.Settle(0.3f);
 
-                // No frame runs during the sleeps, so this client handles the relayed update only
-                // after the server has taken the delete.
-                Peer.Send(Channel, "model::update", new JObject { { "id", id }, { "label", "created" } });
-                Thread.Sleep(300);
-                deleter.Send(Channel, "model::delete", new JObject { { "id", id } });
-                Thread.Sleep(300);
-                yield return E2EServer.Settle(1f);
+            // No frame runs during the sleeps, so this client handles the relayed update only
+            // after the server has taken the delete.
+            Peer.Send(Channel, "model::update", new JObject { { "id", id }, { "label", "created" } });
+            Thread.Sleep(300);
+            deleter.Send(Channel, "model::delete", new JObject { { "id", id } });
+            Thread.Sleep(300);
+            yield return E2EServer.Settle(1f);
 
-                // The creating client moves the object before the delete reaches it.
-                Peer.Send(Channel, "model::update", new JObject { { "id", id }, { "where", new JArray(1f, 0f, 0f) } });
-                yield return E2EServer.Settle(1f);
+            // The creating client moves the object before the delete reaches it.
+            Peer.Send(Channel, "model::update", new JObject { { "id", id }, { "where", new JArray(1f, 0f, 0f) } });
+            yield return E2EServer.Settle(1f);
 
-                Assert.That(Instances(id), Is.Empty, "The model deleted by the third client is back on this client");
-                yield return AssertTheServerHoldsNothingOf(id);
-            }
-            finally
-            {
-                deleter.Dispose();
-                foreach (var instance in Instances(id))
-                    UnityEngine.Object.Destroy(instance.gameObject);
-            }
+            Assert.That(Instances(id), Is.Empty, "The model deleted by the third client is back on this client");
+            yield return AssertTheServerHoldsNothingOf(id);
         }
 
         /// <summary>
@@ -458,38 +429,30 @@ namespace HCIKonstanz.Colibri.E2E
             yield return LetInitialStateArrive();
 
             var id = Guid.NewGuid().ToString();
-            try
-            {
-                Peer.Send(Channel, "model::update", new JObject { { "id", id }, { "label", "created" }, { "where", new JArray(0f, 0f, 0f) } });
-                yield return E2EServer.WaitUntil(() => Instances(id).Length == 1,
-                    $"The manager never instantiated the model '{id}' it was told about");
-                yield return E2EServer.Settle(0.5f);
-                var seen = Peer.Received.Count;
+            Peer.Send(Channel, "model::update", new JObject { { "id", id }, { "label", "created" }, { "where", new JArray(0f, 0f, 0f) } });
+            yield return E2EServer.WaitUntil(() => Instances(id).Length == 1,
+                $"The manager never instantiated the model '{id}' it was told about");
+            yield return E2EServer.Settle(0.5f);
+            var seen = Peer.Received.Count;
 
-                // The peer moves the object, and the server relays that here before this client
-                // deletes it. No frame runs during the sleep, so the update is handled only after
-                // the delete.
-                Peer.Send(Channel, "model::update", new JObject { { "id", id }, { "where", new JArray(1f, 0f, 0f) } });
-                Thread.Sleep(300);
-                UnityEngine.Object.DestroyImmediate(Instances(id).Single().gameObject);
+            // The peer moves the object, and the server relays that here before this client
+            // deletes it. No frame runs during the sleep, so the update is handled only after
+            // the delete.
+            Peer.Send(Channel, "model::update", new JObject { { "id", id }, { "where", new JArray(1f, 0f, 0f) } });
+            Thread.Sleep(300);
+            UnityEngine.Object.DestroyImmediate(Instances(id).Single().gameObject);
 
-                yield return E2EServer.Settle(1.5f);
+            yield return E2EServer.Settle(1.5f);
 
-                Assert.That(Instances(id), Is.Empty, "The object deleted here was built again from an update sent before the delete");
+            Assert.That(Instances(id), Is.Empty, "The object deleted here was built again from an update sent before the delete");
 
-                var toThePeer = Peer.Received.Skip(seen)
-                    .Where(f => f.Channel == Channel && (string)TcpPeer.Json(f)["id"] == id)
-                    .ToArray();
-                Assert.That(toThePeer.Select(f => f.Command).ToArray(), Is.EqualTo(new[] { "model::delete" }),
-                    "The peer should hear of the delete and nothing else: " + string.Join(", ", toThePeer.Select(f => $"{f.Command} {TcpPeer.Text(f)}")));
+            var toThePeer = Peer.Received.Skip(seen)
+                .Where(f => f.Channel == Channel && (string)TcpPeer.Json(f)["id"] == id)
+                .ToArray();
+            Assert.That(toThePeer.Select(f => f.Command).ToArray(), Is.EqualTo(new[] { "model::delete" }),
+                "The peer should hear of the delete and nothing else: " + string.Join(", ", toThePeer.Select(f => $"{f.Command} {TcpPeer.Text(f)}")));
 
-                yield return AssertTheServerHoldsNothingOf(id);
-            }
-            finally
-            {
-                foreach (var instance in Instances(id))
-                    UnityEngine.Object.Destroy(instance.gameObject);
-            }
+            yield return AssertTheServerHoldsNothingOf(id);
         }
 
         /// <summary>
@@ -539,19 +502,8 @@ namespace HCIKonstanz.Colibri.E2E
             yield return E2EServer.Settle(1.5f);
 
             var instances = Instances(id);
-            try
-            {
-                Assert.That(instances, Is.EqualTo(new[] { placed }),
-                    $"{instances.Length} objects carry the id of the one object placed in the scene");
-            }
-            finally
-            {
-                foreach (var instance in instances)
-                {
-                    if (instance != placed)
-                        UnityEngine.Object.Destroy(instance.gameObject);
-                }
-            }
+            Assert.That(instances, Is.EqualTo(new[] { placed }),
+                $"{instances.Length} objects carry the id of the one object placed in the scene");
         }
 
         /// <summary>
@@ -568,30 +520,22 @@ namespace HCIKonstanz.Colibri.E2E
             yield return LetInitialStateArrive();
 
             var id = Guid.NewGuid().ToString();
-            try
-            {
-                Peer.Send(Channel, "model::update", new JObject { { "id", id }, { "label", "first" } });
-                yield return E2EServer.WaitUntil(() => Instances(id).Length == 1,
-                    $"The manager never instantiated the model '{id}' it was told about");
+            Peer.Send(Channel, "model::update", new JObject { { "id", id }, { "label", "first" } });
+            yield return E2EServer.WaitUntil(() => Instances(id).Length == 1,
+                $"The manager never instantiated the model '{id}' it was told about");
 
-                Peer.Send(Channel, "model::delete", new JObject { { "id", id } });
-                yield return E2EServer.WaitUntil(() => Instances(id).Length == 0, "The model the peer deleted was never destroyed");
+            Peer.Send(Channel, "model::delete", new JObject { { "id", id } });
+            yield return E2EServer.WaitUntil(() => Instances(id).Length == 0, "The model the peer deleted was never destroyed");
 
-                // Created again as a client creates an object: a request for its id, which brings
-                // the id back into use, and then its state.
-                Peer.Send(Channel, "model::request", new JObject { { "id", id } });
-                Peer.Send(Channel, "model::update", new JObject { { "id", id }, { "label", "second" } });
-                yield return E2EServer.WaitUntil(() => Instances(id).Any(m => m.Label == "second"),
-                    "The model created again under the id of one the peer had deleted was never built");
+            // Created again as a client creates an object: a request for its id, which brings
+            // the id back into use, and then its state.
+            Peer.Send(Channel, "model::request", new JObject { { "id", id } });
+            Peer.Send(Channel, "model::update", new JObject { { "id", id }, { "label", "second" } });
+            yield return E2EServer.WaitUntil(() => Instances(id).Any(m => m.Label == "second"),
+                "The model created again under the id of one the peer had deleted was never built");
 
-                yield return E2EServer.Settle(0.5f);
-                Assert.That(Instances(id).Length, Is.EqualTo(1));
-            }
-            finally
-            {
-                foreach (var instance in Instances(id))
-                    UnityEngine.Object.Destroy(instance.gameObject);
-            }
+            yield return E2EServer.Settle(0.5f);
+            Assert.That(Instances(id).Length, Is.EqualTo(1));
         }
 
 
@@ -607,36 +551,31 @@ namespace HCIKonstanz.Colibri.E2E
             yield return LetInitialStateArrive();
 
             SyncSettings.MaxSendRate = 1;
-            try
+            Cleanup.Add(SyncSettings.ResetMaxSendRate);
+
+            model.Label = "first";
+
+            // Well inside the interval: a change after a quiet spell is not held back.
+            yield return Peer.Expect(Channel, "model::update",
+                frame => Assert.That(TcpPeer.Json(frame)["label"].Value<string>(), Is.EqualTo("first")),
+                timeoutSeconds: 0.5f);
+
+            model.Label = "between";
+            yield return null;
+            model.Count = 3;
+            yield return null;
+            model.Label = "last";
+
+            // Nothing changes after this, and the held values still have to arrive - as one
+            // update, without the value in between.
+            yield return Peer.Expect(Channel, "model::update", frame =>
             {
-                model.Label = "first";
+                var payload = TcpPeer.Json(frame);
+                Assert.That(payload["label"].Value<string>(), Is.EqualTo("last"));
+                Assert.That(payload["_count"].Value<int>(), Is.EqualTo(3));
+            });
 
-                // Well inside the interval: a change after a quiet spell is not held back.
-                yield return Peer.Expect(Channel, "model::update",
-                    frame => Assert.That(TcpPeer.Json(frame)["label"].Value<string>(), Is.EqualTo("first")),
-                    timeoutSeconds: 0.5f);
-
-                model.Label = "between";
-                yield return null;
-                model.Count = 3;
-                yield return null;
-                model.Label = "last";
-
-                // Nothing changes after this, and the held values still have to arrive - as one
-                // update, without the value in between.
-                yield return Peer.Expect(Channel, "model::update", frame =>
-                {
-                    var payload = TcpPeer.Json(frame);
-                    Assert.That(payload["label"].Value<string>(), Is.EqualTo("last"));
-                    Assert.That(payload["_count"].Value<int>(), Is.EqualTo(3));
-                });
-
-                yield return Peer.ExpectNothing(Channel, 1.5f);
-            }
-            finally
-            {
-                SyncSettings.ResetMaxSendRate();
-            }
+            yield return Peer.ExpectNothing(Channel, 1.5f);
         }
 
         [UnityTest]
@@ -646,23 +585,18 @@ namespace HCIKonstanz.Colibri.E2E
             yield return LetInitialStateArrive();
 
             SyncSettings.MaxSendRate = 0;
-            try
-            {
-                model.Label = "a";
-                yield return null;
-                model.Label = "b";
-                yield return null;
-                model.Label = "c";
+            Cleanup.Add(SyncSettings.ResetMaxSendRate);
 
-                foreach (var expected in new[] { "a", "b", "c" })
-                {
-                    yield return Peer.Expect(Channel, "model::update",
-                        frame => Assert.That(TcpPeer.Json(frame)["label"].Value<string>(), Is.EqualTo(expected)));
-                }
-            }
-            finally
+            model.Label = "a";
+            yield return null;
+            model.Label = "b";
+            yield return null;
+            model.Label = "c";
+
+            foreach (var expected in new[] { "a", "b", "c" })
             {
-                SyncSettings.ResetMaxSendRate();
+                yield return Peer.Expect(Channel, "model::update",
+                    frame => Assert.That(TcpPeer.Json(frame)["label"].Value<string>(), Is.EqualTo(expected)));
             }
         }
 
@@ -700,29 +634,24 @@ namespace HCIKonstanz.Colibri.E2E
             yield return LetInitialStateArrive();
 
             SyncSettings.MaxSendRate = 1;
-            try
+            Cleanup.Add(SyncSettings.ResetMaxSendRate);
+
+            model.Label = "sent";
+            yield return Peer.Expect(Channel, "model::update");
+
+            model.Label = "held";
+            yield return null;
+            yield return null;
+
+            model.Count = 5;
+            stop(Resources.FindObjectsOfTypeAll<SyncTicker>().Single());
+
+            yield return Peer.Expect(Channel, "model::update", frame =>
             {
-                model.Label = "sent";
-                yield return Peer.Expect(Channel, "model::update");
-
-                model.Label = "held";
-                yield return null;
-                yield return null;
-
-                model.Count = 5;
-                stop(Resources.FindObjectsOfTypeAll<SyncTicker>().Single());
-
-                yield return Peer.Expect(Channel, "model::update", frame =>
-                {
-                    var payload = TcpPeer.Json(frame);
-                    Assert.That(payload["label"]?.Value<string>(), Is.EqualTo("held"), $"The held change did not go out at once: {payload}");
-                    Assert.That(payload["_count"]?.Value<int>(), Is.EqualTo(5), $"The change made in the last frame did not go out with it: {payload}");
-                }, timeoutSeconds: 0.5f);
-            }
-            finally
-            {
-                SyncSettings.ResetMaxSendRate();
-            }
+                var payload = TcpPeer.Json(frame);
+                Assert.That(payload["label"]?.Value<string>(), Is.EqualTo("held"), $"The held change did not go out at once: {payload}");
+                Assert.That(payload["_count"]?.Value<int>(), Is.EqualTo(5), $"The change made in the last frame did not go out with it: {payload}");
+            }, timeoutSeconds: 0.5f);
         }
 
         /// <summary>
@@ -736,28 +665,23 @@ namespace HCIKonstanz.Colibri.E2E
             yield return LetInitialStateArrive();
 
             SyncSettings.MaxSendRate = 1;
-            try
-            {
-                model.Label = "sent";
-                yield return Peer.Expect(Channel, "model::update");
+            Cleanup.Add(SyncSettings.ResetMaxSendRate);
 
-                model.Label = "held";
-                yield return null;
-                yield return null;
+            model.Label = "sent";
+            yield return Peer.Expect(Channel, "model::update");
 
-                var id = model.Id;
-                UnityEngine.Object.Destroy(model.gameObject);
+            model.Label = "held";
+            yield return null;
+            yield return null;
 
-                yield return Peer.Expect(Channel, "model::delete",
-                    frame => Assert.That(TcpPeer.Json(frame)["id"].Value<string>(), Is.EqualTo(id)),
-                    timeoutSeconds: 0.5f);
+            var id = model.Id;
+            UnityEngine.Object.Destroy(model.gameObject);
 
-                yield return Peer.ExpectNothing(Channel, 1.5f);
-            }
-            finally
-            {
-                SyncSettings.ResetMaxSendRate();
-            }
+            yield return Peer.Expect(Channel, "model::delete",
+                frame => Assert.That(TcpPeer.Json(frame)["id"].Value<string>(), Is.EqualTo(id)),
+                timeoutSeconds: 0.5f);
+
+            yield return Peer.ExpectNothing(Channel, 1.5f);
         }
 
         /// <summary>
@@ -789,63 +713,51 @@ namespace HCIKonstanz.Colibri.E2E
             };
 
             Sync.AddModelDeleteListener(Channel, inTheSameFrame);
+            Cleanup.Add(() => Sync.RemoveModelDeleteListener(Channel, inTheSameFrame));
             SyncSettings.MaxSendRate = 1;
-            try
+            Cleanup.Add(SyncSettings.ResetMaxSendRate);
+
+            model.Label = "sent";
+            yield return Peer.Expect(Channel, "model::update", timeoutSeconds: 0.5f);
+
+            model.Label = "held";
+            yield return null;
+            yield return null;
+
+            Peer.Send(Channel, "model::delete", new JObject { { "id", id } });
+            yield return E2EServer.WaitUntil(() => model == null, "The model deleted by the peer was never destroyed");
+            yield return E2EServer.Settle(0.5f);
+
+            // What the server holds for that id now: nothing but the id, which is its answer
+            // for a model it does not know - unless the held update has brought it back.
+            Peer.Send(Channel, "model::request", new JObject { { "id", id } });
+            yield return Peer.Expect(Channel, "model::update", frame =>
             {
-                model.Label = "sent";
-                yield return Peer.Expect(Channel, "model::update", timeoutSeconds: 0.5f);
-
-                model.Label = "held";
-                yield return null;
-                yield return null;
-
-                Peer.Send(Channel, "model::delete", new JObject { { "id", id } });
-                yield return E2EServer.WaitUntil(() => model == null, "The model deleted by the peer was never destroyed");
-                yield return E2EServer.Settle(0.5f);
-
-                // What the server holds for that id now: nothing but the id, which is its answer
-                // for a model it does not know - unless the held update has brought it back.
-                Peer.Send(Channel, "model::request", new JObject { { "id", id } });
-                yield return Peer.Expect(Channel, "model::update", frame =>
-                {
-                    var payload = (JObject)TcpPeer.Json(frame);
-                    Assert.That(payload["id"].Value<string>(), Is.EqualTo(id));
-                    Assert.That(payload.Properties().Select(p => p.Name).ToArray(), Is.EqualTo(new[] { "id" }),
-                        $"The model the peer deleted is back on the server: {payload.ToString(Newtonsoft.Json.Formatting.None)}");
-                });
-            }
-            finally
-            {
-                Sync.RemoveModelDeleteListener(Channel, inTheSameFrame);
-                SyncSettings.ResetMaxSendRate();
-            }
+                var payload = (JObject)TcpPeer.Json(frame);
+                Assert.That(payload["id"].Value<string>(), Is.EqualTo(id));
+                Assert.That(payload.Properties().Select(p => p.Name).ToArray(), Is.EqualTo(new[] { "id" }),
+                    $"The model the peer deleted is back on the server: {payload.ToString(Newtonsoft.Json.Formatting.None)}");
+            });
         }
 
         /// <summary>
         /// Fails if the server would hand the model to a client joining now, which asks for every
         /// model on the channel.
         /// </summary>
-        private static IEnumerator AssertTheServerHoldsNothingOf(string id)
+        private IEnumerator AssertTheServerHoldsNothingOf(string id)
         {
-            var lateJoiner = new TcpPeer();
-            try
-            {
-                yield return lateJoiner.Connect("late-joiner");
-                yield return E2EServer.Settle(0.3f);
+            var lateJoiner = Cleanup.Add(new TcpPeer());
+            yield return lateJoiner.Connect("late-joiner");
+            yield return E2EServer.Settle(0.3f);
 
-                lateJoiner.Send(Channel, "model::request", (JToken)null);
-                yield return E2EServer.Settle(1f);
+            lateJoiner.Send(Channel, "model::request", (JToken)null);
+            yield return E2EServer.Settle(1f);
 
-                var held = lateJoiner.Received
-                    .Where(f => f.Channel == Channel && f.Command == "model::update" && (string)TcpPeer.Json(f)["id"] == id)
-                    .Select(TcpPeer.Text)
-                    .ToArray();
-                Assert.That(held, Is.Empty, "The server holds the deleted model again, and hands it to every client that joins");
-            }
-            finally
-            {
-                lateJoiner.Dispose();
-            }
+            var held = lateJoiner.Received
+                .Where(f => f.Channel == Channel && f.Command == "model::update" && (string)TcpPeer.Json(f)["id"] == id)
+                .Select(TcpPeer.Text)
+                .ToArray();
+            Assert.That(held, Is.Empty, "The server holds the deleted model again, and hands it to every client that joins");
         }
 
         private static E2ESyncModel[] Instances(string id)

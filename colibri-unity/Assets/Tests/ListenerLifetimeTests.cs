@@ -127,16 +127,11 @@ namespace HCIKonstanz.Colibri.E2E
             _staticDeliveries = 0;
 
             Sync.Receive<int>(channel, CountStatically);
-            try
-            {
-                Peer.Send(channel, "broadcast::int", "1");
-                yield return E2EServer.WaitUntil(() => _staticDeliveries == 1,
-                    $"A static listener stopped receiving on channel '{channel}'");
-            }
-            finally
-            {
-                Sync.Unregister<int>(channel, CountStatically);
-            }
+            Cleanup.Add(() => Sync.Unregister<int>(channel, CountStatically));
+
+            Peer.Send(channel, "broadcast::int", "1");
+            yield return E2EServer.WaitUntil(() => _staticDeliveries == 1,
+                $"A static listener stopped receiving on channel '{channel}'");
         }
 
         /// <summary>

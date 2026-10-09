@@ -74,20 +74,15 @@ namespace HCIKonstanz.Colibri.E2E
             Action<Vector3> handler = _ => good++;
 
             Sync.Receive(channel, handler);
-            try
-            {
-                LogAssert.Expect(LogType.Warning, new Regex("^Colibri: received a vector3 "));
+            Cleanup.Add(() => Sync.Unregister(channel, handler));
 
-                Peer.Send(channel, "broadcast::vector3", "\"not a vector\"");
-                Peer.Send(channel, "broadcast::vector3", "[1,2,3]");
+            LogAssert.Expect(LogType.Warning, new Regex("^Colibri: received a vector3 "));
 
-                yield return E2EServer.WaitUntil(() => good > 0,
-                    "The message behind the malformed one never arrived");
-            }
-            finally
-            {
-                Sync.Unregister(channel, handler);
-            }
+            Peer.Send(channel, "broadcast::vector3", "\"not a vector\"");
+            Peer.Send(channel, "broadcast::vector3", "[1,2,3]");
+
+            yield return E2EServer.WaitUntil(() => good > 0,
+                "The message behind the malformed one never arrived");
         }
     }
 }

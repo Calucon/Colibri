@@ -172,20 +172,15 @@ namespace HCIKonstanz.Colibri.E2E
             Action<JToken> handler = value => received = value;
 
             Sync.Receive(channel, handler);
-            try
-            {
-                Peer.Send(channel, "broadcast::json", "{\"a\":1}");
+            Cleanup.Add(() => Sync.Unregister(channel, handler));
 
-                yield return E2EServer.WaitUntil(() => received != null,
-                    $"Unity never received 'broadcast::json' on channel '{channel}'");
+            Peer.Send(channel, "broadcast::json", "{\"a\":1}");
 
-                Assert.That(JToken.DeepEquals(received, new JObject { { "a", 1 } }), Is.True,
-                    $"Received {received} instead of {{\"a\":1}}");
-            }
-            finally
-            {
-                Sync.Unregister(channel, handler);
-            }
+            yield return E2EServer.WaitUntil(() => received != null,
+                $"Unity never received 'broadcast::json' on channel '{channel}'");
+
+            Assert.That(JToken.DeepEquals(received, new JObject { { "a", 1 } }), Is.True,
+                $"Received {received} instead of {{\"a\":1}}");
         }
 
 
@@ -218,19 +213,14 @@ namespace HCIKonstanz.Colibri.E2E
             };
 
             Sync.Receive(channel, handler);
-            try
-            {
-                Peer.Send(channel, command, payload);
+            Cleanup.Add(() => Sync.Unregister(channel, handler));
 
-                yield return E2EServer.WaitUntil(() => arrived,
-                    $"Unity never received '{command}' on channel '{channel}'");
+            Peer.Send(channel, command, payload);
 
-                Assert.That(received, Is.EqualTo(expected));
-            }
-            finally
-            {
-                Sync.Unregister(channel, handler);
-            }
+            yield return E2EServer.WaitUntil(() => arrived,
+                $"Unity never received '{command}' on channel '{channel}'");
+
+            Assert.That(received, Is.EqualTo(expected));
         }
     }
 }

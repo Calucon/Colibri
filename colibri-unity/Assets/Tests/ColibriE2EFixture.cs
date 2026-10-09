@@ -1,8 +1,6 @@
 using System.Collections;
 using System.Collections.Generic;
-using HCIKonstanz.Colibri.Core;
 using HCIKonstanz.Colibri.Networking;
-using HCIKonstanz.Colibri.Synchronization;
 using NUnit.Framework;
 using UnityEngine;
 using UnityEngine.TestTools;
@@ -23,6 +21,9 @@ namespace HCIKonstanz.Colibri.E2E
     {
         protected TcpPeer Peer { get; private set; }
         protected WebServerConnection Connection { get; private set; }
+
+        /// <summary>What the test has to undo when it ends, failed or not. See <see cref="TestCleanup"/>.</summary>
+        protected TestCleanup Cleanup { get; } = new TestCleanup();
 
         private readonly List<GameObject> _spawned = new List<GameObject>();
 
@@ -51,12 +52,14 @@ namespace HCIKonstanz.Colibri.E2E
             // before it has put the peer on the app, and it is lost for good.
             yield return E2EServer.Settle(0.3f);
 
-            _syncedBefore = new HashSet<GameObject>(SyncedObjects());
+            _syncedBefore = TestCleanup.SyncedObjects();
         }
 
         [UnityTearDown]
         public IEnumerator DisconnectPeer()
         {
+            Cleanup.Run();
+
             var destroyed = false;
             foreach (var spawned in _spawned)
             {
@@ -73,7 +76,7 @@ namespace HCIKonstanz.Colibri.E2E
             // channels includes models earlier tests left behind. Left in the scene, they were
             // found by the next test's manager - which takes switched-off objects too since
             // 06d5943 - and their state went out into that test's peer.
-            foreach (var synced in SyncedObjects())
+            foreach (var synced in TestCleanup.SyncedObjects())
             {
                 if (!_syncedBefore.Contains(synced))
                 {
@@ -130,23 +133,5 @@ namespace HCIKonstanz.Colibri.E2E
         }
 
         protected static void AssertNoErrors() => LogAssert.NoUnexpectedReceived();
-
-        /// <summary>Every GameObject in the scene with a SyncBehaviour of any model type on it.</summary>
-        private static IEnumerable<GameObject> SyncedObjects()
-        {
-            var found = new HashSet<GameObject>();
-            foreach (var behaviour in UnityCompat.FindAll<MonoBehaviour>(FindObjectsInactive.Include))
-            {
-                for (var type = behaviour.GetType(); type != null; type = type.BaseType)
-                {
-                    if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(SyncBehaviour<>))
-                    {
-                        found.Add(behaviour.gameObject);
-                        break;
-                    }
-                }
-            }
-            return found;
-        }
     }
 }

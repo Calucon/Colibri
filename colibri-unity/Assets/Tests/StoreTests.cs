@@ -141,19 +141,14 @@ namespace HCIKonstanz.Colibri.E2E
 
             // Only the web port, so the binary connection this fixture depends on is untouched.
             config.WebServerPort = 9099;
-            try
-            {
-                LogAssert.Expect(LogType.Error, new Regex("^Colibri: could not load "));
+            Cleanup.Add(() => config.WebServerPort = realPort);
 
-                var get = ColibriStore.Get<StoredThing>("does-not-matter");
-                yield return E2EServer.Await(get, "Store.Get hung against an unreachable server", 20f);
+            LogAssert.Expect(LogType.Error, new Regex("^Colibri: could not load "));
 
-                Assert.That(get.Result, Is.Null);
-            }
-            finally
-            {
-                config.WebServerPort = realPort;
-            }
+            var get = ColibriStore.Get<StoredThing>("does-not-matter");
+            yield return E2EServer.Await(get, "Store.Get hung against an unreachable server", 20f);
+
+            Assert.That(get.Result, Is.Null);
         }
     }
 
