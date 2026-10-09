@@ -15,6 +15,9 @@ const { WaveFile } = wavefile;
 
 const APP = voiceAppId('voice-test');
 
+// An app id as the server writes it in logs and recording names.
+const appHex = (appId: number): string => `0x${appId.toString(16).padStart(8, '0')}`;
+
 // A PCM voice packet of `appId`, as Unity sends it.
 const voicePacket = function (userId: number, sequence: number, data: number[] = [ 0, 0 ], appId = APP): Buffer {
     return encodeVoicePacket({ appId, userId, sequence, frameSize: 960, codec: VoiceCodec.PCM, data: Buffer.from(data) });
@@ -346,11 +349,10 @@ describe('VoiceServer', () => {
                 [ aMovesToB, dJoins ],
             ]);
             expect(internals.clients.size).toBe(4);
-            const hex = (appId: number) => `0x${appId.toString(16).padStart(8, '0')}`;
             const aPort = (a.address() as AddressInfo).port;
             expect(logs.filter(l => l.origin === 'VoiceServer' && /moved from app/.test(l.message)).map(l => [ l.level, l.message ])).toEqual([
-                [ LogLevel.Debug, `Voice client 127.0.0.1:${aPort} ID: 1 moved from app ${hex(A)} to app ${hex(B)}` ],
-                [ LogLevel.Debug, `Voice client 127.0.0.1:${aPort} ID: 1 moved from app ${hex(B)} to app ${hex(A)}` ],
+                [ LogLevel.Debug, `Voice client 127.0.0.1:${aPort} ID: 1 moved from app ${appHex(A)} to app ${appHex(B)}` ],
+                [ LogLevel.Debug, `Voice client 127.0.0.1:${aPort} ID: 1 moved from app ${appHex(B)} to app ${appHex(A)}` ],
             ]);
         });
 
@@ -606,7 +608,7 @@ describe('VoiceServer recordings', () => {
 
         const files = await recordings();
         expect(files).toHaveLength(1);
-        expect(files[0]).toMatch(/^rec_\d{4}-\d\d-\d\dT\d\d_\d\d_\d\d\.\d{3}Z_ID_7\.wav$/);
+        expect(files[0]).toMatch(new RegExp(`^rec_\\d{4}-\\d\\d-\\d\\dT\\d\\d_\\d\\d_\\d\\d\\.\\d{3}Z_app_${appHex(APP)}_ID_7_port_\\d+\\.wav$`));
         expect(await readSamples(files[0]!)).toEqual(samples);
 
         const saved = savedLogs();
@@ -626,7 +628,7 @@ describe('VoiceServer recordings', () => {
         await server.stop();
 
         const files = await recordings();
-        expect(files.map(name => name.replace(/^rec_.*_ID_/, ''))).toEqual([ '1.wav', '2.wav' ]);
+        expect(files.map(name => /_ID_(\d+)_port_/.exec(name)?.[1])).toEqual([ '1', '2' ]);
         expect(await readSamples(files[0]!)).toEqual(first);
         expect(await readSamples(files[1]!)).toEqual(second);
         expect(savedLogs()).toHaveLength(2);
@@ -676,8 +678,8 @@ describe('VoiceServer recordings', () => {
         await talk(6, someSamples(480, 6));
         await talk(8, someSamples(480, 8));
         // A directory where client 6's file would go.
-        const client6 = Array.from(internals.clients.values()).find(client => (client as { userId: number }).userId === 6) as { recordingStartDate: Date };
-        await mkdir(path.join(dir, `rec_${client6.recordingStartDate.toISOString().replace(/:/g, '_')}_ID_6.wav`));
+        const client6 = Array.from(internals.clients.values()).find(client => (client as { userId: number }).userId === 6) as { recordingStartDate: Date, appId: number, port: number };
+        await mkdir(path.join(dir, `rec_${client6.recordingStartDate.toISOString().replace(/:/g, '_')}_app_${appHex(client6.appId)}_ID_6_port_${client6.port}.wav`));
 
         await server.stop();
 
@@ -685,7 +687,7 @@ describe('VoiceServer recordings', () => {
         expect(failed).toHaveLength(1);
         expect(failed[0]!.message).toContain('Failed to save the voice recording of client ID 6 (127.0.0.1:');
         expect(failed[0]!.message).toContain('EISDIR');
-        expect((await recordings()).filter(name => name.endsWith('_ID_8.wav'))).toHaveLength(1);
+        expect((await recordings()).filter(name => name.includes('_ID_8_'))).toHaveLength(1);
         expect(savedLogs()).toHaveLength(1);
     });
 

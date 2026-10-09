@@ -406,10 +406,16 @@ export class VoiceServer extends Service {
 
     // Never throws: a failed save is logged. Nothing here re-encodes the samples on the main
     // thread (see wavHeader): writeFile hands their bytes to the file system in chunks.
+    //
+    // The app and the source port are in the file name because the start time and the voice id
+    // alone do not tell recordings apart: two apps may use the same voice id, and after a
+    // restart or a dropped network every client registers again within the same few ms. Two
+    // recordings with the same name used to overwrite each other without a word.
     private async saveRecording(client: VoiceClient): Promise<void> {
         const samples = client.recordingData.toTypedArray();
         const dateString = client.recordingStartDate.toISOString().replace(/:/g, '_');
-        const filename = path.join(this.voiceRecordingPath, `rec_${dateString}_ID_${client.userId}.wav`);
+        const filename = path.join(this.voiceRecordingPath,
+            `rec_${dateString}_app_${formatAppId(client.appId)}_ID_${client.userId}_port_${client.port}.wav`);
         const seconds = (samples.length / this.samplingRate).toFixed(1);
         try {
             await mkdir(this.voiceRecordingPath, { recursive: true });
