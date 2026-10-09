@@ -435,7 +435,10 @@ rationale, migration steps, and what the Editor verification did and did not cov
   the change, hold the older value too: `Sync` sends one more `model::request` on
   `colibri::reconnect` ahead of the change, and until its answer the member takes nothing from them.
   In the round after a reconnect, the member is kept until that round ends instead. An object a
-  manager builds from another client's update takes that update as it is. See
+  manager builds from another client's update takes that update as it is. A placed `SyncTransform`
+  with a `Rigidbody` stays kinematic until its first answer, whatever `PhysicsAuthority` says, so
+  that a client that joins later does not send where its own simulation took the object meanwhile
+  as a change of its own. One instantiated with an empty `Id` is simulated at once. See
   [SyncTransform](docs/guide.md#synctransform).
 - **Objects built from a disabled `Template` come to life.** A copy starts out as its template is,
   and a manager's template is often kept switched off in the scene. A copy that is switched off
@@ -712,8 +715,9 @@ otherwise spend on their prototype, so:
   wire, and `ModelResyncTests` what an object does with them, also when the connection drops again
   before the answers or before the value sent again arrives, and when the object changes right
   after the reconnect. `ModelResyncTests` also cover a change made before an object's first answer,
-  kept over that answer and the ones still on their way, also in the round after a reconnect, and
-  the members left as they were, which take the answer; `ReconnectTests` an object placed during
+  kept over that answer and the ones still on their way, also in the round after a reconnect, the
+  members left as they were, which take the answer, and a placed body with `PhysicsAuthority`
+  ticked, which waits for it; `ReconnectTests` an object placed during
   the outage and changed as the client reconnects. `ProtocolMismatchDetectionTests` walk the
   client through scripted sessions against a `FakeColibriServer` that hangs up, stays silent, heartbeats or refuses: the
   growing backoff, the suspected mismatch and what clears it, the watchdog before the first frame,
