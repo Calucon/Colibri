@@ -868,9 +868,9 @@ a real scene generates traffic. But state sync is last-write-wins and coalesces 
 value changes three times between two flushes, two of those never go on the wire, and that is the
 design working rather than the network failing. So the load cannot measure loss, and the panel calls
 its gap figure **coalesced**, not lost. With the send-rate limit (§2) changes are coalesced per
-interval as well, so *Coalesced* rises by design, and the panel's *Out* row, which counts the
-changes the sample drives, is no longer the number of messages that leave. Set *Max Send Rate* to 0
-to measure the raw per-frame load.
+interval as well, so *Coalesced* rises by design, and the panel's *Changed* row, the changes the
+sample drives, is no longer the number of messages that leave; *Sent* shows the most they can
+become. Set *Max Send Rate* to 0 to measure the raw per-frame load.
 
 *Latency and loss* therefore ride on a separate low-rate probe channel, where every message is meant
 to arrive exactly once. It is a round trip, so no clock is shared between the two ends and the

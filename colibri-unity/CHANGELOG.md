@@ -576,9 +576,9 @@ otherwise spend on their prototype, so:
   a real scene generates traffic, but state sync is last-write-wins and coalesces per frame, so a
   value that never went out is the design working and cannot be counted as loss. The panel calls
   that figure *coalesced*, not *lost*. With the send-rate limit an object's changes are coalesced
-  per interval too, so *Coalesced* rises by design, and the panel's *Out* figure counts the changes
-  the sample drives rather than the messages that leave; set *Max Send Rate* to `0` to measure the
-  raw per-frame load. **Latency and loss** ride on a separate low-rate probe
+  per interval too, so *Coalesced* rises by design. The panel shows the changes the sample drives
+  as *Changed* and the most messages they can become as *Sent*; set *Max Send Rate* to `0` to
+  measure the raw per-frame load. **Latency and loss** ride on a separate low-rate probe
   channel where every message is meant to arrive exactly once, measured as a round trip so no clock
   is shared between the two ends. That channel is the only thing here that can honestly report a
   dropped message, and it is what makes the server's own backpressure discard visible from inside
