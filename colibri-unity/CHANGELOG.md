@@ -569,7 +569,8 @@ otherwise spend on their prototype, so:
   keeping up. The sample spawns up to 500 synchronized objects, moves as many of them per frame as
   you ask it to, and reports throughput, round-trip latency percentiles, dropped messages, frame
   cost and reconnects, on screen, live, with sliders. Run it in two editors side by side and turn
-  the count up until the numbers stop being acceptable.
+  the count up until the numbers stop being acceptable. Until a probe comes back, the panel says to
+  start a second client with the scene.
 
   It carries two separate instruments on purpose. The **load** is synchronized objects, which is how
   a real scene generates traffic, but state sync is last-write-wins and coalesces per frame, so a
