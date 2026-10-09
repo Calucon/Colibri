@@ -1,43 +1,19 @@
 # colibri-server guide
 
-The full reference for colibri-server: setup, every setting, what it logs, and how it behaves under
-load and when clients vanish. The [README](../README.md) is the short version. The wire protocol
-is in [protocol.md](protocol.md), and everything that changed since 1.x in
-[v2-changelog.md](v2-changelog.md).
+Full reference for colibri-server. Overview: [README](../README.md). Wire protocol:
+[protocol.md](protocol.md). Changes since 1.x: [v2-changelog.md](v2-changelog.md).
 
-- [Setup](#setup)
-  - [Docker](#docker): [data directory](#data-directory),
-    [running as another user](#running-as-another-user),
-    [unwritable data directory](#unwritable-data-directory),
-    [settings and ports](#settings-and-ports)
-  - [Node.js](#nodejs)
-  - [Configuration](#configuration)
-- [TLS](#tls): [enabling TLS](#enabling-tls),
-  [a self-signed certificate](#a-self-signed-certificate), [Docker](#tls-with-docker),
-  [renewal](#renewal), [startup errors](#startup-errors),
-  [the log](#tls-in-the-log), [reverse proxy](#reverse-proxy),
-  [performance](#performance)
-- [Features](#features)
-  - [Logs](#logs)
-  - [Load limits](#load-limits)
-  - [Idle timeout](#idle-timeout)
-- [Protocol version](#protocol-version)
-- [Development](#development)
+## Security
 
-The server connects the Unity clients (TCP) and web clients (Socket.IO) of each app: it relays
-their messages (`broadcast::`) and changes to synced objects (models) to each other, and keeps a
-copy of each app's models. It also stores values through a small REST API, relays each app's voice
-over UDP, and serves an admin UI showing what every client logs.
-
-Colibri has no authentication: anyone who can reach these ports can join any app, read and change
-its data, and read the log. Run it on a network you trust.
+Colibri has no authentication. Anyone who can reach the ports can join any app, read and change its
+data, and read the log. Run the server on a trusted network.
 
 ## Setup
 
 ### Docker
 
-Recommended. Image: [`hcikn/colibri`](https://hub.docker.com/r/hcikn/colibri). Save the following
-as `docker-compose.yml` and run `docker compose up -d`:
+Recommended. Image: [`hcikn/colibri`](https://hub.docker.com/r/hcikn/colibri). Save as
+`docker-compose.yml` and run `docker compose up -d`:
 
 ```yaml
 services:
@@ -45,10 +21,8 @@ services:
     image: hcikn/colibri:2.0.0
     restart: unless-stopped
     container_name: colibri
-    # The server logs to stdout/stderr, client log lines included, and Docker's default
-    # json-file log never rotates: cap it rather than let a long study fill the disk. And no
-    # `tty: true`: with a TTY, `docker logs` has no stderr, and the warnings and errors are
-    # mixed into stdout.
+    # Cap the log: Docker's json-file log never rotates, and client log lines are logged too.
+    # Do not set `tty: true`, which mixes stderr into stdout in `docker logs`.
     logging:
       driver: json-file
       options:
@@ -57,117 +31,109 @@ services:
     volumes:
       - colibri-data:/srv/colibri/data
     ports:
-      - 9011:9011 # web interface / web sockets / REST store
-      - 9012:9012 # tcp (unity)
+      - 9011:9011 # admin UI, web clients, REST store
+      - 9012:9012 # TCP, Unity clients
       - "9013:9013/udp" # voice
 
 volumes:
   colibri-data:
 ```
 
-The admin UI is then at `http://<your-server-ip>:9011`.
+Admin UI: `http://<server-ip>:9011`.
 
-To run the server from a checkout of this repository instead of a published image, run
-`docker compose up -d` in its `colibri-server` directory, whose own `docker-compose.yml` builds
-the image from source and keeps the data in `./data`, or replace the `image:` line above with
+To build from a checkout, run `docker compose up -d` in `colibri-server`, which builds from source
+and keeps the data in `./data`. Or replace the `image:` line with
 `build: <path to the checkout>/colibri-server`.
 
 The image sets `NODE_ENV=production` and runs the server as PID 1, so `docker stop` shuts it down
-cleanly: it writes any pending store changes first, and saves the voice recordings still in
-progress.
+cleanly, writing pending store changes and saving voice recordings in progress.
 
 #### Data directory
 
-`/srv/colibri/data` holds the REST store's `store.json` and any voice recordings. Mount your
-volume there and leave `DATA_ROOT` unset: in the image, that path is the server's data directory,
-and the only one the container gives to the server's user (see below). A volume mounted anywhere
-else, with `DATA_ROOT` pointing at it, is left as it is, so unless it already belongs to uid 1000
-the server cannot save there.
+`/srv/colibri/data` holds `store.json` and voice recordings. Mount the volume there and leave
+`DATA_ROOT` unset. The container gives only this directory to the server's user. A volume mounted
+elsewhere, with `DATA_ROOT` pointing at it, keeps its owner and is writable only if it belongs to uid
+1000.
 
-A named volume, like `colibri-data` above, needs no setup. To keep the data in a directory on the
-host instead, mount that directory:
+A named volume such as `colibri-data` needs no setup. For a host directory:
 
 ```yaml
     volumes:
       - ./data:/srv/colibri/data
 ```
 
-This works with a `./data` that Docker creates on first start, and with a root-owned `data`
-directory left behind by colibri-server 1.x, whose `store.json` keeps its format. The container
-starts as root, gives `/srv/colibri/data` to the `node` user (uid 1000) if anything in it belongs
-to someone else, and then runs the server as `node`; on the host, the directory ends up owned by
-uid 1000.
+This also works with a `./data` that Docker creates on first start, and with a root-owned `data`
+directory from colibri-server 1.x, whose `store.json` format is unchanged. The container starts as
+root, chowns `/srv/colibri/data` to `node` (uid 1000) if anything in it has another owner, and runs
+the server as `node`. On the host, the directory then belongs to uid 1000.
 
 #### Running as another user
 
-Started with `--user` (or `user:` in the compose file), the container cannot change owners, so
-the data directory has to belong to that user already. Give a host directory to it yourself,
-e.g. `sudo chown -R 1001:1001 ./data` for `--user 1001:1001`. A new named volume belongs to uid
-1000, as `/srv/colibri/data` does in the image, so it only works as it is with
-`--user 1000:1000`. For any other uid, use a host directory you gave to that uid, or drop
-`--user` and let the container hand the directory to `node` itself.
+With `--user` (or `user:` in the compose file), the container cannot change owners, so the data
+directory must already belong to that user, e.g. `sudo chown -R 1001:1001 ./data` for
+`--user 1001:1001`. A new named volume belongs to uid 1000, as `/srv/colibri/data` does in the image,
+so it works unchanged only with `--user 1000:1000`. For another uid, use a host directory owned by that
+uid, or drop `--user` so the container chowns the directory to `node`.
 
 #### Unwritable data directory
 
-If the server cannot write to its data directory, it says so at startup on stderr, with the path,
-the error, the uid it runs as and what to do about that error: give the directory to that uid,
-drop a read-only (`:ro`) mount, move a file out of the way, or free disk space. It says so in the
-admin UI's log too. It keeps running, but saves nothing: `store.json` and voice recordings stay in
+If the server cannot write to its data directory, it prints `DATA_ROOT is not writable: <path>` on
+stderr at startup, with the error, its uid and the fix for that error: chown the directory to that
+uid, drop a read-only (`:ro`) mount, move a file out of the way, or free disk space. The admin UI log
+shows it too. The server keeps running but saves nothing: `store.json` and voice recordings stay in
 memory until it stops.
 
 #### Settings and ports
 
-Settings from [Configuration](#configuration) go into an `environment:` section, e.g.
-`CONSOLE_LOG_LEVEL: debug`, or into a `.env` file mounted at `/srv/colibri/.env`. To use other
-ports, change only the host side of `ports:`, e.g. `"8011:9011"`, and leave the ports inside the
-container as they are. If you do set `WEBSERVER_PORT`, publish that port instead, e.g.
-`"9111:9111"`; the image's health check follows `WEBSERVER_PORT` and `WEBSERVER_HOST` wherever
-they are set.
+Put [settings](#configuration) in `environment:`, e.g. `CONSOLE_LOG_LEVEL: debug`, or in a `.env`
+file mounted at `/srv/colibri/.env`. To change a port, change only the host side of `ports:`, e.g.
+`"8011:9011"`. If you set `WEBSERVER_PORT`, publish that port, e.g. `"9111:9111"`. The health check
+reads `WEBSERVER_PORT` and `WEBSERVER_HOST` from the environment or the `.env` file.
 
 ### Node.js
 
-Requirements: NodeJS 24+
+Requires Node.js 24 or newer.
 
-Clone this repository, then in `colibri-server` install with `npm ci`, build with
-`npm run build`, and start with `npm start`.
+```sh
+git clone https://github.com/hcigroupkonstanz/Colibri.git
+cd Colibri/colibri-server
+npm ci && npm run build && npm start
+```
 
 ### Configuration
 
-The server reads its settings from environment variables, and from a `.env` file in the
-directory it is started from (`colibri-server` for `npm start`); a variable that is already set
-in the environment wins. [`.env.example`](../.env.example) lists every one with its default. In
-short:
+Set environment variables, or use a `.env` file in the working directory (`colibri-server` for
+`npm start`). The environment takes precedence. [`.env.example`](../.env.example) lists every variable
+with its default.
 
-| variable | default | |
+| Name | Default | Description |
 | --- | --- | --- |
-| `WEBSERVER_HOST`, `WEBSERVER_PORT` | `0.0.0.0`, `9011` | admin UI, web clients (Socket.IO) and the REST store |
+| `WEBSERVER_HOST`, `WEBSERVER_PORT` | `0.0.0.0`, `9011` | Admin UI, web clients (Socket.IO), REST store |
 | `TCP_HOST`, `TCP_PORT` | `0.0.0.0`, `9012` | Unity clients |
-| `VOICE_HOST`, `VOICE_PORT` | `0.0.0.0`, `9013` | voice relay (UDP, IPv4) |
-| `VOICE_SAMPLING_RATE` | `48000` | sampling rate written into voice recordings, in Hz |
-| `VOICE_RECORDING` | `false` | `true` saves each voice client's audio as a `.wav` file in the data directory (PCM voice only), named as in [Voice packets](protocol.md#voice-packets-udp) |
-| `DATA_ROOT` | `../../data` | data directory: `store.json` and voice recordings |
-| `WEBSERVER_ROOT` | `../ui/` | the admin UI's build output |
-| `BASE_URL` | empty | path the admin UI is served under, e.g. `/colibri` behind a reverse proxy; `/api/store` and Socket.IO stay at the root |
-| `STACK_TRACE_LIMIT` | `30` | stack frames captured for a logged error |
-| `CONSOLE_LOG_LEVEL` | `info` | least severe level printed to stdout/stderr: `error`, `warn`, `info` or `debug` |
-| `CONSOLE_LOG_BROADCAST_TRAFFIC` | `false` | `true` also prints every `broadcast::` message, whatever the level |
-| `TCP_INBOUND_BACKLOG_LIMIT` | `2000` | messages from Unity clients that may wait for the server's main thread before it holds back `model::update` and drops `broadcast::` messages, so an overloaded server's memory and delay stay bounded; `0`: no limit |
-| `CLIENT_MESSAGE_RATE_LIMIT`, `CLIENT_MESSAGE_RATE_BURST` | `1000`, `2000` | `model::update` and `broadcast::` messages a second that one client, Unity or web, may send, and how many at once after a quieter stretch; beyond that, the same happens to its messages. Catches a runaway send loop. `0` turns the limit off; the burst must be at least 1 |
-| `TCP_IDLE_TIMEOUT_SECONDS` | `10` | seconds a Unity client may send nothing at all, not even its heartbeat replies, before it is disconnected as gone, e.g. a headset that left the Wi-Fi; a connection that has not handshaked by then is closed too. A client reading a message larger than 64 KiB gets up to 6 times this much more (see [Idle timeout](#idle-timeout)). `0`: never |
-| `APP_CLIENT_WARNING_THRESHOLD` | `8` | log a warning when one app has more clients than this, Unity and web together, the admin UI not counted; usually separate projects that kept the same app name. `0`: never |
-| `MODEL_TOMBSTONE_SECONDS` | `600` | seconds the server remembers that a synced object (model) was deleted. Meanwhile it ignores updates for it, so one another client sent before the delete reached it cannot create the object again, and it tells a client that asks for the object again after a reconnect to delete its copy. A client that has the object in its scene again, such as a scene with placed objects loaded again, ends this early. Forgotten with the app's models once its last client has left. `0`: not remembered. See [Deleted models](protocol.md#deleted-models) |
-| `TLS_CERT`, `TLS_KEY` | empty | PEM files of the certificate (with its chain) and of its private key. Set both, and the TCP port and the web port serve TLS only; see [TLS](#tls) |
+| `VOICE_HOST`, `VOICE_PORT` | `0.0.0.0`, `9013` | Voice relay (UDP, IPv4) |
+| `VOICE_SAMPLING_RATE` | `48000` | Sampling rate of voice recordings, in Hz |
+| `VOICE_RECORDING` | `false` | `true` saves each voice client's PCM audio as a `.wav` file in the data directory, named as in [Voice packets](protocol.md#voice-packets-udp) |
+| `DATA_ROOT` | `../../data` | Data directory: `store.json` and voice recordings |
+| `WEBSERVER_ROOT` | `../ui/` | Admin UI build output |
+| `BASE_URL` | empty | Path of the admin UI, e.g. `/colibri` behind a reverse proxy. `/api/store` and Socket.IO stay at the root. |
+| `STACK_TRACE_LIMIT` | `30` | Stack frames captured for a logged error |
+| `CONSOLE_LOG_LEVEL` | `info` | Least severe level printed to stdout/stderr: `error`, `warn`, `info` or `debug` |
+| `CONSOLE_LOG_BROADCAST_TRAFFIC` | `false` | `true` also prints every `broadcast::` message, regardless of `CONSOLE_LOG_LEVEL` |
+| `TCP_INBOUND_BACKLOG_LIMIT` | `2000` | Messages from Unity clients that may wait for the main thread before [load limiting](#load-limits) starts. `0`: no limit. |
+| `CLIENT_MESSAGE_RATE_LIMIT`, `CLIENT_MESSAGE_RATE_BURST` | `1000`, `2000` | `model::update` and `broadcast::` messages per second one Unity or web client may send, and the burst after a quieter period. Beyond that, [load limiting](#load-limits) applies. Catches runaway send loops. `0`: no limit. The burst must be at least 1. |
+| `TCP_IDLE_TIMEOUT_SECONDS` | `10` | Seconds a Unity client may send nothing, heartbeat replies included, before it is disconnected ([Idle timeout](#idle-timeout)). `0`: never. |
+| `APP_CLIENT_WARNING_THRESHOLD` | `8` | Warn when one app has more clients than this, Unity and web together, admin UI excluded. Usually separate projects with the same app name. `0`: never. |
+| `MODEL_TOMBSTONE_SECONDS` | `600` | Seconds a deleted synced object (model) is remembered. Meanwhile updates for it are ignored, so they cannot re-create it, and a re-request after a reconnect is answered with a delete. A client with the object in its scene again ends this early. Cleared with the app's models when its last client leaves. `0`: off. See [Deleted models](protocol.md#deleted-models). |
+| `TLS_CERT`, `TLS_KEY` | empty | PEM files of the certificate with its chain, and of its private key. With both set, the TCP and web ports serve [TLS](#tls) only. |
 
-`DATA_ROOT` and `WEBSERVER_ROOT` may be absolute paths, e.g. `DATA_ROOT=/var/lib/colibri`. A
-relative path is taken from the compiled server's directory, `dist/server`, so the defaults are
-`dist/ui` and the `data` directory next to `dist`. In the Docker image, leave `DATA_ROOT` alone and
-mount the data at `/srv/colibri/data` instead (see [Data directory](#data-directory)).
+`DATA_ROOT` and `WEBSERVER_ROOT` may be absolute, e.g. `DATA_ROOT=/var/lib/colibri`. Relative paths
+resolve from `dist/server`, so the defaults are `dist/ui` and `data` next to `dist`. In Docker, leave
+`DATA_ROOT` unset ([Data directory](#data-directory)).
 
-A port that is not an integer from 1 to 65535, a sampling rate, stack trace limit or burst that is
-not a positive integer, any other number that is not a whole number of 0 or more, or an unknown
-log level stops the server at startup, with a message naming the variable. So does a `TLS_CERT`
-or `TLS_KEY` it cannot use (see [Startup errors](#startup-errors)).
-See [Load limits](#load-limits) for what the limits are for.
+Invalid values stop the server at startup with `Invalid <NAME>: "<value>" is not ...`: a port outside
+1 to 65535, a `VOICE_SAMPLING_RATE`, `STACK_TRACE_LIMIT` or `CLIENT_MESSAGE_RATE_BURST` that is not a
+positive integer, another number that is not an integer of 0 or more, or an unknown log level. Unusable
+TLS files stop it too ([Startup errors](#startup-errors)).
 
 ## TLS
 
@@ -321,19 +287,19 @@ The cost of TLS on a headset itself was not measured.
 
 ## Features
 
-- **Admin UI** at `http://<your-server-ip>:9011` (`https://` with [TLS](#tls)). The *Log* page
-  shows what the server and every connected client log, filtered by app and level, with a separate
-  *Sync traffic* switch for the continuous `broadcast::` messages. The *Statistics* page shows the
-  connected clients and their latency.
-- **Model synchronization** and **broadcasts** between the Unity and web clients of an app, see
-  [protocol.md](protocol.md). Only `broadcast::` messages and model changes are passed on to other
-  clients; see [Relayed messages](protocol.md#relayed-messages).
-- **REST store** at `/api/store` on the web port, saved to `store.json` in the data directory, see
-  [REST store](protocol.md#rest-store).
-- **Voice relay** on UDP port 9013. Each voice packet goes to the other clients of the sender's app
-  that are sending voice to this server. The app is an app id in the packet, the hash of the app
-  name; see [Voice packets](protocol.md#voice-packets-udp). Like the app name on TCP, it keeps
-  apps apart but is not access control. Voice is not encrypted.
+- **Admin UI** at `http://<server-ip>:9011` (`https://` with [TLS](#tls)). The *Log* page shows the
+  log of the server and every connected client, filtered by app and level, with a *Sync traffic*
+  switch for the continuous `broadcast::` messages. The *Statistics* page shows the connected clients
+  and their latency.
+- **Model synchronization** and **broadcasts** between the Unity (TCP) and web (Socket.IO) clients of
+  an app. The server keeps a copy of each app's models. Only `broadcast::` messages and model changes
+  are relayed to other clients ([Relayed messages](protocol.md#relayed-messages)).
+- **REST store** at `/api/store` on the web port, saved to `store.json` in the data directory
+  ([REST store](protocol.md#rest-store)).
+- **Voice relay** on UDP port 9013. A voice packet goes to the clients of the sender's app that send
+  voice to this server. Each packet carries the app as an app id, the hash of the app name
+  ([Voice packets](protocol.md#voice-packets-udp)). Like the app name on TCP, it separates apps but is
+  not access control. Voice is not encrypted.
 
 ### Logs
 
