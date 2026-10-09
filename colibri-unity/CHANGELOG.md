@@ -251,11 +251,7 @@ rationale, migration steps, and what the Editor verification did and did not cov
   failed (the timeout, a refusal or another socket error) and is `null` once a connection has
   opened; *Window → Colibri Status* shows it under *Not connected* as *Last attempt: …*. None of
   these counts towards a suspected protocol mismatch, since nothing was ever accepted.
-- **Disabling and enabling the connection in one frame reconnects at once.** The ended loop's
-  cleanup closed the new socket during its connect (on Mono the attempt then waited 5 s and said
-  the server did not answer) and could close the outbox under a `Connected` session, so sends
-  waited for nothing; each loop now touches only its own socket, and the status and outbox only
-  until `OnDisable` ends it.
+- **Disabling and enabling the connection in one frame** no longer takes 5 s on Mono or leaves sends stuck.
 - **Connected means the server has spoken.** A session becomes `Connected` on the first frame the
   server sends, not when the TCP connection opens. Only then is the backoff reset, `OnConnected`
   raised and the queued messages sent, so against something that accepts connections and then
