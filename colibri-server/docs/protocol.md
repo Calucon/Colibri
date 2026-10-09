@@ -66,13 +66,15 @@ parser never scans for delimiters.
 
 ### Handshake
 
-A client sends a `handshake` frame right after connecting, before anything else. The body is
+A client must send a `handshake` frame right after connecting, before anything else. The body is
 `version`, `app` and `name`, joined with `::`, as UTF-8 text.
 
 - No field may contain `::`, or start or end with `:`, because a body like `"2::app:::name"` cannot be
   split back into the intended fields. A `:` inside a field is fine.
-- A body that breaks this rule, or does not split into exactly three fields, is logged as
-  `Malformed handshake frame: "<body>"`, and the connection is closed.
+- A body that breaks this rule, or does not split into exactly three fields, is a frame error
+  ([Frame parsing](#frame-parsing)). The server logs
+  `Invalid frame from client <id>, discarding buffer and terminating connection: Malformed handshake frame: "<body>"`
+  and closes the connection.
 - colibri-unity replaces `::`, and a `:` at either end, in its app and device name with `_`, and warns
   when this changes the app name.
 
@@ -295,7 +297,7 @@ A `[Sync] Color` model field uses the same conversions and has the same two form
 
 **Only Unity sends `broadcast::int`.** JavaScript has one number type, so colibri-web cannot tell `5`
 from `5.0` and always sends `broadcast::float`. `sendInt` is an alias kept for symmetry with the Unity
-API. Unity routes the two commands to separate listener lists, so a Unity client receives numbers from
+API. Unity routes the two commands to separate listener lists, so a Unity client must receive numbers from
 web clients with `Sync.Receive<float>`. colibri-web's `receiveNumber` listens for both commands.
 
 **The `log` channel is not JSON.** `ClientLogger` treats its payload as text, so colibri-unity sends it
