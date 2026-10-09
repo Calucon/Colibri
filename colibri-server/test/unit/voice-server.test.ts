@@ -8,18 +8,16 @@ import * as path from 'path';
 import { Subscription } from 'rxjs';
 import wavefile from 'wavefile';
 import { VoiceServer, wavHeader } from '../../src/server/modules/web/voice-server.js';
+import { VoiceCodec, encodeVoicePacket, voiceAppId } from '../../src/server/modules/web/voice-packet.js';
 import { ConsoleLog, LogLevel, LogMessage, Service } from '../../src/server/modules/core/index.js';
 
 const { WaveFile } = wavefile;
 
-// |userId(2)|sequence(2)|frameSize(2)|codec(1)|data|, little-endian, as Unity sends it.
-const voicePacket = function (userId: number, sequence: number, data: number[] = [ 0, 0 ]): Buffer {
-    const header = Buffer.alloc(7);
-    header.writeInt16LE(userId, 0);
-    header.writeInt16LE(sequence, 2);
-    header.writeInt16LE(960, 4);
-    header.writeInt8(0, 6); // PCM
-    return Buffer.concat([ header, Buffer.from(data) ]);
+const APP = voiceAppId('voice-test');
+
+// A PCM voice packet of `appId`, as Unity sends it.
+const voicePacket = function (userId: number, sequence: number, data: number[] = [ 0, 0 ], appId = APP): Buffer {
+    return encodeVoicePacket({ appId, userId, sequence, frameSize: 960, codec: VoiceCodec.PCM, data: Buffer.from(data) });
 };
 
 // A PCM packet carrying `samples` as 16-bit little-endian values.
@@ -111,23 +109,23 @@ describe('VoiceServer', () => {
         expect(malformedReports()[0]!.message).toContain(`127.0.0.1:${(a.address() as AddressInfo).port}`);
     });
 
-    it('rejects every length up to the 7-byte header, and accepts a header-only packet', async () => {
+    it('rejects every length up to the 11-byte header, and accepts a header-only packet', async () => {
         const a = await openClient();
         const b = await openClient();
 
-        for (let length = 0; length < 7; length++) {
-            // The 0..6-byte prefix of a well-formed packet: only the full header may register.
+        for (let length = 0; length < 11; length++) {
+            // The 0..10-byte prefix of a well-formed packet: only the full header may register.
             await send(a, voicePacket(1, 1).subarray(0, length));
         }
         await send(b, voicePacket(2, 1));
         // a has not been registered by any of those, so nothing reaches it yet; b is the
-        // only client. A header-only (7-byte) packet from a then registers a.
+        // only client. A header-only (11-byte) packet from a then registers a.
         await send(a, voicePacket(1, 1, []));
         const relayed = await roundTrip(b, a, 2);
 
         expect(relayed).toEqual(voicePacket(2, 1));
         expect(internals.clients.size).toBe(2);
-        // All seven short ones came from a, so they were reported once.
+        // All eleven short ones came from a, so they were reported once.
         expect(malformedReports()).toHaveLength(1);
     });
 
@@ -181,7 +179,7 @@ describe('VoiceServer', () => {
         // (port 0 is dropped above), so a peer it rejects is planted directly. It goes in first,
         // so every relay reaches it before a and b.
         internals.clients.set('127.0.0.1:0', {
-            ip: '127.0.0.1', port: 0, userId: 9, lastSequence: 0, lastHeartbeat: Date.now(),
+            ip: '127.0.0.1', port: 0, userId: 9, appId: APP, lastSequence: 0, lastHeartbeat: Date.now(),
             frameSize: 960, frameSizeMillis: 20, codec: 0, recordingStartDate: new Date(), recordingData: { length: 0 },
         });
         const a = await openClient();
@@ -516,7 +514,7 @@ describe('VoiceServer recordings', () => {
         const samples = new Int16Array(SAMPLING_RATE * 600);
         for (let i = 0; i < samples.length; i++) samples[i] = (i * 31) % 20000 - 10000;
         internals.clients.set('127.0.0.1:9', {
-            ip: '127.0.0.1', port: 9, userId: 9, lastSequence: 0, lastHeartbeat: Date.now(),
+            ip: '127.0.0.1', port: 9, userId: 9, appId: APP, lastSequence: 0, lastHeartbeat: Date.now(),
             frameSize: 480, frameSizeMillis: 10, codec: 0, recordingStartDate: new Date(),
             recordingData: { length: samples.length, toTypedArray: () => samples },
         });

@@ -4,6 +4,13 @@ import { AddressInfo } from 'net';
 import { mkdir, writeFile } from 'fs/promises';
 import { endianness } from 'os';
 import * as path from 'path';
+import {
+    VOICE_APP_ID_OFFSET,
+    VOICE_HEADER_LENGTH,
+    VOICE_HEADER_VERSION,
+    VOICE_VERSION_AND_CODEC_OFFSET,
+    VoiceCodec,
+} from './voice-packet.js';
 
 // Recordings can run for minutes at 48kHz, so a plain number[] would mean millions of
 // boxed-double pushes. This keeps samples in a flat Int16Array, growing (doubling) only
@@ -38,22 +45,18 @@ interface VoiceClient {
     ip: string;
     port: number;
     userId: number;
+    appId: number;
     lastSequence: number;
     lastHeartbeat: number;
     frameSize: number; // How many samples are sent at one time
     frameSizeMillis: number;
-    codec: Codec;
+    codec: VoiceCodec;
     recordingStartDate: Date;
     recordingData: GrowableInt16Buffer;
 }
 
-enum Codec {
-    PCM,
-    OPUS
-}
-
-// |userId(2)|sequence(2)|frameSize(2)|codec(1)|, see the message handler.
-const HEADER_LENGTH = 7;
+// What getAppClients hands back for an app with no voice clients.
+const NO_CLIENTS: readonly VoiceClient[] = [];
 
 const WAV_HEADER_LENGTH = 44;
 
@@ -85,6 +88,8 @@ export const wavHeader = function (samplingRate: number, dataBytes: number): Buf
     return header;
 };
 
+const formatAppId = (appId: number): string => `0x${appId.toString(16).padStart(8, '0')}`;
+
 /** The samples as the little-endian bytes a .wav file holds, without copying them where it can. */
 const littleEndianBytes = function (samples: Int16Array): Buffer {
     const bytes = Buffer.from(samples.buffer, samples.byteOffset, samples.byteLength);
@@ -110,9 +115,10 @@ export class VoiceServer extends Service {
     private disconnectTimeoutMillis = 2000;
     private disconnectCheckInterval!: NodeJS.Timeout;
 
-    // Rebuilt only when a client joins or times out, instead of re-scanning/re-deriving
-    // `this.clients` on every incoming voice packet (received at up to ~50 packets/s/client).
-    private clientsCache: VoiceClient[] | undefined;
+    // The voice clients of each app, by appId. Rebuilt only when a client joins, times out or
+    // changes app, instead of re-scanning/re-deriving `this.clients` on every incoming voice
+    // packet (received at up to ~50 packets/s/client).
+    private appClients: Map<number, VoiceClient[]> | undefined;
 
     // The recordings checkClientsDisconnected is saving, while it is. Guards it against
     // overlapping fs work when a save outlives its tick (see the comment there), and lets
@@ -142,12 +148,27 @@ export class VoiceServer extends Service {
             const nowMillis = now.getTime();
             const clientKey = `${remote.address}:${remote.port}`;
 
+            // A Colibri 1.x client's header has no appId, so there is no app to relay its
+            // packets to. Its codec byte (0 or 1) is where the header version is now, which
+            // makes its version 0.
+            if (message.length > VOICE_VERSION_AND_CODEC_OFFSET) {
+                const version = message.readUInt8(VOICE_VERSION_AND_CODEC_OFFSET) >> 4;
+                if (version === 0) {
+                    this.reportV1Packet(clientKey, nowMillis);
+                    return;
+                }
+                if (version !== VOICE_HEADER_VERSION) {
+                    this.reportMalformedPacket(clientKey, `its header version is ${version}, not ${VOICE_HEADER_VERSION}`, nowMillis);
+                    return;
+                }
+            }
+
             // Every header read below is at a fixed offset, so the whole header has to be
             // there. This used to check for only 2 bytes: a single 2-6 byte datagram then
             // reached readInt16LE(2)/readInt8(6), and the ERR_OUT_OF_RANGE thrown out of this
             // listener was an uncaught exception that shut the whole server down.
-            if (message.length < HEADER_LENGTH) {
-                this.reportMalformedPacket(clientKey, `${message.length} bytes is shorter than the ${HEADER_LENGTH}-byte header`, nowMillis);
+            if (message.length < VOICE_HEADER_LENGTH) {
+                this.reportMalformedPacket(clientKey, `${message.length} bytes is shorter than the ${VOICE_HEADER_LENGTH}-byte header`, nowMillis);
                 return;
             }
 
@@ -162,11 +183,12 @@ export class VoiceServer extends Service {
                 return;
             }
 
-            // Voice message with 7 bytes header: |userId(2)|sequence(2)|frameSize(2)|codec(1)|data|
+            // |userId(2)|sequence(2)|frameSize(2)|version and codec(1)|appId(4)|data|, see voice-packet.ts
             const userId = message.readInt16LE(0); // .net (Unity) decodes default in little-endian order
             const sequence = message.readInt16LE(2);
             const frameSize = message.readInt16LE(4);
-            const codec: Codec = message.readInt8(6);
+            const codec: VoiceCodec = message.readUInt8(VOICE_VERSION_AND_CODEC_OFFSET) & 0x0f;
+            const appId = message.readUInt32LE(VOICE_APP_ID_OFFSET);
 
             // Current voice client
             let voiceClient = this.clients.get(clientKey);
@@ -177,6 +199,7 @@ export class VoiceServer extends Service {
                     ip: remote.address,
                     port: remote.port,
                     userId: userId,
+                    appId,
                     lastSequence: sequence,
                     lastHeartbeat: nowMillis,
                     frameSize,
@@ -186,20 +209,25 @@ export class VoiceServer extends Service {
                     recordingData: new GrowableInt16Buffer(),
                 };
                 this.clients.set(clientKey, voiceClient);
-                this.clientsCache = undefined;
-                this.logDebug(`New voice client connected from ${remote.address}:${remote.port} ID: ${userId} Codec: ${codec === Codec.OPUS ? 'Opus' : 'PCM'}`);
+                this.appClients = undefined;
+                this.logDebug(`New voice client connected from ${remote.address}:${remote.port} ID: ${userId} App: ${formatAppId(appId)} Codec: ${codec === VoiceCodec.OPUS ? 'Opus' : 'PCM'}`);
                 if (this.recordingVoiceData) {
                     this.logWarning('Warning: Voice recording is enabled');
-                    if (codec !== Codec.PCM) this.logWarning('Voice recording is only supported for PCM data');
+                    if (codec !== VoiceCodec.PCM) this.logWarning('Voice recording is only supported for PCM data');
                 }
+            } else if (voiceClient.appId !== appId) {
+                // Its app name changed: from now on it hears, and is heard by, the new app.
+                this.logDebug(`Voice client ${remote.address}:${remote.port} ID: ${voiceClient.userId} moved from app ${formatAppId(voiceClient.appId)} to app ${formatAppId(appId)}`);
+                voiceClient.appId = appId;
+                this.appClients = undefined;
             }
 
             // Update last heartbeat
             voiceClient.lastSequence = sequence;
             voiceClient.lastHeartbeat = nowMillis;
 
-            // Send message to all other clients
-            for (const peer of this.getClientsCache()) {
+            // Send message to all other clients of its app
+            for (const peer of this.getAppClients(appId)) {
                 if (peer === voiceClient) continue;
 
                 // send() checks its arguments synchronously and throws, and anything thrown
@@ -216,9 +244,9 @@ export class VoiceServer extends Service {
                 }
             }
 
-            if (codec === Codec.PCM && this.recordingVoiceData) {
+            if (codec === VoiceCodec.PCM && this.recordingVoiceData) {
                 // i + 2 <= length: an odd trailing byte is dropped rather than over-read.
-                for (let i = HEADER_LENGTH; i <= message.length - 2; i += 2) {
+                for (let i = VOICE_HEADER_LENGTH; i <= message.length - 2; i += 2) {
                     voiceClient.recordingData.push(message.readInt16LE(i));
                 }
             }
@@ -273,7 +301,7 @@ export class VoiceServer extends Service {
 
         const pendingRecordings = Array.from(this.clients.values()).filter(client => client.recordingData.length > 0);
         this.clients.clear();
-        this.clientsCache = undefined;
+        this.appClients = undefined;
         if (pendingRecordings.length === 0) return;
 
         this.logInfo(`Saving ${pendingRecordings.length} voice recording(s) still in progress before stopping`);
@@ -287,6 +315,14 @@ export class VoiceServer extends Service {
 
         this.logError(`Ignoring malformed voice packet from ${source}: ${reason}`
             + ` (further ones from this source are not reported for ${REPORT_INTERVAL_MILLIS / 1000}s)`, false);
+    }
+
+    private reportV1Packet(source: string, nowMillis: number): void {
+        if (!this.claimReport(source, nowMillis)) return;
+
+        this.logWarning(`Ignoring voice packet from ${source}: it looks like a Colibri 1.x client (its voice header has no app), `
+            + `but this server speaks voice header v${VOICE_HEADER_VERSION}. Upgrade the Colibri Unity package (de.uni.kn.colibri) in that app to 2.x`
+            + ` (further ones from this source are not reported for ${REPORT_INTERVAL_MILLIS / 1000}s)`);
     }
 
     private reportRelayFailure(peer: VoiceClient, err: unknown, nowMillis: number): void {
@@ -317,11 +353,16 @@ export class VoiceServer extends Service {
         }
     }
 
-    private getClientsCache(): VoiceClient[] {
-        if (!this.clientsCache) {
-            this.clientsCache = Array.from(this.clients.values());
+    private getAppClients(appId: number): readonly VoiceClient[] {
+        if (!this.appClients) {
+            this.appClients = new Map<number, VoiceClient[]>();
+            for (const client of this.clients.values()) {
+                const app = this.appClients.get(client.appId);
+                if (app) app.push(client);
+                else this.appClients.set(client.appId, [ client ]);
+            }
         }
-        return this.clientsCache;
+        return this.appClients.get(appId) ?? NO_CLIENTS;
     }
 
     // setInterval never awaits this, so the timed-out clients are collected and removed
@@ -338,7 +379,7 @@ export class VoiceServer extends Service {
             // Remove inactive clients
             if (now - value.lastHeartbeat > this.disconnectTimeoutMillis) {
                 this.clients.delete(key);
-                this.clientsCache = undefined;
+                this.appClients = undefined;
                 this.logDebug(`Voice client ${value.ip}:${value.port} disconnected ID: ${value.userId}`);
 
                 // Check if recording data is available
