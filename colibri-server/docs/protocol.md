@@ -795,7 +795,9 @@ passes the packet on unchanged to every other voice client with the same `appId`
 sends with another `appId` from the same address and port moves to that app. A client is dropped
 after 2 to 3 s without a packet, so a client hears voice only while it sends voice itself, as
 colibri-unity's `VoiceBroadcast` does while it broadcasts. With `VOICE_RECORDING=true` the server
-also saves the samples of each client's PCM packets as a `.wav` file.
+also saves the samples of each client's PCM packets as a `.wav` file in the data directory, named
+after the time of the client's first packet (UTC), its app id, its voice id and its source port:
+`rec_2026-10-09T11_07_58.502Z_app_0xe40c292c_ID_1_port_52114.wav`.
 
 The server drops the packets below, and reports at most one of them per source address and port
 every 10 s:

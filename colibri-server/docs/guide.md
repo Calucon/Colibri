@@ -143,7 +143,7 @@ short:
 | `TCP_HOST`, `TCP_PORT` | `0.0.0.0`, `9012` | Unity clients |
 | `VOICE_HOST`, `VOICE_PORT` | `0.0.0.0`, `9013` | voice relay (UDP, IPv4) |
 | `VOICE_SAMPLING_RATE` | `48000` | sampling rate written into voice recordings, in Hz |
-| `VOICE_RECORDING` | `false` | `true` saves each voice client's audio as a `.wav` file in the data directory (PCM voice only) |
+| `VOICE_RECORDING` | `false` | `true` saves each voice client's audio as a `.wav` file in the data directory (PCM voice only), named as in [Voice packets](protocol.md#voice-packets-udp) |
 | `DATA_ROOT` | `../../data` | data directory: `store.json` and voice recordings |
 | `WEBSERVER_ROOT` | `../ui/` | the admin UI's build output |
 | `BASE_URL` | empty | path the admin UI is served under, e.g. `/colibri` behind a reverse proxy; `/api/store` and Socket.IO stay at the root |
