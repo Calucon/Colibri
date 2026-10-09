@@ -657,116 +657,129 @@ else
 
 ## Connection and outages
 
-Colibri opens the connection by itself the first time anything calls `Sync.Send` or
-`Sync.Receive`, or a `SyncBehaviour` wakes up. When the connection drops, it reconnects on its
-own, waiting 0.5 s, then 1 s, 2 s and so on, up to 10 s, between attempts. An attempt that nothing
-answers is given up after 5 s. `WebServerConnection.Instance` tells you where it stands:
+Colibri connects when anything first calls `Sync.Send` or `Sync.Receive`, or a `SyncBehaviour` runs
+`Awake`. After a drop it reconnects with delays of 0.5 s, 1 s, 2 s and so on up to 10 s. An attempt
+without an answer is abandoned after 5 s.
 
-- `Status` is `Connecting`, `Connected`, `Reconnecting`, `Disconnected` or `ProtocolMismatch`.
-- `OnConnected` is raised on the main thread once the server has actually sent something: an
-  accepted TCP connection is not enough. `OnDisconnected` is raised exactly once for every
-  `OnConnected`, when that connection ends. An attempt that never got connected raises neither.
-  Both are raised in the order things happened, so the last one raised is the current state: a
-  connection that drops and comes back between two frames raises `OnDisconnected`, then
-  `OnConnected`.
-- `LastConnectFailure` says why the last attempt to open the connection failed (for example
-  `… did not answer within 5 s`, or a refusal) and is `null` once one has opened.
-- `await connection.Connected` waits until the connection is up. It is cancelled when the server
-  refuses this client's protocol version or the component is disabled, so the `await` then throws
-  a `TaskCanceledException`.
+| `WebServerConnection.Instance` member | Description |
+|---|---|
+| `Status` | `ConnectionStatus`: `Connecting`, `Connected`, `Reconnecting`, `Disconnected` or `ProtocolMismatch` |
+| `OnConnected` | Raised on the main thread once the server has sent something, not when TCP accepts the connection |
+| `OnDisconnected` | Raised once for every `OnConnected`, when that connection ends |
+| `LastConnectFailure` | Why the last attempt failed, e.g. `… did not answer within 5 s` or a refusal. `null` once connected. |
+| `Connected` | Task that completes once connected. Cancelled when the server refuses the protocol version or the component is disabled, so `await` then throws a `TaskCanceledException`. |
+| `ServerVersion`, `ProtocolMismatchReason` | The server's answer to a refused protocol version |
+| `SuspectedProtocolMismatch` | A mismatch the server could not report ([Requirements](#requirements)) |
 
-While the connection is down, whatever you send waits, and goes out in the order it was sent as
-soon as the connection is back, ahead of anything sent afterwards:
+An attempt that never connected raises no event. Events are raised in order, so the last one raised
+is the current state. A drop and reconnect between two frames raises `OnDisconnected`, then
+`OnConnected`.
 
-- Broadcasts (`Sync.Send`): at most 256 are kept. Past that the oldest are dropped, with one
-  warning per outage. Log lines wait in `[RemoteLogger]` instead, which keeps the newest 1000 (see
-  [Web Interface for Logging](#web-interface-for-logging)); only lines it had already handed over
-  when the connection dropped count towards the 256.
-- Changes to synced objects (`SyncBehaviour`, `SyncTransform`) are not dropped by that bound.
-  Several changes to the same object during one outage are merged into one update, newer values
-  winning.
-- Behind both, at most **10 000 messages** wait in all: during an outage, or while connected over
-  a link too slow for what is sent. Past that the oldest broadcasts and log lines go first, and then
-  the oldest synced-object messages (requests, updates and deletes), which other clients then never
-  see. The console says so once per connection: `Colibri: more than 10000 messages are waiting to be
-  sent…`.
+### Sending during an outage
 
-What arrives waits for `Update`. While `Update` does not run (the app is paused, such as a Quest
-with the headset off, or the Editor is in the background without *Run In Background*), Colibri
-keeps reading, so that the server does not take the client for gone. Past 1000 waiting messages,
-each update for an object is merged into the one already waiting for it, newer values winning, so
-a listener sees only the newest state of each object for that stretch; past 10 000, the oldest are
-dropped, broadcasts first. The console then says so once per connection: `Colibri: … received
-messages waited for Update, which did not run for a while…`.
+Messages sent while disconnected wait. After the reconnect they go out in order, before anything
+sent later.
 
-After reconnecting, Colibri asks the server again for every synced object in the scene, and for
-everything on the channels of its `SyncBehaviourManager`s, so what other clients changed in the
-meantime arrives. For each object, the server's answer is one of:
+- **Broadcasts** (`Sync.Send`): at most 256 wait. Beyond that the oldest are dropped, with one
+  warning per outage.
+- **Log lines** wait in `[RemoteLogger]`, which keeps the newest 1000 ([Web Interface for
+  Logging](#web-interface-for-logging)). Only lines it handed over before the drop count toward the
+  256.
+- **Synced object changes** are exempt from the 256 limit. Changes to one object are merged into one
+  update, newer values winning.
+- **Total:** at most **10 000 messages** wait, during an outage or on a link too slow for the
+  traffic. Beyond that, the oldest broadcasts and log lines are dropped first, then the oldest
+  synced-object requests, updates and deletes, which other clients then never see. The console warns
+  once per connection: `Colibri: more than 10000 messages are waiting to be sent…`.
 
-- **The object's current state**, which is applied, unless it shows that this client's own last
-  change was lost (see below).
-- **Nothing for it.** The server forgets an app's synced objects when the app's last client
-  disconnects, and when it restarts, and a single client whose connection drops is that last
-  client. Colibri then sends the object's full state again, so the server has it back, and clients
-  that join later see it.
-- **A delete**: another client deleted the object during the outage. It is deleted on this client
-  too.
+### Receiving while Update does not run
 
-An object that changed during the outage does not get its full state sent again. Its merged update
-goes out ahead of the request, so a server that had forgotten the object creates it from that
-update, with only the members that changed, and answers the request with those. The other members
-reach the server only when they change. Until then, a client that joins later builds the object
-with the template's values for them, shown even if it is hidden here; a placed object keeps its
-values from the scene.
+Received messages wait for `Update`. `Update` does not run while the app is paused, such as a Quest
+with the headset off, or while the Editor is in the background without *Run In Background*. Colibri
+keeps reading meanwhile, so the server does not drop the client.
 
-A change made as the Wi-Fi drops goes into a connection that is already dead, and is lost: the
-client notices only 2 s later, when the server's heartbeats stop. The answer then holds the value
-from before that change. So each `[Sync]` member remembers the values it sent around the time the
-client last heard from the server, which heartbeats every 100 ms: the latest 8 up to then, the first
-8 after it, and the newest. For an object moved through the drop, the position the server has is
-among them, however many moves were lost after it, and stays among them until all the answers are
-in, even if the object moves on as soon as the connection is back. The member also remembers the
-value it held before those: the last one dropped, or the one the server last showed it, in another
-client's update or in an answer. Until all the answers are in, everything that arrives for the
-object, other clients' updates included, is compared with the values the member held from 10 s
-before the outage was noticed: those it sent since, and the one it held at that point, such as
-`true` for an object switched on a minute ago. The value sent last means it arrived. An earlier one
-means the change after it was lost: the member keeps its value and sends it again, once. So does a
-member changed after Colibri has asked again, whatever arrives: the server reads that change after
-all of it. Otherwise a value the member did not hold is another client's change during the outage
-and is applied, as is everything for a member that sent nothing in those 10 s and for an object that
-has never sent anything. If the connection drops again before all the answers are in, the next
-reconnect still counts from the first outage. This goes by values, so some cases come out wrong:
+- Beyond 1000 waiting messages, updates for one object are merged, newer values winning. Listeners
+  then see only the newest state of each object for that period.
+- Beyond 10 000, the oldest messages are dropped, broadcasts first.
+- The console warns once per connection:
+  `Colibri: … received messages waited for Update, which did not run for a while…`.
+
+### After a reconnect
+
+Colibri requests every synced object in the scene and everything on its `SyncBehaviourManager`
+channels again, to receive changes made meanwhile. The server answers each object with:
+
+- **its current state**, applied unless it reveals a lost change of this client ([Lost
+  changes](#lost-changes))
+- **nothing**, if the server forgot the app's objects because the server restarted or the app's last
+  client disconnected. A single client whose connection drops is that last client. Colibri then
+  sends the full state again, for the server and for clients that join later.
+- **a delete** by another client during the outage, applied here too
+
+An object changed during the outage sends only its merged update, ahead of the request. A server
+that forgot the object creates it with only the changed members and answers with them. The other
+members reach the server only when they change. Until then, clients that join later use the
+template's values for them, shown even if the object is hidden here. Placed objects keep their scene
+values.
+
+### Lost changes
+
+A change made as the Wi-Fi drops goes into a dead connection and is lost. The client notices the
+drop 2 s later, when heartbeats stop, and the server's answer holds the value from before the
+change.
+
+To detect this, each `[Sync]` member keeps the values it sent around the time the client last heard
+from the server, which heartbeats every 100 ms. These are the last 8 up to then, the first 8 after,
+the newest, and the value held before those, which is the last one dropped or the last one received
+from the server. The value the server holds stays among them until all answers are in, however many
+later changes were lost or made after the reconnect.
+
+Until all answers are in, everything that arrives for the object, other clients' updates included,
+is compared with the values the member held since 10 s before the outage was noticed. These are the
+values it sent since and the one it held then, e.g. `true` for an object switched on a minute ago.
+
+| Arriving value | Result |
+|---|---|
+| The value sent last | The change arrived. |
+| An earlier one | The next change was lost. The member keeps its value and sends it again, once. |
+| Any value, if the member changed after the request | The same. The server reads that change after the answer. |
+| A value the member did not hold | Another client's change during the outage. Applied. |
+| Any value, if the member sent nothing in those 10 s, or the object never sent anything | Applied |
+
+A second drop before all answers are in still counts from the first outage. The comparison uses
+values, so some cases go wrong:
 
 - Another client that sets a member back during the outage, to a value this client held in those
-  10 s, is undone: this client's value replaces it.
-- A member changed more than 8 times within about 100 ms of the last heartbeat before the link
-  died may not be recognised, and takes the answer. That needs a send-rate limit above about 80
-  updates a second, or none.
-- A member changed more than once between a reconnect and a second drop, before all the answers
-  are in, may not be recognised either.
-- A member whose very first value was lost held nothing before it, and is not sent again.
+  10 s, is undone.
+- More than 8 changes of a member within about 100 ms of the last heartbeat may go unrecognised, so
+  the answer is applied. This needs a send-rate limit above about 80 per second, or none.
+- More than one change between a reconnect and a second drop, before all answers are in, may go
+  unrecognised too.
+- A member whose first value ever was lost is not sent again.
 
-An object destroyed as the Wi-Fi drops loses its delete the same way. When the outage is noticed,
-the deletes made since the client last heard from the server, or in the second before, are sent
-again, so the object is deleted on the server and the other clients after the reconnect. A delete
-made 60 s or more before the outage was noticed is not sent again. If the connection drops again
-before all the answers are in, the deletes sent again go out once more, however old, and so do those
-made since the outage was noticed, unless the object has been created on this client again. Like a
-delete made during the outage, one sent again also removes an object another client has created
-under the same id in the meantime.
+### Lost deletes
 
-The server remembers a delete for `MODEL_TOMBSTONE_SECONDS`, 10 minutes by default. An object
-that another client deleted longer ago than that, while this client was away, is answered with
-nothing, so this client sends it again, and it is back as if this client had just created it. See
-[After a reconnect](../../colibri-server/docs/protocol.md#after-a-reconnect) in the protocol docs.
+Deletes made as the Wi-Fi drops are lost the same way. When the outage is noticed, Colibri sends
+again the deletes made since the client last heard from the server or in the second before.
 
-A refused protocol version is final: `Status` becomes `ProtocolMismatch`, the client stops
-reconnecting, and whatever was queued or is sent afterwards is dropped, with a one-time warning.
-`ServerVersion` and `ProtocolMismatchReason` say what the server answered. Disabling and
-re-enabling the `WebServerConnection` component tries again. A mismatch the server could not
-report (see [Requirements](#requirements)) shows up in `SuspectedProtocolMismatch` instead, while
-the client keeps retrying.
+- Deletes made 60 s or more before the outage was noticed are not sent again.
+- On a second drop before all answers are in, these deletes go out once more, whatever their age, as
+  do deletes made since the outage was noticed, unless the object was created on this client again.
+- Like any delete during an outage, a delete sent again also removes an object another client
+  created under the same id meanwhile.
+
+The server remembers deletes for `MODEL_TOMBSTONE_SECONDS`, 10 minutes by default. For an object
+another client deleted longer ago while this client was away, the server answers with nothing, so
+this client sends it again and recreates it. See [After a
+reconnect](../../colibri-server/docs/protocol.md#after-a-reconnect) in the protocol documentation.
+
+### Protocol mismatch
+
+A refused protocol version is final. `Status` becomes `ProtocolMismatch`, the client stops
+reconnecting, and queued and later messages are dropped with a one-time warning. `ServerVersion` and
+`ProtocolMismatchReason` hold the server's answer. Disable and re-enable the `WebServerConnection`
+component to retry. A mismatch the server cannot report appears in `SuspectedProtocolMismatch`
+instead, and the client keeps retrying.
 
 ## Web Interface for Logging
 
