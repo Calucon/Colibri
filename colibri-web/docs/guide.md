@@ -12,7 +12,7 @@ Overview and quick start: [README](../README.md). Release notes and breaking cha
     - [TLS](#tls)
     - [Protocol version](#protocol-version)
 - [Usage](#usage)
-    - [Sending Data between Clients](#sending-data-between-clients)
+    - [Sending data between clients](#sending-data-between-clients)
     - [SyncModel](#syncmodel)
     - [Remote Store](#remote-store)
     - [Web Interface for Logging](#web-interface-for-logging)
@@ -153,9 +153,9 @@ colibri.protocolMismatch.subscribe(error => {
 
 ## Usage
 
-### Sending Data between Clients
+### Sending data between clients
 
-`Sync` publishes values on named channels, from anywhere in your code:
+`Sync` sends and receives values on named channels:
 
 ```ts
 import { Sync } from '@hcikn/colibri';
@@ -168,27 +168,32 @@ Sync.receiveBool('myChannel', onValue);
 Sync.unregister('myChannel', onValue);
 ```
 
-Listeners can be registered and unregistered before `new Colibri()`, and are attached when it is created. A
+Listeners can be registered and unregistered before `new Colibri()`. They are attached when it is created. A
 `Sync.send*` call before `new Colibri()` is dropped with the warning `Colibri not initialized yet! (Instance is null)`.
 
-| Type       | Send                                         | Value                                      |
-| ---------- | -------------------------------------------- | ------------------------------------------ |
-| bool       | `sendBool`                                   | `boolean`                                  |
-| int, float | `sendNumber`, aliases `sendInt`, `sendFloat` | `number`                                   |
-| string     | `sendString`                                 | `string`                                   |
-| Vector2    | `sendVector2`                                | `[x, y]`                                   |
-| Vector3    | `sendVector3`                                | `[x, y, z]`                                |
-| Quaternion | `sendQuaternion`                             | `[x, y, z, w]`                             |
-| Color      | `sendColor`                                  | `[r, g, b, a]`, each 0-1, or `"#RRGGBBAA"` |
-| JSON       | `sendJson`                                   | object                                     |
+| Type       | Send             | Receive             | Value                                      |
+| ---------- | ---------------- | ------------------- | ------------------------------------------ |
+| bool       | `sendBool`       | `receiveBool`       | `boolean`                                  |
+| int, float | `sendNumber`     | `receiveNumber`     | `number`                                   |
+| string     | `sendString`     | `receiveString`     | `string`                                   |
+| Vector2    | `sendVector2`    | `receiveVector2`    | `[x, y]`                                   |
+| Vector3    | `sendVector3`    | `receiveVector3`    | `[x, y, z]`                                |
+| Quaternion | `sendQuaternion` | `receiveQuaternion` | `[x, y, z, w]`                             |
+| Color      | `sendColor`      | `receiveColor`      | `[r, g, b, a]`, each 0-1, or `"#RRGGBBAA"` |
+| JSON       | `sendJson`       | `receiveJson`       | object                                     |
 
-Each `send*` has a matching `receive*`. Each type except JSON also has an array form, such as `sendVector3Array`.
-Vectors, quaternions and colours are plain arrays, where Unity uses structs.
+Each type except JSON also has an array form, such as `sendVector3Array` and `receiveVector3Array`. Unity uses structs
+for vectors, quaternions and colours.
+
+`sendInt` and `sendFloat` are send-only aliases of `sendNumber`, after Unity's type names. `sendIntArray` and
+`sendFloatArray` are aliases of `sendNumberArray`.
+
+Sample: [broadcast](../samples/broadcast.ts) (`npm run samples/broadcast`).
 
 #### Colours
 
 Unity sends a colour as the HTML string `"#RRGGBBAA"`, colibri-web as `[r, g, b, a]`. A callback receives either form.
-Normalize it:
+Convert it with `toHexColor` or `toRgbaColor`:
 
 ```ts
 import { Sync, toHexColor, toRgbaColor } from '@hcikn/colibri';
@@ -199,25 +204,24 @@ Sync.receiveColor('myChannel', color => {
 });
 ```
 
-For a payload that is not a colour, both functions warn and return opaque black instead of throwing. The wire format
-is in [Payload shapes](../../colibri-server/docs/protocol.md#payload-shapes).
+For a payload that is not a colour, both functions warn and return opaque black instead of throwing. Wire format:
+[Payload shapes](../../colibri-server/docs/protocol.md#payload-shapes).
 
-Sample: [broadcast](../samples/broadcast.ts) (`npm run samples/broadcast`).
-
-#### Limitations
+#### Broadcast limitations
 
 - The server relays data without storing it. A listener receives only what is sent while it is registered and
   connected.
 - Data goes to the _other_ clients of the app, not to the sender.
 - Channel and type must match between sender and listener.
-- colibri-web tags every number as `float`, since JavaScript has one number type. `sendInt` sends `float` too, and
-  exists only for API symmetry with Unity. **Unity must receive web numbers with `Sync.Receive<float>`, never
-  `Sync.Receive<int>`.** `receiveNumber` accepts both.
+- colibri-web tags every number as `float`, since JavaScript has one number type. `sendInt` sends `float` too.
+  **Unity must receive web numbers with `Sync.Receive<float>`, never `Sync.Receive<int>`.** `receiveNumber` accepts
+  `int` and `float` from Unity.
 - A listener stays registered until `Sync.unregister`.
-- By default, the server accepts up to 1000 broadcasts and model updates a second from one client, in bursts of up
-  to 2000. Beyond that, it drops the client's broadcasts and holds back its model updates, merged per object so that
-  the latest value of every field still arrives. It logs a warning naming the client. The limit catches runaway send
-  loops. The server's operator can change it.
+- By default, the server accepts up to 1000 broadcasts and model updates a second from one client, in bursts
+  of up to 2000 (`CLIENT_MESSAGE_RATE_LIMIT`, `CLIENT_MESSAGE_RATE_BURST`). Beyond that, it drops the client's
+  broadcasts and holds back its model updates, merged per object so that the latest value of every field still
+  arrives. It logs a warning naming the client. The limit catches runaway send loops. Details:
+  [Load limits](../../colibri-server/docs/guide.md#load-limits).
 
 ### SyncModel
 
