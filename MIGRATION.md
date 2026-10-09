@@ -478,14 +478,23 @@ they have rather than creating duplicates.
   undone (see [Known limits](colibri-server/docs/protocol.md#known-limits)). A Unity object
   destroyed at the drop has its delete sent again. After their re-requests, both clients send one
   more `model::request`, on the channel `colibri::reconnect`, to tell when the answers are over. A
-  Unity client does so after every reconnect; colibri-web also does so after asking for every model
-  and after asking for one of its models once more.
+  Unity client does so after every reconnect, and also when an object's first answer arrives
+  outside that round after the object changed members of its own (see below); colibri-web also does
+  so after asking for every model and after asking for one of its models once more.
   See [After a reconnect](colibri-server/docs/protocol.md#after-a-reconnect).
 - While a Unity client is disconnected, what it sends waits in one queue and goes out in order when
   the connection is back. Past 256 broadcasts and log lines the oldest are dropped, with one
   warning per outage, while the model updates for one object are merged into one instead. Behind
   that, the whole queue is capped at 10,000 messages, connected or not: past it the oldest
   broadcasts and log lines go first, then the oldest model messages, with a warning.
+
+**A Unity object keeps what changed before the server's state arrived.** A `SyncBehaviour` or
+`SyncTransform` asks the server for its state when it wakes up. In 1.x a change made before the
+answer arrived, in `Start` say, was dropped, and the answer put the server's values back. Such a
+change now replaces the server's value, on every client, as colibri-web's `registerModel` does
+(below). A script that sets a `[Sync]` member or moves a `SyncTransform` in `Start` therefore does
+so for everyone each time a client starts. Set starting values in the scene or the prefab, or in a
+model's `Awake` before `base.Awake()`, to have the object take the server's state instead.
 
 **colibri-web's `registerModel` takes what the server has.** It used to send the new instance in
 full at once. When the server already held that id (a fixed id such as `'session'`, kept while
