@@ -14,6 +14,9 @@ except in a handful of hooks (`ModelSynchronization`, `MeasureLatency`, `WebLog`
 `ClientLogger`) that explicitly parse it via the `Payload` abstraction
 (`src/server/modules/core/payload.ts`).
 
+Voice is separate: Unity clients send it to the voice port over UDP, in the
+[voice packet format](#voice-packets-udp).
+
 ## What the server relays
 
 The server does not forward messages in general. Of what a client sends, it relays exactly two
@@ -763,6 +766,52 @@ arrived in - a JSON string (TCP/Socket.IO-as-string), a parsed value (Socket.IO)
 Relaying TCP→TCP or Socket.IO→Socket.IO therefore does zero JSON/utf8 work; only a genuine
 cross-transport relay (or a hook that inspects the payload) pays for a conversion, and only once.
 
+## Voice packets (UDP)
+
+colibri-unity's voice chat sends each audio frame to the voice port (`VOICE_PORT`, UDP 9013) as
+one datagram: an 11-byte header, then the audio. All integers are little-endian.
+
+```
+[i16 userId][i16 sequence][i16 frameSize][u8 version and codec][u32 appId][data]
+```
+
+| offset | size | field |
+| --- | --- | --- |
+| 0 | 2 | `userId`: the voice id the sender broadcasts as. Receivers do not play `0`. |
+| 2 | 2 | `sequence`: colibri-unity sends `0` |
+| 4 | 2 | `frameSize`: the number of samples in the frame, at the voice sampling rate (`VOICE_SAMPLING_RATE`, 48000 by default) |
+| 6 | 1 | version and codec: the header version, `2`, in the high 4 bits; the codec in the low 4 bits, `0` for PCM and `1` for Opus |
+| 7 | 4 | `appId`: the app id of the sender's app, see below |
+| 11 | rest | PCM: mono `i16` samples. Opus: one Opus packet. |
+
+`appId` is the 32-bit FNV-1a hash of the app name's UTF-8 bytes: start with `0x811c9dc5`, then for
+each byte XOR it in and multiply by `0x01000193`, modulo 2^32. The empty name hashes to
+`0x811c9dc5`, `a` to `0xe40c292c`. colibri-unity hashes the *App Name* of its Colibri
+configuration (`VoicePacketCodec.AppId`); the server's implementation is `voiceAppId` in
+`src/server/modules/web/voice-packet.ts`.
+
+The server registers the sender of a valid packet as a voice client, by its address and port, and
+passes the packet on unchanged to every other voice client with the same `appId`. A client that
+sends with another `appId` from the same address and port moves to that app. A client is dropped
+after 2 to 3 s without a packet, so a client hears voice only while it sends voice itself, as
+colibri-unity's `VoiceBroadcast` does while it broadcasts. With `VOICE_RECORDING=true` the server
+also saves the samples of each client's PCM packets as a `.wav` file.
+
+The server drops the packets below, and reports at most one of them per source address and port
+every 10 s:
+
+| packet | log |
+| --- | --- |
+| header version `0`: a Colibri 1.x client, whose 7-byte header has no `appId` and has the codec, `0` or `1`, at offset 6 | warning `Ignoring voice packet from <address>:<port>: it looks like a Colibri 1.x client ...`, which says to upgrade the Unity package to 2.x |
+| a header version other than `0` and `2` | error `Ignoring malformed voice packet from <address>:<port>: its header version is <n>, not 2` |
+| shorter than the 11-byte header | error `Ignoring malformed voice packet from <address>:<port>: <n> bytes is shorter than the 11-byte header` |
+| from source port 0 | error `Ignoring malformed voice packet from <address>:<port>: its source port is 0, ...` |
+
+The app id keeps the voice of different apps apart, as the app name does on TCP; it is not access
+control. Anyone who knows an app's name can send voice to its clients and receive theirs. Two app
+names can have the same app id, by chance about 1 in 4 billion for any two; their voice clients
+then hear each other. Voice is never encrypted: [TLS](#tls) covers the TCP and web ports only.
+
 ## Known limits
 
 **A reconnect catches up on deletions only for a while.** Both clients ask for the models again
@@ -799,5 +848,6 @@ the same time. A `model::delete` colibri-unity sends again after an outage also 
 another client has created under the same id since, as a delete sent during the outage does.
 
 **Nobody is authenticated.** Any client that can reach the server can join any app under any name,
-and read and change its models and its REST store. The version check is not access control.
+read and change its models and its REST store, and send and receive its voice. The version check
+is not access control.
 Colibri is meant for a local network you trust.
