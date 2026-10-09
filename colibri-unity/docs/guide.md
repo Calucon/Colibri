@@ -296,19 +296,16 @@ as the timeout or the refusal above) and is `null` once a connection has opened.
 
 ## Sending Data between Clients
 
-Colibri supports simple data transmission via pub/sub communication. Data can be published from anywhere in
-the executed code, as illustrated with the following simple example of sending a float value `myNumber` on a `MyChannel` channel:
+`Sync.Send` publishes a value on a channel from anywhere in your code:
 
 ```c#
 float myNumber = 5;
 Sync.Send("MyChannel", myNumber);
 ```
 
-`Sync.Send` reaches every other client with the same app name, never the client that sent it:
-the server passes the message on to everyone else in the app.
+The server forwards the message to all other clients with the same app name, never to the sender.
 
-The sent data can then be received anywhere within Unity by registering a listener. Name the type
-you expect in the angle brackets:
+`Sync.Receive` registers a listener for a channel and a type:
 
 ```c#
 void Start() {
@@ -316,38 +313,32 @@ void Start() {
 }
 
 private void MyListener(float myNumber) {
-    // This code that will be executed whenever
-    // a float is received on "MyChannel"
+    // Runs whenever a float
+    // arrives on "MyChannel"
 }
 ```
 
-There is no matching cleanup call to remember. A listener registered by a `MonoBehaviour`, as a
-method or as a lambda written inside it, is dropped automatically once that component or its
-GameObject is destroyed, so a destroyed object never gets called and never throws
-`MissingReferenceException` out of the middle of Colibri's message loop.
+- A listener that is a method of a `MonoBehaviour`, or a lambda written inside one, is removed when
+  the component or its GameObject is destroyed. Destroyed objects are never called and cannot throw
+  `MissingReferenceException` in Colibri's message loop.
+- `Sync.Unregister` removes a listener while its object lives on:
 
-`Sync.Unregister` is still there for when you want to stop listening while the object lives on:
+  ```c#
+  private void OnMenuClosed() {
+      Sync.Unregister<float>("MyChannel", MyListener);
+  }
+  ```
 
-```c#
-private void OnMenuClosed() {
-    Sync.Unregister<float>("MyChannel", MyListener);
-}
-```
+- Colibri cannot track the lifetime of `static` methods and plain C# objects. Remove such listeners
+  with `Sync.Unregister`.
 
-It is also the only way to remove a listener that is a `static` method, or that belongs to a plain
-C# object rather than a Unity one: neither has a lifetime Colibri can follow.
+### Supported types
 
-The following types (including arrays) are available for sync: 
-- `bool`
-- `int`
-- `float`
-- `string`
-- `Vector2`
-- `Vector3`
-- `Quaternion`
-- `Color`
+`bool`, `int`, `float`, `string`, `Vector2`, `Vector3`, `Quaternion`, `Color`, and arrays of these.
 
-For custom types, Colibri supports JSON (via Newtonsoft.JSON): 
+### JSON
+
+Send other types as JSON (Newtonsoft JSON):
 
 ```c#
 Sync.Send("myJson", new JObject
@@ -364,7 +355,7 @@ private void MyListener(JToken jtoken) {
 }
 ```
 
-Your own classes can be serialized and deserialized automatically (by Newtonsoft JSON, so `[Serializable]` is optional):
+Newtonsoft JSON converts your own classes. `[Serializable]` is optional:
 
 ```c#
 using System;
@@ -393,11 +384,11 @@ private void MyListener(JToken jtoken) {
 }
 ```
 
-Unity's own types need Colibri's help: Newtonsoft on its own cannot convert a `Vector3`,
-`Quaternion` or `Color` inside your class, so a plain `JToken.FromObject` throws a
-`JsonSerializationException` (for a `Vector3`: `Self referencing loop detected for property
-'normalized'`). Pass `ColibriJson.Serializer`, which converts a `Vector2`, `Vector3`, `Vector4`,
-`Quaternion` or `Color` to an array of its components and back:
+Newtonsoft JSON cannot convert a `Vector3`, `Quaternion` or `Color` inside your class. A plain
+`JToken.FromObject` throws a `JsonSerializationException`, for a `Vector3` with
+`Self referencing loop detected for property 'normalized'`. Pass `ColibriJson.Serializer`, which
+converts `Vector2`, `Vector3`, `Vector4`, `Quaternion` and `Color` to arrays of their components and
+back:
 
 ```c#
 using HCIKonstanz.Colibri.Synchronization; // ColibriJson
@@ -409,7 +400,7 @@ private void MyListener(JToken jtoken) {
 }
 ```
 
-Or build the `JObject` yourself with Colibri's conversions:
+Or build the `JObject` with Colibri's conversion methods:
 
 ```c#
 using HCIKonstanz.Colibri.Synchronization; // ToJson(), ToVector3(), ToQuaternion(), ToColor()
@@ -425,16 +416,14 @@ private void OnSpawn(JToken jtoken) {
 }
 ```
 
-Sending a `Vector3`, `Quaternion` or `Color` on its own, and a `[Sync]` member of one of these
-types, is not affected: Colibri converts those itself.
+Colibri converts a `Vector3`, `Quaternion` or `Color` that is sent directly or is a `[Sync]` member,
+so these need neither.
 
-Limitations:
+### Limitations
 
-- You have to register the listener *before* sending out data
-- Type and channel *must* match between listener and sender. If they don't, Colibri says so in the
-  console, naming the channel, both types, and how to fix it.
-
-
+- Register the listener before data is sent.
+- Channel and type must match on both sides. On a mismatch, the console names the channel, both
+  types and the fix.
 
 ## SyncTransform
 
