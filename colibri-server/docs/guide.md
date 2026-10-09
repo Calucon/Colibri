@@ -130,10 +130,15 @@ with its default.
 resolve from `dist/server`, so the defaults are `dist/ui` and `data` next to `dist`. In Docker, leave
 `DATA_ROOT` unset ([Data directory](#data-directory)).
 
-Invalid values stop the server at startup with `Invalid <NAME>: "<value>" is not ...`: a port outside
-1 to 65535, a `VOICE_SAMPLING_RATE`, `STACK_TRACE_LIMIT` or `CLIENT_MESSAGE_RATE_BURST` that is not a
-positive integer, another number that is not an integer of 0 or more, or an unknown log level. Unusable
-TLS files stop it too ([Startup errors](#startup-errors)).
+Invalid values stop the server at startup with `Invalid <NAME>: "<value>" is not ...`:
+
+- a port that is not an integer from 1 to 65535
+- a `VOICE_SAMPLING_RATE`, `STACK_TRACE_LIMIT` or `CLIENT_MESSAGE_RATE_BURST` that is not a positive
+  integer
+- another numeric setting that is not an integer of 0 or more
+- an unknown `CONSOLE_LOG_LEVEL`
+
+Unusable TLS files also stop the server ([Startup errors](#startup-errors)).
 
 ## TLS
 
@@ -241,13 +246,14 @@ the fix.
 | `TLS_KEY (<path>) holds no private key the server can use ...` | Not a PEM private key | Point `TLS_KEY` at the key |
 | `TLS_KEY (<path>) is not the private key of the certificate in TLS_CERT ...` | Key of another certificate, also an RSA key with an EC certificate or the reverse, which OpenSSL alone accepts and then fails every handshake | Use the key that belongs to the certificate |
 | `TLS_KEY (<path>) is protected by a passphrase ...` | The key has a passphrase | `openssl pkey -in <protected key> -out <key>` |
+| `TLS_CERT (<path>) and TLS_KEY (<path>) cannot serve TLS together: ...` | OpenSSL rejects the pair for another reason | See the OpenSSL error in the message |
 
 ### TLS in the log
 
 | Message | Cause | Fix |
 | --- | --- | --- |
 | WARN `Refusing a connection from <address> (Unity client '<name>', app '<app>'): it does not use TLS ...` | *Server supports SSL/TLS?* not ticked | Tick it |
-| WARN `Refusing a connection from <address>: it looks like a Colibri 1.x client, which cannot use TLS ...` | Colibri 1.x client | Upgrade to 2.x |
+| WARN `Refusing a connection from <address>: it looks like a Colibri 1.x client, which cannot use TLS ...` | Colibri 1.x client on the TLS port | Upgrade the Unity package to 2.x and tick *Server supports SSL/TLS?* |
 | WARN `Refusing a connection from <address>: it starts a TLS handshake, but this server's TCP port does not use TLS ...` | *Server supports SSL/TLS?* ticked, server without TLS | Untick it, or enable TLS |
 | INFO `TLS handshake with <address> failed: ...` | Gives the reason. If the client refused the certificate or hung up during the handshake, as many clients do to refuse one, it adds what to check. | See the message |
 | WARN `TLS_CERT or TLS_KEY has changed, but cannot be used: ... Still serving the certificate with SHA-256 fingerprint ...` | Incomplete or broken renewal | See [Renewal](#renewal) |
@@ -289,7 +295,7 @@ The cost of TLS on a headset was not measured.
   are relayed to other clients ([Relayed messages](protocol.md#relayed-messages)).
 - **REST store** at `/api/store` on the web port, saved to `store.json` in the data directory
   ([REST store](protocol.md#rest-store)).
-- **Voice relay** on UDP port 9013. A voice packet goes to the clients of the sender's app that send
+- **Voice relay** on UDP port 9013. A voice packet goes to the other clients of the sender's app that send
   voice to this server. Each packet carries the app as an app id, the hash of the app name
   ([Voice packets](protocol.md#voice-packets-udp)). Like the app name on TCP, it separates apps but is
   not access control. Voice is not encrypted.
