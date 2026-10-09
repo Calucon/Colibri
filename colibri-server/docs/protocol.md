@@ -2,89 +2,87 @@
 
 Colibri relays real-time object synchronization between two kinds of clients:
 
-- **Unity clients** connect over raw **TCP** using the binary framing described below.
-- **Web clients** connect over **Socket.IO**, using the
-  [envelope described further down](#socketio-envelope-web-clients). The framing sections do not
-  apply to them; the version check and everything about channels, commands and payloads does.
+- **Unity clients** connect over raw **TCP** with the [v3 framing](#v3-tcp-framing).
+- **Web clients** connect over **Socket.IO** with the [envelope](#socketio-envelope-web-clients). The
+  framing sections do not apply to them. Version checking, channels, commands and payloads do.
 
-Both transports carry the same logical `{ channel, command, payload }` message shape into the
-server's `ConnectionPool`, which is transport-agnostic - a message the server relays reaches the
-clients of the app on both transports. The server never needs to look inside a message's payload
-except in a handful of hooks (`ModelSynchronization`, `MeasureLatency`, `WebLog`,
-`ClientLogger`) that explicitly parse it via the `Payload` abstraction
-(`src/server/modules/core/payload.ts`).
+Both transports feed the same `{ channel, command, payload }` message into the transport-independent
+`ConnectionPool`, so a relayed message reaches the app's clients on both. Only the hooks
+`ModelSynchronization`, `MeasureLatency`, `WebLog` and `ClientLogger` read payloads, through `Payload`
+(`src/server/modules/core/payload.ts`). It holds a message in the form it arrived in, a JSON string
+(TCP, or Socket.IO as a string), a parsed value (Socket.IO) or raw bytes (TCP), and computes and caches
+another form only when asked. Relaying TCP→TCP or Socket.IO→Socket.IO therefore does no JSON or UTF-8
+work. Only a cross-transport relay, or a hook that inspects the payload, pays for a conversion, and
+only once.
 
-Voice is separate: Unity clients send it to the voice port over UDP, in the
-[voice packet format](#voice-packets-udp).
+Unity clients send voice separately, over UDP to the voice port ([Voice packets](#voice-packets-udp)).
 
 ## Relayed messages
 
-The server does not forward messages in general. Of what a client sends, it relays exactly two
-kinds, to the other clients of the sender's app - Unity and web alike, the sender excluded:
+The server relays only two kinds of client messages, to the other clients of the sender's app, Unity
+and web, excluding the sender:
 
-- every message whose `command` starts with `broadcast::`, unchanged (see
-  [`broadcast::` commands](#broadcast-commands));
-- `model::update` and `model::delete`, which also change the server's copy of the model (see
-  [Model synchronization](#model-synchronization)).
+- messages whose `command` starts with `broadcast::`, unchanged
+  ([`broadcast::` commands](#broadcast-commands))
+- `model::update` and `model::delete`, which also change the server's copy of the model
+  ([Model synchronization](#model-synchronization))
 
-It also answers `model::request`, and handles the messages on its own channels (see
-[Server messages](#server-messages)). Any other message reaches no other client: a command such as
+It also answers `model::request` and handles messages on the channels it reserves
+([Server messages](#server-messages)). Any other message reaches no other client. A command such as
 `myCommand`, sent with colibri-web's `SendMessage(channel, 'myCommand', …)` or colibri-unity's
-`WebServerConnection.SendCommand`, is dropped. The server logs a warning the first time, once per
-app, channel and command: `Client '<name>' (<id>, app '<app>') sent 'myCommand' on channel
-'<channel>', which the server does not handle: it reached no other client. ...`. To send the other
-clients a message of your own, give it a command that starts with `broadcast::`, e.g.
-`broadcast::myCommand`, and receive it with colibri-web's `RegisterChannel` or colibri-unity's
-`OnMessageReceived`.
+`WebServerConnection.SendCommand`, is dropped, with a warning once per app, channel and command:
+`Client '<name>' (<id>, app '<app>') sent 'myCommand' on channel '<channel>', which the server does not handle: it reached no other client. ...`.
+For your own messages, use a command starting with `broadcast::`, e.g. `broadcast::myCommand`, and
+receive it with colibri-web's `RegisterChannel` or colibri-unity's `OnMessageReceived`.
 
 Under overload, or from a client that sends too fast, the server holds back and merges
-`model::update` messages and drops `broadcast::` messages; see [Inbound limits](#inbound-limits).
+`model::update` messages and drops `broadcast::` messages ([Inbound limits](#inbound-limits)).
 
 ## v3 TCP framing
 
-> **This is a breaking protocol change.** A `colibri-unity` client built against the old v1
-> flatbuffer framing cannot talk to a v2.0.0+ server, and vice versa. There is no version
-> *negotiation* - the server accepts exactly one protocol version and refuses every other one,
-> so both sides must be upgraded together. See [Version checking](#version-checking).
+> **Breaking change.** colibri-unity clients built for the v1 flatbuffer framing and v2.0.0+ servers
+> cannot connect to each other. Upgrade both sides together ([Version checking](#version-checking)).
 
-This document calls the framing "v3"; the protocol version a client announces for it is `2`.
+This document calls the framing v3. Clients announce it as protocol version `2`.
 
-Every frame on the wire has a fixed-size header followed by a type-specific body:
+Each frame is a fixed-size header followed by a type-specific body:
 
 ```
 [u32 LE totalLength][u8 type][body]
 ```
 
-- `totalLength` is the number of bytes **after the length field itself** - i.e. `1 (type) +
-  body.length`. A reader knows a full frame is available as soon as it has buffered
-  `4 + totalLength` bytes.
-- `type` is one of the three values below.
+- `totalLength` counts the bytes **after the length field**: `1 (type) + body.length`. A full frame is
+  available once `4 + totalLength` bytes are buffered.
+- `type` is one of:
 
-| type | name      | body |
-| ---- | --------- | ---- |
+| Type | Name | Body |
+| --- | --- | --- |
 | `0x00` | heartbeat | `[u64 LE pingTimestamp]` |
 | `0x01` | handshake | utf8 `"version::app::name"` |
-| `0x02` | message   | `[u16 LE channelLen][channel utf8][u16 LE commandLen][command utf8][payload bytes]` |
+| `0x02` | message | `[u16 LE channelLen][channel utf8][u16 LE commandLen][command utf8][payload bytes]` |
 
-All integers are little-endian. Strings inside a body are length-prefixed, not
-null-terminated - there is no delimiter scanning anywhere in the parser.
+All integers are little-endian. Strings in a body are length-prefixed, not null-terminated, so the
+parser never scans for delimiters.
 
 ### Handshake
 
-A client must send a `handshake` frame immediately after connecting, before sending anything
-else. `version`, `app`, and `name` are `::`-joined into the body as plain utf8 text. None of the
-three may contain `::`, or start or end with `:`, since a body like `"2::app:::name"` cannot be
-split back into the fields that were meant. The server logs a body that breaks this rule, or does
-not split into exactly three fields, as a malformed handshake frame and closes the connection; a
-`:` inside a field is fine. colibri-unity replaces a `::` and a colon at either end of its app
-and device name with `_`, and warns about a changed app name. The server assigns the connection
-to `app` and begins including it in that app's broadcasts; any `message` frame received before
-the handshake is ignored and logged.
+A client sends a `handshake` frame right after connecting, before anything else. The body is
+`version`, `app` and `name`, joined with `::`, as UTF-8 text.
 
-A client may send another handshake on the same connection. The server then moves it to the new
-app: the old app sees `client::disconnected` and loses its models if that was its last client, and
-the new app sees `client::connected`. A second handshake into the same app shows up as a
-disconnect followed by a connect, and keeps the app's models.
+- No field may contain `::`, or start or end with `:`, because a body like `"2::app:::name"` cannot be
+  split back into the intended fields. A `:` inside a field is fine.
+- A body that breaks this rule, or does not split into exactly three fields, is logged as
+  `Malformed handshake frame: "<body>"`, and the connection is closed.
+- colibri-unity replaces `::`, and a `:` at either end, in its app and device name with `_`, and warns
+  when this changes the app name.
+
+The server assigns the connection to `app` and includes it in that app's broadcasts. A `message` frame
+received before the handshake is ignored and logged.
+
+A client may handshake again on the same connection to move to another app. The old app receives
+`client::disconnected` and loses its models if that was its last client. The new app receives
+`client::connected`. A second handshake into the same app shows as a disconnect and a connect, and the
+app keeps its models.
 
 ### Version checking
 
@@ -763,14 +761,6 @@ replaced atomically (written to `store.json.tmp`, then renamed). A save that fai
 tried again with the next one. When the server shuts down - on `docker stop`, Ctrl+C or an
 uncaught error - it writes whatever is not saved yet, and leaves `store.json` alone if that is
 nothing.
-
-## Cross-transport relaying
-
-`Payload` (`src/server/modules/core/payload.ts`) holds whichever representation a message
-arrived in - a JSON string (TCP/Socket.IO-as-string), a parsed value (Socket.IO), or raw bytes
-(TCP) - and lazily computes and memoizes the others only if something actually asks for them.
-Relaying TCP→TCP or Socket.IO→Socket.IO therefore does zero JSON/utf8 work; only a genuine
-cross-transport relay (or a hook that inspects the payload) pays for a conversion, and only once.
 
 ## Voice packets (UDP)
 
