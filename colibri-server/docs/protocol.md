@@ -221,7 +221,8 @@ each TCP client whose handshake it accepted, until the connection closes. A clie
 heartbeat has not gone out yet is skipped ([Backpressure](#backpressure)). The client echoes the frame
 unchanged, the only `heartbeat` frame sent from client to server. The server feeds the echo into the
 message pipeline as a synthetic `colibri`/`latency` message, so `MeasureLatency` computes the round
-trip as for a web client's latency ping. One frame for both halves the idle packet rate per client.
+trip as for a web client's latency ping. Using one frame for heartbeat and latency ping halves the
+idle packet rate per client, compared with two 100 ms timers.
 
 The server is never silent for long, so a client can treat silence as a dead connection. colibri-unity
 drops a session after 2 s without a frame, also while waiting for the first one, and reconnects.
@@ -233,21 +234,23 @@ handles it like any disconnect: the app's other clients receive `client::disconn
 loses its models if it was the last client. Echoing every heartbeat keeps a client connected, if the
 echo comes from a thread that keeps running while the application is busy. colibri-unity echoes from
 its receive loop, off Unity's main thread. A connection without a handshake within the same time is
-closed too. All connections have TCP keepalive enabled. Socket.IO clients are not covered: Socket.IO's
+closed too. All connections have TCP keepalive enabled. Socket.IO clients are not covered. Socket.IO's
 own ping detects a lost one, by default within 45 s.
 
 A message over 64 KiB contains no heartbeat, so a client reading it cannot echo until it is through.
 The server cannot observe the reading, since the kernel's send buffer, and those of a proxy such as
-Docker's port forwarding, take megabytes at once. Until a client echoes a heartbeat sent after the
-latest such message, it may stay silent one extra `TCP_IDLE_TIMEOUT_SECONDS` per 64 KiB of the largest
-such message since its last echo, the rate a heartbeat every 64 KiB assumes (about 6.4 KiB/s at the
-default), at most 6 extra. That is 70 s in total at the default, enough for a 4 MiB message at about
-60 KB/s or faster. A slower client is disconnected, and the warning names the message size. A client
-that is gone when such a message is sent, or goes while reading it, is detected that much later. A
-client that never echoes heartbeats keeps the extra time from its first such message on.
+Docker's port forwarding, take megabytes at once.
+
+Until a client echoes a heartbeat sent after the latest such message, its idle timeout is extended by
+`TCP_IDLE_TIMEOUT_SECONDS * min(size / 64 KiB, 6)`, where `size` is the largest such message sent
+since its last echo. This assumes the client reads at least 64 KiB per timeout (about 6.4 KiB/s at the
+default). At the default the total is at most 70 s, enough for a 4 MiB message at about 60 KB/s or
+faster. A slower client is disconnected, and the warning names the message size. A client that is gone
+when such a message is sent, or goes while reading it, is detected that much later. A client that
+never echoes heartbeats keeps the extra time from its first such message on.
 
 Socket.IO clients get no heartbeat frame but a `colibri`/`latency` event every 100 ms from
-`MeasureLatency`. It is not a version signal: colibri-server 1.2.0 and later send it
+`MeasureLatency`. It is not a version signal, because colibri-server 1.2.0 and later send it
 ([Detecting an out-of-date server](#detecting-an-out-of-date-server)).
 
 ### Message
@@ -323,8 +326,7 @@ as a length of at least 16 MiB. The 1.x handshake starts with `\0\0\0h`, which r
 ### TLS
 
 With `TLS_CERT` and `TLS_KEY` set ([TLS](guide.md#tls) in the guide), the TCP port accepts only TLS.
-TLS wraps the framing unchanged, and the protocol version stays the same: after the TLS handshake, a
-client sends and receives the same frames as without TLS.
+TLS wraps the v3 framing unchanged. The protocol version stays `2`.
 
 On the TLS port, the server reads the first 2 bytes of each connection. `0x16 0x03` starts a TLS
 handshake record. As a v3 length field, these bytes would mean a frame of at least 790 bytes
@@ -334,20 +336,20 @@ it. On a port without TLS, a client whose first bytes are a TLS handshake is ref
 instead of waiting for a frame that never completes. Both warnings are logged at most once a minute
 per address.
 
-For web clients only the transport changes: with TLS on, the web port serves only HTTPS and WSS, and
-the [Socket.IO envelope](#socketio-envelope-web-clients) is unchanged.
+For web clients only the transport changes. With TLS on, the web port serves only HTTPS and WSS. The
+[Socket.IO envelope](#socketio-envelope-web-clients) is unchanged.
 
 ### Backpressure
 
 Before writing a relayed frame to a TCP client, the server compares the relayed traffic waiting in the
 client's write buffer with a 1 MiB high-water mark. Above it, the frame is dropped, not queued, whatever
 it carries: `broadcast::`, `model::update`, `model::delete` or `client::connected`. The server warns when
-a client starts falling behind, and again with the number of dropped frames once it has caught up. This
-bounds memory, but the client does not learn what it missed. A continuous `broadcast::` stream recovers
-with the next message, a one-off broadcast is lost. A dropped `model::update`, usually carrying only the
-changed fields, can leave a field out of date on that client until it changes again. A dropped
-`model::delete` leaves the object in place. A client that reconnects requests the current models again
-([After a reconnect](#after-a-reconnect)).
+a client starts falling behind, and again with the number of dropped frames once it has caught up.
+This bounds memory. The client is not told which frames it missed. A continuous `broadcast::` stream
+recovers with the next message. A one-off broadcast is lost. A dropped `model::update`, usually
+carrying only the changed fields, can leave a field out of date on that client until it changes again.
+A dropped `model::delete` leaves the object in place. A client that reconnects requests the current
+models again ([After a reconnect](#after-a-reconnect)).
 
 Two kinds of frames are exempt:
 
@@ -377,8 +379,7 @@ per app**, so a message to N web clients of an app is encoded once, not N times.
 
 ## Size limits
 
-Every way into the server accepts messages of up to about 5 MiB, so whatever one client can send, the
-others can receive:
+Every inbound path accepts messages of up to about 5 MiB, so the limits match across transports:
 
 | Path | Limit | Beyond the limit |
 | --- | --- | --- |
@@ -399,12 +400,13 @@ Two limits keep a server that receives more than it can process responsive and i
 | backlog | messages from all TCP clients that the server's main thread has not processed yet | `TCP_INBOUND_BACKLOG_LIMIT`, `2000` |
 | rate | messages per second from one client, TCP or Socket.IO, with bursts | `CLIENT_MESSAGE_RATE_LIMIT`, `1000`, and `CLIENT_MESSAGE_RATE_BURST`, `2000` |
 
-`0` disables either. Socket.IO clients have only the rate limit: the server handles their messages as it
-reads them, so there is no queue to bound.
+`0` disables either. Socket.IO clients have only the rate limit, because the server handles their
+messages as it reads them, without a queue.
 
 Both limits apply only to `model::update` and `broadcast::` messages, the bulk of sync traffic, and
-never on the `colibri` or `log` channel. Everything else passes at once: handshakes, heartbeats,
-`model::request`, `model::delete`, log lines and anything on the `colibri` channel. Above a limit:
+never to messages on the `colibri` or `log` channel. Everything else passes at once: handshakes,
+heartbeats, `model::request`, `model::delete`, log lines and anything on the `colibri` channel. Above
+a limit:
 
 - **`model::update` is held back and merged per object** (channel and `id`). A field in a later update
   replaces the held one, and fields not sent again are kept. When there is room, checked with the
@@ -416,7 +418,7 @@ never on the `colibri` or `log` channel. Everything else passes at once: handsha
 - An update the server could not apply anyway, one that is not a JSON object with a string `id`, is
   dropped.
 - **With updates for 1000 objects held for a client, an update for another object is lost**
-  (`MAX_HELD_OBJECTS`). Unlike a broadcast, this is state nothing sends again: the object reaches the
+  (`MAX_HELD_OBJECTS`). Unlike a broadcast, this is state nothing sends again. The object reaches the
   server's copy and the other clients only when it changes again. A client creating a few thousand
   objects at once, e.g. a scene with many synced objects loading, can hit this.
 
@@ -446,7 +448,7 @@ lost. With the default settings:
 An episode summary reads, e.g., `held back 1475 model::update(s), merged per object and dropped 12 message(s) over 2.5 s`.
 If updates were lost, it adds `lost 450 model::update(s) for good` and a sentence on what that means.
 
-The rate limit is far above normal use: syncing 10 objects 72 times a second is 720 updates a second. It
+The rate limit is far above normal use. Syncing 10 objects 72 times a second is 720 updates a second. It
 catches runaway loops, typically code that sends every frame without a rate cap. The backlog limit is
 reached when the server as a whole is overloaded. Fewer synced objects, a lower sync rate or fewer
 clients per app reduce the load. Every message is relayed to every other client of the app, so the
