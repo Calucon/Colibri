@@ -280,7 +280,7 @@ The server never inspects a `broadcast::` payload, so the shape is a convention 
 | Command | JSON payload | colibri-unity | colibri-web |
 | --- | --- | --- | --- |
 | `broadcast::bool` | `true` | `Send(ch, bool)` | `sendBool` |
-| `broadcast::int` | `5` | `Send(ch, int)` | none (see below) |
+| `broadcast::int` | `5` | `Send(ch, int)` | none |
 | `broadcast::float` | `1.5` | `Send(ch, float)` | `sendNumber` / `sendFloat` / `sendInt` |
 | `broadcast::string` | `"text"` | `Send(ch, string)` | `sendString` |
 | `broadcast::vector2` | `[x, y]` | `Send(ch, Vector2)` | `sendVector2` |
@@ -603,7 +603,7 @@ Both clients request the models again after every reconnect ([Requests](#request
 answer for an object they hold:
 
 - **The model:** applied, so changes other clients made during the outage arrive, unless the answer
-  shows that the client's own last change was lost (see below).
+  shows that the client's own last change was lost.
 - **The bare id:** the server has no model any more, after a restart or because the app's last client
   had left, as happens when an app's only client loses its connection. The client sends its full state
   again, so the model is back on the server for clients that join later.
@@ -675,7 +675,7 @@ colibri-web's `getRestObject` / `setRestObject` use it.
 | `GET /api/store` | `200` with the app names, `["app1", …]` |
 | `GET /api/store/:app` | `200` with the value names of that app. `404` if the app is unknown. |
 | `GET /api/store/:app/:name` | `200` with the stored JSON value. `404` if there is none. |
-| `PUT /api/store/:app/:name` | Stores the request body, any JSON value (object, array, number, string, `true`, `null`), sent as `Content-Type: application/json`, up to 5 MiB. `201` if new, `200` if it replaced a value, each with `{ "result": "…", "data": <the value> }`. `400`, storing nothing, for malformed JSON or no JSON body: none, an empty one, or one sent as `text/plain` or any other `Content-Type` except form data (see below). `413` for a body over 5 MiB. |
+| `PUT /api/store/:app/:name` | Stores the request body, any JSON value (object, array, number, string, `true`, `null`), sent as `Content-Type: application/json`, up to 5 MiB. `201` if new, `200` if it replaced a value, each with `{ "result": "…", "data": <the value> }`. `400`, storing nothing, for malformed JSON or no JSON body: none, an empty one, or one sent as `text/plain` or any other `Content-Type` except form data. `413` for a body over 5 MiB. |
 | `DELETE /api/store/:app` | `200`, and every value of the app is gone. `404` if the app is unknown. |
 | `DELETE /api/store/:app/:name` | `200`. `404` if there is no such value. |
 
@@ -713,7 +713,7 @@ datagram: an 11-byte header, then the audio. All integers are little-endian.
 | 2 | 2 | `sequence`: colibri-unity sends `0` |
 | 4 | 2 | `frameSize`: samples in the frame, at the voice sampling rate (`VOICE_SAMPLING_RATE`, default 48000) |
 | 6 | 1 | version and codec: header version `2` in the high 4 bits, codec in the low 4 bits, `0` for PCM and `1` for Opus |
-| 7 | 4 | `appId`: the app id of the sender's app, see below |
+| 7 | 4 | `appId`: the app id of the sender's app |
 | 11 | rest | PCM: mono `i16` samples. Opus: one Opus packet. |
 
 `appId` is the 32-bit FNV-1a hash of the app name's UTF-8 bytes: start with `0x811c9dc5`, then for each

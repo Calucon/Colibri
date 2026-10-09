@@ -420,7 +420,7 @@ package to upgrade, at most once a minute per address ([Version checking](protoc
 - `npm run test:stressecho`: raw TCP client that answers the probes of colibri-unity's Network Stress
   sample, so one Unity editor can measure round trips (`npm run test:stressecho -- [app] [seconds]`).
 - `npm run test:docker`: requires Docker. Builds the image, or uses `COLIBRI_DOCKER_IMAGE`, and runs
-  it in each deployment below. Pass deployment names to run only those.
+  it in each deployment in the table. Pass deployment names to run only those.
 
   | Deployment | Setup |
   | --- | --- |
