@@ -817,8 +817,8 @@ members whose lowercased names collide are each reported by name with the fix.
 - connection state, colour-coded; server `host:port`; the app name actually in use; protocol version
 - a protocol refusal in red, with the server's version and reason (not retried, so the usual "check
   that colibri-server is running" advice would be wrong), and a *suspected* mismatch
-  (`SuspectedProtocolMismatch`, several connections in a row that ended before a single frame) as a
-  yellow warning while the client keeps retrying
+  (`SuspectedProtocolMismatch`, several connections in a row that ended before a single frame,
+  other than by the heartbeat watchdog) as a yellow warning while the client keeps retrying
 - **time since the last server heartbeat**: deliberately not called latency. The server's heartbeat
   carries the *server's* clock, so the client genuinely cannot derive a round trip from it; real
   latency figures live on the server's admin UI. What it does tell you is whether the server is
@@ -921,7 +921,7 @@ Two things that follow from the design rather than from the harness:
 | `WebServerConnection.DeliveryFramesPerSecond` | Smoothed rate `Update` runs at: how fast messages reach user code |
 | `ConnectionStatus.ProtocolMismatch` | Terminal: the server refused this client's protocol version |
 | `WebServerConnection.ServerVersion` / `.ProtocolMismatchReason` | Set only with a refusal |
-| `WebServerConnection.SuspectedProtocolMismatch` | Set after several sessions in a row end before a frame; a guess, retried |
+| `WebServerConnection.SuspectedProtocolMismatch` | Set after several sessions in a row end before a frame, other than by the heartbeat watchdog; a guess, retried |
 | `WebServerConnection.LastConnectFailure` | Why the last attempt to open the connection failed (a 5 s timeout, a refusal, another socket error); `null` once one opened |
 | `ProtocolMismatchException` | Unwinds a refused session; public so tests and applications can identify it |
 | `SyncSettings.MaxSendRate` | Updates per second one synced object may send; starts as the configured value, can be changed for the current run |
