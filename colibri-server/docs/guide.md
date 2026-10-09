@@ -406,24 +406,38 @@ package to upgrade, at most once a minute per address ([Version checking](protoc
 - `npm run test:vectors`: checks that colibri-unity's protocol test vectors match this server's
   encoder, and that colibri-web, colibri-unity and the admin UI announce this server's protocol
   version. Runs in CI. `npm run test:vectors -- --emit` prints the C# vector table.
-- `npm run test:tcpclient`: manual smoke test against a server on this machine on `TCP_PORT`: v3
-  handshake, then heartbeat echoes. `-- 1` announces protocol version 1 to provoke a refusal. Exits 0
-  when connected and heartbeated, 2 when refused (after printing the server's reason), 1 on a server
-  problem: no heartbeat, or an undecodable frame, printed as `Malformed frame from server`, which ends
-  the run. With TLS: `TCP_PORT=<port> npm run test:tcpclient -- --tls`, plus `--insecure` for an
-  untrusted certificate such as a self-signed one, and `--host <name>` for another machine. Prints the
-  SHA-256 fingerprint of the server's certificate. The manual probe
-  `tsx test/tcp-crosstalk-check.ts [app] [ms] --tls [--insecure] [--host <name>]` takes the same
-  options.
+- `npm run test:tcpclient`: manual smoke test against a server on this machine on `TCP_PORT`. Sends a
+  v3 handshake, then echoes heartbeats.
+  - `-- 1`: announce protocol version 1 to provoke a refusal.
+  - `TCP_PORT=<port> npm run test:tcpclient -- --tls`: connect over TLS and print the SHA-256
+    fingerprint of the server's certificate. Add `--insecure` for an untrusted certificate, e.g. a
+    self-signed one, and `--host <name>` for another machine.
+  - Exit codes: `0` connected and heartbeats received, `2` refused (prints the server's reason), `1` no
+    heartbeat, or an undecodable frame (prints `Malformed frame from server` and ends the run).
+  - `tsx test/tcp-crosstalk-check.ts [app] [ms] --tls [--insecure] [--host <name>]`: manual probe with
+    the same TLS options.
 - `npm run test:stressecho`: raw TCP client that answers the probes of colibri-unity's Network Stress
   sample, so one Unity editor can measure round trips (`npm run test:stressecho -- [app] [seconds]`).
-- `npm run test:docker`: requires Docker. Builds the image, or uses `COLIBRI_DOCKER_IMAGE`, and runs it
-  with a fresh bind mount, a root-owned 1.x data directory, a named volume, `--user 1000:1000` on a
-  named volume and on a root-owned directory, read-only 1.x data, no `CAP_CHOWN`, `WEBSERVER_PORT` in
-  the environment and in a mounted `.env`, `WEBSERVER_HOST=localhost`, and TLS on both ports. Each run
-  must become healthy, stop cleanly and keep saved data across a restart, or, where it cannot save,
-  report that with advice for the cause. With TLS, it also checks the served certificate, the refusal
-  of a client without TLS, and renewal without a restart, which needs `openssl` on `PATH`. Each
-  container is removed after its deployment, everything else at the end. Pass deployment names to run
-  only those. `COLIBRI_DOCKER_PREFIX`, `COLIBRI_DOCKER_PORT` and `COLIBRI_DOCKER_TMPDIR` are described
-  at the top of [`test/docker-image-check.ts`](../test/docker-image-check.ts).
+- `npm run test:docker`: requires Docker. Builds the image, or uses `COLIBRI_DOCKER_IMAGE`, and runs
+  it in each deployment below. Pass deployment names to run only those.
+
+  | Deployment | Setup |
+  | --- | --- |
+  | `bind-missing-dir` | Bind mount of a directory Docker creates |
+  | `bind-root-owned-1x` | Root-owned 1.x data directory |
+  | `named-volume` | Named volume |
+  | `user-1000-named-volume` | `--user 1000:1000` on a named volume |
+  | `user-1000-root-owned-dir` | `--user 1000:1000` on a root-owned directory |
+  | `bind-read-only` | 1.x data mounted read-only |
+  | `bind-world-writable-no-chown` | 1.x data without `CAP_CHOWN` |
+  | `web-port-9111` | `WEBSERVER_PORT` in the environment |
+  | `web-host-localhost` | `WEBSERVER_HOST=localhost` |
+  | `web-port-from-env-file` | `WEBSERVER_PORT` in a mounted `.env` |
+  | `tls-self-signed` | TLS on both ports |
+
+  Each run must become healthy, stop cleanly and keep saved data across a restart, or, where it cannot
+  save, report that with advice for the cause. With TLS, it also checks the served certificate, the
+  refusal of a client without TLS, and renewal without a restart, which needs `openssl` on `PATH`.
+  Each container is removed after its deployment, everything else at the end.
+  `COLIBRI_DOCKER_PREFIX`, `COLIBRI_DOCKER_PORT` and `COLIBRI_DOCKER_TMPDIR` are described at the top
+  of [`test/docker-image-check.ts`](../test/docker-image-check.ts).
