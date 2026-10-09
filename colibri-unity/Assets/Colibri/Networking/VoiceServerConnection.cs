@@ -38,6 +38,14 @@ namespace HCIKonstanz.Colibri.Networking
         // main thread, before the receive thread starts.
         private volatile int samplingRate = DEFAULT_SAMPLING_RATE;
 
+        // The app id every packet goes out with, and the one a received packet has to carry: the
+        // server keeps the voice of different apps apart by it. Written on the main thread, read
+        // by the receive thread too.
+        private volatile uint appId = VoicePacketCodec.AppId(string.Empty);
+
+        // Main thread only: the App Name appId was computed from.
+        private string appIdName = string.Empty;
+
         // Receive thread in, main thread out - and there can be two receive threads at once:
         // OnDisable waits only 500 ms for the old one, so after a quick disable and enable it may
         // still be handing over a packet while the new one starts. Everything in the queues is
@@ -91,8 +99,38 @@ namespace HCIKonstanz.Colibri.Networking
 
         private void Update()
         {
+            // Every frame, so a packet goes out with the App Name configured now.
+            UseAppName(ColibriConfig.Load().AppName);
+
             if (isConnected)
                 DeliverReceivedPackets();
+        }
+
+        /// <summary>
+        /// Sends and receives voice as part of the app named <paramref name="appName"/> from now on.
+        /// </summary>
+        /// <remarks>Main thread only. Internal so the EditMode tests can set the app.</remarks>
+        internal void UseAppName(string appName)
+        {
+            appName = appName ?? string.Empty;
+            if (appName == appIdName)
+                return;
+
+            appIdName = appName;
+            appId = VoicePacketCodec.AppId(appName);
+        }
+
+        /// <summary>
+        /// Hands a received datagram to <see cref="EnqueueReceived"/> if it is a voice packet of
+        /// this client's app. The server relays nothing else, so this drops only what reaches the
+        /// socket some other way: a datagram too short for the header, one with another header
+        /// version, such as a packet from a Colibri 1.x client, and a packet of another app.
+        /// </summary>
+        /// <remarks>Called from the receive thread; internal for the EditMode tests.</remarks>
+        internal void HandleReceived(byte[] bytes)
+        {
+            if (VoicePacketCodec.TryDecode(bytes, out var packetAppId, out var packet) && packetAppId == appId && packet.Id != 0)
+                EnqueueReceived(packet);
         }
 
         /// <summary>
@@ -158,6 +196,7 @@ namespace HCIKonstanz.Colibri.Networking
             {
                 sendIPEndPoint = new IPEndPoint(address, config.VoiceServerPort);
                 samplingRate = config.VoiceServerSamplingRate > 0 ? config.VoiceServerSamplingRate : DEFAULT_SAMPLING_RATE;
+                UseAppName(config.AppName);
 
                 udpClient = new UdpClient();
                 // Port 0 lets the OS pick an ephemeral port. The server replies to whatever
@@ -260,11 +299,7 @@ namespace HCIKonstanz.Colibri.Networking
                 try
                 {
                     byte[] bytes = client.Receive(ref from);
-                    VoicePacket voicePacket = GetVoicePacket(bytes);
-                    if (voicePacket.Id != 0)
-                    {
-                        EnqueueReceived(voicePacket);
-                    }
+                    HandleReceived(bytes);
                 }
                 catch (ObjectDisposedException)
                 {
@@ -293,7 +328,7 @@ namespace HCIKonstanz.Colibri.Networking
             if (client == null)
                 return;
 
-            byte[] bytes = AddMetadataBytes(id, sequence, frameSize, codec, data);
+            byte[] bytes = VoicePacketCodec.Encode(appId, id, sequence, frameSize, codec, data);
             client.Send(bytes, bytes.Length, sendIPEndPoint);
         }
 
@@ -322,32 +357,6 @@ namespace HCIKonstanz.Colibri.Networking
                 foreach (var voicePacketListener in voicePacketListeners[voicePacket.Id].ToArray())
                     voicePacketListener.Invoke(voicePacket);
             }
-        }
-
-        private VoicePacket GetVoicePacket(byte[] data)
-        {
-            short id = BitConverter.ToInt16(data, 0);
-            short sequence = BitConverter.ToInt16(data, 2);
-            short frameSize = BitConverter.ToInt16(data, 4);
-            Codec codec = (Codec)data[6];
-            byte[] sampleData = new byte[data.Length - 7];
-            Array.Copy(data, 7, sampleData, 0, sampleData.Length);
-            return new VoicePacket() { Id = id, Sequence = sequence, FrameSize = frameSize, Codec = codec, Data = sampleData };
-        }
-
-        private byte[] AddMetadataBytes(short id, short sequence, short frameSize, Codec codec, byte[] data)
-        {
-            byte[] bytes = new byte[data.Length + 7];
-            byte[] idBytes = BitConverter.GetBytes(id);
-            byte[] sequenceBytes = BitConverter.GetBytes(sequence);
-            byte[] frameSizeBytes = BitConverter.GetBytes(frameSize);
-            byte codecByte = (byte)codec;
-            Array.Copy(idBytes, bytes, 2);
-            Array.Copy(sequenceBytes, 0, bytes, 2, 2);
-            Array.Copy(frameSizeBytes, 0, bytes, 4, 2);
-            bytes[6] = codecByte;
-            Array.Copy(data, 0, bytes, 7, data.Length);
-            return bytes;
         }
     }
 }
