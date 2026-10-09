@@ -418,10 +418,10 @@ is the deliberate exception and still carries raw text, because the admin UI rea
 
 Unity writes `#RRGGBBAA`. colibri-web's `sendColor` writes `[r, g, b, a]` when given an array. Unity
 used to throw an `InvalidCastException` on the array form inside the frame's single dispatch loop,
-which lost every message queued behind it in that frame. Unity now accepts both forms, as does
-colibri-web (see [colour callbacks](#breaking-colour-callbacks-get-a-colorvalue)).
+which lost every message queued behind it in that frame. Unity and colibri-web now accept
+both forms ([colour callbacks](#breaking-colour-callbacks-get-a-colorvalue)).
 
-### Integers from Unity
+### Integers from Unity (web)
 
 Unity tags `int` and `float` differently, so `Sync.Send(channel, 5)` arrives as `broadcast::int`.
 colibri-web's `receiveNumber` listened only for `broadcast::float` and silently dropped these. It
@@ -475,7 +475,7 @@ reconnect, and update their objects instead of creating duplicates.
 - After their re-requests, both clients send one more `model::request`, on the channel
   `colibri::reconnect`, to detect the end of the answers. A Unity client does so after every
   reconnect, and when an object's first answer arrives outside that round after the object changed
-  its own members ([below](#changes-before-the-servers-state-arrives-unity)). colibri-web does so
+  its own members ([details](#changes-before-the-servers-state-arrives-unity)). colibri-web does so
   after requesting every model, after requesting one of its models again, and after the first update
   for a model it registers if it does neither. See
   [After a reconnect](colibri-server/docs/protocol.md#after-a-reconnect).
@@ -490,7 +490,7 @@ reconnect, and update their objects instead of creating duplicates.
 A `SyncBehaviour` or `SyncTransform` requests the server's state when it wakes up. In 1.x, a change
 made before the answer, in `Start` for example, was dropped, and the answer restored the server's
 values. Such a change now replaces the server's value on every client, as colibri-web's
-`registerModel` does ([below](#registermodel-web)).
+`registerModel` does ([`registerModel` (web)](#registermodel-web)).
 
 - A script that sets a `[Sync]` member or moves a `SyncTransform` in `Start` therefore does so for
   everyone each time a client starts.
@@ -503,21 +503,21 @@ values. Such a change now replaces the server's value on every client, as colibr
 ### `registerModel` (web)
 
 `registerModel` used to send the new instance in full at once. If the server already held the id,
-such as a fixed id like `'session'` kept while another client stayed connected and the page
+such as the fixed id `'session'` kept while another client stayed connected and the page
 reloaded, this overwrote everyone else's copy. The answer to the request for every model then
 restored the old values on this client only.
 
-`registerModel` now asks the server for the id first. If the server has the model, its values
-replace the instance's, and changes made after `registerModel` are sent on top of them. If not, the
-instance is sent in full, one round trip later than before. Registering an id that is already listed
-replaces the listed instance instead of listing the id twice.
+`registerModel` now first requests the model with that id from the server. If the server has the
+model, its values replace the instance's, and changes made after `registerModel` are sent on top of
+them. If not, the instance is sent in full, one round trip later than before. Registering an id that
+is already listed replaces the listed instance instead of listing the id twice.
 
 ### Voice port (Unity)
 
 The voice receive socket binds to an ephemeral port instead of 9014, which allowed only one Unity
 client per machine. The server replies to the datagram's source port, so a fixed port is not needed.
 
-### Voice per app
+### Voice per app (Unity)
 
 In 1.x, every voice packet went to every client on the server that was sending voice, and a
 `VoiceReceiver` played the voice id it was given, from any app. Now only clients with the same
@@ -554,11 +554,11 @@ the closure captured.
   parameter, `Debug.Log` or a static), because that lambda captures nothing.
 - Registering the same listener again on the same channel adds nothing. A `Start` that runs again
   after a scene reload does not receive each message twice.
-- Existing `Sync.Unregister` calls in `OnDestroy` are still correct. For a component's listener, a
-  forgotten one no longer breaks delivery. In 1.x, the destroyed component was still called,
-  `MissingReferenceException` came out of `WebServerConnection.Update`, and every message queued
-  behind it in that frame was lost. This is a likely cause of unexplained gaps in delivery in a 1.x
-  project.
+- Keep existing `Sync.Unregister` calls in `OnDestroy`. They are still correct. For a component's
+  listener, a forgotten one no longer breaks delivery. In 1.x, the destroyed component was still
+  called, `MissingReferenceException` came out of `WebServerConnection.Update`, and every message
+  queued behind it in that frame was lost. This is a likely cause of unexplained gaps in delivery in
+  a 1.x project.
 - **This covers `Sync.Receive` only.** The static `ModelCreated` and `ModelDestroyed` events of
   `SyncBehaviour<T>` are plain C# events and still need their `-=`.
 
@@ -582,7 +582,7 @@ app `test` disconnected, the store of app `test2` was wiped too. Both bugs are f
 3. **Turn on *Run In Background*** (Project Settings → Player). With it off, an unfocused Editor
    stops running the player loop. The client then stops sending and receiving without an error,
    while the socket stays open and everything still reports as connected. This is not new in 2.0,
-   but it often costs debugging time.
+   but it is the most common cause of lost debugging time.
 4. **Open *Window → Colibri Status*** while connected. It shows the app name. With a typo in the
    name, the connection is healthy, but no other client ever appears. A name others also use puts
    unrelated clients in your app. *Window → Colibri Configuration* now warns about names such as
