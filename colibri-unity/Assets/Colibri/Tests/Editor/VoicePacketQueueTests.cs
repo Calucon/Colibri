@@ -1,9 +1,11 @@
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading;
 using HCIKonstanz.Colibri.Networking;
 using NUnit.Framework;
 using UnityEngine;
+using UnityEngine.TestTools;
 
 namespace HCIKonstanz.Colibri.Tests
 {
@@ -194,6 +196,33 @@ namespace HCIKonstanz.Colibri.Tests
             _voice.DeliverReceivedPackets();
 
             Assert.That(delivered, Is.EqualTo(new short[] { 1, 6, 8 }));
+        }
+
+        /// <summary>
+        /// Without an App Name the TCP connection does not connect, and voice used to go out anyway,
+        /// with the empty name's app id, to every other client on the server that has none. Nothing
+        /// is sent now, and that is said once until there is an App Name again.
+        /// </summary>
+        [Test]
+        public void NoVoiceIsSentWithoutAnAppName()
+        {
+            var noAppName = new Regex(@"^Colibri voice: no voice is sent without an App Name\. ");
+            var data = new byte[] { 0xF8 };
+
+            LogAssert.Expect(LogType.Error, noAppName);
+            Assert.That(_voice.TryEncodeToSend(1, 0, 960, Codec.OPUS, data, out _), Is.False, "Voice was sent without an App Name");
+            _voice.UseAppName("   ");
+            Assert.That(_voice.TryEncodeToSend(1, 1, 960, Codec.OPUS, data, out _), Is.False, "Voice was sent with an App Name of spaces");
+            LogAssert.NoUnexpectedReceived();
+
+            _voice.UseAppName("app-a");
+            Assert.That(_voice.TryEncodeToSend(1, 2, 960, Codec.OPUS, data, out var packet), Is.True, "No voice was sent with an App Name");
+            Assert.That(packet, Is.EqualTo(VoicePacketCodec.Encode(VoicePacketCodec.AppId("app-a"), 1, 2, 960, Codec.OPUS, data)));
+
+            _voice.UseAppName("");
+            LogAssert.Expect(LogType.Error, noAppName);
+            Assert.That(_voice.TryEncodeToSend(1, 3, 960, Codec.OPUS, data, out _), Is.False, "Voice was sent after the App Name was cleared");
+            LogAssert.NoUnexpectedReceived();
         }
     }
 }
