@@ -196,10 +196,10 @@ is `'1'`, since every 2.0.0+ server sends the announcement and every earlier rel
 `'unknown'` appears only when a server refused a client without stating its version.
 
 The 100 ms `latency` broadcast is no substitute for the announcement, because colibri-server 1.2.0
-added it and 1.2.x and 1.3.x servers send it too. Verified against the published images: `hcikn/colibri:1.1.1` sends none,
-`hcikn/colibri:1.3.1` sends it with the old `\0\0\0` framing. These servers also match 2.x in the
-Socket.IO envelope, the `colibri::clients` payloads and the relay behaviour, so a web client has no
-other signal.
+added it and 1.2.x and 1.3.x servers send it too. Verified against the published images:
+`hcikn/colibri:1.1.1` sends none, `hcikn/colibri:1.3.1` sends it with the old `\0\0\0` framing. These
+servers also match 2.x in the Socket.IO envelope, the `colibri::clients` payloads and the relay
+behaviour, so a web client has no other signal.
 
 The detection is heuristic:
 
@@ -301,8 +301,8 @@ A `[Sync] Color` model field uses the same conversions and has the same two form
 
 **Only Unity sends `broadcast::int`.** JavaScript has one number type, so colibri-web cannot tell `5`
 from `5.0` and always sends `broadcast::float`. `sendInt` is an alias kept for symmetry with the Unity
-API. Unity routes the two commands to separate listener lists, so a Unity client must receive numbers from
-web clients with `Sync.Receive<float>`. colibri-web's `receiveNumber` listens for both commands.
+API. Unity routes the two commands to separate listener lists, so a Unity client must receive numbers
+from web clients with `Sync.Receive<float>`. colibri-web's `receiveNumber` listens for both commands.
 
 **The `log` channel is not JSON.** `ClientLogger` treats its payload as text, so colibri-unity sends it
 as raw UTF-8 (`WebServerConnection.EncodePayload`). The server unwraps a JSON string value before
