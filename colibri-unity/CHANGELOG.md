@@ -427,7 +427,10 @@ rationale, migration steps, and what the Editor verification did and did not cov
   server's value over it: the change was undone on this client and never reached another (in 1.3.1
   too). The answer now compares each member with the value it had when the object registered. A
   member that differs keeps its value and goes out as an ordinary update; every other member takes
-  the server's value, so values from the scene or the prefab never go out over it. The answer to a
+  the server's value, so values from the scene or the prefab do not go out over it, as long as each
+  `[Sync]` getter can read its value in `base.Awake()`: a model's own setup, such as a cached
+  component, goes before that call (the guide's example and the SyncBehaviour sample now do so, and
+  the sample applies its Inspector color only once it is edited). The answer to a
   manager's request for its whole channel, and an update another client sent before the server read
   the change, hold the older value too: `Sync` sends one more `model::request` on
   `colibri::reconnect` ahead of the change, and until its answer the member takes nothing from them.
