@@ -610,7 +610,10 @@ SyncSettings.MaxSendRate = 60; // updates per second per synced object; 0 = no l
 
 ## Remote Store
 
-Colibri offers persistent data storage on the server, so that data can be saved easily between sessions. Anything Newtonsoft JSON can serialize, such as an object of your own class (with `Vector3`, `Quaternion` or `Color` fields in it too), a list, or a plain number or string, can be uploaded via a RESTful interface of the `Store` object, up to 5 MiB of JSON per name. Data is kept per *app name*:
+`Store` saves data per app name on the server through its REST interface, so it persists between
+sessions. It takes anything Newtonsoft JSON can serialize, such as an object of your own class (also
+with `Vector3`, `Quaternion` or `Color` fields), a list, a number or a string, up to 5 MiB of JSON
+per name.
 
 ```c#
 // Create example object
@@ -622,8 +625,6 @@ exampleObject.Name = "Charly Sharp";
 bool putSuccess = await Store.Put("exampleObject", exampleObject);
 Debug.Log($"Success: {putSuccess}");
 ```
-
-or retrieved again:
 
 ```c#
 ExampleClass exampleObject = await Store.Get<ExampleClass>("exampleObject");
@@ -637,15 +638,22 @@ else
 }
 ```
 
-`await Store.Delete("exampleObject")` removes it again.
+`await Store.Delete("exampleObject")` deletes the value and returns `false` on failure.
 
-Limitations:
-
-- Data fetching happens manually (data won’t be automatically updated!)
-- Values are converted with Newtonsoft JSON, which saves the public fields and properties of your class; `[Serializable]` is not needed, and a private `[SerializeField]` field is not saved
-- A `Vector2`, `Vector3`, `Vector4`, `Quaternion` or `Color` inside your class is converted with [`ColibriJson`](#sending-data-between-clients) and saved as an array of its components. Values Colibri 1.x saved as `{"x": …}` still load
-- Neither call throws for a failure: `await Store.Put(…)` returns `false` when the value cannot be converted or the server did not store it, and `await Store.Get<T>(…)` returns `default` when the request fails, when nothing is saved under that name, or when the saved value does not fit `T`. Each logs why. A saved `null` also comes back as `null`, and an exception your own class throws, from its constructor for example, still comes through
-- The app name and the name you save under are URL-encoded, so a name with `/`, `#`, `?`, `%` or a space in it works, and addresses the same value as in colibri-web
+- Values are fetched only on request. They do not update automatically.
+- Newtonsoft JSON saves the public fields and properties of your class. `[Serializable]` is not
+  needed. A private `[SerializeField]` field is not saved.
+- A `Vector2`, `Vector3`, `Vector4`, `Quaternion` or `Color` inside your class is converted with
+  [`ColibriJson`](#json) and saved as an array of its components. Values Colibri 1.x saved as
+  `{"x": …}` still load.
+- Failures do not throw. `Store.Put` returns `false` if the value cannot be converted or the server
+  did not store it. `Store.Get<T>` returns `default` if the request fails, nothing is saved under
+  the name, or the saved value does not fit `T`. Both log the reason.
+- A saved `null` is returned as `null`. Exceptions thrown by your own class, e.g. by its
+  constructor, pass through.
+- Requests give up after 10 s.
+- The app name and the name you save under are URL-encoded. Names with `/`, `#`, `?`, `%` or spaces
+  work and address the same value as in colibri-web.
 
 ## Connection and outages
 
