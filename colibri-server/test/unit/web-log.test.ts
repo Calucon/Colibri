@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { config, Subject } from 'rxjs';
 import { WebLog } from '../../src/server/modules/web/web-log.js';
 import { SocketIoClient, SocketIOServer } from '../../src/server/modules/networking/socket-io-server.js';
@@ -214,6 +214,31 @@ describe('WebLog', () => {
             .filter(m => m.message === 'tick')
             .map(m => m.id);
         expect(new Set(ids).size).toBe(1);
+    });
+
+    it('keeps the time of the first occurrence in a merged entry, and moves created to the latest', async () => {
+        vi.useFakeTimers({ toFake: [ 'Date' ] });
+        try {
+            const server = new FakeSocketIOServer();
+            const webLog = new WebLog(server as unknown as SocketIOServer);
+            await webLog.init();
+
+            const admin = makeClient('admin1', 'colibri');
+            server.connectClient(admin);
+
+            const emitter = new Emitter();
+            vi.setSystemTime(1000);
+            emitter.emitDebug('tick');
+            vi.setSystemTime(2000);
+            emitter.emitDebug('tick');
+            vi.setSystemTime(3000);
+            emitter.emitDebug('tick');
+
+            expect(server.broadcasts.map(b => b.message.payload!.asValue<{ first: number; created: number }>())
+                .map(m => [ m.first, m.created ])).toEqual([ [ 1000, 1000 ], [ 1000, 2000 ], [ 1000, 3000 ] ]);
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it('does not merge the same line from two apps', async () => {

@@ -13,7 +13,10 @@ interface WebMessage {
     level: number;
     message: string;
     group: string;
+    /** When the line last occurred. */
     created: number;
+    /** When the line first occurred: the same as `created` until it repeats. */
+    first: number;
     count: number;
     metadata: Metadata;
 }
@@ -135,6 +138,7 @@ export class WebLog extends Service {
                 group: log.group,
                 message: log.message,
                 created: log.created.getTime(),
+                first: log.created.getTime(),
                 count: 0,
                 metadata: log.metadata
             };
