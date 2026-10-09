@@ -17,6 +17,10 @@ this is the server's full detail.
   else is refused. That includes colibri-web 1.x, which announces `1` although its Socket.IO
   envelope still works; use colibri-web 2.x. See
   [Protocol version checking](#protocol-version-checking).
+- **Voice packets carry the app.** The voice header has a header version and an app id now, and
+  the relay passes a packet on only to the voice clients of the sender's app. Voice packets from
+  colibri-unity 1.x are dropped; use colibri-unity 2.x. See
+  [Voice relay](#voice-relay-breaking-change).
 - **Node 24 and native ESM** to run from source.
 - **Docker image.** The server runs as the non-root `node` user, started through a new
   `colibri-entrypoint.sh` that replaces the node base image's entrypoint; `CMD` is
@@ -289,6 +293,24 @@ Checked end to end against colibri-unity 2.0.0, with a decoding proxy in front o
 The C# codec stays pinned to this server's encoder by byte-for-byte vectors in colibri-unity's
 EditMode tests, which `npm run test:vectors` checks in CI.
 
+### Voice relay (breaking change)
+
+- **A voice packet reaches only the sender's app.** Every packet used to go to every other voice
+  client on the server, whatever its app: every client received all voice traffic, anyone could
+  listen to any app, and two apps using the same voice id, such as two projects started from the
+  voice sample, heard each other.
+- The header is 11 bytes: the 7 bytes 1.x had, with a header version (`2`) in the high 4 bits of
+  the codec byte, then the app id, the 32-bit FNV-1a hash of the app name. See
+  [Voice packets](protocol.md#voice-packets-udp). `voice-packet.ts` holds the format and the hash.
+- A packet from a colibri-unity 1.x client, whose codec byte reads as header version 0, is dropped
+  and logged as a warning that says to upgrade the Unity package. A packet with another header
+  version is dropped as malformed. Each source is reported at most once every 10 s, as for the
+  other malformed packets.
+- A client whose packets name another app moves to it. The relay finds a packet's peers in a list
+  per app, rebuilt only when a client joins, times out or changes app.
+- The app id keeps apps apart but is not access control: anyone who knows an app's name can send
+  and receive its voice. Voice is not encrypted.
+
 ### Load and lost connections
 
 - **An overloaded server no longer queues TCP messages without bound.** The TCP thread passed
@@ -501,11 +523,12 @@ The endpoints are documented under [REST store](./protocol.md#rest-store).
   (including both original key bugs), `ConnectionPool`, `Payload` (memoization and the
   `undefined`/`null`/empty-string/invalid-JSON edge cases), the TCP worker and its proxy, the
   Socket.IO server against real `socket.io-client` sockets, the REST store and web server, the
-  voice server, `WebLog`, `ClientLogger`, `BroadcastLogger`, the console log, the `DATA_ROOT`
+  voice server (apps kept apart, a client changing app, 1.x voice packets) and the voice packet
+  format, `WebLog`, `ClientLogger`, `BroadcastLogger`, the console log, the `DATA_ROOT`
   check, the configuration, the ring buffer, the deprecated serialization helpers, and the inbound
   limits: the backlog count, the rate limit and the merging of held updates, on both transports.
 - `npm run test:vectors` checks the cross-implementation protocol vectors in colibri-unity's
-  `ProtocolVectorTests.cs` against this server's encoder.
+  `ProtocolVectorTests.cs`, frames and voice packets, against this server's encoders.
 - `test/tcp-client-test.ts` (`npm run test:tcpclient`) speaks the v3 framing, decodes frames and
   echoes heartbeats; a unit test runs it against a stand-in server for each of its exit codes, and
   checks that no script under `test/` hard-codes the protocol version it handshakes with. Manual
@@ -521,7 +544,7 @@ The endpoints are documented under [REST store](./protocol.md#rest-store).
 - Added `docs/protocol.md`: which messages the server relays, the v3 framing, version checking and
   detecting an out-of-date server, the payload shape of every `broadcast::` command, size limits,
   the inbound limits with the warnings as the server prints them, the server's own channels,
-  model synchronization and the REST store. For models it covers the three `model::request` forms
+  model synchronization, the REST store and the voice packet format. For models it covers the three `model::request` forms
   (`{}`, a fresh `{ id }`, a re-request `{ id, again: true }`), tombstones, and what each client
   does after a reconnect; under backpressure, that answers and heartbeats are not dropped at the
   1 MiB mark, and that the 100 ms heartbeat is skipped while one still waits. Its known limits
@@ -560,8 +583,8 @@ Not part of this release:
   authenticates nobody. There is no handshake token, the app name `colibri` is what makes a client
   the admin UI, CORS allows any origin, there are no connection caps, and [TLS](#tls) is off
   unless `TLS_CERT` and `TLS_KEY` are set; the per-client message rate limit is there to catch a
-  runaway send loop, not a hostile client, which can open as many connections as it likes. Model objects are plain objects, not null-prototype ones. The
-  voice relay forwards every voice packet to every other voice client, whatever its app. The
-  structural changes that would have come first (Socket.IO rooms, `Map` keying in `DataStore` and
+  runaway send loop, not a hostile client, which can open as many connections as it likes. Model objects are plain objects, not null-prototype ones. Voice
+  is kept within an app by an app id anyone can compute from the app name, and is not encrypted.
+  The structural changes that would have come first (Socket.IO rooms, `Map` keying in `DataStore` and
   the REST store, bounds checks on TCP ingress and egress) landed anyway, on performance and
   robustness grounds.
