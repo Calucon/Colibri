@@ -44,11 +44,13 @@ Colibri component from 1.x.
   values set before `registerModel`. Changes made after `registerModel` are held until the
   answer, then sent on top of it, and kept on this client. When they replace values the server
   had, the model is asked for once more, followed by a request on `colibri::reconnect` whose
-  answer tells when that answer is over; changes made meanwhile wait for it, then go out. If the
-  server has nothing for the id, the model is sent in full. So a
-  reloaded page that registers a fixed id no longer shows old values while everyone else has new
-  ones, and an id deleted a moment ago can be registered again. A new model reaches other clients
-  one round trip after `registerModel`.
+  answer tells when that answer is over; changes made meanwhile wait for it, then go out.
+  Otherwise one more request on `colibri::reconnect` follows, and the fields sent until its
+  answer are kept out of every update: the update taken for the answer may have been another
+  client's, or the answer to the request for every model. If the server has nothing for the id,
+  the model is sent in full. So a reloaded page that registers a fixed id no longer shows old
+  values while everyone else has new ones, and an id deleted a moment ago can be registered
+  again. A new model reaches other clients one round trip after `registerModel`.
 - After a reconnect, the models registered on this client are asked for again with
   `model::request { id, again: true }`, so a model another client deleted during the outage
   (within `MODEL_TOMBSTONE_SECONDS`) is dropped here instead of being sent back to everyone.

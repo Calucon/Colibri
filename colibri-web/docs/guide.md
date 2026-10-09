@@ -273,10 +273,10 @@ registerExampleClass(mySample); // from now on mySample is synchronized with the
 The id identifies the instance on every client, so it has to be unique. `registerModel` first asks the server for that
 id. If the server already has a model with it (another client created it, or this page did before it was reloaded while
 another client of the app stayed connected), the server's copy wins: its values replace the ones the instance had when
-it was registered, and changes made after `registerModel` are sent on top of them. Otherwise the instance is sent to the
-other clients in full. An id that is already in the list, such as a copy the server sent earlier, is replaced by the
-instance you register; the replaced one stops syncing, and Colibri warns in the console if this client had registered it
-itself.
+it was registered, and changes made after `registerModel` are sent on top of them and kept, also when an update another
+client made to the model arrives before the server's answer. Otherwise the instance is sent to the other clients in
+full. An id that is already in the list, such as a copy the server sent earlier, is replaced by the instance you
+register; the replaced one stops syncing, and Colibri warns in the console if this client had registered it itself.
 
 `SampleClasses$` emits a freshly registered instance once with its constructor values, in the same tick as
 `registerModel` and before the server's answer arrives, so a UI bound to it briefly shows the defaults; nothing of it is
