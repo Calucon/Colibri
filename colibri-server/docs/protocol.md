@@ -389,93 +389,84 @@ message that does not fit into a TCP frame is not relayed to TCP clients. The se
 
 ## Inbound limits
 
-Two limits keep a server that is sent more than it can process responsive, and its memory
-bounded:
+Two limits keep a server that receives more than it can process responsive and its memory bounded:
 
-| limit | counts | setting, default |
+| Limit | Counts | Setting, default |
 | --- | --- | --- |
 | backlog | messages from all TCP clients that the server's main thread has not processed yet | `TCP_INBOUND_BACKLOG_LIMIT`, `2000` |
-| rate | messages a second from one client, TCP or Socket.IO, with bursts | `CLIENT_MESSAGE_RATE_LIMIT`, `1000`, and `CLIENT_MESSAGE_RATE_BURST`, `2000` |
+| rate | messages per second from one client, TCP or Socket.IO, with bursts | `CLIENT_MESSAGE_RATE_LIMIT`, `1000`, and `CLIENT_MESSAGE_RATE_BURST`, `2000` |
 
-`0` turns either off. Socket.IO clients are subject to the rate limit only: the server handles
-their messages as it reads them, so there is no queue of them to bound.
+`0` disables either. Socket.IO clients have only the rate limit: the server handles their messages as it
+reads them, so there is no queue to bound.
 
-Both limits only ever touch `model::update` and `broadcast::` messages, the bulk of a sync loop's
-traffic, and never those on the `colibri` or `log` channel. Everything else - handshakes,
-heartbeats, `model::request`, `model::delete`, log lines, anything on the `colibri` channel -
-always goes through at once. Past a limit:
+Both limits apply only to `model::update` and `broadcast::` messages, the bulk of sync traffic, and
+never on the `colibri` or `log` channel. Everything else passes at once: handshakes, heartbeats,
+`model::request`, `model::delete`, log lines and anything on the `colibri` channel. Above a limit:
 
-- **`model::update` is held back and merged per object** (per channel and `id`): a field in a
-  later update replaces the one held, and fields not sent again are kept. As soon as there is
-  room - checked with the client's next message and every 100ms - the held updates are passed
-  on, oldest object first, one `model::update` per object. A `model::update` may carry only the
-  fields that changed, and the server and every client merge it field by field, so the other
-  clients and the server's copy skip intermediate states but still get the latest value of every
-  field. A held update is re-encoded as JSON, so it is not byte-identical to anything the client
-  sent.
-- **`broadcast::` messages are dropped.** There is nothing to merge them into.
-- An update the server could not apply anyway - not a JSON object with a string `id` - is
+- **`model::update` is held back and merged per object** (channel and `id`). A field in a later update
+  replaces the held one, and fields not sent again are kept. When there is room, checked with the
+  client's next message and every 100 ms, the held updates go on, oldest object first, one
+  `model::update` per object. Since the server and every client merge updates field by field, the other
+  clients and the server's copy skip intermediate states but still get the latest value of every field.
+  A held update is re-encoded as JSON, so it is not byte-identical to what the client sent.
+- **`broadcast::` messages are dropped**, as there is nothing to merge them into.
+- An update the server could not apply anyway, one that is not a JSON object with a string `id`, is
   dropped.
-- **An update for one more object once updates for 1000 are held for that client is lost**
-  (`MAX_HELD_OBJECTS`). Unlike a dropped broadcast, that is state nothing sends again: the object
-  reaches the server's copy and the other clients only when it changes again. A client that
-  creates a few thousand objects at once, such as a scene with many synced objects loading, can
-  run into this.
+- **With updates for 1000 objects held for a client, an update for another object is lost**
+  (`MAX_HELD_OBJECTS`). Unlike a broadcast, this is state nothing sends again: the object reaches the
+  server's copy and the other clients only when it changes again. A client creating a few thousand
+  objects at once, e.g. a scene with many synced objects loading, can hit this.
 
-Nothing a client sends overtakes its held updates. They are passed on before the next message
-from that client that is not limited, before a second handshake, and, when it disconnects, before
-its app sees `client::disconnected`. So a `model::delete` cannot arrive ahead of an update to the
-same object and bring it back.
+Nothing a client sends overtakes its held updates. They go on before its next message that is not
+limited, before a second handshake, and on disconnect before its app receives `client::disconnected`. So
+a `model::delete` cannot arrive ahead of an update to the same object and have that update bring it
+back.
 
-Clients are not told. The other clients of the app receive fewer updates, each possibly carrying
-the changes of several, and later; synced objects move less smoothly, and a stream of
-`broadcast::` messages has gaps.
+Clients are not notified. The app's other clients receive fewer, later updates, each possibly carrying
+the changes of several. Synced objects move less smoothly, and `broadcast::` streams have gaps.
 
-An episode runs from the first message held back or dropped until nothing has been over the limit
-for a second. One that goes on for a second or longer is warned about a second in, and again when
-it is over, with how many updates were held back and messages dropped. A shorter one, such as the
-main thread stalling for a moment on a long garbage collection, is summed up in a single line at
-debug level, which the default `CONSOLE_LOG_LEVEL` does not print, unless it lost updates: then
-that summary is a warning however short the episode was, and says how many were lost. With the
-default settings, the warnings read:
+An episode runs from the first message held back or dropped until nothing has been over the limit for a
+second. One lasting a second or longer logs a warning a second in, and another at its end with the
+numbers of updates held back and messages dropped. A shorter one, e.g. the main thread pausing for a
+long garbage collection, logs a summary at debug level, which the default `CONSOLE_LOG_LEVEL` does not
+print. If it lost updates, the summary is a warning however short the episode, and states how many were
+lost. With the default settings:
 
-| warning | means |
+| Warning | Meaning |
 | --- | --- |
-| `The main thread has kept falling 2000 TCP messages behind (TCP_INBOUND_BACKLOG_LIMIT) for a second now: ...` | the server as a whole is taking in more than it can process; every Unity client is limited |
+| `The main thread has kept falling 2000 TCP messages behind (TCP_INBOUND_BACKLOG_LIMIT) for a second now: ...` | the server as a whole receives more than it can process. Every Unity client is limited. |
 | `The main thread has caught up with TCP messages again; ...` | that episode is over |
 | `Unity client '<name>' (<id>, app '<app>', <address>) has been sending more than 1000 model::update and broadcast::* messages a second (CLIENT_MESSAGE_RATE_LIMIT, bursts up to CLIENT_MESSAGE_RATE_BURST=2000) for a second now. ...`, and the same starting `Web client <id> (app '<app>', <address>)` | one client is over its rate limit |
 | `... is back under the message rate limit; ...`, `... disconnected while over the message rate limit; ...` | that client's episode is over |
-| `The main thread was briefly 2000 TCP messages behind (TCP_INBOUND_BACKLOG_LIMIT) and has caught up; ...`, `... was briefly over the message rate limit; ...` | a short episode; a warning only when it lost updates, a debug line otherwise |
+| `The main thread was briefly 2000 TCP messages behind (TCP_INBOUND_BACKLOG_LIMIT) and has caught up; ...`, `... was briefly over the message rate limit; ...` | a short episode. A warning only if it lost updates, a debug line otherwise. |
 
-The summary at the end of an episode reads, for example, `held back 1475 model::update(s), merged
-per object and dropped 12 message(s) over 2.5 s`, with `lost 450 model::update(s) for good` added,
-and a sentence on what that means, when updates were lost.
+An episode summary reads, e.g., `held back 1475 model::update(s), merged per object and dropped 12 message(s) over 2.5 s`.
+If updates were lost, it adds `lost 450 model::update(s) for good` and a sentence on what that means.
 
-The rate limit is far above what a client needs - one syncing 10 objects 72 times a second sends
-720 updates a second - so it only catches a runaway loop, typically something that sends every
-frame without a rate cap. The backlog limit is reached when the server as a whole is overloaded:
-fewer synced objects, a lower sync rate or fewer clients per app reduce the load. Since every
-message is relayed to every other client of the app, the server's work grows with the square of
-an app's size. Each time an app grows past `APP_CLIENT_WARNING_THRESHOLD` clients (8 by default,
-Unity and web together), the server logs a warning that starts `App '<app>' now has`.
+The rate limit is far above normal use: syncing 10 objects 72 times a second is 720 updates a second. It
+catches runaway loops, typically code that sends every frame without a rate cap. The backlog limit is
+reached when the server as a whole is overloaded. Fewer synced objects, a lower sync rate or fewer
+clients per app reduce the load. Every message is relayed to every other client of the app, so the
+server's work grows with the square of an app's size. Each time an app grows past
+`APP_CLIENT_WARNING_THRESHOLD` clients (default 8, Unity and web together), the server logs a warning
+starting with `App '<app>' now has`.
 
 ## Server messages
 
-Besides relaying (see [Relayed messages](#relayed-messages)), the server speaks on a
-few channels of its own. Applications should not use these channel names, or the app name
-`colibri`.
+Besides relaying, the server uses a few channels of its own. Applications must not use these channel
+names, or the app name `colibri`.
 
-| channel | command | sent | payload |
+| Channel | Command | Sent | Payload |
 | --- | --- | --- | --- |
 | `colibri` | `protocol::accepted` | to a Socket.IO client, once it is accepted | `{ serverVersion }` |
 | `colibri` | `protocol::rejected` | to a refused client, before it is disconnected | `{ reason, serverVersion, clientVersion }` |
-| `colibri` | `latency` | to every Socket.IO client every 100ms; the client sends it back unchanged | a number to echo |
+| `colibri` | `latency` | to every Socket.IO client every 100 ms. The client sends it back unchanged. | a number to echo |
 | `colibri::clients` | `client::connected`, `client::disconnected` | to every client of the app, and the admin UI, when a client joins or leaves | `{ id, name, app }` |
 | `colibri::clients` | `client::request` | by a client, to ask who is connected | the server answers with one `client::connected` per client of the requester's app, with `version` added |
 | `log` | `debug`, `info`, `warn` / `warning`, `error` | by a client, to write to the server log at that level (any other command: debug) | text |
 
-`name` is the name from the handshake for a TCP client and the client's IP address for a
-Socket.IO client. The admin UI also uses `colibri::log` and `colibri::latency`.
+`name` is the handshake name for a TCP client and the IP address for a Socket.IO client. The admin UI
+also uses `colibri::log` and `colibri::latency`.
 
 ## Model synchronization
 
