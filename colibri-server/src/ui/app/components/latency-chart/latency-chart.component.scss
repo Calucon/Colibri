@@ -1,20 +1,25 @@
 :host {
-    display: grid;
-    grid-template-columns: 1fr 250px;
+    display: block;
 }
 
-.client-stats {
-    max-height: 500px;
-    overflow-x: hidden;
-    overflow-y: auto;
+.chart {
+    position: relative;
+    height: clamp(200px, 40vh, 420px);
+    overflow: hidden;
 
-    .client {
-        margin-bottom: 20px;
-        border-left: 5px solid black;
-        padding-left: 10px;
-    }
+    // drawn by d3, so outside the reach of this component's own (encapsulated) styles
+    ::ng-deep svg {
+        position: absolute;
+        inset: 0;
+        color: var(--text-muted);
 
-    h3 {
-        margin: 0;
+        .axis {
+            font: 11px var(--sans);
+
+            .domain,
+            line {
+                stroke: var(--surface-3);
+            }
+        }
     }
 }

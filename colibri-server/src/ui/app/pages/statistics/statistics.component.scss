@@ -1,18 +1,104 @@
 :host {
-    display: block;
-    overflow-x: hidden;
-    overflow-y: auto;
-    margin: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 16px max(16px, env(safe-area-inset-right)) 24px max(16px, env(safe-area-inset-left));
 }
 
-.container {
-    border-radius: 10px;
-    padding: 20px;
+.card {
+    min-width: 0;
+    padding: 16px;
 
-    background: white;
-    color: black;
+    background: var(--surface-1);
+    border: 1px solid var(--surface-2);
+    border-radius: 8px;
+}
 
-    overflow-y: auto;
-    overflow-x: hidden;
+.card-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 12px;
+    margin-bottom: 12px;
+
+    h2 {
+        margin: 0;
+        color: var(--text-strong);
+        font-size: 16px;
+        font-weight: 500;
+    }
+
+    .hint {
+        color: var(--text-muted);
+        font-size: 13px;
+    }
+}
+
+.table {
+    overflow-x: auto;
+}
+
+table {
     width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+th,
+td {
+    padding: 6px 12px 6px 0;
+    text-align: left;
+    white-space: nowrap;
+}
+
+th {
+    color: var(--text-muted);
+    font-weight: 500;
+    border-bottom: 1px solid var(--surface-2);
+}
+
+tbody tr + tr td {
+    border-top: 1px solid var(--surface-2);
+}
+
+.num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.swatch {
+    display: block;
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+}
+
+.name .muted {
+    margin-left: 6px;
+    color: var(--text-muted);
+    font-family: var(--mono);
+    font-size: 12px;
+}
+
+.empty {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 14px;
+}
+
+@media (max-width: 599.98px) {
+    :host {
+        padding-top: 12px;
+        gap: 12px;
+    }
+
+    .card {
+        padding: 12px;
+    }
+
+    .version {
+        display: none;
+    }
 }
