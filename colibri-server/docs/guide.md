@@ -306,8 +306,8 @@ The cost of TLS on a headset was not measured.
   are relayed to other clients ([Relayed messages](protocol.md#relayed-messages)).
 - **REST store** at `/api/store` on the web port, saved to `store.json` in the data directory
   ([REST store](protocol.md#rest-store)).
-- **Voice relay** on UDP port 9013. A voice packet goes to the other clients of the sender's app that send
-  voice to this server. Each packet carries the app as an app id, the hash of the app name
+- **Voice relay** on UDP port 9013. A voice packet goes to the other clients of the sender's app that
+  send voice to this server. Each packet carries the app as an app id, the hash of the app name
   ([Voice packets](protocol.md#voice-packets-udp)). Like the app name on TCP, it separates apps but is
   not access control. Voice is not encrypted.
 
@@ -333,10 +333,10 @@ of an app's size. Give each project on a shared server its own app name. Each ti
 When the main thread is `TCP_INBOUND_BACKLOG_LIMIT` messages behind the Unity clients, or one client
 sends more than `CLIENT_MESSAGE_RATE_LIMIT` messages a second, the server holds back `model::update`
 and drops `broadcast::` messages, so its memory and delay stay bounded. Held updates are merged per
-object: the latest value of every field arrives, later. Nothing else is held back or dropped. Synced
-objects move less smoothly for the other clients. Updates are held for at most 1000 objects per client.
-An update for one more object is lost, and that object reaches the server and the other clients only
-when it changes again.
+object, so the latest value of every field still arrives, only later. Nothing else is held back or
+dropped. Synced objects move less smoothly for the other clients. Updates are held for at most 1000
+objects per client. An update for one more object is lost, and that object reaches the server and the
+other clients only when it changes again.
 
 An overload lasting a second logs a warning naming `TCP_INBOUND_BACKLOG_LIMIT`, or
 `CLIENT_MESSAGE_RATE_LIMIT` and the client, and another at its end with the numbers held back and
@@ -345,8 +345,9 @@ dropped. A shorter one logs a debug line, or a warning if it lost updates.
 
 - **Backlog warning:** the server as a whole receives more than it can process. Sync fewer objects,
   less often, or with fewer clients per app.
-- **Rate warning:** the named client sends far more than the others, usually every frame without a
-  rate cap. Normal clients stay far below the limit: 10 objects at 72 Hz are 720 updates a second.
+- **Rate warning:** the named client sends far more than the others, usually because it sends every
+  frame without a rate cap. Normal clients stay far below the limit. 10 objects at 72 Hz are 720
+  updates a second.
 
 ### Idle timeout
 
@@ -355,29 +356,30 @@ client silent for `TCP_IDLE_TIMEOUT_SECONDS` (10 s) is disconnected as if it had
 connection, with the warning
 `Unity client '<name>' (<id>, app '<app>', <address>) has sent nothing for <n> s ...`. The other
 clients of its app receive `client::disconnected`, and if it was the last client, the app's models are
-cleared. This detects a headset that left
-the Wi-Fi or went to sleep without closing its connection, which the operating system notices only
-after many minutes. A connection without a handshake within this time is closed too.
+cleared. This detects a headset that left the Wi-Fi or went to sleep without closing its connection,
+which the operating system notices only after many minutes. A connection without a handshake within
+this time is closed too.
 
 A message over 64 KiB contains no heartbeat, so a client reading it over a slow link echoes nothing
-until it is through. Until it echoes a heartbeat sent after that message, it may stay silent one extra
-timeout per 64 KiB of the message, at most 6 (60 s at the default), so a 4 MiB message needs about
-60 KB/s or more. A slower client is disconnected, and the warning names the message size. Smaller
-messages need no extra time. A headset that is gone when such a message is sent, or goes while reading
-it, is therefore detected only within 7 timeouts (70 s) at worst
+until it is through. Until the client echoes a heartbeat sent after that message, its timeout grows by
+one timeout per 64 KiB of the message, at most 6 (60 s at the default). A 4 MiB message therefore needs
+about 60 KB/s or more. A slower client is disconnected, and the warning names the message size.
+Smaller messages need no extra time. A headset that is gone when such a message is sent, or goes while
+reading it, is detected within 7 timeouts (70 s) at worst
 ([Heartbeat / latency](protocol.md#heartbeat--latency)).
 
 colibri-unity echoes heartbeats off Unity's main thread, so a long scene load does not trigger the
 timeout. A debugger stopped at a breakpoint usually pauses all threads and does trigger it. For long
 breakpoints against your own server, raise `TCP_IDLE_TIMEOUT_SECONDS` or set it to `0`. Web clients
-are not affected: Socket.IO's own ping detects a lost one within about 45 s.
+are not affected. Socket.IO's own ping detects a lost web client within about 45 s.
 
 ## Protocol version
 
 Web clients use Socket.IO, Unity clients a custom binary protocol over TCP
-([protocol.md](protocol.md)). **v2.0.0 introduces the v3 framing, a breaking change for Unity
-clients:** colibri-unity 1.x cannot connect. colibri-web 1.x is refused too, although the Socket.IO
-envelope is unchanged. Update both to 2.x.
+([protocol.md](protocol.md)).
+
+**Breaking change:** v2.0.0 introduces the v3 framing. colibri-unity 1.x cannot connect. colibri-web
+1.x is refused too, although the Socket.IO envelope is unchanged. Update both to 2.x.
 
 Both transports send a protocol version in the handshake, and the server refuses every version but its
 own, without negotiation. A refused client receives the reason on the `colibri` channel, is
