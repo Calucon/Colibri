@@ -9,18 +9,19 @@ Colibri relays real-time object synchronization between two kinds of clients:
 Both transports feed the same `{ channel, command, payload }` message into the transport-independent
 `ConnectionPool`, so a relayed message reaches the app's clients on both. Only the hooks
 `ModelSynchronization`, `MeasureLatency`, `WebLog` and `ClientLogger` read payloads, through `Payload`
-(`src/server/modules/core/payload.ts`). It holds a message in the form it arrived in, a JSON string
-(TCP, or Socket.IO as a string), a parsed value (Socket.IO) or raw bytes (TCP), and computes and caches
-another form only when asked. Relaying TCP→TCP or Socket.IO→Socket.IO therefore does no JSON or UTF-8
-work. Only a cross-transport relay, or a hook that inspects the payload, pays for a conversion, and
-only once.
+(`src/server/modules/core/payload.ts`).
+
+`Payload` keeps the form a message arrived in: a JSON string (TCP, or Socket.IO sent as a string), a
+parsed value (Socket.IO) or raw bytes (TCP). It converts to another form on first use and caches the
+result. Same-transport relays do no JSON or UTF-8 work. A cross-transport relay, or a hook that reads
+the payload, converts it once.
 
 Unity clients send voice separately, over UDP to the voice port ([Voice packets](#voice-packets-udp)).
 
 ## Relayed messages
 
-The server relays only two kinds of client messages, to the other clients of the sender's app, Unity
-and web, excluding the sender:
+The server relays two kinds of client messages to the other clients of the sender's app, Unity and
+web:
 
 - messages whose `command` starts with `broadcast::`, unchanged
   ([`broadcast::` commands](#broadcast-commands))
@@ -43,7 +44,7 @@ Under overload, or from a client that sends too fast, the server holds back and 
 > **Breaking change.** colibri-unity clients built for the v1 flatbuffer framing and v2.0.0+ servers
 > cannot connect to each other. Upgrade both sides together ([Version checking](#version-checking)).
 
-This document calls the framing v3. Clients announce it as protocol version `2`.
+Clients announce the v3 framing as protocol version `2`.
 
 Each frame is a fixed-size header followed by a type-specific body:
 
@@ -89,9 +90,9 @@ app keeps its models.
 ### Version checking
 
 The server compares `version` with `PROTOCOL_VERSION` in
-[`protocol.ts`](../src/server/modules/networking/protocol.ts), currently `2`. This is a check, not a
-negotiation. There is one supported version at a time, and v1 and v3 share no subset, so any other
-version is **refused**, not downgraded.
+[`protocol.ts`](../src/server/modules/networking/protocol.ts), currently `2`. The server supports one
+version at a time and **refuses** every other one. There is no negotiation or downgrade, since v1 and
+v3 share no subset.
 
 A refused client never joins its app's broadcast set or `clientConnected$`, so it does not appear in
 the admin UI. The server logs an error naming the client, its address and both versions, e.g.
@@ -119,7 +120,7 @@ Known gaps, all deliberate:
 - **A client with other framing cannot read the refusal.** The first packet of a Colibri 1.x Unity
   client, its handshake, does not parse as a v3 frame ([Frame parsing](#frame-parsing)), and the client
   could not decode a refusal anyway. The server detects the 1.x framing, closes the connection and
-  logs, at most once a minute per address, repeats at debug level:
+  logs this warning at most once a minute per address (repeats at debug level):
   `Refusing a connection from <address>: it looks like a Colibri 1.x client (it speaks the 1.x wire format), but this server speaks protocol v2. Upgrade the Colibri Unity package (de.uni.kn.colibri) in that app to 2.x. ...`.
   This is the only diagnostic. The 1.x client keeps reconnecting.
 - **colibri-web 1.x does not handle `protocol::rejected`.** It receives the refusal as an ordinary
@@ -174,44 +175,44 @@ colibri-web reports the suspicion and a refusal (`fatal: true`) at most once eac
 instance on `Colibri.protocolMismatch`. A refusal can follow a suspicion, not the reverse.
 
 colibri-unity counts a session as connected only after the server's first frame, so these sessions do
-not reset the reconnect backoff (0.5 s, 1 s, 2 s, ... up to 10 s). Without TLS, a session ending in a
-clean close, a reset or an undecodable frame counts. With TLS on, only an undecodable frame counts. The
-first frame a session decodes clears the count and the suspicion. These exceptions reflect server
-behaviour. A 1.x server
-sends heartbeats from the moment it accepts, also through a TLS-terminating proxy, and the first one
-fails to decode at once. A 2.x server with TLS on closes the connection of a client without TLS and
-sends a frame to one with TLS. The excluded sessions therefore point at something that accepts
-connections and then closes them or forwards nothing, such as a proxy whose backend is down. After 3 of
-them in a row, colibri-unity logs a warning saying so.
+not reset the reconnect backoff (0.5 s, 1 s, 2 s, ... up to 10 s). A session past the handshake that
+ends without a frame counts if it ends in a clean close, a reset or an undecodable frame. With TLS on,
+only an undecodable frame counts. A session ended by the 2 s heartbeat watchdog never counts. The
+first frame a session decodes clears the count and the suspicion.
 
-TCP clients get no announcement: the framing changed incompatibly in 2.0.0, so a pre-2.0.0 server is
+A 1.x server sends heartbeats from the moment it accepts, also through a TLS-terminating proxy, and
+the first one fails to decode at once. A 2.x server with TLS on closes the connection of a client
+without TLS and sends a frame to one with TLS. Sessions that do not count therefore point at something
+that accepts connections and then closes them or forwards nothing, such as a proxy whose backend is
+down. After 3 of them in a row, colibri-unity logs a warning saying so.
+
+TCP clients get no announcement. The framing changed incompatibly in 2.0.0, so a pre-2.0.0 server is
 unmistakable.
 
-`serverVersion` is always a **protocol** version, never a release version such as `1.3.1`: in the
-payloads above, in `ProtocolMismatchError` and in `ProtocolMismatchException`. It is therefore
-comparable with the client version beside it. For a suspected old server it is `'1'`, since every
-2.0.0+ server sends the announcement and every earlier release uses v1. `'unknown'` appears only
-when a server refused a client without stating its version.
+In `protocol::accepted`, `protocol::rejected`, `ProtocolMismatchError` and
+`ProtocolMismatchException`, `serverVersion` is always a **protocol** version, never a release version
+such as `1.3.1`. It compares directly with the client version beside it. For a suspected old server it
+is `'1'`, since every 2.0.0+ server sends the announcement and every earlier release uses v1.
+`'unknown'` appears only when a server refused a client without stating its version.
 
-The 100 ms `latency` broadcast cannot replace the announcement: colibri-server 1.2.0 added it, so 1.2.x
-and 1.3.x servers send it too. Verified against the published `hcikn/colibri:1.1.1` and
-`hcikn/colibri:1.3.1` images: 1.1.1 sends none, 1.3.1 sends it with the old `\0\0\0` framing. Nothing
-else a web client can observe differs: the Socket.IO envelope, the `colibri::clients` payloads and the
-relay behaviour are identical.
+The 100 ms `latency` broadcast is no substitute for the announcement, because colibri-server 1.2.0
+added it and 1.2.x and 1.3.x servers send it too. Verified against the published images: `hcikn/colibri:1.1.1` sends none,
+`hcikn/colibri:1.3.1` sends it with the old `\0\0\0` framing. These servers also match 2.x in the
+Socket.IO envelope, the `colibri::clients` payloads and the relay behaviour, so a web client has no
+other signal.
 
-The detection is a guess, so by design:
+The detection is heuristic:
 
-- **Neither client gives up.** A current web client works with a 1.x server, since the Socket.IO
-  envelope did not change (tested against both images, traffic relayed both ways), so colibri-web stays
-  connected rather than turn a warning into an outage. A current Unity client cannot work with these
-  servers at all, so colibri-unity only names the cause, keeps retrying and leaves `Status` unchanged.
-  `ConnectionStatus.ProtocolMismatch` and `ProtocolMismatchReason` are reserved for a refusal that was
-  received and decoded.
-- **Neither is certain.** For colibri-unity, a TCP port that is not Colibri looks the same, so only
-  sessions past the handshake count. "Connection refused" means the server is switched off and is never
-  reported as a version problem. colibri-web's signal can also come from a server whose event loop
-  stalls for 5 s. While the browser tab is hidden, colibri-web re-arms the timer instead of reporting,
-  since a frozen tab is the likeliest cause of such a delay.
+- **No client disconnects on a suspicion.** colibri-web stays connected, because a current web client
+  works with a 1.x server. The Socket.IO envelope did not change (tested against both images, traffic
+  relayed both ways). A current Unity client cannot work with a 1.x server. colibri-unity logs the
+  cause, keeps retrying and leaves `Status` unchanged. `ConnectionStatus.ProtocolMismatch` and
+  `ProtocolMismatchReason` are reserved for a refusal that was received and decoded.
+- **False positives are possible.** For colibri-unity, a TCP port that is not Colibri looks the same,
+  so only sessions past the handshake count. "Connection refused" means the server is switched off and
+  is never reported as a version problem. colibri-web's signal can also come from a server whose event
+  loop stalls for 5 s. While the browser tab is hidden, colibri-web re-arms the timer instead of
+  reporting, since a frozen tab is the likeliest cause of such a delay.
 
 ### Heartbeat / latency
 
