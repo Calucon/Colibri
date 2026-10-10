@@ -515,7 +515,7 @@ one; the next replaces it.
 
 | Topic | Query | Snapshot |
 | --- | --- | --- |
-| `server` | none | `{ version, protocolVersion, node, startedAt, uptime, settings, tls, voice, counts }` |
+| `server` | none | `{ version, build, protocolVersion, node, startedAt, uptime, settings, tls, voice, counts }` |
 | `clients` | none | `{ clients: ClientRow[], total, adminPages }`, at most 1000 rows |
 | `models` | `{ app?, channel?, filter?, offset?, limit? }` | `{ query, channels, channelsTotal, models: ModelRow[], total, deleted, deletedTotal, tombstoneSeconds }` |
 | `model` | `{ app, channel, id }` | `{ app, channel, id, found, deletedAt?, fields?, bytes?, updatedAt?, json?, truncated? }` |
@@ -528,7 +528,10 @@ one; the next replaces it.
   `{ names, issuer, selfSigned, validFrom, validTo, fingerprint256 }` of the certificate served now;
   never paths, key material or file contents. `voice` is `{ listening, recording, samplingRate, clients }`.
   `counts` is `{ tcpClients, webClients, adminPages, apps, models, modelApps, modelChannels,
-  deletedModels, storeApps, storeKeys }`. `uptime` is in seconds.
+  deletedModels, storeApps, storeKeys }`. `uptime` is in seconds. `build` is `{ commit, dirty, builtAt }`:
+  the full hash of the git commit the server was built from, whether `colibri-server` had uncommitted
+  changes then, and the build time. `commit` is `null` for a build without git information, `builtAt`
+  for a build that did not record it (`tsc` alone).
 - **`clients`:** every client except admin UI pages. A row is
   `{ id, app, name, transport, version, tls, address, connectedAt, latency, in, out, limit, held }`:
   `transport` is `tcp` or `web`, `address` the client's own address (from the PROXY protocol header or

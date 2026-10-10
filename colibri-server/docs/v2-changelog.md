@@ -165,6 +165,10 @@ this is the server's full detail.
 - The image sets `NODE_ENV=production`.
 - `docker-compose.yml` caps the container log at 5 × 10 MB, since client log lines now reach
   `docker logs` and Docker's default log never rotates.
+- `npm run build` records the commit it builds in `dist/server/build-info.json`: from the build
+  arguments `COLIBRI_COMMIT` and `COLIBRI_COMMIT_DIRTY`, which `npm run publish` and
+  `docker-compose.yml` pass, else from git. The image has no `.git`, so a `docker build` without
+  them reports the commit as unknown.
 - New `npm run test:docker` runs the image against a fresh bind mount, a root-owned 1.x data
   directory, a named volume, as `--user 1000:1000`, with the 1.x data mounted read-only, without
   `CAP_CHOWN`, and with a changed `WEBSERVER_PORT` or `WEBSERVER_HOST`.
@@ -193,6 +197,9 @@ this is the server's full detail.
 - The shutdown and crash lines (`Received SIGTERM, shutting down...`, a shutdown step that
   failed, an uncaught exception, an unhandled rejection, a failed startup) are printed in the same
   format, as `[core/Server]`, and appear in the admin UI's log too.
+- The log starts with the version and the commit the server was built from:
+  `Colibri 2.0.0, commit 1a2b3c4d5e`, `(with uncommitted changes)` for a dirty build, or
+  `commit unknown`.
 - dotenv no longer prints its `injected env ... // tip` line on every start.
 - The `Web server listening on` startup line is printed once the web server is listening. It used
   to be printed before the server had even tried its port, so it appeared when the port was taken
@@ -538,9 +545,9 @@ The endpoints are documented under [REST store](./protocol.md#rest-store).
   channel, with their size, number of fields and last update; a model's value as JSON, to read or
   download (over 512 KiB, its start, as text); and the ids deleted lately. It reads once, on
   *Refresh*, or every second with *Live*.
-- New Server page: versions, uptime, the settings in effect with the variables that set them, the TLS
-  certificate's names, issuer, validity and fingerprint (a warning 30 days before it expires), and
-  counts of clients, apps, models and REST store values.
+- New Server page: versions, the commit the server was built from, uptime, the settings in effect with
+  the variables that set them, the TLS certificate's names, issuer, validity and fingerprint (a
+  warning 30 days before it expires), and counts of clients, apps, models and REST store values.
 - The Log page goes to the previous and next error or warning (keys `p` and `n`, with the focus in
   the log) and to the first error since the page was opened (`e`). It downloads the loaded lines
   that match its filters and search as text or JSON, which works over plain HTTP, unlike the

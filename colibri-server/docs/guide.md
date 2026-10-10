@@ -45,6 +45,10 @@ To build from a checkout, run `docker compose up -d` in `colibri-server`. That c
 image from source and keeps the data in `./data`. Alternatively, replace the `image:` line with
 `build: <path to the checkout>/colibri-server`.
 
+The image has no `.git`, so for the *Server* page to show the commit it was built from, pass it:
+`COLIBRI_COMMIT=$(git rev-parse HEAD) docker compose up -d --build`, or
+`docker build --build-arg COLIBRI_COMMIT=$(git rev-parse HEAD) .`.
+
 The image sets `NODE_ENV=production` and runs the server as PID 1. On `docker stop`, the server
 writes pending store changes and saves voice recordings in progress before it exits.
 
@@ -449,12 +453,13 @@ soon as it opens.
 
   ![Models page](../img/admin-models.png)
 
-- **Server:** version, protocol version, Node.js version and uptime; the settings in effect, with the
-  variables that set them: ports, `BASE_URL`, TLS, `TRUSTED_PROXIES`, `TCP_PROXY_PROTOCOL`, load
-  limits, idle timeout, tombstones, voice and recording; the TLS certificate's names, issuer, validity
-  and SHA-256 fingerprint, with a warning 30 days before it expires; and counts of clients, apps,
-  synchronized models and REST store values. Never certificate or key paths, key material or file
-  contents.
+- **Server:** version, the commit it was built from (the full hash and build time on hover,
+  *uncommitted changes* for a build with changes not committed, *unknown* without git information),
+  protocol version, Node.js version and uptime; the settings in effect, with the variables that set
+  them: ports, `BASE_URL`, TLS, `TRUSTED_PROXIES`, `TCP_PROXY_PROTOCOL`, load limits, idle timeout,
+  tombstones, voice and recording; the TLS certificate's names, issuer, validity and SHA-256
+  fingerprint, with a warning 30 days before it expires; and counts of clients, apps, synchronized
+  models and REST store values. Never certificate or key paths, key material or file contents.
 
   ![Server page](../img/admin-server.png)
 
@@ -534,7 +539,8 @@ package to upgrade, at most once a minute per address ([Version checking](protoc
 
 - `npm ci`: install the dependencies.
 - `npm run watch`: development server, recompiles and reloads on changes.
-- `npm run build`: compile.
+- `npm run build`: compile. Records the commit in `dist/server/build-info.json`, from
+  `COLIBRI_COMMIT` and `COLIBRI_COMMIT_DIRTY` (`true`) if set, else from git.
 - `npm start`: start the server. Compile first.
 - `npm run lint`: lint the server and admin UI sources.
 - `npm test`: vitest unit tests. The TLS tests need `openssl` on `PATH` (Git for Windows ships it in
