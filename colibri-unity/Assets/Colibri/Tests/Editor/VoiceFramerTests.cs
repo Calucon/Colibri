@@ -220,6 +220,17 @@ namespace HCIKonstanz.Colibri.Tests
             Assert.That(VoiceFramer.FrameSampleCount(samplingRate, frameMilliseconds), Is.EqualTo(expected));
         }
 
+        [TestCase(16000, 48000, 48000, 48000)]
+        [TestCase(48000, 48000, 48000, 48000)]
+        [TestCase(8000, 44100, 48000, 44100)]
+        [TestCase(96000, 192000, 48000, 96000)]
+        [TestCase(0, 0, 48000, 48000, Description = "a microphone that takes any rate")]
+        [TestCase(0, 0, 16000, 16000)]
+        public void RecordingRateIsTheServersOrTheNearestTheMicrophoneTakes(int minSupported, int maxSupported, int serverRate, int expected)
+        {
+            Assert.That(VoiceFramer.RecordingRate(minSupported, maxSupported, serverRate), Is.EqualTo(expected));
+        }
+
         [TestCase(48000, 960, true)]
         [TestCase(48000, 120, true, Description = "2.5 ms")]
         [TestCase(48000, 2880, true, Description = "60 ms")]

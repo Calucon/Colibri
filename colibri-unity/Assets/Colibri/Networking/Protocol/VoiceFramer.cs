@@ -85,6 +85,18 @@ namespace HCIKonstanz.Colibri.Networking.Protocol
         internal static int FrameSampleCount(int samplingRate, int frameMilliseconds)
             => (int)Math.Max(0, Math.Min(int.MaxValue, (long)samplingRate * frameMilliseconds / 1000));
 
+        /// <summary>
+        /// The sampling rate to record at: the server's if the microphone takes it, or else the
+        /// nearest one it takes, which needs the least resampling. Unity reports a microphone
+        /// that takes any rate as taking 0 to 0 Hz.
+        /// </summary>
+        internal static int RecordingRate(int minSupported, int maxSupported, int serverRate)
+        {
+            if (minSupported <= 0 && maxSupported <= 0)
+                return serverRate;
+            return Math.Max(minSupported, Math.Min(maxSupported, serverRate));
+        }
+
         /// <summary>Whether Opus encodes frames of <paramref name="frameSamples"/> samples at <paramref name="samplingRate"/>.</summary>
         internal static bool IsOpusFrame(int samplingRate, int frameSamples)
         {

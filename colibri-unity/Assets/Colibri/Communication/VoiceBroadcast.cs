@@ -116,9 +116,9 @@ namespace HCIKonstanz.Colibri.Communication
             Microphone.GetDeviceCaps(recordingDevices[MicrophoneID], out minSupportedSamplingRate, out maxSupportedSamplingRate);
             if (Debugging) Debug.Log(DEBUG_HEADER + "Sampling rates supported: " + minSupportedSamplingRate + " - " + maxSupportedSamplingRate);
 
-            // Decide on sampling rate
-            microphoneSamplingRate = maxSupportedSamplingRate;
-            if (maxSupportedSamplingRate >= serverSamplingRate && minSupportedSamplingRate <= serverSamplingRate) microphoneSamplingRate = serverSamplingRate;
+            // Decide on sampling rate. A microphone that takes any rate reports 0 to 0, and its
+            // maximum, which this used to record at then, is no rate at all.
+            microphoneSamplingRate = VoiceFramer.RecordingRate(minSupportedSamplingRate, maxSupportedSamplingRate, serverSamplingRate);
             if (Debugging) Debug.Log(DEBUG_HEADER + "Use sampling rate: " + microphoneSamplingRate);
 
             // Frames are cut at the server's sampling rate, which a packet's frame size counts in,
