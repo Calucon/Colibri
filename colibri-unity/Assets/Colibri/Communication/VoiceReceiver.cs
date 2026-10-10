@@ -30,9 +30,8 @@ namespace HCIKonstanz.Colibri.Communication
         // Mono at the output rate, from the main thread to the audio thread
         private VoicePlaybackBuffer playbackBuffer;
         private VoiceServerConnection voiceServerConnection;
-        private short remoteUserId;
-        // Read on the audio thread
-        private volatile bool playback = false;
+        // Whose voice plays, if anyone's
+        private VoicePlayback playback;
         // private bool isInitialized = false;
         private Resampler resampler;
         // Samples at the output rate, read on the audio thread: past the threshold, fast-forward
@@ -55,6 +54,7 @@ namespace HCIKonstanz.Colibri.Communication
             // A second, as VoiceServerConnection queues at most a second of each sender's voice.
             // Here rather than in StartPlayback, so that the audio thread never finds none.
             playbackBuffer = new VoicePlaybackBuffer(Math.Max(AudioSettings.outputSampleRate, 48000));
+            playback = new VoicePlayback(playbackBuffer, AddVoicePacketListener, RemoveVoicePacketListener);
             voiceServerConnection = VoiceServerConnection.Instance;
             playbackAudioSource = GetComponent<AudioSource>();
             playbackAudioSource.bypassEffects = false;
@@ -84,7 +84,7 @@ namespace HCIKonstanz.Colibri.Communication
         private void Update()
         {
             // Debug: Check if data in playback buffer is constant
-            if (Debugging && playback)
+            if (Debugging && playback.IsPlaying)
             {
                 // Said here rather than on the audio thread
                 long fastForwarded = playbackBuffer.FastForwarded;
@@ -97,7 +97,7 @@ namespace HCIKonstanz.Colibri.Communication
                 timer += Time.deltaTime;
                 if (timer > 5f)
                 {
-                    Debug.Log(DEBUG_HEADER + "Id: " + remoteUserId + " | Samples in playback buffer: " + playbackBuffer.Count);
+                    Debug.Log(DEBUG_HEADER + "Id: " + playback.Id + " | Samples in playback buffer: " + playbackBuffer.Count);
                     timer = 0f;
                 }
             }
@@ -108,9 +108,7 @@ namespace HCIKonstanz.Colibri.Communication
             // Destroyed while playing, as VoiceManager destroys the receiver of a client it has not
             // heard from: the connection kept delivering to it, and its buffer, which nothing
             // played any more, grew with every packet.
-            if (playback && voiceServerConnection != null)
-                voiceServerConnection.RemoveVoicePacketListener(remoteUserId, OnSamplesDataReceived);
-            playback = false;
+            playback?.Stop();
 
             // Here rather than in OnApplicationQuit, so that a receiver destroyed before then frees
             // it too. Null unless an Opus packet has come in and Opus runs here.
@@ -121,14 +119,15 @@ namespace HCIKonstanz.Colibri.Communication
         // On the audio thread: nothing here allocates or waits for the main thread.
         private void OnAudioFilterRead(float[] data, int channels)
         {
-            if (playback)
+            VoicePlayback current = playback;
+            if (current != null && current.IsPlaying)
             {
                 try
                 {
                     // Fast forward to latest samples to reduce latency. Each sample goes to every
                     // channel, and what the buffer cannot fill is silence.
                     int fastForwardAbove = FastForwardPlayback ? fastForwardSamplesThreshold : int.MaxValue;
-                    playbackBuffer.Read(data, channels, fastForwardAbove, lastPacketSamples);
+                    current.Read(data, channels, fastForwardAbove, lastPacketSamples);
                 }
                 catch (Exception e)
                 {
@@ -145,20 +144,30 @@ namespace HCIKonstanz.Colibri.Communication
 
         public void StartPlayback(short id)
         {
-            remoteUserId = id;
-            voiceServerConnection.AddVoicePacketListener(remoteUserId, OnSamplesDataReceived);
+            // Nothing for the id that plays already: each start added a listener, and started
+            // twice, the receiver played every packet twice. Another id replaces the one playing.
+            if (!playback.Start(id)) return;
             playbackAudioSource.Play();
-            playback = true;
-            playbackBuffer.Clear();
-            Debug.Log(DEBUG_HEADER + "Start voice playback with ID: " + remoteUserId);
+            Debug.Log(DEBUG_HEADER + "Start voice playback with ID: " + id);
         }
 
         public void StopPlayback()
         {
-            Debug.Log(DEBUG_HEADER + "Stop voice playback of ID: " + remoteUserId);
-            playback = false;
+            if (!playback.Stop()) return;
+            Debug.Log(DEBUG_HEADER + "Stop voice playback of ID: " + playback.Id);
             playbackAudioSource.Stop();
-            voiceServerConnection.RemoveVoicePacketListener(remoteUserId, OnSamplesDataReceived);
+        }
+
+        private void AddVoicePacketListener(short id)
+        {
+            voiceServerConnection.AddVoicePacketListener(id, OnSamplesDataReceived);
+        }
+
+        private void RemoveVoicePacketListener(short id)
+        {
+            // In OnDestroy on quit, the connection may be gone already
+            if (voiceServerConnection != null)
+                voiceServerConnection.RemoveVoicePacketListener(id, OnSamplesDataReceived);
         }
 
         private void OnSamplesDataReceived(VoicePacket voicePacket)
@@ -206,7 +215,7 @@ namespace HCIKonstanz.Colibri.Communication
 
         private void ReportOpusFailure(string reason)
         {
-            Debug.LogWarning(DEBUG_HEADER + "Opus packets of voice id " + remoteUserId + " that cannot be decoded are dropped (" + reason + "). PCM packets still play. Reported once per receiver.");
+            Debug.LogWarning(DEBUG_HEADER + "Opus packets of voice id " + playback.Id + " that cannot be decoded are dropped (" + reason + "). PCM packets still play. Reported once per receiver.");
         }
     }
 }
