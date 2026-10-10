@@ -71,6 +71,9 @@ export const boxLayout = function (chartWidth: number, plotWidth: number, client
     return { band, hidden: null };
 };
 
+// a clipPath id of its own for each chart on the page
+let clipIds = 0;
+
 interface Line {
     client: ColibriClient;
     color: string;
@@ -111,6 +114,7 @@ export class LatencyChartComponent implements AfterViewInit, OnDestroy {
     private svg: d3.Selection<SVGSVGElement, unknown, null, undefined> | null = null;
     private lineChartSvg: d3.Selection<SVGGElement, unknown, null, undefined> | null = null;
     private boxplotSvg: d3.Selection<SVGGElement, unknown, null, undefined> | null = null;
+    private lineClip: d3.Selection<SVGRectElement, unknown, null, undefined> | null = null;
     private axisLeft: d3.Selection<SVGGElement, unknown, null, undefined> | null = null;
     private axisBottom: d3.Selection<SVGGElement, unknown, null, undefined> | null = null;
 
@@ -163,9 +167,15 @@ export class LatencyChartComponent implements AfterViewInit, OnDestroy {
             .append('g')
             .attr('transform', 'translate(' + margin.left + ',' + margin.top + ')');
 
+        // A sample that arrives during the slide lies up to a second past the right end of the
+        // time axis, and its segment was drawn over the first client's box until the next slide.
+        const clipId = `latency-clip-${++clipIds}`;
+        this.lineClip = this.svg.append('clipPath').attr('id', clipId).append('rect').attr('y', -2);
+
         this.lineChartSvg = this.svg
             .append('g')
             .attr('transform', 'translate(' + margin.left + ',' + margin.top + ')')
+            .attr('clip-path', `url(#${clipId})`)
             // extra container for smooth animations
             .append('g');
 
@@ -181,6 +191,8 @@ export class LatencyChartComponent implements AfterViewInit, OnDestroy {
         this.width = el.clientWidth;
         this.height = el.clientHeight;
         this.svg?.attr('width', this.width).attr('height', this.height);
+        // 2px over the top and bottom for the stroke of a line at either end of the scale
+        this.lineClip?.attr('height', Math.max(0, this.height - margin.top - margin.bottom) + 4);
         this.axisBottom?.attr('transform', `translate(${margin.left}, ${this.height - margin.bottom})`);
     }
 
@@ -197,6 +209,7 @@ export class LatencyChartComponent implements AfterViewInit, OnDestroy {
         const now = Date.now();
         const boxplotWidth = this.clients().length * band;
         const linechartWidth = Math.max(0, plotWidth - boxplotWidth);
+        this.lineClip?.attr('width', linechartWidth);
 
         if (this.boxplotSvg) {
             this.boxplotSvg
