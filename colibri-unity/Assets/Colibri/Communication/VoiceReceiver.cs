@@ -1,6 +1,7 @@
 ﻿using System.Collections;
 using System.Collections.Generic;
 using HCIKonstanz.Colibri.Networking;
+using HCIKonstanz.Colibri.Networking.Protocol;
 using HCIKonstanz.Colibri.Setup;
 using UnityEngine;
 
@@ -11,6 +12,8 @@ namespace HCIKonstanz.Colibri.Communication
     {
         public bool FastForwardPlayback = true;
         public int FastForwardLatencyMilliseconds = 100;
+        // Kept so that scripts that set it still compile.
+        [Tooltip("No effect. Each packet is decoded by its own codec; Use Opus Codec on VoiceBroadcast decides what a client sends.")]
         public bool UseOpusCodec = false;
         public int FrameSizeMilliseconds = 20;
         public float Volume = 1f;
@@ -31,10 +34,16 @@ namespace HCIKonstanz.Colibri.Communication
         // private bool isInitialized = false;
         private Resampler resampler;
         private int fastForwardSamplesThreshold = 4800;
+
+        // Decodes each packet by its codec, creating opusDecoder with the first Opus packet
+        private VoiceDecoder voiceDecoder;
+        // Null until the first Opus packet, and where Opus cannot decode
         private OpusDecoder opusDecoder;
 
         private void Awake()
         {
+            // Here rather than in Start: StartPlayback, and with it a packet, can come first.
+            voiceDecoder = new VoiceDecoder(CreateOpusDecoder, ReportOpusFailure);
             voiceServerConnection = VoiceServerConnection.Instance;
             playbackAudioSource = GetComponent<AudioSource>();
             playbackAudioSource.bypassEffects = false;
@@ -56,11 +65,6 @@ namespace HCIKonstanz.Colibri.Communication
             serverSamplingRate = ColibriConfig.Load().VoiceServerSamplingRate;
             resampler = new Resampler(serverSamplingRate, AudioSettings.outputSampleRate);
             fastForwardSamplesThreshold = serverSamplingRate / 1000 * FastForwardLatencyMilliseconds;
-
-            if (UseOpusCodec)
-            {
-                opusDecoder = new OpusDecoder(serverSamplingRate, 1);
-            }
             // isInitialized = true;
         }
 
@@ -80,7 +84,8 @@ namespace HCIKonstanz.Colibri.Communication
 
         private void OnApplicationQuit()
         {
-            if (UseOpusCodec) opusDecoder.Destroy();
+            // Null unless an Opus packet has come in and Opus runs here
+            opusDecoder?.Destroy();
         }
 
         // Use the MonoBehaviour.OnAudioFilterRead callback to playback voice data as fast as possible
@@ -124,15 +129,11 @@ namespace HCIKonstanz.Colibri.Communication
 
         private void OnSamplesDataReceived(VoicePacket voicePacket)
         {
-            byte[] shortBytes = voicePacket.Data;
+            // PCM as it is, Opus decoded, whatever UseOpusCodec says. Null for a packet that
+            // cannot be played, such as Opus where it cannot be decoded.
+            byte[] shortBytes = voiceDecoder.Decode(voicePacket);
+            if (shortBytes == null) return;
             frameSize = voicePacket.FrameSize;
-
-            if (UseOpusCodec && voicePacket.Codec == Codec.OPUS)
-            {
-                byte[] decodedBytes = opusDecoder.Decode(voicePacket.Data, voicePacket.FrameSize);
-                if (decodedBytes == null) return;
-                shortBytes = decodedBytes;
-            }
 
             // Convert bytes to float samples
             float[] samples = SamplingUtility.ConvertShortBytesToFloat(shortBytes);
@@ -148,6 +149,27 @@ namespace HCIKonstanz.Colibri.Communication
 
             // Add samples to playback buffer
             playbackBuffer.AddRange(samples); // Sometimes ArgumentOutOfRangeException
+        }
+
+        private bool CreateOpusDecoder(out VoiceFrameDecoder decoder, out string error)
+        {
+            decoder = null;
+            if (!OpusDecoder.TryCreate(serverSamplingRate, 1, out opusDecoder, out error))
+                return false;
+            decoder = DecodeOpus;
+            return true;
+        }
+
+        private byte[] DecodeOpus(byte[] opus, int frameSamples, out string error)
+        {
+            byte[] pcm = opusDecoder.TryDecode(opus, frameSamples, out OpusError opusError);
+            error = pcm == null ? opusError.ToString() : null;
+            return pcm;
+        }
+
+        private void ReportOpusFailure(string reason)
+        {
+            Debug.LogWarning(DEBUG_HEADER + "Opus packets of voice id " + remoteUserId + " that cannot be decoded are dropped (" + reason + "). PCM packets still play. Reported once per receiver.");
         }
 
         private void FastForwardPlaybackBuffer()
