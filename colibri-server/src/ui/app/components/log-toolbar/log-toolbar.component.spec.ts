@@ -211,23 +211,15 @@ describe('LogToolbarComponent', () => {
         expect([ 7, 999, 1000, 1250, 9999, 10000 ].map(n => component.shortCount(n))).toEqual([ '7', '999', '1k', '1.3k', '10k', '10k' ]);
     });
 
-    it('moves to the search on /, but not while typing elsewhere', () => {
+    it('moves to the search for the log page\'s / key, and opens the filters for it', () => {
         const fixture = TestBed.createComponent(LogToolbarComponent);
         fixture.detectChanges();
         document.body.appendChild(fixture.nativeElement);
         const input: HTMLInputElement = fixture.nativeElement.querySelector('.search input');
 
-        document.body.dispatchEvent(new KeyboardEvent('keydown', { key: '/', bubbles: true }));
+        fixture.componentInstance.focusSearch();
         expect(document.activeElement).toBe(input);
-
-        input.blur();
-        const other = document.createElement('textarea');
-        document.body.appendChild(other);
-        other.focus();
-        other.dispatchEvent(new KeyboardEvent('keydown', { key: '/', bubbles: true }));
-        expect(document.activeElement).toBe(other);
-
-        other.remove();
+        expect(fixture.componentInstance.open()).toBe(true);
         fixture.nativeElement.remove();
     });
 });

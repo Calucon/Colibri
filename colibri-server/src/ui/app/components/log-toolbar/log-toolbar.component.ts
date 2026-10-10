@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, ElementRef, HostListener, OnDestroy, computed, effect, inject, input, output, signal, untracked, viewChild } from '@angular/core';
+import { ChangeDetectionStrategy, Component, ElementRef, OnDestroy, computed, effect, inject, input, output, signal, untracked, viewChild } from '@angular/core';
 import { DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { MenuItem } from 'primeng/api';
@@ -170,14 +170,8 @@ export class LogToolbarComponent implements OnDestroy {
         else input.blur();
     }
 
-    // '/' moves to the search, as in many developer tools, unless something else takes text
-    @HostListener('document:keydown', [ '$event' ])
-    onKey(event: KeyboardEvent): void {
-        if (event.key !== '/' || event.ctrlKey || event.metaKey || event.altKey) return;
-        const target = event.target as HTMLElement | null;
-        if (target?.closest('input, textarea, select, [contenteditable="true"]')) return;
-
-        event.preventDefault();
+    /** To the search field, for the log page's '/' key; on a phone, the filters open for it. */
+    focusSearch(): void {
         this.open.set(true);
         this.searchInput().nativeElement.focus();
     }

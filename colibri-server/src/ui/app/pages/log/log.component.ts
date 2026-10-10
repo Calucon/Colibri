@@ -48,6 +48,7 @@ export class LogComponent implements AfterViewInit, OnDestroy {
     private injector = inject(Injector);
 
     private scroller = viewChild.required<ElementRef<HTMLElement>>('scroller');
+    private toolbar = viewChild.required(LogToolbarComponent);
 
     /** Whether the page scrolls to new lines as they arrive. */
     following = signal(true);
@@ -140,8 +141,15 @@ export class LogComponent implements AfterViewInit, OnDestroy {
     private resizeObserver: ResizeObserver | undefined;
 
     constructor() {
-        // After the first render: by then the address is this page's, not the one it came from.
-        afterNextRender(() => this.log.openPage());
+        afterNextRender(() => {
+            // by then the address is this page's, not the one it came from
+            this.log.openPage();
+            // The keys below work with the focus in the log. On a page just loaded, nothing has the
+            // focus yet: the log takes it, so that they work from the start.
+            if (document.activeElement === null || document.activeElement === document.body) {
+                this.scroller().nativeElement.focus({ preventScroll: true });
+            }
+        });
 
         afterRenderEffect(() => {
             this.rows();
@@ -257,10 +265,18 @@ export class LogComponent implements AfterViewInit, OnDestroy {
         return top === Infinity ? [ 0, index.size - 1 ] : [ top, bottom ];
     }
 
-    // n and p, as next and previous in many tools, and e for the first error.
-    @HostListener('document:keydown', [ '$event' ])
+    // '/' to the search, n and p to the next and previous error or warning, as in many developer
+    // tools, and e to the first new error. Only with the focus in the log or its toolbar: single
+    // character keys that worked anywhere on the page would also take a key meant for something
+    // else, or a word said to speech input (WCAG 2.1.4).
+    @HostListener('keydown', [ '$event' ])
     onKey(event: KeyboardEvent): void {
         if (event.ctrlKey || event.metaKey || event.altKey || typing(event)) return;
+        if (event.key === '/') {
+            event.preventDefault();
+            this.toolbar().focusSearch();
+            return;
+        }
         const step = ({ n: 'next', p: 'previous', e: 'first-error' } as const)[event.key as 'n' | 'p' | 'e'];
         if (!step) return;
         event.preventDefault();

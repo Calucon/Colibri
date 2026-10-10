@@ -38,8 +38,12 @@ describe('LogComponent', () => {
         vi.advanceTimersByTime(FLUSH_INTERVAL);
     };
 
+    // the page created last
+    let page: HTMLElement;
+
     const create = () => {
         const fixture = TestBed.createComponent(LogComponent);
+        page = fixture.nativeElement;
         fixture.detectChanges();
         TestBed.flushEffects();
         return { fixture, component: fixture.componentInstance, log: TestBed.inject(LogService) };
@@ -176,7 +180,8 @@ describe('LogComponent', () => {
     });
 
     describe('errors and warnings', () => {
-        const key = (key: string, target: EventTarget = document) =>
+        // on the log, where the keys work, unless said otherwise
+        const key = (key: string, target: EventTarget = page.querySelector('.scroller')!) =>
             target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
 
         beforeEach(() => {
@@ -212,15 +217,29 @@ describe('LogComponent', () => {
             expect(component.current()).toBeNull();
         });
 
-        it('ignores the keys while typing', () => {
-            const { component } = create();
+        it('ignores the keys while typing, and with the focus outside the log', () => {
+            const { fixture, component } = create();
             history([ message({ id: 'e', level: 0 }) ]);
-            const input = document.createElement('input');
-            document.body.appendChild(input);
 
-            key('n', input);
+            key('n', fixture.nativeElement.querySelector('.search input'));
             expect(component.current()).toBeNull();
-            input.remove();
+            key('n', document.body);
+            key('e', document.body);
+            expect(component.current()).toBeNull();
+        });
+
+        it('takes the focus on a page just loaded, so that the keys work, and goes to the search on /', () => {
+            const fixture = TestBed.createComponent(LogComponent);
+            page = fixture.nativeElement;
+            document.body.appendChild(page);
+            (document.activeElement as HTMLElement | null)?.blur();
+            fixture.detectChanges();
+            TestBed.tick();
+            expect(document.activeElement).toBe(fixture.nativeElement.querySelector('.scroller'));
+
+            key('/');
+            expect(document.activeElement).toBe(fixture.nativeElement.querySelector('.search input'));
+            fixture.nativeElement.remove();
         });
 
         it('goes to the first error since the page was opened with e', () => {
