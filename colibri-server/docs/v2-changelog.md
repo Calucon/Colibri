@@ -361,10 +361,11 @@ EditMode tests, which `npm run test:vectors` checks in CI.
   forged sender can take the place of one of them that sends no voice.
 - The app id keeps apps apart but is not access control: anyone who knows an app's name and can
   reach the TCP port can join the app and send and receive its voice. Voice is not encrypted.
-- **Voice on IPv6.** A `VOICE_HOST` that is an IPv6 address, `::` included, gets an IPv6 socket
-  that takes IPv4 clients as well and relays between the two kinds. The voice socket was always
-  IPv4, which cannot bind an IPv6 address: `VOICE_HOST=::` failed with `bind EINVAL` and voice
-  stayed off. Any other `VOICE_HOST` keeps the IPv4 socket. `TCP_HOST` and `WEBSERVER_HOST` already
+- **Voice on IPv6.** A `VOICE_HOST` that is an IPv6 address gets an IPv6 socket. On `::` it takes
+  IPv4 clients as well and relays between the two kinds; on another IPv6 address it takes only
+  that address. The voice socket was always IPv4, which cannot bind an IPv6 address:
+  `VOICE_HOST=::` failed with `bind EINVAL` and voice stayed off. Any other `VOICE_HOST` keeps the
+  IPv4 socket. `TCP_HOST` and `WEBSERVER_HOST` already
   took an IPv6 address, so `::` on all three serves clients that reach the server over IPv6, such
   as colibri-unity 2.0.0 with a server name that has only an AAAA record. See
   [Configuration](./guide.md#configuration).
