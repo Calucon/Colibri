@@ -12,6 +12,9 @@ import { bytes, count, download, duration, fileNamePart } from '../../format';
 /** Models a page of the list shows. */
 export const MODELS_PAGE_SIZE = 50;
 
+/** Deleted ids shown until all are asked for. */
+export const DELETED_SHOWN = 10;
+
 /** How long typing in the filter pauses before the list is asked for, in ms. */
 export const FILTER_DELAY = 300;
 
@@ -185,6 +188,11 @@ export class ModelsComponent implements OnDestroy {
         if (!data) return [];
         return data.deleted.map(row => ({ ...row, key: `${row.app}\n${row.channel}\n${row.id}`, age: duration((data.at - row.deletedAt) / 1000) }));
     });
+
+    readonly DELETED_SHOWN = DELETED_SHOWN;
+    /** Whether every deleted id the server sent is shown, not only the newest. */
+    allDeleted = signal(false);
+    deletedShown = computed(() => this.allDeleted() ? this.deleted() : this.deleted().slice(0, DELETED_SHOWN));
 
     /** Whether the page asked for is past the end, after models were deleted or the filter changed. */
     pastEnd = computed(() => {

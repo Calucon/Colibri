@@ -155,7 +155,7 @@
                 </tr>
               </thead>
               <tbody>
-                @for (row of deleted(); track row.key) {
+                @for (row of deletedShown(); track row.key) {
                   <tr>
                     <td class="c-id">
                       <span class="id-line">
@@ -177,6 +177,11 @@
               </tbody>
             </table>
           </div>
+          @if (deleted().length > DELETED_SHOWN) {
+            <button type="button" class="btn more-deleted" [attr.aria-expanded]="allDeleted()" (click)="allDeleted.set(!allDeleted())">
+              {{ allDeleted() ? 'Show the newest ' + DELETED_SHOWN : 'Show all ' + deleted().length }}
+            </button>
+          }
         } @else if (data.tombstoneSeconds > 0) {
           <p class="empty-note">None{{ filtered() ? ' that match' : '' }}.</p>
         }
@@ -227,10 +232,6 @@
       } @else {
         <p class="empty-note">Loading the model…</p>
       }
-    </section>
-  } @else {
-    <section class="card detail placeholder" aria-label="Model">
-      <p class="empty-note">Choose a model to see its value.</p>
     </section>
   }
 </div>

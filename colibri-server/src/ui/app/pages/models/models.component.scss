@@ -109,18 +109,16 @@
     cursor: pointer;
 }
 
-// The list, and the open model beside it on a wide screen or instead of it on a narrow one.
+// The list across the page, and the open model beside it on a wide screen or instead of it on a
+// narrow one.
 .models {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+    grid-template-columns: minmax(0, 1fr);
     align-items: start;
-}
 
-.placeholder {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-height: 160px;
+    &.open {
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+    }
 }
 
 .list {
@@ -212,6 +210,10 @@
 
 .deleted-table .c-id {
     color: var(--text-muted);
+}
+
+.more-deleted {
+    margin-top: 12px;
 }
 
 .pager {
@@ -366,13 +368,12 @@
 
 @media (max-width: 1099.98px) {
     // the open model instead of the list, with a way back
-    .models {
+    .models.open {
         grid-template-columns: minmax(0, 1fr);
-    }
 
-    .models.open .list,
-    .placeholder {
-        display: none;
+        .list {
+            display: none;
+        }
     }
 
     .detail {

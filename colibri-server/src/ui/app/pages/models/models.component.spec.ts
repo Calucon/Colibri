@@ -4,7 +4,7 @@ import { provideRouter } from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
 import { Subject } from 'rxjs';
 import { ConnectionState, ModelRow, Reconnect, SocketIOService } from '../../services';
-import { HIGHLIGHT_LIMIT, MODELS_PAGE_SIZE, ModelsComponent, jsonParts } from './models.component';
+import { DELETED_SHOWN, HIGHLIGHT_LIMIT, MODELS_PAGE_SIZE, ModelsComponent, jsonParts } from './models.component';
 
 const model = (id: string, overrides: Partial<ModelRow> = {}): ModelRow => ({
     app: 'demo', channel: 'scene', id, fields: 3, bytes: 120, updatedAt: 1000, ...overrides
@@ -101,6 +101,24 @@ describe('ModelsComponent', () => {
         answer('model', { app: 'demo', channel: 'scene', id: 'm1', found: false, deletedAt: 59_000 });
         harness.detectChanges();
         expect(harness.routeNativeElement!.querySelector('.gone')?.textContent?.trim()).toMatch(/^Deleted 2 s ago, at /);
+    });
+
+    it('spans the page until a model is open, and shows the newest deleted ids until asked for all', async () => {
+        const { harness } = await open('/models');
+        const deleted = Array.from({ length: DELETED_SHOWN + 5 }, (_, i) => ({ app: 'demo', channel: 'scene', id: `d${i}`, deletedAt: 31_000 }));
+        list([ model('a') ], { deleted, deletedTotal: deleted.length });
+        harness.detectChanges();
+        const root = harness.routeNativeElement!;
+
+        expect(root.querySelector('.models')?.classList.contains('open')).toBe(false);
+        expect(root.querySelector('.detail')).toBeNull();
+        expect(root.querySelectorAll('.deleted-table tbody tr')).toHaveLength(DELETED_SHOWN);
+
+        const more = root.querySelector<HTMLButtonElement>('.more-deleted')!;
+        expect(more.textContent?.trim()).toBe(`Show all ${DELETED_SHOWN + 5}`);
+        more.click();
+        harness.detectChanges();
+        expect(root.querySelectorAll('.deleted-table tbody tr')).toHaveLength(DELETED_SHOWN + 5);
     });
 
     it('offers the last page when the page asked for is past the end', async () => {
