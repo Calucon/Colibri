@@ -3,6 +3,7 @@ import { DatePipe } from '@angular/common';
 import { LogMessage, LogService, SocketIOService } from '../../services';
 import { LogMessageComponent } from '../../components/log-message/log-message.component';
 import { LogToolbarComponent } from '../../components/log-toolbar/log-toolbar.component';
+import { OfflineBannerComponent } from '../../components/offline-banner/offline-banner.component';
 import { matchesSearch } from '../../components/log-message/log-format';
 
 /**
@@ -30,7 +31,7 @@ interface EmptyState {
     selector: 'app-log',
     templateUrl: './log.component.html',
     styleUrls: ['./log.component.scss'],
-    imports: [DatePipe, LogMessageComponent, LogToolbarComponent],
+    imports: [DatePipe, LogMessageComponent, LogToolbarComponent, OfflineBannerComponent],
     changeDetection: ChangeDetectionStrategy.OnPush
 })
 export class LogComponent implements AfterViewInit, OnDestroy {
@@ -77,9 +78,6 @@ export class LogComponent implements AfterViewInit, OnDestroy {
         }
         return count;
     });
-
-    /** When the connection was lost, while it is. */
-    offline = computed(() => this.socketio.state() === 'reconnecting' ? this.socketio.lostAt() : null);
 
     /** The rows that start a new day, which get the date above them. */
     dayStarts = computed(() => {

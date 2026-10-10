@@ -5,18 +5,6 @@
     background: var(--bg);
 }
 
-.banner {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 16px;
-
-    color: var(--bg);
-    background: var(--warn);
-    font-size: 13px;
-    font-weight: 500;
-}
-
 .viewport {
     position: relative;
     flex: 1;

@@ -1,11 +1,6 @@
 <app-log-toolbar [following]="following()" (followChange)="$event ? follow() : pause()" [matches]="search() ? matches().length : null"></app-log-toolbar>
 
-@if (offline(); as lostAt) {
-  <div class="banner" role="alert">
-    <i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
-    Connection to the server lost at {{ lostAt | date:'HH:mm:ss' }}. Reconnecting…
-  </div>
-}
+<app-offline-banner></app-offline-banner>
 
 <div class="viewport">
   <div #scroller class="scroller" [class.paused]="!following()" role="log" aria-label="Log lines" tabindex="-1"
