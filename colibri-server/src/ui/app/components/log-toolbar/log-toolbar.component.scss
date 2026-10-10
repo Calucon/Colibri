@@ -4,9 +4,8 @@
     border-bottom: 1px solid var(--border);
 }
 
-// Wide screens: one row. Below 1100px the search, app and sync controls take a second row, and
-// on a phone, or a screen as short as a phone held sideways, they fold away behind the Filters
-// button.
+// Wide screens: one row. Below 1500px the search, app and switches take a second row, and on a
+// phone, or a screen as short as a phone held sideways, they fold away behind the Filters button.
 .bar {
     display: flex;
     flex-wrap: wrap;
@@ -257,12 +256,13 @@
     }
 }
 
-.sync {
+.switch {
     display: flex;
     align-items: center;
     gap: 8px;
     min-height: 32px;
     font-size: 13px;
+    white-space: nowrap;
     cursor: pointer;
 
     small {
@@ -279,7 +279,7 @@
     display: none;
 }
 
-@media (max-width: 1099.98px) {
+@media (max-width: 1499.98px) {
     .follow {
         order: 0;
     }
@@ -361,10 +361,10 @@
         max-width: none;
     }
 
-    .sync {
+    .switch {
         min-height: 44px;
 
-        .sync-label {
+        .switch-label {
             display: flex;
             flex-direction: column;
         }

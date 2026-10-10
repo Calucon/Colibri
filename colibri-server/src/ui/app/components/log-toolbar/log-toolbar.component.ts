@@ -76,6 +76,7 @@ export class LogToolbarComponent implements OnDestroy {
         const search = this.log.search();
         if (search) active.push({ label: `Search: ${search}`, clear: () => this.log.search.set('') });
         if (this.log.showBroadcastTraffic()) active.push({ label: 'Sync traffic', clear: () => this.log.showBroadcastTraffic.set(false) });
+        if (!this.log.showConnections()) active.push({ label: 'No connections', clear: () => this.log.showConnections.set(true) });
         return active;
     });
 

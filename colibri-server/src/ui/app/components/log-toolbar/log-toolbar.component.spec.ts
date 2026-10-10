@@ -8,6 +8,7 @@ describe('LogToolbarComponent', () => {
         filter: ReturnType<typeof signal<string>>;
         levels: ReturnType<typeof signal<ReadonlySet<number>>>;
         showBroadcastTraffic: ReturnType<typeof signal<boolean>>;
+        showConnections: ReturnType<typeof signal<boolean>>;
         search: ReturnType<typeof signal<string>>;
         apps: ReturnType<typeof signal<ReadonlySet<string>>>;
         levelCounts: ReturnType<typeof signal<number[]>>;
@@ -23,6 +24,7 @@ describe('LogToolbarComponent', () => {
             filter: signal(''),
             levels: signal<ReadonlySet<number>>(new Set([ 0, 1, 2, 3 ])),
             showBroadcastTraffic: signal(false),
+            showConnections: signal(true),
             search: signal(''),
             apps: signal<ReadonlySet<string>>(new Set()),
             levelCounts: signal([ 0, 0, 0, 0 ]),
@@ -144,12 +146,31 @@ describe('LogToolbarComponent', () => {
         log.filter.set('demo');
         log.search.set('asset');
         log.showBroadcastTraffic.set(true);
+        log.showConnections.set(false);
         const component = TestBed.createComponent(LogToolbarComponent).componentInstance;
 
-        expect(component.activeFilters().map(f => f.label)).toEqual([ 'App: demo', 'Search: asset', 'Sync traffic' ]);
+        expect(component.activeFilters().map(f => f.label)).toEqual([ 'App: demo', 'Search: asset', 'Sync traffic', 'No connections' ]);
 
         component.activeFilters()[0].clear();
         expect(log.filter()).toBe('');
+        component.activeFilters()[2].clear();
+        expect(log.showConnections()).toBe(true);
+    });
+
+    it('hides the connection lines with its own switch', async () => {
+        const fixture = TestBed.createComponent(LogToolbarComponent);
+        fixture.detectChanges();
+        // ngModel writes its value a microtask later
+        await fixture.whenStable();
+        fixture.detectChanges();
+        const [ sync, connections ] = fixture.nativeElement.querySelectorAll('.switch input') as NodeListOf<HTMLInputElement>;
+        expect([ sync.checked, connections.checked ]).toEqual([ false, true ]);
+
+        connections.click();
+        fixture.detectChanges();
+
+        expect(log.showConnections()).toBe(false);
+        expect(log.showBroadcastTraffic()).toBe(false);
     });
 
     it('counts in thousands past 999', () => {

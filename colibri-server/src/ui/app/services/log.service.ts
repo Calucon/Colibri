@@ -68,6 +68,8 @@ export class LogService {
     public readonly filter = signal<string>(readHash());
     public readonly levels = signal<ReadonlySet<number>>(new Set(LOG_LEVELS.map(l => l.value)));
     public readonly showBroadcastTraffic = signal(false);
+    /** Whether the routine connect and disconnect lines are shown. */
+    public readonly showConnections = signal(true);
 
     /** Text to look for in the loaded lines. Unlike the filters above, the page applies it itself. */
     public readonly search = signal('');
@@ -100,6 +102,7 @@ export class LogService {
     public clearFilters(): void {
         this.filter.set('');
         this.showBroadcastTraffic.set(false);
+        this.showConnections.set(true);
         this.search.set('');
         if (this.levels().size !== LOG_LEVELS.length) this.setLevels(LOG_LEVELS.map(l => l.value));
     }
@@ -128,6 +131,7 @@ export class LogService {
             const filter = this.filter();
             this.levels();
             this.showBroadcastTraffic();
+            this.showConnections();
 
             untracked(() => {
                 this.clear();
@@ -165,6 +169,7 @@ export class LogService {
             filter: this.filter(),
             levels: [ ...this.levels() ],
             showBroadcastTraffic: this.showBroadcastTraffic(),
+            showConnections: this.showConnections(),
             request: this.awaiting
         });
     }

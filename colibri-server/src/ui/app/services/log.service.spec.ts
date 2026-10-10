@@ -58,6 +58,7 @@ describe('LogService', () => {
             filter: '',
             levels: [ 0, 1, 2, 3 ],
             showBroadcastTraffic: false,
+            showConnections: true,
             request: 1
         });
     });
@@ -88,6 +89,7 @@ describe('LogService', () => {
             filter: '',
             levels: [ 0 ],
             showBroadcastTraffic: false,
+            showConnections: true,
             request: 2
         });
     });
@@ -107,6 +109,7 @@ describe('LogService', () => {
             filter: '',
             levels: [ 0, 1, 2, 3 ],
             showBroadcastTraffic: true,
+            showConnections: true,
             request: 2
         });
     });
@@ -132,6 +135,18 @@ describe('LogService', () => {
         vi.advanceTimersByTime(FLUSH_INTERVAL);
 
         expect(service.messages().map(m => m.id)).toEqual([ 'current', 'after' ]);
+    });
+
+    it('asks the server to leave out the connection lines, and again to show them', () => {
+        const service = start();
+
+        service.showConnections.set(false);
+        TestBed.flushEffects();
+        expect(emit).toHaveBeenLastCalledWith('colibri::log', 'requestLog', expect.objectContaining({ showConnections: false, request: 2 }));
+
+        service.showConnections.set(true);
+        TestBed.flushEffects();
+        expect(emit).toHaveBeenLastCalledWith('colibri::log', 'requestLog', expect.objectContaining({ showConnections: true, request: 3 }));
     });
 
     // the tab back from Statistics links to /log, without the app filter the page still has

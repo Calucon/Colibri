@@ -20,7 +20,7 @@
   </button>
 
   <button type="button" class="more-toggle" [attr.aria-expanded]="open()" aria-controls="log-filters"
-    [attr.aria-label]="'Filters' + (activeFilters().length > 0 ? ', ' + activeFilters().length + ' active' : '')" title="Search, app and sync traffic"
+    [attr.aria-label]="'Filters' + (activeFilters().length > 0 ? ', ' + activeFilters().length + ' active' : '')" title="Search, app, sync traffic and connections"
     (click)="open.set(!open())">
     <i class="pi pi-sliders-h" aria-hidden="true"></i>
     <span>Filters</span>
@@ -56,11 +56,19 @@
       </ng-template>
     </p-select>
 
-    <label class="sync" title="Show the broadcast:: messages between an app's clients, such as state and position updates. Shown whatever the levels; hidden by default, since there are many.">
+    <label class="switch" title="Show the broadcast:: messages between an app's clients, such as state and position updates. Shown whatever the levels; hidden by default, since there are many.">
       <p-toggleswitch [ngModel]="log.showBroadcastTraffic()" (ngModelChange)="log.showBroadcastTraffic.set($event)"></p-toggleswitch>
-      <span class="sync-label">
+      <span class="switch-label">
         <span>Sync traffic</span>
         <small>broadcast:: messages between clients</small>
+      </span>
+    </label>
+
+    <label class="switch" title="Show the routine lines about clients connecting and disconnecting. Warnings and errors about connections are shown either way.">
+      <p-toggleswitch [ngModel]="log.showConnections()" (ngModelChange)="log.showConnections.set($event)"></p-toggleswitch>
+      <span class="switch-label">
+        <span>Connections</span>
+        <small>connect and disconnect lines</small>
       </span>
     </label>
 

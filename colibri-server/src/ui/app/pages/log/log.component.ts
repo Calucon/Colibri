@@ -120,6 +120,7 @@ export class LogComponent implements AfterViewInit, OnDestroy {
             this.log.filter();
             this.log.levels();
             this.log.showBroadcastTraffic();
+            this.log.showConnections();
             untracked(() => this.follow());
         });
     }
