@@ -87,6 +87,35 @@ describe('serverSections', () => {
         expect(fact(s, 'network', 'Web')?.note).toBe('HTTPS and WSS');
     });
 
+    describe('TLS on this server and at a proxy', () => {
+        const certificate = { names: 'colibri.example.org', issuer: 'Example CA', selfSigned: false, validFrom: 0, validTo: 200 * DAY, fingerprint256: 'AB:CD' };
+        const rows = (s: ServerSnapshot) => ({
+            web: fact(s, 'network', 'Web')?.note,
+            tcp: fact(s, 'network', 'TCP')?.note,
+            tls: [ fact(s, 'network', 'TLS')?.value, fact(s, 'network', 'TLS')?.note, fact(s, 'network', 'TLS')?.tone ]
+        });
+
+        it.each([
+            [ 'no TLS', null, false, { web: 'HTTP and WS', tcp: 'unencrypted', tls: [ 'Off', undefined, 'off' ] } ],
+            [ 'TLS on this server', certificate, false, { web: 'HTTPS and WSS', tcp: 'TLS', tls: [ 'On', undefined, 'ok' ] } ],
+            [ 'web TLS at the proxy', null, true, { web: 'HTTP here, HTTPS at the proxy', tcp: 'unencrypted', tls: [ 'Not on this server', 'HTTPS at the proxy', undefined ] } ],
+            // a direct connection uses the server's own
+            [ 'both', certificate, true, { web: 'HTTPS and WSS', tcp: 'TLS', tls: [ 'On', undefined, 'ok' ] } ]
+        ])('with %s, says so in the Web, TCP and TLS rows', (_case, tls, web, expected) => {
+            expect(rows(snapshot({ tls, tlsAtProxy: { web } }))).toEqual(expected);
+        });
+
+        it('says on hover why HTTPS is at the proxy, and only then', () => {
+            const proxied = snapshot({ tlsAtProxy: { web: true } });
+            expect(fact(proxied, 'network', 'Web')?.title).toContain('X-Forwarded-Proto');
+            expect(fact(proxied, 'network', 'TLS')?.title).toBe(fact(proxied, 'network', 'Web')?.title);
+            expect(fact(proxied, 'network', 'TLS')?.variable).toBe('TLS_CERT, TLS_KEY');
+
+            expect(fact(snapshot(), 'network', 'Web')?.title).toBeUndefined();
+            expect(fact(snapshot({ tls: certificate, tlsAtProxy: { web: true } }), 'network', 'Web')?.title).toBeUndefined();
+        });
+    });
+
     it('lists settings it does not know under Other settings', () => {
         const s = snapshot();
         s.settings = { ...s.settings, NEW_SETTING: 'x' };
@@ -119,15 +148,17 @@ describe('ServerComponent', () => {
         });
     });
 
-    const shown = (build: ServerSnapshot['build']) => {
+    const row = (overrides: Partial<ServerSnapshot>, label: string) => {
         const fixture = TestBed.createComponent(ServerComponent);
         fixture.detectChanges();
         const request = emit.mock.calls.filter(call => call[1] === 'subscribe').at(-1)![2].request;
-        channel.next({ command: 'server', payload: snapshot({ request, build }) });
+        channel.next({ command: 'server', payload: snapshot({ request, ...overrides }) });
         fixture.detectChanges();
-        const row = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll('.fact')).find(f => f.querySelector('dt')?.textContent === 'Commit')!;
-        return { value: row.querySelector('.value')!, note: row.querySelector('.note')?.textContent ?? null };
+        const shownFact = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll('.fact')).find(f => f.querySelector('dt')?.textContent === label)!;
+        return { value: shownFact.querySelector('.value')!, note: shownFact.querySelector('.note')?.textContent ?? null };
     };
+
+    const shown = (build: ServerSnapshot['build']) => row({ build }, 'Commit');
 
     it('shows the commit in mono with the full hash on hover, and a note for uncommitted changes', () => {
         const { value, note } = shown({ commit: '3e2855e0c1d2b3a4f5e6d7c8b9a0f1e2d3c4b5a6', dirty: true, builtAt: null });
@@ -135,6 +166,14 @@ describe('ServerComponent', () => {
         expect(value.classList.contains('mono')).toBe(true);
         expect(value.getAttribute('title')).toBe('3e2855e0c1d2b3a4f5e6d7c8b9a0f1e2d3c4b5a6');
         expect(note).toBe('uncommitted changes');
+    });
+
+    it('shows TLS at the proxy as not on this server, not muted, rather than Off', () => {
+        const { value, note } = row({ tlsAtProxy: { web: true } }, 'TLS');
+        expect(value.textContent?.trim()).toBe('Not on this server');
+        expect(value.classList.contains('off')).toBe(false);
+        expect(value.getAttribute('title')).toContain('X-Forwarded-Proto');
+        expect(note).toBe('HTTPS at the proxy');
     });
 
     it('shows an unknown commit muted, saying why on hover', () => {
