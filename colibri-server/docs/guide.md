@@ -381,11 +381,9 @@ The cost of TLS on a headset was not measured.
 
 ## Features
 
-- **Admin UI** at `http://<server-ip>:9011` (`https://` with [TLS](#tls)), on a phone too. The *Log*
-  page shows the log of the server and every connected client, filtered by app and level, with a
-  search and a *Sync traffic* switch for the continuous `broadcast::` messages. Scrolling up pauses
-  it; click a line for its details. The *Statistics* page shows the connected clients and their
-  latency.
+- **Admin UI** at `http://<server-ip>:9011` (`https://` with [TLS](#tls)), on a phone too: the log
+  of the server and every connected client, the connected clients, the synchronized models and the
+  settings in effect ([Admin UI](#admin-ui)).
 - **Model synchronization** and **broadcasts** between the Unity (TCP) and web (Socket.IO) clients of
   an app. The server keeps a copy of each app's models. Only `broadcast::` messages and model changes
   are relayed to other clients ([Relayed messages](protocol.md#relayed-messages)).
@@ -412,24 +410,40 @@ Server messages, and lines clients send through colibri-unity's `RemoteLogging` 
 
 ### Admin UI
 
-Besides the log, the admin UI reads from the server, over the Socket.IO channel `colibri::admin`
-([Admin UI channel](protocol.md#admin-ui-channel)):
+Four pages, all read only: nothing on them changes, deletes or disconnects anything. They read from
+the server over the Socket.IO channel `colibri::admin` ([Admin UI channel](protocol.md#admin-ui-channel)).
+The server sends a page its data at most once a second, with bounded sizes, and computes nothing for
+it while no page is open.
 
-- **Server info:** version, protocol version, Node.js version, uptime, the settings in effect (ports,
-  load limits, `TRUSTED_PROXIES`, `TCP_PROXY_PROTOCOL`, idle timeout, voice and recording), the TLS
-  certificate's names, issuer and expiry, and counts of clients, apps, synchronized models and REST
-  store values. Never certificate or key paths, key material or file contents.
-- **Clients:** every connected Unity and web client with its app, name, protocol version, address
-  (as resolved behind a trusted proxy), TLS, connection time, latency, messages per second in and out,
-  and whether a [load limit](#load-limits) holds its updates back.
-- **Models:** the synchronized models of every app and channel, with their size, number of fields and
-  last update, filtered and in pages of at most 200, and one model's value as JSON. Also the ids
-  deleted within `MODEL_TOMBSTONE_SECONDS`.
+- **Log:** the [log](#logs), filtered by app and level, with a search over the loaded lines. *Sync
+  traffic* shows the `broadcast::` messages between clients; *Connections* off leaves out the routine
+  connect and disconnect lines, not the warnings and errors about connections. Scrolling up pauses
+  the log; click a line for its details and a link to the clients of its app. The arrows go to the
+  previous and next error or warning, *New errors* to the first error since the page was opened.
+  *Download* saves the loaded lines that match the filters and the search, as text or as JSON; unlike
+  the clipboard, it works over plain HTTP. The filters are in the address, so a reload or a copied
+  link keeps them: `/log?levels=error,warn&q=timeout&sync=1&connections=0#MyApp`.
+- **Clients:** every connected Unity (TCP) and web client with its app, name, address (behind a
+  [trusted proxy](#behind-a-reverse-proxy), the one the proxy names), transport and TLS, protocol
+  version, time connected, latency, messages per second in and out over the last second, and whether
+  a [load limit](#load-limits) holds its updates back: *Rate limit* or *Backlog*, with the number of
+  objects held. Sort by a column, show one app (`/clients?app=MyApp`), and open a client's lines in
+  the log. Below, a chart of each client's latency over the last 110 s. The former *Statistics*
+  page, `/statistics`, leads here.
+- **Models:** the synchronized models of each app and channel, 50 to a page, with their id, number
+  of top-level fields, size as compact JSON and time since the last update, filtered by part of the
+  id or channel. Click one for its value as JSON, cut at 512 KiB, to read or download. Below, the ids
+  deleted within `MODEL_TOMBSTONE_SECONDS`. *Refresh* reads the list again; *Live* updates the list
+  and the open model every second.
+- **Server:** version, protocol version, Node.js version and uptime; the settings in effect, with the
+  variables that set them: ports, `BASE_URL`, TLS, `TRUSTED_PROXIES`, `TCP_PROXY_PROTOCOL`, load
+  limits, idle timeout, tombstones, voice and recording; the TLS certificate's names, issuer, validity
+  and SHA-256 fingerprint, with a warning 30 days before it expires; and counts of clients, apps,
+  synchronized models and REST store values. Never certificate or key paths, key material or file
+  contents.
 
-All of it is read only: the admin UI cannot change, delete or disconnect anything. A page asks for
-data while it is open and the server sends it at most once a second, with bounded sizes. With no
-admin page open, the server computes nothing for it. The log page can leave out the routine connect
-and disconnect lines.
+Keys on the *Log* page: `/` search, `p` and `n` previous and next error or warning, `e` first new
+error. On the *Models* page, `Esc` closes the open model.
 
 ### Load limits
 

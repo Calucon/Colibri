@@ -526,9 +526,25 @@ The endpoints are documented under [REST store](./protocol.md#rest-store).
   marks the gap. The app bar shows whether the page is connected.
 - A web client's refusal, malformed events and rate limit warnings carry its app, so the app filter
   shows them.
-- The Statistics page is dark like the rest, its chart fits its card, and a table lists the clients
-  with their latency. A client keeps its colour while others connect and leave, and the chart shows
-  each client's median per second, across the whole width from the first sample.
+- The Statistics page is now the Clients page, and `/statistics` leads there. A table lists every
+  connected client with its app, name, address, transport and TLS, protocol version, time connected,
+  latency, messages per second in and out, and whether a load limit holds its updates back. It sorts
+  by any column and shows one app (`/clients?app=MyApp`). The latency chart is dark like the rest and
+  fits its card; a client keeps its colour while others connect and leave, and the chart shows each
+  client's median per second, across the whole width from the first sample.
+- New Models page: the synchronized models of each app and channel, 50 to a page and filtered by id or
+  channel, with their size, number of fields and last update; a model's value as JSON, to read or
+  download; and the ids deleted lately. It reads once, on *Refresh*, or every second with *Live*.
+- New Server page: versions, uptime, the settings in effect with the variables that set them, the TLS
+  certificate's names, issuer, validity and fingerprint (a warning 30 days before it expires), and
+  counts of clients, apps, models and REST store values.
+- The Log page goes to the previous and next error or warning (keys `p` and `n`) and to the first
+  error since the page was opened (`e`). It downloads the loaded lines that match its filters and
+  search as text or JSON, which works over plain HTTP, unlike the clipboard. A *Connections* switch
+  hides the routine connect and disconnect lines. Levels, search and switches are in the address
+  along with the app, so a reload or a shared link shows the same.
+- An opened log line links to the clients of its app, and each client on the Clients page to its
+  lines in the log.
 - The server answers the admin UI's read-only requests on the new channel `colibri::admin`: server
   info (versions, uptime, settings in effect, TLS certificate description, counts), every connected
   client with its transport, address, TLS, connection time, latency, messages per second in and out
@@ -544,8 +560,7 @@ The endpoints are documented under [REST store](./protocol.md#rest-store).
 - The admin UI keeps its dark theme whatever colour scheme the visitor's system prefers.
 - Replaced the dead Karma/Protractor `test`/`server-app-e2e` targets in `angular.json` (both pointed
   at files that never existed) with Angular's first-party `@angular/build:unit-test` builder
-  (Vitest runner); specs for `LogService`, `ClientService` and the Log and Statistics pages run in
-  CI as `npm run gui:test`.
+  (Vitest runner); specs for the services and the pages run in CI as `npm run gui:test`.
 - Replaced `socketio.service.ts`'s `_.throttle` NgZone-batching with RxJS `throttleTime`; `lodash`
   and `@types/lodash` are removed from `package.json`.
 - Fixed the services barrel (`src/ui/app/services/index.ts`) to re-export `ClientService`, matching

@@ -2,7 +2,7 @@
 
 Server for [Colibri](../README.md). Relays messages and synchronized-object updates between the Unity and web
 clients of each app and keeps the current object state. Provides a REST key-value store, a UDP voice relay and an
-admin UI that shows client logs.
+admin UI with the log, the connected clients, the synchronized models and the server settings.
 
 Full documentation: [docs/guide.md](docs/guide.md). Changes since 1.x: [docs/v2-changelog.md](docs/v2-changelog.md).
 
