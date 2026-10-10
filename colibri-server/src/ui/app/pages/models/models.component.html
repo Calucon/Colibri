@@ -211,13 +211,14 @@
             <div><dt>Size</dt><dd>{{ model.bytes !== undefined ? size(model.bytes) : '-' }}</dd></div>
             <div><dt>Updated</dt><dd [title]="model.updatedAt | date:'yyyy-MM-dd HH:mm:ss.SSS'">{{ modelAge() }} ago, at {{ model.updatedAt | date:'HH:mm:ss' }}</dd></div>
             <div class="actions">
-              <button type="button" class="btn" (click)="downloadModel()">
-                <i class="pi pi-download" aria-hidden="true"></i><span>Download</span>
+              <button type="button" class="btn" (click)="downloadModel()"
+                [title]="model.truncated ? 'The first 512 KiB, as text: cut off, it is not valid JSON' : 'The value as a JSON file'">
+                <i class="pi pi-download" aria-hidden="true"></i><span>{{ model.truncated ? 'Download start' : 'Download' }}</span>
               </button>
             </div>
           </dl>
           @if (model.truncated) {
-            <p class="note">The value is longer than 512 KiB: only its start is shown, and downloaded.</p>
+            <p class="note">The value is longer than 512 KiB: only its start is shown, and downloaded as text.</p>
           }
           <pre class="json" tabindex="0" aria-label="The model's value as JSON">@for (part of jsonParts(); track $index) {@if (part.kind) {<span class="{{ part.kind }}">{{ part.text }}</span>} @else {{{ part.text }}}}</pre>
         } @else {

@@ -137,6 +137,27 @@ describe('ModelsComponent', () => {
         expect(document.activeElement?.getAttribute('data-key')).toBe('demo\nscene\nb');
     });
 
+    it('downloads a value cut at 512 KiB as text, named as partial', async () => {
+        const { harness, component } = await open('/models?model=m1&modelApp=demo&modelChannel=scene');
+        const created: Blob[] = [];
+        const names: string[] = [];
+        const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockImplementation(blob => { created.push(blob as Blob); return 'blob:x'; });
+        const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) { names.push(this.download); });
+
+        answer('model', { app: 'demo', channel: 'scene', id: 'm1', found: true, fields: 1, bytes: 600_000, updatedAt: 1000, json: '{\n  "id": "m1",\n  "text": "xx', truncated: true });
+        harness.detectChanges();
+        expect(harness.routeNativeElement!.querySelector('.facts .btn')?.textContent?.trim()).toBe('Download start');
+        component.downloadModel();
+
+        answer('model', { app: 'demo', channel: 'scene', id: 'm1', found: true, fields: 1, bytes: 20, updatedAt: 1000, json: '{\n  "id": "m1"\n}', truncated: false });
+        component.downloadModel();
+
+        expect(names).toEqual([ 'demo-scene-m1-partial.txt', 'demo-scene-m1.json' ]);
+        expect(created.map(blob => blob.type)).toEqual([ 'text/plain', 'application/json' ]);
+        click.mockRestore();
+        createObjectURL.mockRestore();
+    });
+
     it('offers the last page when the page asked for is past the end', async () => {
         const { harness, component } = await open('/models?page=9');
         list([], { total: 120, query: { app: '', channel: '', filter: '', offset: 400, limit: MODELS_PAGE_SIZE } });

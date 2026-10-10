@@ -331,10 +331,13 @@ export class ModelsComponent implements OnDestroy {
         void this.navigate({ model: null, modelApp: null, modelChannel: null }, false);
     }
 
+    /** The value as a .json file; its start, cut at 512 KiB, as a -partial.txt, since that is no valid JSON. */
     downloadModel(): void {
         const model = this.model();
         if (!model?.json) return;
-        download(`${fileNamePart(model.app)}-${fileNamePart(model.channel)}-${fileNamePart(model.id)}.json`, model.json, 'application/json');
+        const name = `${fileNamePart(model.app)}-${fileNamePart(model.channel)}-${fileNamePart(model.id)}`;
+        if (model.truncated) download(`${name}-partial.txt`, model.json, 'text/plain');
+        else download(`${name}.json`, model.json, 'application/json');
     }
 
     private navigate(queryParams: Record<string, string | null>, replaceUrl = true): Promise<boolean> {
