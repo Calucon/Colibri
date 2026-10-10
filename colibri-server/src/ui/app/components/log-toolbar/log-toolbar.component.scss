@@ -283,11 +283,12 @@
             font-weight: 700;
         }
 
+        // lighter than the level colours: those are under 4.5:1 on the chip's background
         &.on {
-            &.level-0 .tag { color: var(--err); }
+            &.level-0 .tag { color: #f2b4b9; }
             &.level-1 .tag { color: var(--warn); }
-            &.level-2 .tag { color: var(--info); }
-            &.level-3 .tag { color: var(--debug); }
+            &.level-2 .tag { color: #9fcfdc; }
+            &.level-3 .tag { color: #c0c8d6; }
         }
     }
 
