@@ -3,10 +3,12 @@
 }
 
 // One grid per row with fixed columns, so that time, level, source and message line up from row
-// to row, and a long message wraps under itself instead of under the time.
+// to row, and a long message wraps under itself instead of under the time. The message column is
+// as wide as its text, up to the room there is: a repeat count follows a short line right after
+// its text, not at the far edge of a wide screen.
 .row {
     display: grid;
-    grid-template-columns: 12ch 2.25rem var(--source-width, 13rem) minmax(0, 1fr) auto;
+    grid-template-columns: 12ch 2.25rem var(--source-width, 13rem) minmax(0, max-content) auto;
     grid-template-areas: 'time level source message count';
     column-gap: 12px;
     align-items: start;
@@ -137,6 +139,7 @@
 
 .count {
     grid-area: count;
+    justify-self: start;
     margin-top: 1px;
     padding: 0 6px;
 
@@ -149,6 +152,8 @@
 
 .details {
     grid-column: message / -1;
+    // sized by the columns, not the other way round: its width would move the count when opened
+    contain: inline-size;
     display: flex;
     flex-wrap: wrap;
     gap: 2px 20px;
