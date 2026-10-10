@@ -23,6 +23,8 @@ export interface LogMessage {
 
 interface LogHistory {
     request: number | null;
+    /** The server's Date.now(), the clock that stamps the lines. */
+    at?: number;
     messages: LogMessage[];
 }
 
@@ -132,8 +134,16 @@ export class LogService {
     /** Text to look for in the loaded lines. Unlike the filters above, the page applies it itself. */
     public readonly search = signal(this.initial.search);
 
-    /** When the page was opened: "First error" goes to the first error since. */
-    public readonly openedAt = Date.now();
+    // When the page was opened, by the browser's clock.
+    private readonly openedLocally = Date.now();
+    private readonly _openedAt = signal(this.openedLocally);
+    /**
+     * When the page was opened, by the server's clock, which stamps the lines: "New errors" counts
+     * the errors since. A browser whose clock is a few minutes off would count errors from before
+     * or miss new ones. The browser's own clock until the first history says what the server's reads.
+     */
+    public readonly openedAt = this._openedAt.asReadonly();
+    private serverClockKnown = false;
 
     /** How many of the loaded lines there are of each level. */
     public readonly levelCounts = computed(() => {
@@ -286,6 +296,10 @@ export class LogService {
     }
 
     private receiveHistory(history: LogHistory): void {
+        if (!this.serverClockKnown && typeof history.at === 'number') {
+            this.serverClockKnown = true;
+            this._openedAt.set(this.openedLocally + (history.at - Date.now()));
+        }
         if (history.request !== this.awaiting) return;
 
         this.awaiting = null;

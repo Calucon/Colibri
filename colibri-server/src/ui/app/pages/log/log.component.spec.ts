@@ -226,9 +226,9 @@ describe('LogComponent', () => {
         it('goes to the first error since the page was opened with e', () => {
             const { component, log } = create();
             history([
-                message({ id: 'old', level: 0, created: log.openedAt - 1 }),
-                message({ id: 'new', level: 0, created: log.openedAt + 5 }),
-                message({ id: 'newer', level: 0, created: log.openedAt + 9 })
+                message({ id: 'old', level: 0, created: log.openedAt() - 1 }),
+                message({ id: 'new', level: 0, created: log.openedAt() + 5 }),
+                message({ id: 'newer', level: 0, created: log.openedAt() + 9 })
             ]);
             expect(component.nav().newErrors).toBe(2);
 

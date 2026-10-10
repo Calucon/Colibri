@@ -94,8 +94,10 @@ export class LogComponent implements AfterViewInit, OnDestroy {
     private problems = computed(() => this.matches().filter(isProblem).map(line => line.id));
 
     /** The errors since the page was opened, oldest first. */
-    private newErrors = computed(() =>
-        this.matches().filter(line => !line.reconnect && line.level === 0 && line.created >= this.log.openedAt).map(line => line.id));
+    private newErrors = computed(() => {
+        const openedAt = this.log.openedAt();
+        return this.matches().filter(line => !line.reconnect && line.level === 0 && line.created >= openedAt).map(line => line.id);
+    });
 
     nav = computed<LogNav>(() => {
         const problems = this.problems();
@@ -105,7 +107,7 @@ export class LogComponent implements AfterViewInit, OnDestroy {
             problems: problems.length,
             position: position < 0 ? null : position + 1,
             newErrors: this.newErrors().length,
-            openedAt: this.log.openedAt
+            openedAt: this.log.openedAt()
         };
     });
 

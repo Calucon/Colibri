@@ -74,6 +74,24 @@ describe('LogService', () => {
         expect(service.messages().map(m => m.id)).toEqual([ 'a', 'b' ]);
     });
 
+    it('takes when the page was opened by the server\'s clock, which stamps the lines', () => {
+        vi.setSystemTime(1_000_000);
+        const service = TestBed.inject(LogService);
+        TestBed.flushEffects();
+        expect(service.openedAt()).toBe(1_000_000);
+
+        // the server's clock 5 min ahead of the browser's, read 2 s after the page was opened
+        vi.setSystemTime(1_002_000);
+        logChannel.next({ command: 'history', payload: { request: lastRequest(), at: 1_302_000, messages: [] } });
+        expect(service.openedAt()).toBe(1_300_000);
+
+        // once: later histories do not move it
+        service.levels.set(new Set([ 0 ]));
+        TestBed.flushEffects();
+        logChannel.next({ command: 'history', payload: { request: lastRequest(), at: 9_999_999, messages: [] } });
+        expect(service.openedAt()).toBe(1_300_000);
+    });
+
     it('re-requests the log and clears messages when levels change', () => {
         const service = start();
 
