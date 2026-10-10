@@ -13,6 +13,8 @@ No 1.x client, Unity or web, works with a 2.0 server.
 - [ ] [Node 24, native ESM](#breaking)
 - [ ] [Port your own TCP clients to the new protocol](#breaking)
 - [ ] [Port your own voice code to the new packet format](#breaking)
+- [ ] [Voice through a UDP proxy: add the proxy to `TRUSTED_PROXIES`, or publish 9013/udp
+      directly](#breaking)
 - [ ] [Docker: pin the image version](#other-changes)
 - [ ] [Docker: remove `tty: true` from a compose file based on the 1.x README](#other-changes)
 - [ ] [Docker with `--user` (or `user:` in compose): give the data directory to that
@@ -123,6 +125,12 @@ Colibri 1.x voice clients therefore work neither with a 2.0 server nor with 2.0 
 own voice code to
 [Voice packets](colibri-server/docs/protocol.md#voice-packets-udp).
 
+**Voice from another address than the TCP connection.** In 1.x the server relayed voice from any
+address. Voice that reaches it through a UDP proxy, or from another address than the client's TCP
+connection, is now dropped with `Ignoring voice packet from <address>:<port> for app <app id>: no
+Unity client of that app is connected from <address>`. Add the proxy to `TRUSTED_PROXIES`, or
+publish 9013/udp directly ([Voice relay](colibri-server/docs/guide.md#voice-relay)).
+
 **Removed dependencies:** `flatbuffers`, `body-parser`, `uuid` and `source-map-support`.
 
 ### Other changes
@@ -168,6 +176,9 @@ colibri-web's `RemoteLogger`.
 | `TCP_IDLE_TIMEOUT_SECONDS` | `10` | Disconnect a Unity client that sends nothing for this long. `0`: never. |
 | `APP_CLIENT_WARNING_THRESHOLD` | `8` | Log a warning when an app has more clients than this. `0`: never. |
 | `MODEL_TOMBSTONE_SECONDS` | `600` | How long the server remembers a deleted model. `0`: not at all. |
+| `TRUSTED_PROXIES` | empty | Reverse proxies trusted to report the client's address, from `X-Forwarded-For` or a PROXY protocol header. Voice from them is relayed without the address check. |
+| `TCP_PROXY_PROTOCOL` | `false` | `true`: a TCP connection from a trusted proxy must start with a PROXY protocol header. |
+| `TLS_CERT`, `TLS_KEY` | empty | Certificate and key for [TLS](#tls) on the TCP and web ports. |
 
 - A headset that leaves the Wi-Fi or goes to sleep does not close its connection. In 1.x, without
   the idle timeout, it counted as connected and kept its app's synced objects alive until the
