@@ -23,11 +23,12 @@ rationale, migration steps, and what the Editor verification did and did not cov
   talk to a 1.x server, and a 1.x client cannot talk to a 2.0.0 server. There is no version
   negotiation: both sides must be upgraded together.
 - **Voice packets carry an app id.** The voice header has a header version and an app id, the
-  32-bit FNV-1a hash of the App Name, and colibri-server 2.0.0 passes a packet on only to the
-  clients with the same app id. Voice ids only have to be unique within an app now, and 1.x and
-  2.0.0 clients do not hear each other. The server relays voice only from the address of a client
-  connected with the same App Name, so voice needs `WebServerConnection` connected too, and after
-  an App Name change it resumes only once that reconnects. See
+  32-bit FNV-1a hash of the App Name as the TCP handshake sends it, and colibri-server 2.0.0
+  passes a packet on only to the clients with the same app id. Voice ids only have to be unique
+  within an app now, and 1.x and 2.0.0 clients do not hear each other. The server relays voice only
+  from the address of a client connected with the same App Name, so voice needs
+  `WebServerConnection` connected too, and after an App Name change it resumes only once that
+  reconnects. See
   [Voice packets](../colibri-server/docs/protocol.md#voice-packets-udp).
 - **Minimum Unity is 2022.3 LTS** (the package manifest previously claimed 2019.4 while using APIs
   that were never available there).
@@ -362,7 +363,9 @@ rationale, migration steps, and what the Editor verification did and did not cov
 - **A colon at either end of the App Name.** It merged with the handshake's `::` separator, so app
   `app:` silently joined app `app` with the colon moved onto the client name. Such a colon is now
   replaced with `_`, with a warning for the App Name, and `FrameCodec` rejects such handshake
-  fields.
+  fields. The voice app id is the hash of the name the handshake sends: it was the hash of the App
+  Name as configured, so the server, which relays voice only from a Unity client of the packet's
+  app, dropped all voice of such an App Name.
 - **Main-thread config reads.** `ColibriConfig.Load()` goes through `Resources.Load`; the connection
   path used to call it from a worker thread. It is now snapshotted on the main thread.
 - **Voice chat.** `udpThread.Abort()` (unsupported on .NET Core / IL2CPP) is replaced with a
@@ -404,6 +407,16 @@ rationale, migration steps, and what the Editor verification did and did not cov
   position, which at 44.1 to 48 kHz ran a sixth of a sample further ahead every 20 ms. A
   microphone that reports 0 to 0 Hz, which means any rate, records at the *Voice Sampling Rate*
   instead of at 0 Hz.
+- **Voice playback.** `VoiceReceiver` decoded Opus only with its own *Use Opus Codec* on, and played
+  Opus packets as PCM otherwise, which is noise. It now decodes each packet by its codec, and its
+  *Use Opus Codec* has no effect. Where Opus does not run, it logged two errors per Opus packet on
+  macOS and iOS, and in the macOS Editor with Android as the build target it threw
+  `DllNotFoundException` in `Start`, then a `NullReferenceException` for every Opus packet and on
+  quit. It now drops the Opus packets it cannot decode, with one warning per receiver, and still
+  plays PCM. A voice listener that throws is logged and no longer drops the other packets delivered
+  in that frame. A receiver destroyed without `StopPlayback`, as the VoiceChat sample does, stops
+  receiving and frees its Opus decoder; its buffer used to grow with every packet. A packet that
+  arrives before the receiver's `Start` is dropped; with an output rate other than 48 kHz it threw.
 - **`Store`** serializes with Newtonsoft instead of `JsonUtility`, which cannot handle dictionaries,
   properties, or top-level arrays and so silently disagreed with what `Sync` can carry. What that
   costs a 1.x project is under Breaking changes. A value that cannot be converted, or a saved
@@ -746,7 +759,8 @@ otherwise spend on their prototype, so:
   voice header and the app id, with `VoicePacketQueueTests` which received packets are played; and
   `VoiceFramerTests` with `StreamingResamplerTests` how recorded audio becomes voice frames: only
   960-sample frames and no lost audio from a 44.1 kHz microphone, an encoder that always fails, and
-  resampling without drift however the stream is cut.
+  resampling without drift however the stream is cut. `VoiceDecoderTests` cover received packets:
+  PCM plays, and an Opus decoder that cannot be created or fails drops only Opus, with one report.
   `FrameCodecTests` also covers the colon at either end of a handshake field.
 - New PlayMode assembly `HCIKonstanz.Colibri.E2E` (`Assets/Tests/`, in the development project
   rather than the shipped package). A real Unity client, a real colibri-server and a raw v3 peer as
@@ -809,7 +823,7 @@ otherwise spend on their prototype, so:
   `ConnectTimeoutTests` an attempt nothing answers, cancelling one, and a refusal reported at
   once; `ServerAddressTests` IP addresses with and without brackets, the order a name's addresses
   are tried in, their shares of the connect timeout, and moving on from an address that refuses or
-  does not answer, IPv6 then IPv4 on the loopback; `VoicePacketQueueTests` voice packets from several receive threads at once; `OutboxTests`
+  does not answer, IPv6 then IPv4 on the loopback; `VoicePacketQueueTests` voice packets from several receive threads at once, a listener that throws, and the app id of an App Name the handshake changes; `OutboxTests`
   the 10 000-message cap, connected and not; `RemoteLoggingTests` the missing-lines note. In
   PlayMode, `SyncModelTests` and `SyncTransformTests` run the limit end to end (a burst, a limit of
   `0`, what is held going out on quit, pause and focus loss, a destroy and a delete from another
@@ -838,7 +852,8 @@ otherwise spend on their prototype, so:
 - Still no GameCI workflow: the Unity suites run locally, since a Unity container in CI needs a
   licence secret. Voice chat has no end-to-end coverage (it needs a microphone); only the choice of
   the server's address, the packet format, the queue that hands received packets to the main
-  thread, and how recorded audio is resampled and cut into frames are unit-tested.
+  thread, how recorded audio is resampled and cut into frames, and how received packets are
+  decoded are unit-tested.
 - `run-tests.mjs --stripping` builds a Release IL2CPP player with *Managed Stripping Level* High and
   checks inside it that every `[Sync]` member survived with its `[Sync]` and still syncs. Off by
   default; skipped with a notice without the platform's IL2CPP module.
