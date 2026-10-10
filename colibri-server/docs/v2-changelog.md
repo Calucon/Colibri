@@ -168,9 +168,9 @@ this is the server's full detail.
 - `docker-compose.yml` caps the container log at 5 × 10 MB, since client log lines now reach
   `docker logs` and Docker's default log never rotates.
 - `npm run build` records the commit it builds in `dist/server/build-info.json`: from the build
-  arguments `COLIBRI_COMMIT` and `COLIBRI_COMMIT_DIRTY`, which `npm run publish` and
-  `docker-compose.yml` pass, else from git. The image has no `.git`, so a `docker build` without
-  them reports the commit as unknown.
+  arguments `COLIBRI_COMMIT` and `COLIBRI_COMMIT_DIRTY`, which `npm run publish` passes, and
+  `docker-compose.yml` from the environment, else from git. The image has no `.git`, so a
+  `docker build` without them reports the commit as unknown.
 - New `npm run test:docker` runs the image against a fresh bind mount, a root-owned 1.x data
   directory, a named volume, as `--user 1000:1000`, with the 1.x data mounted read-only, without
   `CAP_CHOWN`, and with a changed `WEBSERVER_PORT` or `WEBSERVER_HOST`.

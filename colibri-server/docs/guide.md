@@ -45,9 +45,21 @@ To build from a checkout, run `docker compose up -d` in `colibri-server`. That c
 image from source and keeps the data in `./data`. Alternatively, replace the `image:` line with
 `build: <path to the checkout>/colibri-server`.
 
-The image has no `.git`, so for the *Server* page to show the commit it was built from, pass it:
-`COLIBRI_COMMIT=$(git rev-parse HEAD) docker compose up -d --build`, or
-`docker build --build-arg COLIBRI_COMMIT=$(git rev-parse HEAD) .`.
+The image has no `.git`, so for the *Server* page to show the commit it was built from, pass it as
+the build argument `COLIBRI_COMMIT`, and `COLIBRI_COMMIT_DIRTY=true` for a checkout with uncommitted
+changes. The bundled compose file reads both from the environment:
+`COLIBRI_COMMIT=$(git rev-parse HEAD) docker compose up -d --build`. In your own compose file, pass
+them under `build:` the same way:
+
+```yaml
+    build:
+      context: <path to the checkout>/colibri-server
+      args:
+        COLIBRI_COMMIT: ${COLIBRI_COMMIT:-}
+        COLIBRI_COMMIT_DIRTY: ${COLIBRI_COMMIT_DIRTY:-}
+```
+
+Without compose: `docker build --build-arg COLIBRI_COMMIT=$(git rev-parse HEAD) .`.
 
 The image sets `NODE_ENV=production` and runs the server as PID 1. On `docker stop`, the server
 writes pending store changes and saves voice recordings in progress before it exits.
