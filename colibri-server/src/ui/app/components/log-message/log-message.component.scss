@@ -150,13 +150,14 @@
     border-radius: 9px;
 }
 
+// one label and value a line, the labels in a column of their own
 .details {
     grid-column: message / -1;
     // sized by the columns, not the other way round: its width would move the count when opened
     contain: inline-size;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 2px 20px;
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: 2px 12px;
     margin: 6px 0 4px;
 
     font: 12px/18px var(--sans);
@@ -164,8 +165,7 @@
     cursor: text;
 
     div {
-        display: flex;
-        gap: 6px;
+        display: contents;
     }
 
     dt {
@@ -239,6 +239,5 @@
 
     .details {
         grid-column: 1 / -1;
-        flex-direction: column;
     }
 }
