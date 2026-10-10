@@ -76,7 +76,10 @@ export interface ClientRow {
     name: string;
     transport: 'tcp' | 'web';
     version: string;
+    /** Whether its connection to the server is encrypted. */
     tls: boolean;
+    /** Whether it reached a trusted proxy over TLS, by the proxy's X-Forwarded-Proto. Web clients only. */
+    tlsAtProxy: boolean;
     address: string;
     connectedAt: number;
     /** Median round trip over the last second, in ms. */

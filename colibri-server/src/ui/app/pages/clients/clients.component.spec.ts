@@ -15,6 +15,7 @@ const client = (overrides: Partial<ClientRow>): ClientRow => ({
     transport: 'tcp',
     version: '2',
     tls: false,
+    tlsAtProxy: false,
     address: '10.0.0.5',
     connectedAt: 0,
     latency: null,
@@ -103,7 +104,7 @@ describe('ClientsComponent', () => {
         const quest = component.rows().find(row => row.id === 'q1');
         const web = component.rows().find(row => row.id === 'web1');
         expect(quest).toEqual(expect.objectContaining({
-            label: 'Quest', byId: false, address: '10.0.0.5', transport: 'TCP', tls: true, connected: '2 min',
+            label: 'Quest', byId: false, address: '10.0.0.5', transport: 'TCP', tls: 'server', tlsLabel: 'TLS', connected: '2 min',
             latency: '12.3 ms', in: '30.0', out: '120.5', limit: 'Rate limit', held: 4, color: null
         }));
         // a web client by the start of its id, in its colour in the latency chart

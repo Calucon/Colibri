@@ -16,7 +16,7 @@ describe('addSample', () => {
 
 describe('the rate history of a first snapshot', () => {
     const row = (id: string, history: [number, number][] | undefined, rates: { in: number | null; out: number | null }): ClientRow => ({
-        id, app: 'demo', name: id, transport: 'tcp', version: '2', tls: false, address: '10.0.0.5', connectedAt: 0,
+        id, app: 'demo', name: id, transport: 'tcp', version: '2', tls: false, tlsAtProxy: false, address: '10.0.0.5', connectedAt: 0,
         latency: null, limit: null, held: 0, ...rates, ...(history ? { history } : {})
     });
     const snapshot = (clients: ClientRow[]): ClientsSnapshot => ({ request: 1, at: 5_000_000, clients, total: clients.length, adminPages: 1 });

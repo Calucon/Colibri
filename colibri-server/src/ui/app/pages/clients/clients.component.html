@@ -68,7 +68,7 @@
               <td class="c-transport">
                 {{ row.transport }}
                 @if (row.tls) {
-                  <span class="tls" title="Encrypted: TLS"><i class="pi pi-lock" aria-hidden="true"></i> TLS</span>
+                  <span class="tls" [title]="row.tlsTitle"><i class="pi pi-lock" aria-hidden="true"></i> {{ row.tlsLabel }}</span>
                 }
                 <span class="version" title="The protocol version it announced">v{{ row.version }}</span>
               </td>
