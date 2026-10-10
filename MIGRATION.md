@@ -624,10 +624,12 @@ every client announces the server's protocol version.
 
 Not covered by any suite:
 
-- **Voice chat**, beyond the server's relay, the packet format on both sides, the Unity client's
-  choice of server address, and the queue that hands received packets to the main thread. The rest
-  needs a microphone. The client's socket and its shutdown were reviewed and compiled, not
-  exercised.
+- **Voice chat** end to end, which needs a microphone. Unit tests cover the server's relay, the
+  packet format on both sides, and in the Unity client the choice of server address (IPv4 and IPv6),
+  failed sends, the socket with its receive thread over the IPv6 loopback, the queue that hands
+  received packets to the main thread, resampling and framing with the fallback to PCM, decoding,
+  and the playback buffer. Microphone capture, the `AudioSource` output, the sample and two real
+  clients are not tested.
 - **Android and Meta Quest.** No suite builds for Android or runs on a headset. The code that runs
   only there (the IL2CPP `[Sync]` accessors) and the Android settings check are tested in the
   Editor.
