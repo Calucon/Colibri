@@ -79,6 +79,7 @@ interface VoiceServerInternals {
     udpSocket: dgram.Socket;
     clients: Map<string, unknown>;
     reportedAt: Map<string, number>;
+    rejections: Map<string, unknown>;
     savingRecordings: Promise<void> | undefined;
     pruneReports(nowMillis: number): void;
     checkClientsDisconnected(): Promise<void>;
@@ -518,7 +519,21 @@ describe('VoiceServer', () => {
 
         const ignoredReports = () => logs.filter(l => l.origin === 'VoiceServer' && l.level === LogLevel.Warn && /no Unity client/.test(l.message));
         const noRoomReports = () => logs.filter(l => l.origin === 'VoiceServer' && l.level === LogLevel.Warn && /as many voice clients already/.test(l.message));
+        // The debug line for the first packet dropped from a source.
+        const firstDrops = () => logs.filter(l => l.origin === 'VoiceServer' && l.level === LogLevel.Debug && /^Ignoring voice packet/.test(l.message));
         const appOf = (key: string) => (internals.clients.get(key) as { appId: number } | undefined)?.appId;
+
+        // Runs `steps` with Date.now() stopped, at the start time plus what `at` was last given in ms.
+        // A source's dropped packets are reported only once they have gone on for 3 s.
+        const withClock = (steps: (at: (offsetMillis: number) => void) => void): void => {
+            vi.useFakeTimers({ toFake: [ 'Date' ] });
+            try {
+                const start = Date.now();
+                steps(offsetMillis => vi.setSystemTime(start + offsetMillis));
+            } finally {
+                vi.useRealTimers();
+            }
+        };
 
         it('relays voice from the address of a Unity client of the same app', () => {
             const sent = relays(internals.udpSocket);
@@ -539,10 +554,16 @@ describe('VoiceServer', () => {
         it('ignores voice from an address without a Unity client, and relays nothing to it', () => {
             const sent = relays(internals.udpSocket);
             unity.connect('lab', '192.0.2.1');
-            deliver(internals.udpSocket, '192.0.2.1', 5001, voicePacket(1, 0, [], LAB));
+            withClock(at => {
+                deliver(internals.udpSocket, '192.0.2.1', 5001, voicePacket(1, 0, [], LAB));
 
-            for (let i = 0; i < 5; i++) deliver(internals.udpSocket, '198.51.100.7', 4000, voicePacket(9, i, [ 9, 0 ], LAB));
-            deliver(internals.udpSocket, '192.0.2.1', 5001, voicePacket(1, 1, [ 1, 0 ], LAB));
+                // One a second for 4 s: reported at 3 s, and once only.
+                for (let i = 0; i < 5; i++) {
+                    at(i * 1000);
+                    deliver(internals.udpSocket, '198.51.100.7', 4000, voicePacket(9, i, [ 9, 0 ], LAB));
+                }
+                deliver(internals.udpSocket, '192.0.2.1', 5001, voicePacket(1, 1, [ 1, 0 ], LAB));
+            });
 
             expect(sent).toEqual([]);
             expect([ ...internals.clients.keys() ]).toEqual([ '192.0.2.1:5001' ]);
@@ -556,13 +577,18 @@ describe('VoiceServer', () => {
             const sent = relays(internals.udpSocket);
             unity.connect('lab', '192.0.2.1');
             unity.connect('other', '192.0.2.2');
-            deliver(internals.udpSocket, '192.0.2.2', 5002, voicePacket(2, 0, [], OTHER));
+            withClock(at => {
+                deliver(internals.udpSocket, '192.0.2.2', 5002, voicePacket(2, 0, [], OTHER));
 
-            // Neither from a new sender, nor from one of lab changing app: that one stays in lab.
-            deliver(internals.udpSocket, '192.0.2.1', 5001, voicePacket(1, 0, [], OTHER));
-            deliver(internals.udpSocket, '192.0.2.1', 5003, voicePacket(3, 0, [], LAB));
-            deliver(internals.udpSocket, '192.0.2.1', 5003, voicePacket(3, 1, [ 3, 0 ], OTHER));
-            deliver(internals.udpSocket, '192.0.2.2', 5002, voicePacket(2, 1, [ 2, 0 ], OTHER));
+                // Neither from a new sender, nor from one of lab changing app: that one stays in lab.
+                for (const offset of [ 0, 3000 ]) {
+                    at(offset);
+                    deliver(internals.udpSocket, '192.0.2.1', 5001, voicePacket(1, 0, [], OTHER));
+                    deliver(internals.udpSocket, '192.0.2.1', 5003, voicePacket(3, 0, [], LAB));
+                    deliver(internals.udpSocket, '192.0.2.1', 5003, voicePacket(3, 1, [ 3, 0 ], OTHER));
+                }
+                deliver(internals.udpSocket, '192.0.2.2', 5002, voicePacket(2, 1, [ 2, 0 ], OTHER));
+            });
 
             expect(sent).toEqual([]);
             expect([ ...internals.clients.keys() ].sort()).toEqual([ '192.0.2.1:5003', '192.0.2.2:5002' ]);
@@ -580,10 +606,15 @@ describe('VoiceServer', () => {
             const sent = relays(internals.udpSocket);
             unity.connect('lab', '192.0.2.1');
             unity.connect('lab', '192.0.2.2');
-            deliver(internals.udpSocket, '192.0.2.1', 5001, voicePacket(1, 0, [], LAB));
-
-            for (let port = 10000; port < 11000; port++) deliver(internals.udpSocket, '192.0.2.1', port, voicePacket(9, 0, [], LAB));
-            deliver(internals.udpSocket, '192.0.2.2', 5002, voicePacket(2, 0, [ 2, 0 ], LAB));
+            withClock(at => {
+                for (const offset of [ 0, 3000 ]) {
+                    at(offset);
+                    // Keeps sending, so that none of them takes its place.
+                    deliver(internals.udpSocket, '192.0.2.1', 5001, voicePacket(1, offset, [], LAB));
+                    for (let port = 10000; port < 11000; port++) deliver(internals.udpSocket, '192.0.2.1', port, voicePacket(9, 0, [], LAB));
+                }
+                deliver(internals.udpSocket, '192.0.2.2', 5002, voicePacket(2, 0, [ 2, 0 ], LAB));
+            });
 
             expect(sent).toEqual([ '192.0.2.1:5001' ]);
             expect([ ...internals.clients.keys() ].sort()).toEqual([ '192.0.2.1:5001', '192.0.2.2:5002' ]);
@@ -601,18 +632,28 @@ describe('VoiceServer', () => {
             unity.connect('other', '192.0.2.1');
             unity.connect('other', '192.0.2.1');
 
-            deliver(internals.udpSocket, '192.0.2.1', 5001, voicePacket(1, 0, [], LAB));
-            deliver(internals.udpSocket, '192.0.2.1', 5003, voicePacket(3, 0, [], LAB));
-            deliver(internals.udpSocket, '192.0.2.1', 5005, voicePacket(5, 0, [], LAB));
-            deliver(internals.udpSocket, '192.0.2.1', 5007, voicePacket(7, 0, [], OTHER));
-            // Nor can one move into an app without room for it. It stays where it was.
-            deliver(internals.udpSocket, '192.0.2.1', 5007, voicePacket(7, 1, [], LAB));
-            expect([ ...internals.clients.keys() ].sort()).toEqual([ '192.0.2.1:5001', '192.0.2.1:5003', '192.0.2.1:5007' ]);
-            expect(appOf('192.0.2.1:5007')).toBe(OTHER);
+            withClock(at => {
+                deliver(internals.udpSocket, '192.0.2.1', 5001, voicePacket(1, 0, [], LAB));
+                deliver(internals.udpSocket, '192.0.2.1', 5003, voicePacket(3, 0, [], LAB));
+                deliver(internals.udpSocket, '192.0.2.1', 5005, voicePacket(5, 0, [], LAB));
+                deliver(internals.udpSocket, '192.0.2.1', 5007, voicePacket(7, 0, [], OTHER));
+                // Nor can one move into an app without room for it. It stays where it was.
+                deliver(internals.udpSocket, '192.0.2.1', 5007, voicePacket(7, 1, [], LAB));
+                expect([ ...internals.clients.keys() ].sort()).toEqual([ '192.0.2.1:5001', '192.0.2.1:5003', '192.0.2.1:5007' ]);
+                expect(appOf('192.0.2.1:5007')).toBe(OTHER);
 
-            // One that moves out makes room.
-            deliver(internals.udpSocket, '192.0.2.1', 5003, voicePacket(3, 1, [], OTHER));
-            deliver(internals.udpSocket, '192.0.2.1', 5005, voicePacket(5, 1, [], LAB));
+                // Still so 3 s on, while those of lab keep sending: now they are reported.
+                at(3000);
+                deliver(internals.udpSocket, '192.0.2.1', 5001, voicePacket(1, 1, [], LAB));
+                deliver(internals.udpSocket, '192.0.2.1', 5003, voicePacket(3, 1, [], LAB));
+                deliver(internals.udpSocket, '192.0.2.1', 5005, voicePacket(5, 1, [], LAB));
+                deliver(internals.udpSocket, '192.0.2.1', 5007, voicePacket(7, 2, [], LAB));
+                expect(appOf('192.0.2.1:5007')).toBe(OTHER);
+
+                // One that moves out makes room.
+                deliver(internals.udpSocket, '192.0.2.1', 5003, voicePacket(3, 2, [], OTHER));
+                deliver(internals.udpSocket, '192.0.2.1', 5005, voicePacket(5, 2, [], LAB));
+            });
 
             expect([ '192.0.2.1:5001', '192.0.2.1:5003', '192.0.2.1:5005', '192.0.2.1:5007' ].map(appOf)).toEqual([ LAB, OTHER, LAB, OTHER ]);
             expect(noRoomReports().map(l => l.message.replace(/ \(further .*$/, ''))).toEqual([
@@ -647,11 +688,127 @@ describe('VoiceServer', () => {
 
             expect(sent).toEqual([ '192.0.2.1:5001', '192.0.2.2:5002', '192.0.2.1:5003' ]);
             expect([ ...internals.clients.keys() ].sort()).toEqual([ '192.0.2.1:5003', '192.0.2.2:5002' ]);
-            expect(noRoomReports()).toHaveLength(1);
+            // Let in within 3 s of its first dropped packet, so not reported.
+            expect(noRoomReports()).toHaveLength(0);
             const replaced = logs.filter(l => l.origin === 'VoiceServer' && /takes its place/.test(l.message));
             expect(replaced.map(l => [ l.level, l.message, l.metadata ])).toEqual([
                 [ LogLevel.Debug, 'Voice client 192.0.2.1:5001 disconnected ID: 1: no packet for 500 ms, and 192.0.2.1:5003 takes its place', { connection: true } ],
             ]);
+        });
+
+        // A Unity client's voice starts a moment before its TCP handshake has registered it, so its
+        // first packets are dropped. That used to be a warning at every client start.
+        it('does not report a sender let in within 3 s of its first dropped packet', async () => {
+            const sent = relays(internals.udpSocket);
+            const debugTail = ' (reported as a warning if this goes on for 3s: a Unity client\'s voice can start before its TCP handshake is in)';
+            withClock(at => {
+                deliver(internals.udpSocket, '192.0.2.1', 5001, voicePacket(1, 0, [], LAB));
+                at(150);
+                deliver(internals.udpSocket, '192.0.2.1', 5001, voicePacket(1, 1, [], LAB));
+                unity.connect('lab', '192.0.2.1');
+                at(170);
+                deliver(internals.udpSocket, '192.0.2.1', 5001, voicePacket(1, 2, [], LAB));
+
+                // A second client at the same address, until its own handshake is in.
+                deliver(internals.udpSocket, '192.0.2.1', 5003, voicePacket(3, 0, [], LAB));
+                at(2999);
+                deliver(internals.udpSocket, '192.0.2.1', 5001, voicePacket(1, 3, [], LAB));
+                deliver(internals.udpSocket, '192.0.2.1', 5003, voicePacket(3, 1, [], LAB));
+                unity.connect('lab', '192.0.2.1');
+                deliver(internals.udpSocket, '192.0.2.1', 5003, voicePacket(3, 2, [], LAB));
+            });
+
+            expect(sent).toEqual([ '192.0.2.1:5001' ]);
+            expect([ ...internals.clients.keys() ].sort()).toEqual([ '192.0.2.1:5001', '192.0.2.1:5003' ]);
+            expect(ignoredReports()).toHaveLength(0);
+            expect(noRoomReports()).toHaveLength(0);
+            // The first dropped packet of each is a debug line, among the connection lines.
+            expect(firstDrops().map(l => [ l.message, l.metadata ])).toEqual([
+                [ `Ignoring voice packet from 192.0.2.1:5001 for app ${appHex(LAB)}: no Unity client of that app is connected from 192.0.2.1${debugTail}`,
+                    { connection: true } ],
+                [ `Ignoring voice packet from 192.0.2.1:5003 for app ${appHex(LAB)}: 192.0.2.1 has 1 Unity client(s) of that app, and as many voice `
+                    + `clients already${debugTail}`, { connection: true } ],
+            ]);
+            // Each forgot its first dropped packet once it was let in.
+            expect(internals.rejections.size).toBe(0);
+
+            // Dropped again once its Unity clients have left, it gets the 3 s anew.
+            unity.disconnectApp('lab');
+            await settled();
+            withClock(at => {
+                at(1);
+                deliver(internals.udpSocket, '192.0.2.1', 5001, voicePacket(1, 4, [], LAB));
+                at(3000);
+                deliver(internals.udpSocket, '192.0.2.1', 5001, voicePacket(1, 5, [], LAB));
+                expect(ignoredReports()).toHaveLength(0);
+                at(3001);
+                deliver(internals.udpSocket, '192.0.2.1', 5001, voicePacket(1, 6, [], LAB));
+            });
+            expect(ignoredReports().map(l => l.message)).toEqual([
+                `Ignoring voice packet from 192.0.2.1:5001 for app ${appHex(LAB)}: no Unity client of that app is connected from 192.0.2.1`
+                    + ' (further ones from this source are not reported for 10s)',
+            ]);
+            expect(firstDrops()).toHaveLength(3);
+        });
+
+        it('reports a sender whose packets are still dropped after 3 s, once every 10 s', () => {
+            unity.connect('lab', '192.0.2.1');
+            const ignoredAt: number[] = [];
+            const noRoomAt: number[] = [];
+            withClock(at => {
+                // A packet every 20 ms from each, as VoiceBroadcast sends, for 23 s.
+                for (let t = 0; t <= 23000; t += 20) {
+                    at(t);
+                    const [ ignored, noRoom ] = [ ignoredReports().length, noRoomReports().length ];
+                    deliver(internals.udpSocket, '192.0.2.1', 5001, voicePacket(1, t / 20, [], LAB));
+                    deliver(internals.udpSocket, '192.0.2.1', 5003, voicePacket(3, t / 20, [], LAB));
+                    deliver(internals.udpSocket, '198.51.100.7', 4000, voicePacket(9, t / 20, [], LAB));
+                    if (ignoredReports().length > ignored) ignoredAt.push(t);
+                    if (noRoomReports().length > noRoom) noRoomAt.push(t);
+                }
+            });
+
+            expect(ignoredAt).toEqual([ 3000, 13000, 23000 ]);
+            expect(noRoomAt).toEqual([ 3000, 13000, 23000 ]);
+            expect(ignoredReports()[0]!.message).toBe(`Ignoring voice packet from 198.51.100.7:4000 for app ${appHex(LAB)}: `
+                + 'no Unity client of that app is connected from 198.51.100.7 (further ones from this source are not reported for 10s)');
+            expect(firstDrops()).toHaveLength(2);
+            expect([ ...internals.clients.keys() ]).toEqual([ '192.0.2.1:5001' ]);
+        });
+
+        it('bounds and prunes what it remembers about senders whose packets it drops', () => {
+            const source = (i: number) => `198.51.100.7:${1024 + i}`;
+            withClock(at => {
+                // Synthetic deliveries from many distinct sources, as from a flood of forged ones.
+                const flood = (sequence: number) => {
+                    for (let i = 0; i < 5000; i++) deliver(internals.udpSocket, '198.51.100.7', 1024 + i, voicePacket(9, sequence, [], LAB));
+                };
+                flood(0);
+                expect(internals.rejections.size).toBe(100);
+                expect(firstDrops()).toHaveLength(100);
+                at(3000);
+                flood(1);
+                expect(internals.rejections.size).toBe(100);
+                expect(ignoredReports()).toHaveLength(100);
+                expect(ignoredReports()[0]!.message).toContain(`from ${source(0)} `);
+
+                // One goes on, the others stop. Theirs are forgotten 10 s after their last.
+                at(12999);
+                deliver(internals.udpSocket, '198.51.100.7', 1024, voicePacket(9, 2, [], LAB));
+                internals.pruneReports(Date.now());
+                expect(internals.rejections.size).toBe(100);
+                at(13000);
+                internals.pruneReports(Date.now());
+                expect([ ...internals.rejections.keys() ]).toEqual([ source(0) ]);
+
+                // The one that went on keeps its time, and is reported again 10 s after the last time.
+                deliver(internals.udpSocket, '198.51.100.7', 1024, voicePacket(9, 3, [], LAB));
+                expect(ignoredReports()).toHaveLength(101);
+                // A new one gets a slot again, and its 3 s.
+                deliver(internals.udpSocket, '198.51.100.7', 1024 + 4999, voicePacket(9, 3, [], LAB));
+                expect([ ...internals.rejections.keys() ]).toEqual([ source(0), source(4999) ]);
+                expect(ignoredReports()).toHaveLength(101);
+            });
         });
 
         // Behind a proxy every voice packet comes from the proxy's address, which no Unity client has.
@@ -664,11 +821,15 @@ describe('VoiceServer', () => {
                 const sent = relays(socket);
                 // A Unity client of lab on the proxy's machine, connected without the proxy.
                 const onProxy = unity.connect('lab', '192.0.2.100');
-                deliver(socket, '192.0.2.100', 6001, voicePacket(1, 0, [], LAB));
-                deliver(socket, '192.0.2.100', 6002, voicePacket(2, 0, [], LAB));
-                deliver(socket, '192.0.2.100', 6001, voicePacket(1, 1, [ 1, 0 ], LAB));
-                // Anyone else still needs a Unity client.
-                deliver(socket, '198.51.100.7', 4000, voicePacket(9, 0, [], LAB));
+                withClock(at => {
+                    deliver(socket, '192.0.2.100', 6001, voicePacket(1, 0, [], LAB));
+                    deliver(socket, '192.0.2.100', 6002, voicePacket(2, 0, [], LAB));
+                    deliver(socket, '192.0.2.100', 6001, voicePacket(1, 1, [ 1, 0 ], LAB));
+                    // Anyone else still needs a Unity client.
+                    deliver(socket, '198.51.100.7', 4000, voicePacket(9, 0, [], LAB));
+                    at(3000);
+                    deliver(socket, '198.51.100.7', 4000, voicePacket(9, 1, [], LAB));
+                });
                 // Nor are the proxy's voice clients dropped when that Unity client leaves: they are
                 // not its own, but those of whoever is behind the proxy.
                 unity.disconnect(onProxy);
@@ -713,9 +874,14 @@ describe('VoiceServer', () => {
                 [ LogLevel.Debug, `Voice client 192.0.2.1:5001 disconnected ID: 1: no Unity client of app ${appHex(LAB)} is connected from 192.0.2.1 any more`, { connection: true } ],
             ]);
 
-            // It hears nothing more, and is not let in again.
-            deliver(internals.udpSocket, '192.0.2.2', 5002, voicePacket(2, 1, [ 2, 0 ], LAB));
-            deliver(internals.udpSocket, '192.0.2.1', 5001, voicePacket(1, 1, [ 1, 0 ], LAB));
+            // It hears nothing more, and is not let in again, which is reported once it has gone on for 3 s.
+            withClock(at => {
+                deliver(internals.udpSocket, '192.0.2.2', 5002, voicePacket(2, 1, [ 2, 0 ], LAB));
+                deliver(internals.udpSocket, '192.0.2.1', 5001, voicePacket(1, 1, [ 1, 0 ], LAB));
+                at(3000);
+                deliver(internals.udpSocket, '192.0.2.2', 5002, voicePacket(2, 2, [ 2, 0 ], LAB));
+                deliver(internals.udpSocket, '192.0.2.1', 5001, voicePacket(1, 2, [ 1, 0 ], LAB));
+            });
             expect(sent).toEqual([ '192.0.2.1:5001' ]);
             expect(server.status.clients).toBe(2);
             expect(ignoredReports()).toHaveLength(1);
@@ -749,8 +915,13 @@ describe('VoiceServer', () => {
                 await internals.checkClientsDisconnected();
                 expect([ ...internals.clients.keys() ]).toEqual([ '192.0.2.1:5001' ]);
 
-                // Nor is there room for it again while the other sends.
+                // Nor is there room for it again while the other sends, which is reported once it
+                // has gone on for 3 s.
                 deliver(internals.udpSocket, '192.0.2.1', 5003, voicePacket(3, 1, [], LAB));
+                expect([ ...internals.clients.keys() ]).toEqual([ '192.0.2.1:5001' ]);
+                vi.setSystemTime(start + 3520);
+                deliver(internals.udpSocket, '192.0.2.1', 5001, voicePacket(1, 3, [], LAB));
+                deliver(internals.udpSocket, '192.0.2.1', 5003, voicePacket(3, 2, [], LAB));
                 expect([ ...internals.clients.keys() ]).toEqual([ '192.0.2.1:5001' ]);
             } finally {
                 vi.useRealTimers();

@@ -78,6 +78,14 @@ interface VoiceClientGroup {
 // app at its address, or its address is a trusted proxy's.
 type Admission = 'unity' | 'proxy';
 
+// A source whose packets admit drops, while it does (see JOIN_GRACE_MILLIS).
+interface Rejection {
+    // When its first dropped packet came in.
+    readonly since: number;
+    // When its latest one did.
+    last: number;
+}
+
 const voiceClientKey = (address: string, port: number): string => `${address}:${port}`;
 const groupKey = (address: string, appId: number): string => `${address} ${appId}`;
 
@@ -160,6 +168,16 @@ const REPORT_INTERVAL_MILLIS = 10000;
 // the next prune frees a slot.
 const REPORT_MAX_KEYS = 100;
 
+// A Unity client opens its voice socket and its TCP connection at about the same time, and its
+// voice often starts a moment (0.1 to 0.2 s) before the TCP handshake has registered it. Its first
+// packets are dropped then (see admit), as are those of a second client at the same address until
+// its own handshake is in, and those of a voice socket opened again on a new port until the old one
+// has been quiet for VOICE_CLIENT_GONE_MILLIS. Each of those used to be a warning, the first at
+// every client start. Now the first packet dropped from a source is logged at debug level only, and
+// the source is reported as a warning once its packets have been dropped for this long. One let in
+// before that is never reported, and its next drop starts over.
+const JOIN_GRACE_MILLIS = 3000;
+
 export class VoiceServer extends Service {
 
     public get serviceName(): string { return 'VoiceServer'; }
@@ -183,6 +201,11 @@ export class VoiceServer extends Service {
     // Report key (see reportMalformedPacket and reportRelayFailure) -> when it was last
     // reported. See REPORT_INTERVAL_MILLIS; pruned every disconnect-check tick.
     private readonly reportedAt = new Map<string, number>();
+    // The sources whose packets admit drops, by voiceClientKey (see JOIN_GRACE_MILLIS). One is
+    // forgotten once it is let in, or by pruneReports once none of its packets has been dropped for
+    // REPORT_INTERVAL_MILLIS. Bounded by REPORT_MAX_KEYS, as reportedAt: once full, a new source is
+    // neither timed nor reported until the next prune frees a slot.
+    private readonly rejections = new Map<string, Rejection>();
 
     // Whether the UDP socket is listening: false before start(), and for good if it could not bind.
     private listening = false;
@@ -281,6 +304,7 @@ export class VoiceServer extends Service {
             if (!voiceClient || voiceClient.appId !== appId) {
                 admission = this.admit(remote.address, appId, clientKey, nowMillis);
                 if (!admission) return;
+                this.rejections.delete(clientKey);
             }
 
             // Add to clients if new client
@@ -523,17 +547,40 @@ export class VoiceServer extends Service {
     }
 
     private reportNoUnityClient(source: string, address: string, appId: number, nowMillis: number): void {
-        if (!this.claimReport(source, nowMillis)) return;
-
-        this.logWarning(`Ignoring voice packet from ${source} for app ${formatAppId(appId)}: no Unity client of that app is connected from ${address}`
-            + ` (further ones from this source are not reported for ${REPORT_INTERVAL_MILLIS / 1000}s)`);
+        const level = this.rejectionReport(source, nowMillis);
+        if (level) this.logRejection(level, source, appId, `no Unity client of that app is connected from ${address}`);
     }
 
     private reportNoRoom(source: string, address: string, appId: number, unityClients: number, nowMillis: number): void {
-        if (!this.claimReport(source, nowMillis)) return;
+        const level = this.rejectionReport(source, nowMillis);
+        if (level) this.logRejection(level, source, appId, `${address} has ${unityClients} Unity client(s) of that app, and as many voice clients already`);
+    }
 
-        this.logWarning(`Ignoring voice packet from ${source} for app ${formatAppId(appId)}: ${address} has ${unityClients} Unity client(s) `
-            + `of that app, and as many voice clients already (further ones from this source are not reported for ${REPORT_INTERVAL_MILLIS / 1000}s)`);
+    // How a packet admit has dropped from `source` is to be logged, if at all (see JOIN_GRACE_MILLIS):
+    // the first one of the source at debug level, then nothing until they have been dropped for
+    // JOIN_GRACE_MILLIS, then as a warning at most once per REPORT_INTERVAL_MILLIS (claimReport).
+    // Called at packet rate, so the message is built only when there is one to log.
+    private rejectionReport(source: string, nowMillis: number): 'debug' | 'warning' | undefined {
+        const rejection = this.rejections.get(source);
+        if (!rejection) {
+            if (this.rejections.size >= REPORT_MAX_KEYS) return undefined;
+            this.rejections.set(source, { since: nowMillis, last: nowMillis });
+            return 'debug';
+        }
+        rejection.last = nowMillis;
+        if (nowMillis - rejection.since < JOIN_GRACE_MILLIS) return undefined;
+        return this.claimReport(source, nowMillis) ? 'warning' : undefined;
+    }
+
+    private logRejection(level: 'debug' | 'warning', source: string, appId: number, reason: string): void {
+        const message = `Ignoring voice packet from ${source} for app ${formatAppId(appId)}: ${reason}`;
+        if (level === 'warning') {
+            this.logWarning(`${message} (further ones from this source are not reported for ${REPORT_INTERVAL_MILLIS / 1000}s)`);
+            return;
+        }
+        // Routine while a Unity client connects, hence a connection line.
+        this.logDebug(`${message} (reported as a warning if this goes on for ${JOIN_GRACE_MILLIS / 1000}s: `
+            + 'a Unity client\'s voice can start before its TCP handshake is in)', CONNECTION_LINE);
     }
 
     private reportUncheckedProxy(address: string): void {
@@ -583,6 +630,13 @@ export class VoiceServer extends Service {
         for (const [key, reportedAt] of this.reportedAt) {
             if (nowMillis - reportedAt >= REPORT_INTERVAL_MILLIS) {
                 this.reportedAt.delete(key);
+            }
+        }
+        // By the latest dropped packet, not the first: a source dropped for good would otherwise
+        // start over every REPORT_INTERVAL_MILLIS, and its warning come JOIN_GRACE_MILLIS late each time.
+        for (const [source, rejection] of this.rejections) {
+            if (nowMillis - rejection.last >= REPORT_INTERVAL_MILLIS) {
+                this.rejections.delete(source);
             }
         }
     }
