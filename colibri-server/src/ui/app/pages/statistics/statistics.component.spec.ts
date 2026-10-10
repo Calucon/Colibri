@@ -17,7 +17,8 @@ describe('StatisticsComponent', () => {
         clients.set([
             { id: 'abcdef123', app: 'demo', name: '127.0.0.1', version: '2', latency: [ [ 1, 4 ], [ 2, 6 ], [ 3, 8 ] ] },
             { id: 'uvwxyz456', app: 'demo', name: '127.0.0.1', version: '2', latency: [] },
-            { id: 'q1', app: 'other', name: 'Quest', version: '', latency: [] }
+            { id: 'q1', app: 'other', name: 'Quest', version: '', latency: [] },
+            { id: 'lone12345', app: 'third', name: '10.0.0.5', version: '2', latency: [] }
         ]);
         const component = TestBed.createComponent(StatisticsComponent).componentInstance;
 
@@ -25,8 +26,8 @@ describe('StatisticsComponent', () => {
         expect(first).toEqual(expect.objectContaining({ color: clientColor(0), app: 'demo', version: 'v2', median: 6, stdev: 2 }));
         expect(second.color).toBe(clientColor(1));
         expect(second.median).toBeNull();
-        // two clients of one app with one name, as web clients on one host are, told apart by id
-        expect([ first.idHint, second.idHint, third.idHint ]).toEqual([ 'abcdef', 'uvwxyz', null ]);
+        // web clients, named by their address, are told apart by id
+        expect(component.rows().map(row => row.idHint)).toEqual([ 'abcdef', 'uvwxyz', null, 'lone12' ]);
         expect(third.version).toBe('');
     });
 });

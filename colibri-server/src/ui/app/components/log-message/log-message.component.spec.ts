@@ -44,6 +44,18 @@ describe('LogMessageComponent', () => {
         expect(text(root, '.message')).toBe('Failed to load asset');
     });
 
+    // every web client on one host has the same address for a name
+    it('shows a web client by the start of its id, with the address in its title', () => {
+        const root: HTMLElement = render(message({
+            message: '[172.20.0.1] Scene loaded',
+            metadata: { clientApp: 'demo-app', clientName: '172.20.0.1', clientId: 'AysXA7fAeXWU9b__AAAT' }
+        })).nativeElement;
+
+        expect(text(root, '.client')).toBe('AysXA7');
+        expect(root.querySelector('.client')?.getAttribute('title')).toBe('172.20.0.1, client AysXA7fAeXWU9b__AAAT');
+        expect(text(root, '.message')).toBe('Scene loaded');
+    });
+
     it('shows a repeat count with when it first occurred, and none for a single line', () => {
         const root: HTMLElement = render(message({})).nativeElement;
         expect(text(root, '.count')).toBe('×10');

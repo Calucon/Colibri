@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, inject, input, signal } from '@angular/core';
 import { DatePipe } from '@angular/common';
 import { LOG_LEVELS, LogMessage, LogService } from '../../services';
-import { LEVEL_TAGS, appColor, highlight, messageText, sourceOf } from './log-format';
+import { LEVEL_TAGS, appColor, highlight, isAddress, messageText, shortId, sourceOf } from './log-format';
 
 @Component({
     selector: 'app-log-message',
@@ -33,6 +33,13 @@ export class LogMessageComponent {
     clientId = computed(() => {
         const id = this.log().metadata?.['clientId'];
         return typeof id === 'string' && id !== 'UNKNOWN' ? id : null;
+    });
+    /** A web client by the start of its id: its name, the address, is the same for all on one host. */
+    clientLabel = computed(() => {
+        const client = this.source().client ?? '';
+        const id = this.clientId();
+        if (id && isAddress(client)) return { text: shortId(id), title: `${client}, client ${id}`, id: true };
+        return { text: client, title: client, id: false };
     });
     countTitle = computed(() =>
         `${this.log().count + 1} times, first at ${this.datePipe.transform(this.log().first, 'HH:mm:ss.SSS')}`);

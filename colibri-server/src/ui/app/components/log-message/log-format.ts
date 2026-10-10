@@ -19,6 +19,19 @@ const text = function (value: unknown): string | undefined {
     return typeof value === 'string' && value !== '' && value !== 'UNKNOWN' ? value : undefined;
 };
 
+/**
+ * Whether a client's name is an IP address, as a web client's is. Every web client on one host,
+ * or behind one Docker port, has the same.
+ */
+export const isAddress = function (name: string): boolean {
+    return /^\d{1,3}(\.\d{1,3}){3}$/.test(name) || (name.includes(':') && /^[\da-f:.]+$/i.test(name));
+};
+
+/** The start of a client's id, enough to tell apart the clients of one app. */
+export const shortId = function (id: string): string {
+    return id.slice(0, 6);
+};
+
 export const sourceOf = function (log: LogMessage): LogSource {
     return {
         app: text(log.metadata?.['clientApp']),
@@ -50,12 +63,12 @@ export const appColor = function (app: string): string {
     return APP_COLORS[(hash >>> 0) % APP_COLORS.length];
 };
 
-/** Whether a line contains the search text, lower case, in its message or source. */
+/** Whether a line contains the search text, lower case, in its message, source or client id. */
 export const matchesSearch = function (log: LogMessage, search: string): boolean {
     if (log.reconnect) return false;
     if (log.message.toLowerCase().includes(search)) return true;
     const source = sourceOf(log);
-    return [ source.app, source.client, source.server ].some(part => part?.toLowerCase().includes(search));
+    return [ source.app, source.client, source.server, text(log.metadata?.['clientId']) ].some(part => part?.toLowerCase().includes(search));
 };
 
 export interface TextPart {

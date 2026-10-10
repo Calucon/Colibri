@@ -115,6 +115,10 @@
     flex: 0 1 auto;
 }
 
+.client.id {
+    font-family: var(--mono);
+}
+
 .message {
     grid-area: message;
     min-width: 0;

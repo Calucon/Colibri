@@ -14,8 +14,8 @@
       @if (source().app; as app) {
         <button type="button" class="app-chip" [style.--app]="appColor()" [title]="'Show only ' + app" (click)="filterApp($event, app)">{{ app }}</button>
       }
-      @if (source().client; as client) {
-        <span class="client" [title]="client">{{ client }}</span>
+      @if (source().client) {
+        <span class="client" [class.id]="clientLabel().id" [title]="clientLabel().title">{{ clientLabel().text }}</span>
       } @else if (!source().app) {
         <span class="server" [title]="source().server">{{ source().server }}</span>
       }
