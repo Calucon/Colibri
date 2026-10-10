@@ -17,7 +17,6 @@ import {
     MAX_MODELS_LIMIT,
     MAX_MODEL_JSON_LENGTH,
     MAX_NAME_LENGTH,
-    MODEL_SIZE_BUDGET_BYTES,
     ServerSources,
     clientsSnapshot,
     modelSnapshot,
@@ -27,6 +26,7 @@ import {
     recentLatency,
     serverSnapshot,
 } from '../../src/server/modules/web/admin-topics.js';
+import { MODEL_SIZE_REFRESH_MILLIS, ModelMeasures } from '../../src/server/modules/web/model-measures.js';
 
 const query = (fields: Record<string, unknown> = {}) => parseModelsQuery(fields);
 
@@ -209,17 +209,34 @@ describe('admin UI topics', () => {
             expect(snapshot.channels[0]).toMatchObject({ channel: 'n'.repeat(MAX_NAME_LENGTH), truncated: true });
         });
 
-        it('measures at most MODEL_SIZE_BUDGET_BYTES of models afresh, leaving the rest\'s size out', () => {
+        it('measures sizes from a budget per second that every snapshot shares, leaving the rest out', () => {
             const store = new DataStore();
-            const big = 'x'.repeat(MODEL_SIZE_BUDGET_BYTES / 2);
+            // 700 bytes each
+            const big = 'x'.repeat(680);
             for (let i = 0; i < 4; i++) store.updateModel('app', 'big', { id: `b${i}`, big });
+            const measures = new ModelMeasures(1000);
 
-            const first = modelsSnapshot(store, query());
-            expect(first.models.map(m => m.bytes === null)).toEqual([false, false, true, true]);
+            // 1000 bytes a second: the first model, and the second while any of it is left, which
+            // leaves the budget 400 bytes in debt.
+            expect(modelsSnapshot(store, query(), measures).models.map(m => m.bytes === null)).toEqual([false, false, true, true]);
+            // Nothing left for another snapshot in the same second.
+            expect(modelsSnapshot(store, query(), measures).models.map(m => m.bytes === null)).toEqual([false, false, true, true]);
+            vi.advanceTimersByTime(1000);
+            expect(modelsSnapshot(store, query(), measures).models.map(m => m.bytes === null)).toEqual([false, false, false, true]);
+        });
 
-            // Measured once, a size is reused until the model changes, so the next snapshot gets further.
-            const second = modelsSnapshot(store, query());
-            expect(second.models.map(m => m.bytes === null)).toEqual([false, false, false, false]);
+        it('shows a changed model\'s last size until MODEL_SIZE_REFRESH_MILLIS after it was measured', () => {
+            const store = new DataStore();
+            store.updateModel('app', 'c', { id: 'm', text: 'short' });
+            const measures = new ModelMeasures();
+            const size = () => modelsSnapshot(store, query(), measures).models[0]!.bytes;
+            expect(size()).toBe('{"id":"m","text":"short"}'.length);
+
+            store.updateModel('app', 'c', { id: 'm', text: 'longer now' });
+            vi.advanceTimersByTime(MODEL_SIZE_REFRESH_MILLIS - 1);
+            expect(size()).toBe('{"id":"m","text":"short"}'.length);
+            vi.advanceTimersByTime(1);
+            expect(size()).toBe('{"id":"m","text":"longer now"}'.length);
         });
     });
 

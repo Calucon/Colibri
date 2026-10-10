@@ -200,20 +200,17 @@ describe('DataStore', () => {
             expect(store.getEntry('app', 'channel', 'a')).toMatchObject({ updatedAt: 1_005_000, model: { id: 'a', x: 2 } });
         });
 
-        it('measures a model\'s JSON size once per change, on request only', () => {
+        it('counts a model\'s updates, without serializing it', () => {
             const store = new DataStore();
+            const stringify = vi.spyOn(JSON, 'stringify');
             store.updateModel('app', 'channel', { id: 'a', text: 'äö' });
             const entry = store.getEntry('app', 'channel', 'a')!;
-            expect(entry.bytes).toBeUndefined();
-
-            const stringify = vi.spyOn(JSON, 'stringify');
-            expect(store.modelBytes(entry)).toBe(Buffer.byteLength('{"id":"a","text":"äö"}'));
-            expect(store.modelBytes(entry)).toBe(Buffer.byteLength('{"id":"a","text":"äö"}'));
-            expect(stringify).toHaveBeenCalledTimes(1);
+            expect(entry.version).toBe(0);
 
             store.updateModel('app', 'channel', { id: 'a', text: 'x' });
-            expect(entry.bytes).toBeUndefined();
-            expect(store.modelBytes(entry)).toBe('{"id":"a","text":"x"}'.length);
+            store.updateModel('app', 'channel', { id: 'a', n: 1 });
+            expect(entry.version).toBe(2);
+            expect(stringify).not.toHaveBeenCalled();
             stringify.mockRestore();
         });
 

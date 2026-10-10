@@ -8,6 +8,9 @@ import { ClientActivity, LoadLimit } from '../networking/client-activity.js';
 import { PROTOCOL_VERSION } from '../networking/protocol.js';
 import { SocketIoClient } from '../networking/socket-io-server.js';
 import { TcpNetworkClient } from '../networking/tcp-server-proxy.js';
+import { MAX_MODEL_JSON_LENGTH, ModelMeasures } from './model-measures.js';
+
+export { MAX_MODEL_JSON_LENGTH };
 
 // The app the admin UI joins.
 export const ADMIN_APP = 'colibri';
@@ -25,11 +28,6 @@ export const MAX_CHANNELS = 500;
 export const MAX_DELETED = 100;
 // How long a model list filter may be.
 export const MAX_FILTER_LENGTH = 200;
-// How many bytes of models a model list measures afresh at most (see DataStore.modelBytes); the
-// size of any model beyond that is left out (null) until a later snapshot gets to it.
-export const MODEL_SIZE_BUDGET_BYTES = 8 * 1024 * 1024;
-// How much of a model's formatted JSON the model topic carries.
-export const MAX_MODEL_JSON_LENGTH = 512 * 1024;
 // Clients the client list holds at most.
 export const MAX_CLIENT_ROWS = 1000;
 
@@ -111,7 +109,7 @@ export interface ModelRow {
     id: string;
     // Top-level fields besides the id.
     fields: number;
-    // Compact JSON size; null if this snapshot had no budget left to measure it.
+    // Compact JSON size as last measured (see ModelMeasures.bytes); null if not measured yet.
     bytes: number | null;
     // Date.now() of its latest update.
     updatedAt: number;
@@ -150,7 +148,7 @@ const truncatedFlag = function (...names: string[]): { truncated?: true } {
     return names.some(isLong) ? { truncated: true } : {};
 };
 
-export const modelsSnapshot = function (store: DataStore, query: ModelsQuery): ModelsSnapshot {
+export const modelsSnapshot = function (store: DataStore, query: ModelsQuery, measures = new ModelMeasures()): ModelsSnapshot {
     const now = Date.now();
     const performanceNow = performance.now();
     const filter = query.filter.toLowerCase();
@@ -172,7 +170,6 @@ export const modelsSnapshot = function (store: DataStore, query: ModelsQuery): M
 
     const models: ModelRow[] = [];
     let total = 0;
-    let sizeBudget = MODEL_SIZE_BUDGET_BYTES;
     for (const { app, channel, models: entries } of store.channels()) {
         if (entries.size > 0) summaryOf(app, channel).models = entries.size;
         if (!inScope(app, channel)) continue;
@@ -183,19 +180,12 @@ export const modelsSnapshot = function (store: DataStore, query: ModelsQuery): M
             total += 1;
             if (total <= query.offset || models.length >= query.limit) continue;
 
-            let bytes: number | null = null;
-            if (entry.bytes !== undefined) {
-                bytes = entry.bytes;
-            } else if (sizeBudget > 0) {
-                bytes = store.modelBytes(entry);
-                sizeBudget -= bytes;
-            }
             models.push({
                 app: clip(app),
                 channel: clip(channel),
                 id: clip(id),
                 fields: fieldCount(entry),
-                bytes,
+                bytes: measures.bytes(entry, performanceNow),
                 updatedAt: entry.updatedAt,
                 ...truncatedFlag(app, channel, id),
             });
@@ -273,14 +263,15 @@ export interface ModelSnapshot {
     found: boolean;
     deletedAt?: number;
     fields?: number;
-    bytes?: number;
+    // As in ModelRow.
+    bytes?: number | null;
     updatedAt?: number;
     // The value as JSON indented by two spaces, cut to MAX_MODEL_JSON_LENGTH characters.
     json?: string;
     truncated?: boolean;
 }
 
-export const modelSnapshot = function (store: DataStore, query: ModelQuery): ModelSnapshot {
+export const modelSnapshot = function (store: DataStore, query: ModelQuery, measures = new ModelMeasures()): ModelSnapshot {
     const now = Date.now();
     const head = { at: now, app: clip(query.app), channel: clip(query.channel), id: clip(query.id) };
     const entry = store.getEntry(query.app, query.channel, query.id);
@@ -291,15 +282,14 @@ export const modelSnapshot = function (store: DataStore, query: ModelQuery): Mod
             : { ...head, found: false };
     }
 
-    const json = JSON.stringify(entry.model, null, 2);
-    const truncated = json.length > MAX_MODEL_JSON_LENGTH;
+    const { json, truncated } = measures.json(entry);
     return {
         ...head,
         found: true,
         fields: fieldCount(entry),
-        bytes: store.modelBytes(entry),
+        bytes: measures.bytes(entry),
         updatedAt: entry.updatedAt,
-        json: truncated ? json.slice(0, MAX_MODEL_JSON_LENGTH) : json,
+        json,
         truncated,
     };
 };

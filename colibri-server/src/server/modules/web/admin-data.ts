@@ -19,6 +19,7 @@ import {
     parseModelsQuery,
     serverSnapshot,
 } from './admin-topics.js';
+import { ModelMeasures } from './model-measures.js';
 
 // The channel the admin UI's pages ask for read-only server data on, and get it on. See
 // docs/protocol.md, Admin UI channel.
@@ -105,6 +106,8 @@ export class AdminData extends Service {
     public get groupName(): string { return 'web'; }
 
     private readonly pages = new Map<string, AdminPage>();
+    // One for every snapshot and page: what it measures a second is bounded for all of them.
+    private readonly measures = new ModelMeasures();
     private refreshTimer: NodeJS.Timeout | undefined;
     // Set while a refresh waits for the TCP worker, so that a slow answer does not stack them up.
     private refreshing = false;
@@ -281,10 +284,10 @@ export class AdminData extends Service {
                 });
 
             case 'models':
-                return modelsSnapshot(sources.store, query.models);
+                return modelsSnapshot(sources.store, query.models, this.measures);
 
             case 'model':
-                return modelSnapshot(sources.store, query.model);
+                return modelSnapshot(sources.store, query.model, this.measures);
         }
     }
 }

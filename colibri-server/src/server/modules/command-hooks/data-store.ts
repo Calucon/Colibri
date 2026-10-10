@@ -19,10 +19,10 @@ export interface ModelEntry {
     readonly model: SyncModel;
     // Date.now() of its latest update.
     updatedAt: number;
-    // Its size as compact JSON, in bytes: measured when the admin UI asks (see modelBytes), and
-    // forgotten whenever the model changes. Never measured per update, which would cost a
-    // JSON.stringify per model::update.
-    bytes: number | undefined;
+    // Counts its updates, so that the admin UI can tell whether what it measured or formatted of
+    // the model (see ModelMeasures) is still its current value. Nothing is measured per update,
+    // which would cost a JSON.stringify per model::update.
+    version: number;
 }
 
 // What is left of a deleted model.
@@ -69,7 +69,7 @@ export class DataStore extends Service {
     public addModel(group: string, channel: string, id: string): void {
         const models = this.getOrCreateChannel(group, channel);
         if (!models.has(id)) {
-            models.set(id, { model: { id }, updatedAt: Date.now(), bytes: undefined });
+            models.set(id, { model: { id }, updatedAt: Date.now(), version: 0 });
         }
     }
 
@@ -77,14 +77,14 @@ export class DataStore extends Service {
         const models = this.getOrCreateChannel(group, channel);
         const existing = models.get(model.id);
         if (!existing) {
-            models.set(model.id, { model, updatedAt: Date.now(), bytes: undefined });
+            models.set(model.id, { model, updatedAt: Date.now(), version: 0 });
         } else {
             const existingModel = existing.model;
             for (const k of Object.keys(model)) {
                 existingModel[k] = model[k];
             }
             existing.updatedAt = Date.now();
-            existing.bytes = undefined;
+            existing.version += 1;
         }
     }
 
@@ -186,14 +186,6 @@ export class DataStore extends Service {
         for (const tombstone of app.oldestFirst) {
             if (now - tombstone.deletedAt < this.tombstoneMillis) yield tombstone;
         }
-    }
-
-    // The model's size as compact JSON, in bytes. Measured once per change of the model, on request.
-    public modelBytes(entry: Readonly<ModelEntry>): number {
-        if (entry.bytes === undefined) {
-            (entry as ModelEntry).bytes = Buffer.byteLength(JSON.stringify(entry.model), 'utf8');
-        }
-        return entry.bytes!;
     }
 
     // How many tombstones the app holds, expired ones not yet dropped included. For the tests.
