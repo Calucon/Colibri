@@ -269,6 +269,7 @@ Show [`LastConnectFailure`](#connection-and-outages) in your app.
 | Two clients do not see each other | Different app names | Compare the names in the log line `Colibri: connected to <host>:<port> as app '<app>'. …` |
 | Unknown objects or messages appear | Another project uses the same app name. Unity reports nothing at runtime. | Choose a unique app name ([Configuration](#configuration)). The server log warns, naming the app, above 8 clients by default (`APP_CLIENT_WARNING_THRESHOLD`). |
 | One client is connected but sends and receives nothing | Its Editor is in the background with *Run In Background* off | Enable *Run In Background* ([Quickstart](#quickstart), step 3) |
+| Voice is not heard, and the server logs `Ignoring voice packet from <address>:<port> for app <app id>: no Unity client of that app is connected from <address>` | The server relays voice only from the address of a client connected with the same App Name: `WebServerConnection` is not connected, voice goes through a proxy, or TCP uses IPv6 and voice IPv4 | See [Voice chat](#voice-chat) and [Server addresses](#server-addresses) |
 
 ## Sending data between clients
 
@@ -841,8 +842,10 @@ and instantiates `VoiceReceiver` prefabs.
   packets](../../colibri-server/docs/protocol.md#voice-packets-udp)). Without an App Name, no voice
   is sent, and Colibri logs an error once.
 - The server relays voice only from the address of a client connected with the same App Name, so
-  voice needs `WebServerConnection` connected too, from the same address. Voice sent through a
-  reverse proxy comes from the proxy's address instead
+  voice needs `WebServerConnection` connected too, from the same address. The voice components do
+  not connect it ([Connection and outages](#connection-and-outages)). In a scene without `Sync`
+  calls or a `SyncBehaviour`, call `Sync.Receive` or read `WebServerConnection.Instance`. Voice
+  sent through a reverse proxy comes from the proxy's address instead
   ([Voice relay](../../colibri-server/docs/guide.md#voice-relay)), and voice over IPv4 from another
   address than a TCP connection over IPv6 ([Server addresses](#server-addresses)).
 - The server takes one voice sender per connected client. Disabling and re-enabling
