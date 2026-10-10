@@ -534,15 +534,16 @@ The endpoints are documented under [REST store](./protocol.md#rest-store).
   client's median per second, across the whole width from the first sample.
 - New Models page: the synchronized models of each app and channel, 50 to a page and filtered by id or
   channel, with their size, number of fields and last update; a model's value as JSON, to read or
-  download; and the ids deleted lately. It reads once, on *Refresh*, or every second with *Live*.
+  download (over 512 KiB, its start, as text); and the ids deleted lately. It reads once, on
+  *Refresh*, or every second with *Live*.
 - New Server page: versions, uptime, the settings in effect with the variables that set them, the TLS
   certificate's names, issuer, validity and fingerprint (a warning 30 days before it expires), and
   counts of clients, apps, models and REST store values.
-- The Log page goes to the previous and next error or warning (keys `p` and `n`) and to the first
-  error since the page was opened (`e`). It downloads the loaded lines that match its filters and
-  search as text or JSON, which works over plain HTTP, unlike the clipboard. A *Connections* switch
-  hides the routine connect and disconnect lines. Levels, search and switches are in the address
-  along with the app, so a reload or a shared link shows the same.
+- The Log page goes to the previous and next error or warning (keys `p` and `n`, with the focus in
+  the log) and to the first error since the page was opened (`e`). It downloads the loaded lines
+  that match its filters and search as text or JSON, which works over plain HTTP, unlike the
+  clipboard. A *Connections* switch hides the routine connect and disconnect lines. Levels, search
+  and switches are in the address along with the app, so a reload or a shared link shows the same.
 - An opened log line links to the clients of its app, and each client on the Clients page to its
   lines in the log.
 - The server answers the admin UI's read-only requests on the new channel `colibri::admin`: server
@@ -551,9 +552,12 @@ The endpoints are documented under [REST store](./protocol.md#rest-store).
   and load limit, and the synchronized models with their tombstones, paginated and filtered, plus one
   model's value. A page asks once or subscribes while it is open; subscriptions are sent again once a
   second and end with the page. Sizes are bounded. Without a subscription the server computes nothing
-  for it and the TCP worker reports nothing. See [Admin UI channel](./protocol.md#admin-ui-channel).
-- The model store records each model's last update time. Sizes are measured only when the admin UI
-  asks, and once per change.
+  for it and the TCP worker reports nothing. A page that stops reading is skipped until it catches
+  up. See [Admin UI channel](./protocol.md#admin-ui-channel).
+- The model store records each model's last update time and counts its updates. Sizes are measured
+  only when the admin UI asks, at most 2 MiB a second; a model that changes keeps its last size for
+  up to 10 s. A model's JSON is formatted only as far as the 512 KiB cut, once per change.
+- The admin log's history carries the server's time, so "New errors" counts by the server's clock.
 - Routine connect and disconnect log lines carry `metadata.connection: true`, and `requestLog` takes
   `showConnections` to leave them out.
 - The SPA fallback no longer adds a log entry every time an admin UI page is loaded.
@@ -610,9 +614,11 @@ The endpoints are documented under [REST store](./protocol.md#rest-store).
 - Unit tests for `TRUSTED_PROXIES` matching, `X-Forwarded-For` on Socket.IO and `req.ip`, the
   PROXY protocol reader (both versions, split, malformed and oversized headers), and the TCP worker
   behind a proxy, with and without TLS.
-- Unit tests for the admin UI channel: snapshot sizes bounded for large stores, the store left
-  unchanged, nothing sent or asked of the TCP worker without a subscription, subscriptions ending with
-  the page, the request limit, and the message counts and load limits on both transports.
+- Unit tests for the admin UI channel: snapshot sizes bounded for large stores and long query names,
+  the store left unchanged, nothing sent or asked of the TCP worker without a subscription,
+  subscriptions ending with the page, refreshes skipped for a page that stopped reading, the request
+  limit, the measuring budget, the JSON formatter's cut, and the message counts and load limits on
+  both transports.
 
 ### Documentation
 

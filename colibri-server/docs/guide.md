@@ -419,7 +419,8 @@ it while no page is open.
   traffic* shows the `broadcast::` messages between clients; *Connections* off leaves out the routine
   connect and disconnect lines, not the warnings and errors about connections. Scrolling up pauses
   the log; click a line for its details and a link to the clients of its app. The arrows go to the
-  previous and next error or warning, *New errors* to the first error since the page was opened.
+  previous and next error or warning, *New errors* to the first error since the page was opened, by
+  the server's clock.
   *Download* saves the loaded lines that match the filters and the search, as text or as JSON; unlike
   the clipboard, it works over plain HTTP. The filters are in the address, so a reload or a copied
   link keeps them: `/log?levels=error,warn&q=timeout&sync=1&connections=0#MyApp`.
@@ -428,13 +429,14 @@ it while no page is open.
   version, time connected, latency, messages per second in and out over the last second, and whether
   a [load limit](#load-limits) holds its updates back: *Rate limit* or *Backlog*, with the number of
   objects held. Sort by a column, show one app (`/clients?app=MyApp`), and open a client's lines in
-  the log. Below, a chart of each client's latency over the last 110 s. The former *Statistics*
-  page, `/statistics`, leads here.
+  the log. While the mouse is over the rows, they keep their order. Below, a chart of each client's
+  latency over the last 110 s. The former *Statistics* page, `/statistics`, leads here.
 - **Models:** the synchronized models of each app and channel, 50 to a page, with their id, number
   of top-level fields, size as compact JSON and time since the last update, filtered by part of the
-  id or channel. Click one for its value as JSON, cut at 512 KiB, to read or download. Below, the ids
-  deleted within `MODEL_TOMBSTONE_SECONDS`. *Refresh* reads the list again; *Live* updates the list
-  and the open model every second.
+  id or channel. A size can be up to 10 s old. Click one for its value as JSON, to read or download;
+  a value over 512 KiB is cut, and its start downloads as text. Below, the newest ids deleted within
+  `MODEL_TOMBSTONE_SECONDS`. *Refresh* reads the list again; *Live* updates the list and the open
+  model every second.
 - **Server:** version, protocol version, Node.js version and uptime; the settings in effect, with the
   variables that set them: ports, `BASE_URL`, TLS, `TRUSTED_PROXIES`, `TCP_PROXY_PROTOCOL`, load
   limits, idle timeout, tombstones, voice and recording; the TLS certificate's names, issuer, validity
@@ -442,8 +444,9 @@ it while no page is open.
   synchronized models and REST store values. Never certificate or key paths, key material or file
   contents.
 
-Keys on the *Log* page: `/` search, `p` and `n` previous and next error or warning, `e` first new
-error. On the *Models* page, `Esc` closes the open model.
+Keys on the *Log* page, with the focus in the log or its toolbar (where a page just loaded puts it):
+`/` search, `p` and `n` previous and next error or warning, `e` first new error. On the *Models* page,
+`Esc` closes the open model.
 
 ### Load limits
 

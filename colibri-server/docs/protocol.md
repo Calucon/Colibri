@@ -509,6 +509,7 @@ The answer comes on `colibri::admin` with the topic as its command. Its payload 
 the server's `Date.now()`. Times are `Date.now()` milliseconds, rates are per second over the last
 second. A page may send 10 `request` and `subscribe` messages a second, bursts of 20; the server
 ignores the rest. With no subscription the server computes nothing, and the TCP worker reports nothing.
+A refresh skips a page whose connection is still sending the previous one; the next replaces it.
 
 | Topic | Query | Snapshot |
 | --- | --- | --- |
@@ -537,21 +538,24 @@ ignores the rest. With no subscription the server computes nothing, and the TCP 
   `app` and `channel` match exactly, `filter` is part of an id or channel name in any case. `limit` is
   1 to 200 (default 50), `total` counts all matches. A `ModelRow` is
   `{ app, channel, id, fields, bytes, updatedAt }`: `fields` is the number of top-level fields besides
-  `id`, `bytes` the compact JSON size. A snapshot measures at most 8 MiB of changed models; the
-  size of any further one is `null` until a later snapshot gets to it.
+  `id`, `bytes` the compact JSON size. The server measures at most 2 MiB of models a second, for all
+  pages together, and a model that changed keeps its last size for up to 10 s. `bytes` is `null`
+  until a model is first measured.
   `channels` lists `{ app, channel, models, deleted }` for every app and channel, at most 500.
   `deleted` lists the newest 100 matching ids deleted within `MODEL_TOMBSTONE_SECONDS`, as
   `{ app, channel, id, deletedAt }`.
 - **`model`:** one model's value as JSON indented by two spaces, cut to 512 KiB with `truncated: true`.
-  A model the server does not hold has `found: false`, and `deletedAt` if it was deleted within
-  `MODEL_TOMBSTONE_SECONDS`.
+  `bytes` is as in a `ModelRow`. A model the server does not hold has `found: false`, and `deletedAt`
+  if it was deleted within `MODEL_TOMBSTONE_SECONDS`.
 
 Names longer than 512 characters are cut, and their row has `truncated: true`; such a model cannot be
-looked up with `model`.
+looked up with `model`. The `app`, `channel` and `id` of a query are cut to 513 characters, so a
+longer one matches nothing.
 
 The admin log's `requestLog` (`colibri::log`) takes `showConnections`, default `true`. With `false`, the
 server leaves out the routine connect and disconnect lines, which carry `metadata.connection: true`.
-Warnings and errors about connections are not tagged.
+Warnings and errors about connections are not tagged. The `history` answer carries `at`, the server's
+`Date.now()`, the clock that stamps the lines.
 
 ## Model synchronization
 
