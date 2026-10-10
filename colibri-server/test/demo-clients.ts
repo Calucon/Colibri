@@ -119,6 +119,15 @@ let stopping = false;
 let heardFromServer = false;
 let hinted = false;
 
+// For a name with more than one address, such as localhost (::1 and 127.0.0.1), Node reports a connect
+// that failed on all of them as an AggregateError with an empty message and one error per address.
+const describeError = function (err: Error): string {
+    if (err instanceof AggregateError && !err.message) {
+        return err.errors.map(inner => (inner instanceof Error ? inner.message : String(inner))).join(', ');
+    }
+    return err.message;
+};
+
 const readReason = function (payload: Buffer): unknown {
     try {
         return (JSON.parse(payload.toString('utf8')) as { reason?: unknown }).reason;
@@ -262,7 +271,7 @@ class UnityClient {
 
             if (!this.lost) {
                 this.lost = true;
-                const why = error?.message ?? (received ? 'closed by the server' : 'closed by the server before it sent anything');
+                const why = error ? describeError(error) : (received ? 'closed by the server' : 'closed by the server before it sent anything');
                 console.log(`${this.label}: connection lost (${why}), trying again every ${RECONNECT_MILLIS / 1000} s`);
             }
             if (!heardFromServer && !hinted) {
