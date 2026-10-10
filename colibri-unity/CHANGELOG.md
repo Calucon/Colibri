@@ -424,6 +424,10 @@ rationale, migration steps, and what the Editor verification did and did not cov
   twice with one voice id played every packet twice. The second call now only restarts the
   `AudioSource` if Unity stopped it, as it does when the GameObject is deactivated. Another id
   replaces the one playing, and `StopPlayback` when nothing plays does nothing.
+  `OpusDecoder.Decode` returns only the samples it decoded, for every channel, at most 120 ms per
+  call. It returned *frameSize* samples of one channel, padded with silence, and a stereo decoder
+  wrote past that buffer. A decoder that was not created or is destroyed logs an error and returns
+  null instead of calling Opus, and a second `Destroy` does nothing; it freed the decoder twice.
 - **`Store`** serializes with Newtonsoft instead of `JsonUtility`, which cannot handle dictionaries,
   properties, or top-level arrays and so silently disagreed with what `Sync` can carry. What that
   costs a 1.x project is under Breaking changes. A value that cannot be converted, or a saved
