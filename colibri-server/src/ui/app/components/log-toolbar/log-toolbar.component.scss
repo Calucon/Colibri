@@ -372,13 +372,28 @@
     }
 }
 
-// the four levels and their counts come first
-@media (max-width: 419.98px) {
+// The four levels and their counts come first: they fit at 360px with four-digit counts, and
+// the Filters button keeps its width with filters active.
+@media (max-width: 424.98px) {
+    .chip {
+        padding: 0 7px;
+    }
+
     .more-toggle {
-        padding: 0 11px;
+        position: relative;
+        justify-content: center;
+        width: 40px;
+        padding: 0;
 
         span:not(.badge) {
             display: none;
+        }
+
+        .badge {
+            position: absolute;
+            top: -6px;
+            right: -6px;
+            box-shadow: 0 0 0 2px var(--surface-1);
         }
     }
 }
