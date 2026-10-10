@@ -8,8 +8,8 @@ Colibri relays real-time object synchronization between two kinds of clients:
 
 Both transports feed the same `{ channel, command, payload }` message into the transport-independent
 `ConnectionPool`, so a relayed message reaches the app's clients on both. Only the hooks
-`ModelSynchronization`, `MeasureLatency`, `WebLog` and `ClientLogger` read payloads, through `Payload`
-(`src/server/modules/core/payload.ts`).
+`ModelSynchronization`, `MeasureLatency`, `WebLog` and `ClientLogger`, and the admin UI's `AdminData`,
+read payloads, through `Payload` (`src/server/modules/core/payload.ts`).
 
 `Payload` keeps the form a message arrived in: a JSON string (TCP, or Socket.IO sent as a string), a
 parsed value (Socket.IO) or raw bytes (TCP). It converts to another form on first use and caches the
