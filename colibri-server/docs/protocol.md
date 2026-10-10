@@ -270,7 +270,7 @@ and other continuous updates.
 
 `BroadcastLogger` (`src/server/modules/command-hooks/broadcast-logger.ts`) logs each one at debug level
 with `metadata.broadcastTraffic = true`. The admin UI's *Sync traffic* toggle filters on that tag,
-independent of the level checkboxes, because this continuous traffic would drown out everything else.
+independent of the level filter, because this continuous traffic would drown out everything else.
 See `WebLog.isVisibleToClient` (`src/server/modules/web/web-log.ts`).
 
 #### Payload shapes
