@@ -42,7 +42,6 @@ namespace HCIKonstanz.Colibri.Communication
 
         private void Awake()
         {
-            // Here rather than in Start: StartPlayback, and with it a packet, can come first.
             voiceDecoder = new VoiceDecoder(CreateOpusDecoder, ReportOpusFailure);
             voiceServerConnection = VoiceServerConnection.Instance;
             playbackAudioSource = GetComponent<AudioSource>();
@@ -137,6 +136,11 @@ namespace HCIKonstanz.Colibri.Communication
 
         private void OnSamplesDataReceived(VoicePacket voicePacket)
         {
+            // Before Start, which reads the sampling rate: StartPlayback right after Instantiate,
+            // as VoiceManager calls it, can get a packet delivered in the same frame. The resampler
+            // was null then, and the Opus decoder would get the default rate.
+            if (resampler == null) return;
+
             // PCM as it is, Opus decoded, whatever UseOpusCodec says. Null for a packet that
             // cannot be played, such as Opus where it cannot be decoded.
             byte[] shortBytes = voiceDecoder.Decode(voicePacket);
