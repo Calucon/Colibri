@@ -10,15 +10,18 @@ import { SocketIoClient } from '../../src/server/modules/networking/socket-io-se
 import { TcpNetworkClient } from '../../src/server/modules/networking/tcp-server-proxy.js';
 import {
     DEFAULT_MODELS_LIMIT,
+    LATENCY_HISTORY_MILLIS,
     MAX_CHANNELS,
     MAX_CLIENT_ROWS,
     MAX_DELETED,
     MAX_FILTER_LENGTH,
+    MAX_LATENCY_HISTORY_SAMPLES,
     MAX_MODELS_LIMIT,
     MAX_MODEL_JSON_LENGTH,
     MAX_NAME_LENGTH,
     ServerSources,
     clientsSnapshot,
+    latencySnapshot,
     modelSnapshot,
     modelsSnapshot,
     parseModelQuery,
@@ -362,6 +365,63 @@ describe('admin UI topics', () => {
             expect(recentLatency(client, now)).toBe(25);
             expect(recentLatency(client, now + 10_000)).toBeNull();
             expect(recentLatency(tcpClient('t2', 'app'), now)).toBeNull();
+        });
+    });
+
+    describe('the latency history', () => {
+        const client = (id: string, app = 'app'): SocketIoClient => ({
+            id, app, name: '192.168.1.20', version: PROTOCOL_VERSION, metadata: {},
+            socket: { handshake: { secure: false, issued: 0 } } as never,
+        });
+        // A sample every 100 ms over the last `seconds`, up to and including now, as MeasureLatency keeps them.
+        const pinged = function <T extends { metadata: Record<string, unknown> }>(target: T, seconds: number, ms = (i: number) => 10 + i / 3): T {
+            const samples = new RingBuffer<[number, number]>(1250);
+            const now = Date.now();
+            for (let i = 0; i <= seconds * 10; i++) samples.push([ now - seconds * 1000 + i * 100, ms(i) ]);
+            target.metadata['latency'] = samples;
+            return target;
+        };
+
+        it('sends each client\'s samples of the window before now, to 0.01 ms, but not the admin UI\'s', () => {
+            const tcp = pinged(client('t1'), 200);
+            const now = Date.now();
+            const snapshot = latencySnapshot({ tcpClients: [ tcp ], webClients: [ client('w1'), pinged(client('admin', 'colibri'), 5) ] });
+
+            expect(snapshot).toMatchObject({ at: now, total: 2, medians: false });
+            expect(snapshot.clients.map(c => c.id)).toEqual([ 't1', 'w1' ]);
+            const samples = snapshot.clients[0]!.samples;
+            // from the start of the window, up to the one taken now, which colibri::latency brings
+            expect(samples).toHaveLength(LATENCY_HISTORY_MILLIS / 100);
+            expect(samples.slice(0, 2)).toEqual([ [ now - LATENCY_HISTORY_MILLIS, 270 ], [ now - LATENCY_HISTORY_MILLIS + 100, 270.33 ] ]);
+            expect(samples.at(-1)![0]).toBe(now - 100);
+            expect(snapshot.clients[1]!.samples).toEqual([]);
+        });
+
+        it('sends per-second medians past MAX_LATENCY_HISTORY_SAMPLES, at the mean time of each second', () => {
+            const count = Math.ceil(MAX_LATENCY_HISTORY_SAMPLES / (LATENCY_HISTORY_MILLIS / 100)) + 1;
+            const tcpClients = Array.from({ length: count }, (_, i) => pinged(client(`t${i}`), 125, j => j % 10));
+            const now = Date.now();
+            const snapshot = latencySnapshot({ tcpClients, webClients: [] });
+
+            expect(snapshot.medians).toBe(true);
+            const medians = snapshot.clients[0]!.samples;
+            expect(medians).toHaveLength(LATENCY_HISTORY_MILLIS / 1000);
+            // a second's samples are 0 to 9 ms, 100 ms apart from its start
+            expect(medians.at(-1)).toEqual([ now - 1000 + 450, 4.5 ]);
+            expect(snapshot.clients.reduce((sum, c) => sum + c.samples.length, 0)).toBeLessThan(MAX_LATENCY_HISTORY_SAMPLES);
+        });
+
+        it('holds at most MAX_CLIENT_ROWS clients, whose medians stay under MAX_LATENCY_HISTORY_SAMPLES', () => {
+            const tcp = pinged(client('t'), 125);
+            const tcpClients = Array.from({ length: MAX_CLIENT_ROWS + 5 }, (_, i) => ({ ...tcp, id: `t${i}` }));
+            const snapshot = latencySnapshot({ tcpClients, webClients: [] });
+
+            expect(snapshot.total).toBe(MAX_CLIENT_ROWS + 5);
+            expect(snapshot.clients).toHaveLength(MAX_CLIENT_ROWS);
+            expect(snapshot.medians).toBe(true);
+            const sent = snapshot.clients.reduce((sum, c) => sum + c.samples.length, 0);
+            expect(sent).toBeLessThanOrEqual(MAX_LATENCY_HISTORY_SAMPLES);
+            expect(sent).toBe(MAX_CLIENT_ROWS * LATENCY_HISTORY_MILLIS / 1000);
         });
     });
 

@@ -13,6 +13,7 @@ import {
     ServerSettings,
     VoiceStatus,
     clientsSnapshot,
+    latencySnapshot,
     modelSnapshot,
     modelsSnapshot,
     parseModelQuery,
@@ -33,8 +34,12 @@ export const ADMIN_REFRESH_MILLIS = 1000;
 // store, so this keeps a script in a loop from having the server do that without end.
 export const ADMIN_REQUEST_LIMIT: RateLimit = { messagesPerSecond: 10, burst: 20 };
 
-export const ADMIN_TOPICS = ['server', 'clients', 'models', 'model'] as const;
+export const ADMIN_TOPICS = ['server', 'clients', 'models', 'model', 'latency'] as const;
 export type AdminTopic = typeof ADMIN_TOPICS[number];
+
+// Topics a page asks for once and cannot subscribe to. The latency history is up to
+// MAX_LATENCY_HISTORY_SAMPLES samples, and colibri::latency brings the new ones every second.
+const REQUEST_ONLY_TOPICS: ReadonlySet<AdminTopic> = new Set([ 'latency' ]);
 
 const isTopic = function (value: unknown): value is AdminTopic {
     return typeof value === 'string' && (ADMIN_TOPICS as readonly string[]).includes(value);
@@ -56,7 +61,7 @@ export interface AdminSources {
 
 // What one page asked for: a topic, with its query for the two that take one.
 type Query =
-    | { topic: 'server' | 'clients' }
+    | { topic: 'server' | 'clients' | 'latency' }
     | { topic: 'models'; models: ModelsQuery }
     | { topic: 'model'; model: ModelQuery };
 
@@ -98,11 +103,11 @@ const isBackedUp = function (page: AdminPage): boolean {
 
 /**
  * Answers the admin UI's pages with read-only snapshots of the server: its settings and counts, the
- * connected clients and their traffic, and the synchronized models. A page asks for a topic once
- * ('request') or for as long as it shows it ('subscribe', until 'unsubscribe' or it disconnects);
- * a subscribed topic is sent again every ADMIN_REFRESH_MILLIS. Nothing is computed, and nothing
- * asked of the TCP worker, while no page has subscribed. Only clients of the app 'colibri' are
- * answered.
+ * connected clients and their traffic and latency, and the synchronized models. A page asks for a
+ * topic once ('request') or for as long as it shows it ('subscribe', until 'unsubscribe' or it
+ * disconnects; the latency history only once); a subscribed topic is sent again every
+ * ADMIN_REFRESH_MILLIS. Nothing is computed, and nothing asked of the TCP worker, while no page has
+ * subscribed. Only clients of the app 'colibri' are answered.
  *
  * Read only by design: Colibri has no authentication, so whatever a page can do through this
  * channel, anyone who can reach the server can do.
@@ -172,6 +177,10 @@ export class AdminData extends Service {
         if (msg.command !== 'request' && msg.command !== 'subscribe') return;
         if (!isTopic(topic)) {
             this.logDebug(`Ignoring ${ADMIN_CHANNEL} '${msg.command}' from admin page ${client.id}: unknown topic`);
+            return;
+        }
+        if (msg.command === 'subscribe' && REQUEST_ONLY_TOPICS.has(topic)) {
+            this.logDebug(`Ignoring ${ADMIN_CHANNEL} 'subscribe' from admin page ${client.id}: '${topic}' is request only`);
             return;
         }
 
@@ -299,6 +308,9 @@ export class AdminData extends Service {
 
             case 'model':
                 return modelSnapshot(sources.store, query.model, this.measures);
+
+            case 'latency':
+                return latencySnapshot({ tcpClients: sources.tcp.currentClients, webClients: sources.socketio.currentClients });
         }
     }
 }

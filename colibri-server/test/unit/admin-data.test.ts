@@ -3,6 +3,7 @@ import { Subject } from 'rxjs';
 import { DataStore } from '../../src/server/modules/command-hooks/data-store.js';
 import { NetworkClient, NetworkMessage } from '../../src/server/modules/command-hooks/connection-pool.js';
 import { Payload } from '../../src/server/modules/core/payload.js';
+import { RingBuffer } from '../../src/server/modules/core/ring-buffer.js';
 import { ClientActivity } from '../../src/server/modules/networking/client-activity.js';
 import { SocketIoClient, SocketIOServer } from '../../src/server/modules/networking/socket-io-server.js';
 import { TCPServerProxy, TcpNetworkClient } from '../../src/server/modules/networking/tcp-server-proxy.js';
@@ -241,6 +242,23 @@ describe('AdminData', () => {
         await vi.advanceTimersByTimeAsync(ADMIN_REFRESH_MILLIS);
         expect(channels).toHaveBeenCalledTimes(1);
         expect(socketio.sent.map(s => s.payload.request)).toEqual([ 0, 1, 2 ]);
+    });
+
+    it('answers a request for the latency history once, and no subscription to it', async () => {
+        const samples = new RingBuffer<[number, number]>(10);
+        samples.push([ Date.now() - 200, 12.345 ]);
+        tcp.clients[0]!.metadata['latency'] = samples;
+        const page = socketio.connect('page');
+        send(page, 'request', { topic: 'latency', request: 4 });
+        send(page, 'subscribe', { topic: 'latency', request: 5 });
+        await settle();
+
+        expect(sentTo(page).map(s => s.payload)).toEqual([
+            { request: 4, at: Date.now(), clients: [ { id: 't1', samples: [ [ Date.now() - 200, 12.35 ] ] } ], total: 1, medians: false },
+        ]);
+        expect(admin.subscriptionCount).toBe(0);
+        await vi.advanceTimersByTimeAsync(3 * ADMIN_REFRESH_MILLIS);
+        expect(sentTo(page)).toHaveLength(1);
     });
 
     it('answers only the admin UI\'s own app', async () => {
