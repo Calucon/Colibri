@@ -452,8 +452,8 @@ Server messages, and lines clients send through colibri-unity's `RemoteLogging` 
 
 Four pages, all read only: nothing on them changes, deletes or disconnects anything. They read from
 the server over the Socket.IO channel `colibri::admin` ([Admin UI channel](protocol.md#admin-ui-channel)).
-The server sends a page its data at most once a second, with bounded sizes. While no page is open, it
-only keeps each client's latency samples and message rates of the last 2 minutes, which a page shows as
+The server refreshes a subscribed page every second, with bounded sizes. While no page is open, it
+keeps each client's latency samples and message rates of the last 2 minutes, which a page shows as
 soon as it opens. `npm run demo` fills the pages with synthetic clients ([Development](#development)).
 
 - **Log:** the [log](#logs), filtered by app and level, with a search over the loaded lines. *Sync

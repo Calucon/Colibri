@@ -508,10 +508,10 @@ The answer comes on `colibri::admin` with the topic as its command. Its payload 
 `request`, the number from the request or subscribe that asked for it (`null` without one), and `at`,
 the server's `Date.now()`. Times are `Date.now()` milliseconds, rates are per second over the last
 second. A page may send 10 `request` and `subscribe` messages a second, bursts of 20; the server
-ignores the rest. With no subscription the server computes nothing, and the TCP worker reports nothing.
-Either way, it keeps each client's latency samples of the last 125 s and its last 125 message rates, one
-a second, for the histories below. A refresh skips a page whose connection is still sending the previous
-one; the next replaces it.
+ignores the rest. With no subscription the server builds no snapshot, and the TCP worker sends no
+report. Either way, it keeps each client's latency samples of the last 125 s and its last 125 message
+rates, one a second, for the histories below. A refresh skips a page whose connection is still
+sending the previous one; the next replaces it.
 
 | Topic | Query | Snapshot |
 | --- | --- | --- |

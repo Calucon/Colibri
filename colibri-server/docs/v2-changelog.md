@@ -588,8 +588,8 @@ The endpoints are documented under [REST store](./protocol.md#rest-store).
   client with its transport, address, TLS, connection time, latency, messages per second in and out
   and load limit, and the synchronized models with their tombstones, paginated and filtered, plus one
   model's value. A page asks once or subscribes while it is open; subscriptions are sent again once a
-  second and end with the page. Sizes are bounded. Without a subscription the server computes nothing
-  for it and the TCP worker reports nothing. A page that stops reading is skipped until it catches
+  second and end with the page. Sizes are bounded. Without a subscription the server builds no
+  snapshot for it and the TCP worker sends no report. A page that stops reading is skipped until it catches
   up. A page's first client list carries each client's message rates of the last 122 s, and the
   request-only topic `latency` its latency samples of that time, as per-second medians past 200,000
   samples. The server keeps both per client whether or not a page is open: 125 s of latency samples
