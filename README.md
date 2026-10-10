@@ -17,7 +17,7 @@ Included:
 - Pub/sub messages on named channels
 - Synchronized objects: `SyncTransform` and `SyncBehaviour` in Unity, `SyncModel` on the web
 - Key-value store on the server
-- Remote logging to the server's admin UI
+- Admin UI: the log of the server and its clients, the connected clients with latency and throughput, the synchronized models and the server settings
 - Voice chat between Unity clients
 - TLS for Unity (TCP) and web (HTTPS, WSS) connections, not for voice
 
