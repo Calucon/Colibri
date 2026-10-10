@@ -125,6 +125,14 @@ this is the server's full detail.
   `X-Forwarded-For` entry that is not itself a trusted proxy, so a client cannot choose it by
   sending the header itself. It names the client in the log and the admin UI, and is its `name` in
   `colibri::clients`, which every client of the app receives. Express's `req.ip` agrees.
+- **TLS at the proxy:** a proxy that ends TLS connects unencrypted, so the admin UI showed no TLS
+  anywhere and TLS as *Off*. From a trusted peer, a Socket.IO client now counts as TLS at the proxy
+  when the right-most `X-Forwarded-Proto` entry is `https` or `wss`, in any case. The Clients page
+  shows it as *TLS at proxy*. Without a certificate, and while such a client or admin page is
+  connected, the Server page shows the web port as *HTTP here, HTTPS at the proxy* and TLS as *Not
+  on this server*. The admin topics carry it as `tlsAtProxy`
+  ([Admin UI channel](./protocol.md#admin-ui-channel)). A PROXY protocol header does not say
+  whether the proxy ended TLS, so Unity clients through it still show as unencrypted.
 - **TCP port:** with new `TCP_PROXY_PROTOCOL=true`, a connection from a trusted peer must start
   with a PROXY protocol header, version 1 (nginx's `proxy_protocol on`) or 2. It is read ahead of a
   TLS handshake, also when it arrives in pieces. The client it names is the one in every log line
