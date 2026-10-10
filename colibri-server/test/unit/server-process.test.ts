@@ -39,6 +39,17 @@ describe('ServerProcess', () => {
 
     const serverLines = () => printed.filter(({ line }) => line.includes('[core/Server]'));
 
+    it('says which version and commit it is', () => {
+        const server = create([]);
+        server.reportStart('2.0.0', { commit: '3e2855e0c1d2b3a4f5e6d7c8b9a0f1e2d3c4b5a6', dirty: true, builtAt: 0 });
+        server.reportStart('2.0.0', { commit: null, dirty: false, builtAt: null });
+
+        expect(serverLines().map(({ stream, line }) => [ stream, line.replace(/^\S+ /, '') ])).toEqual([
+            [ 'out', 'INFO  [core/Server] Colibri 2.0.0, commit 3e2855e0c1 (with uncommitted changes)' ],
+            [ 'out', 'INFO  [core/Server] Colibri 2.0.0, commit unknown (built without git information)' ],
+        ]);
+    });
+
     // main.ts printed this line with console.log: the one line in `docker logs` without a
     // timestamp, level or source, and missing from the admin UI's log.
     it('says it is shutting down in the console log format', async () => {

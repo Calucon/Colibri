@@ -14,6 +14,10 @@ Error.stackTraceLimit = Config.STACK_TRACE_LIMIT;
 // read here rather than when modules/ is imported, which happens before Config loads .env.
 new colibri.ConsoleLog(colibri.ConsoleLog.optionsFromEnv(process.env)).attach(colibri.Service.output$);
 
+// The release, and the commit it was built from: dist/server/build-info.json, next to this file.
+const version = colibri.readServerVersion(fileURLToPath(new URL('../../package.json', import.meta.url)));
+const build = colibri.readBuildInfo(fileURLToPath(new URL('./build-info.json', import.meta.url)));
+
 // Print console errors in GUI
 // const redirectConsole = new colibri.RedirectConsole();
 const dataStore = new colibri.DataStore();
@@ -75,7 +79,7 @@ const adminData = new colibri.AdminData({
     store: dataStore,
     socketio: socketioServer,
     tcp: tcpServer,
-    version: colibri.readServerVersion(fileURLToPath(new URL('../../package.json', import.meta.url))),
+    version,
     startedAt: Date.now(),
     settings: {
         WEBSERVER_HOST: Config.WEBSERVER_HOST,
@@ -124,8 +128,10 @@ const startup = async () => {
         await service.init();
     }
 
-    // After every init(), so the admin UI's WebLog is listening for it too. Not fatal: the
-    // server is still useful without persistence, it just has to say so.
+    // After every init(), so the admin UI's WebLog is listening for these too. First, which
+    // server this is.
+    serverProcess.reportStart(version, build);
+    // Not fatal: the server is still useful without persistence, it just has to say so.
     await dataRootCheck.check();
     // Likewise: logs the certificate's fingerprint.
     tlsCertificate?.start();
