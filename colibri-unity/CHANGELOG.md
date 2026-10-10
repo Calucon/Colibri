@@ -369,6 +369,21 @@ rationale, migration steps, and what the Editor verification did and did not cov
   receive thread and log the exception, once per datagram; it is dropped now. Without an App Name
   no voice is sent, and an error says so once: the TCP connection does not connect without one,
   but voice went out regardless.
+- **Voice frames.** `VoiceBroadcast` froze the app when Opus failed to encode a frame: the send loop
+  kept the frame and tried it again, forever. Opus failed on every frame from a 44.1 kHz
+  microphone, as frames were cut at the microphone's rate and resampled one by one to 958 samples,
+  which is no Opus frame size. On macOS and iOS, where the Opus functions are stubs, it failed on
+  every frame too, and a *Frame Size Milliseconds* of 0 froze the app even with PCM. The recorded
+  audio is now resampled to the *Voice Sampling Rate* as one stream and cut there, into frames of
+  exactly *Frame Size Milliseconds* (960 samples for 20 ms at 48 kHz). Each frame is sent once; one
+  that Opus fails on goes out as PCM, with one warning per broadcast. Opus is used only at 8, 12,
+  16, 24 or 48 kHz with frames of 5, 10, 20, 40 or 60 ms, and only where its library loads;
+  otherwise `VoiceBroadcast` warns once and sends PCM. In the macOS Editor with Android as the
+  build target, it threw `DllNotFoundException` and never started. `Resampler`, which
+  `VoiceReceiver` uses too, no longer drifts: it rounded each chunk's output up and kept a float
+  position, which at 44.1 to 48 kHz ran a sixth of a sample further ahead every 20 ms. A
+  microphone that reports 0 to 0 Hz, which means any rate, records at the *Voice Sampling Rate*
+  instead of at 0 Hz.
 - **`Store`** serializes with Newtonsoft instead of `JsonUtility`, which cannot handle dictionaries,
   properties, or top-level arrays and so silently disagreed with what `Sync` can carry. What that
   costs a 1.x project is under Breaking changes. A value that cannot be converted, or a saved
@@ -706,8 +721,11 @@ otherwise spend on their prototype, so:
   1000-line bound; `SyncAccessorTests` the IL2CPP accessor path, run in the Editor;
   `SyncStrippingTests` that `[Sync]` is a `PreserveAttribute` and carries `[RequireAttributeUsages]`; `WireNameTests` the wire names under
   a Turkish culture; `AndroidSettingsCheckTests` the Android build check;
-  `VoiceServerAddressTests` the choice of the server's IPv4 address; and `VoicePacketCodecTests`
-  the voice header and the app id, with `VoicePacketQueueTests` which received packets are played.
+  `VoiceServerAddressTests` the choice of the server's IPv4 address; `VoicePacketCodecTests`
+  the voice header and the app id, with `VoicePacketQueueTests` which received packets are played;
+  and `VoiceFramerTests` with `StreamingResamplerTests` how recorded audio becomes voice frames:
+  only 960-sample frames and no lost audio from a 44.1 kHz microphone, an encoder that always
+  fails, and resampling without drift however the stream is cut.
   `FrameCodecTests` also covers the colon at either end of a handshake field.
 - New PlayMode assembly `HCIKonstanz.Colibri.E2E` (`Assets/Tests/`, in the development project
   rather than the shipped package). A real Unity client, a real colibri-server and a raw v3 peer as
@@ -796,8 +814,8 @@ otherwise spend on their prototype, so:
   `colibri-unity/Assets/Colibri/Networking/`.
 - Still no GameCI workflow: the Unity suites run locally, since a Unity container in CI needs a
   licence secret. Voice chat has no end-to-end coverage (it needs a microphone); only the choice of
-  the server's address, the packet format and the queue that hands received packets to the main
-  thread are unit-tested.
+  the server's address, the packet format, the queue that hands received packets to the main
+  thread, and how recorded audio is resampled and cut into frames are unit-tested.
 - `run-tests.mjs --stripping` builds a Release IL2CPP player with *Managed Stripping Level* High and
   checks inside it that every `[Sync]` member survived with its `[Sync]` and still syncs. Off by
   default; skipped with a notice without the platform's IL2CPP module.

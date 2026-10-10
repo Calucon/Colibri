@@ -782,7 +782,13 @@ The `Samples/VoiceChat` sample is a complete voice chat. Its `VoiceManager` dist
 and instantiates `VoiceReceiver` prefabs.
 
 - Audio is raw PCM by default. To reduce bandwidth, enable *Use Opus Codec* on both `VoiceBroadcast`
-  and `VoiceReceiver`. Opus works on Windows, Linux and Android.
+  and `VoiceReceiver`. Opus works on Windows, Linux and Android, at a *Voice Sampling Rate* of 8,
+  12, 16, 24 or 48 kHz and a *Frame Size Milliseconds* of 5, 10, 20, 40 or 60. Otherwise
+  `VoiceBroadcast` logs a warning and sends PCM. A frame Opus fails to encode also goes out as PCM,
+  with one warning per broadcast. `VoiceReceiver` plays PCM packets whether or not *Use Opus Codec*
+  is on.
+- `VoiceBroadcast` resamples the microphone to the *Voice Sampling Rate* and sends frames of *Frame
+  Size Milliseconds* at that rate: 960 samples for the default 20 ms at 48 kHz.
 - The voice plays at the `VoiceReceiver`'s position. For spatial audio, enable *Spatialize* on the
   `AudioSource` and set *Spatial Blend* to `1`. Spatializer plugins set in the audio settings also
   work.
@@ -831,7 +837,7 @@ node colibri-unity/run-tests.mjs --tls        # plus the PlayMode suite again, o
 
 | Suite | Location | Description |
 |---|---|---|
-| EditMode | `Assets/Colibri/Tests/Editor/` | NUnit tests of the framing, JSON conversions, diagnostics, outage queue, message dispatch, `[Sync]` accessors (including the IL2CPP path), send-rate limit, connect timeout, build settings check, app-name warning, and the voice server address, packet format and packet queue. Needs no server and runs wherever Unity runs. |
+| EditMode | `Assets/Colibri/Tests/Editor/` | NUnit tests of the framing, JSON conversions, diagnostics, outage queue, message dispatch, `[Sync]` accessors (including the IL2CPP path), send-rate limit, connect timeout, build settings check, app-name warning, and the voice server address, packet format, packet queue, resampling and framing. Needs no server and runs wherever Unity runs. |
 | PlayMode | `Assets/Tests/` | A Unity client and a raw v3 peer against a running `colibri-server`. Reconnects go through a proxy the test can cut. Mismatch detection runs against a scripted stand-in server. |
 
 For PlayMode, the script starts colibri-server with `docker compose` and stops it afterwards. A
@@ -891,5 +897,5 @@ Background* themselves. For the TLS tests, start the TLS server with
 also set `COLIBRI_E2E_TLS=1` in the Editor's environment.
 
 Voice chat has no end-to-end tests, because they need a microphone. Unit tests cover only the server
-address choice, the packet format with its app id, and the queue that hands received packets to the
-main thread.
+address choice, the packet format with its app id, the queue that hands received packets to the
+main thread, and how recorded audio is resampled and cut into frames, with the fallback to PCM.
