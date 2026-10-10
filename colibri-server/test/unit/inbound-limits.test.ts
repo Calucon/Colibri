@@ -311,6 +311,20 @@ describe('inbound limits', () => {
             return false;
         };
 
+        // For the admin UI's client view: limited from the first refused message until its episode ends.
+        it('says whether a client is over its limit now', () => {
+            const { rateLimiter } = limiter(10, 1);
+            send(rateLimiter, 'a', 0);
+            expect(rateLimiter.isLimited('a')).toBe(false);
+
+            send(rateLimiter, 'a', 1);
+            expect(rateLimiter.isLimited('a')).toBe(true);
+            expect(rateLimiter.isLimited('b')).toBe(false);
+
+            rateLimiter.sweep(1 + EPISODE_QUIET_MILLIS);
+            expect(rateLimiter.isLimited('a')).toBe(false);
+        });
+
         it('limits each client on its own', () => {
             const { rateLimiter } = limiter(10, 2);
 

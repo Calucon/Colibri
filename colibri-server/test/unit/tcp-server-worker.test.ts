@@ -1942,6 +1942,123 @@ describe('TCPServerWorker', () => {
         });
     });
 
+    // What the admin UI's client view shows of a TCP client: counted here per message, posted only
+    // when the main thread asks.
+    describe('client activity for the admin UI', () => {
+        const handshaked = function (name: string, app = 'appA'): { socket: FakeSocket; id: string } {
+            const client = connect('10.0.0.7');
+            client.socket.emit('data', encodeHandshakeFrame(PROTOCOL_VERSION, app, name));
+            return client;
+        };
+
+        const updates = function (count: number, from = 0): Buffer {
+            return Buffer.concat(Array.from({ length: count }, (_, i) => encodeMessageFrame(wireMessage('objects', 'model::update', `{"id":"${from + i}"}`))));
+        };
+
+        const ask = function (request = 1): { request: number; clients: { id: string; in: number | null; out: number | null; limit: string | null; held: number }[] } {
+            posted = [];
+            internals.handleParentMessage({ channel: 'm:clientActivity', content: { request } });
+            const answers = posted.filter(p => p.channel === 'clientActivity$');
+            expect(answers).toHaveLength(1);
+            return answers[0]!.content as never;
+        };
+
+        // A second of ticks.
+        const aSecond = function (): void {
+            for (let i = 0; i < 10; i++) {
+                vi.advanceTimersByTime(100);
+                internals.tick();
+            }
+        };
+
+        beforeEach(() => {
+            vi.useFakeTimers();
+            vi.setSystemTime(1_700_000_000_000);
+        });
+
+        afterEach(() => {
+            vi.useRealTimers();
+        });
+
+        it('says where a client connected from, whether over TLS, and since when', () => {
+            vi.setSystemTime(1_700_000_000_000);
+            const { id } = handshaked('quest');
+
+            const connected = posted.find(p => p.channel === 'clientConnected$');
+            expect(connected?.content).toEqual({
+                id, app: 'appA', name: 'quest', version: PROTOCOL_VERSION, address: '10.0.0.7', tls: false, connectedAt: 1_700_000_000_000,
+            });
+        });
+
+        it('posts nothing about it unless asked', () => {
+            const quest = handshaked('quest');
+            for (let i = 0; i < 5; i++) {
+                quest.socket.emit('data', updates(10));
+                aSecond();
+            }
+
+            expect(posted.filter(p => p.channel === 'clientActivity$')).toEqual([]);
+        });
+
+        it('reports each client\'s messages a second in and out, without heartbeats', () => {
+            const sender = handshaked('sender');
+            const receiver = handshaked('receiver');
+            aSecond();
+
+            sender.socket.emit('data', updates(30));
+            sender.socket.emit('data', encodeHeartbeatFrame(1n));
+            for (let i = 0; i < 20; i++) worker.broadcast(wireMessage('objects', 'model::update', '{"id":"x"}'), [ internals.clients.get(receiver.id) as never ]);
+            aSecond();
+
+            const report = ask(5);
+            expect(report.request).toBe(5);
+            expect(report.clients).toEqual([
+                { id: sender.id, in: 30, out: 0, limit: null, held: 0 },
+                { id: receiver.id, in: 0, out: 20, limit: null, held: 0 },
+            ]);
+        });
+
+        it('has no rates for a client connected less than a second ago, and leaves out clients without a handshake', () => {
+            aSecond();
+            const quest = handshaked('quest');
+            connect();
+
+            expect(ask().clients).toEqual([ { id: quest.id, in: null, out: null, limit: null, held: 0 } ]);
+        });
+
+        it('names the rate limit while it holds a client\'s updates back', () => {
+            worker.configure({ rateLimit: { messagesPerSecond: 10, burst: 5 } });
+            const runaway = handshaked('runaway');
+            const calm = handshaked('calm');
+
+            runaway.socket.emit('data', updates(20));
+            calm.socket.emit('data', updates(2, 100));
+            let clients = ask().clients;
+            expect(clients.find(c => c.id === runaway.id)).toMatchObject({ limit: 'rate', held: 15 });
+            expect(clients.find(c => c.id === calm.id)).toMatchObject({ limit: null, held: 0 });
+
+            // Drained at 10 a second, and quiet for a while after.
+            for (let i = 0; i < 4; i++) aSecond();
+            clients = ask().clients;
+            expect(clients.find(c => c.id === runaway.id)).toMatchObject({ limit: null, held: 0 });
+        });
+
+        it('names the backlog limit while the main thread is behind', () => {
+            const backlog = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+            worker.configure({ inboundBacklog: backlog, inboundBacklogLimit: 2 });
+            const quest = handshaked('quest');
+
+            quest.socket.emit('data', updates(5));
+            expect(ask().clients).toEqual([ expect.objectContaining({ id: quest.id, limit: 'backlog', held: 3 }) ]);
+
+            Atomics.store(backlog, 0, 0);
+            aSecond();
+            Atomics.store(backlog, 0, 0);
+            aSecond();
+            expect(ask().clients).toEqual([ expect.objectContaining({ id: quest.id, limit: null, held: 0 }) ]);
+        });
+    });
+
     describe('stop', () => {
         it('destroys live sockets and clears every index', () => {
             const connected = connect();

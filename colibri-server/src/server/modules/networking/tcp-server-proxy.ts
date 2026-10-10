@@ -1,4 +1,12 @@
-import { TCP_SERVER_WORKER, TCP_SERVER_WORKER_ROLE, TcpServerOptions, WireNetworkMessage } from './tcp-server-worker.js';
+import {
+    TCP_SERVER_WORKER,
+    TCP_SERVER_WORKER_ROLE,
+    TcpClientActivityReport,
+    TcpClientConnected,
+    TcpServerOptions,
+    WireNetworkMessage,
+} from './tcp-server-worker.js';
+import { ClientActivity } from './client-activity.js';
 import { Payload, TlsCredentialSource, WorkerServiceProxy } from '../core/index.js';
 import { ownBytes } from './protocol.js';
 import { Observable, Subject, Subscription } from 'rxjs';
@@ -15,13 +23,29 @@ const toBuffer = function (value: Buffer | Uint8Array): Buffer {
 const MAX_RESTART_ATTEMPTS = 5;
 const RESTART_DELAY_MILLIS = 1000;
 
+// How long clientActivity() waits for the worker's answer. The answer queues behind the TCP
+// messages the main thread has yet to handle, so under load it can take a while; past this the
+// admin UI gets no activity for the TCP clients this once rather than waiting.
+export const CLIENT_ACTIVITY_TIMEOUT_MILLIS = 1000;
+
+// A TCP client as the main thread knows it.
+export interface TcpNetworkClient extends NetworkClient {
+    // Its address, behind a proxy the one its PROXY protocol header named.
+    address: string;
+    tls: boolean;
+    // Date.now() of the connection.
+    connectedAt: number;
+}
+
+const NO_ACTIVITY: ReadonlyMap<string, ClientActivity> = new Map();
+
 export class TCPServerProxy
     extends WorkerServiceProxy
     implements NetworkServer {
     public serviceName = 'UnityServer';
     public groupName = 'unity';
 
-    private readonly clients = new Map<string, NetworkClient>();
+    private readonly clients = new Map<string, TcpNetworkClient>();
     // Mirrors the worker's own clientsByApp index on this side of the postMessage
     // boundary, purely so broadcastToApp can answer "is there any TCP client in this app?"
     // without paying asBytes() and a structured clone to find out the answer is no.
@@ -47,10 +71,14 @@ export class TCPServerProxy
     private restartTimer: NodeJS.Timeout | undefined;
     private tlsChanges: Subscription | undefined;
 
+    // The clientActivity() request waiting for the worker's answer, if one is.
+    private activityRequest: { id: number; resolve: (activity: ReadonlyMap<string, ClientActivity>) => void; promise: Promise<ReadonlyMap<string, ClientActivity>> } | undefined;
+    private lastActivityRequest = 0;
+
     public get clients$(): Observable<ReadonlyArray<NetworkClient>> {
         return this.clientStream.asObservable();
     }
-    public get currentClients(): ReadonlyArray<NetworkClient> {
+    public get currentClients(): ReadonlyArray<TcpNetworkClient> {
         return Array.from(this.clients.values());
     }
     public get clientConnected$(): Observable<NetworkClient> {
@@ -69,14 +97,23 @@ export class TCPServerProxy
 
         this.workerMessages$.subscribe((msg) => {
             switch (msg.channel) {
-                case 'clientConnected$':
+                case 'clientConnected$': {
+                    const connected = msg.content as unknown as TcpClientConnected;
                     this.onClientConnected({
-                        id: msg.content.id as string,
-                        app: msg.content.app as string,
-                        name: msg.content.name as string,
-                        version: msg.content.version as string,
+                        id: connected.id,
+                        app: connected.app,
+                        name: connected.name,
+                        version: connected.version,
+                        address: connected.address,
+                        tls: connected.tls,
+                        connectedAt: connected.connectedAt,
                         metadata: {},
                     });
+                    break;
+                }
+
+                case 'clientActivity$':
+                    this.onClientActivity(msg.content as unknown as TcpClientActivityReport);
                     break;
 
                 case 'clientDisconnected$':
@@ -141,9 +178,51 @@ export class TCPServerProxy
             clearTimeout(this.restartTimer);
             this.restartTimer = undefined;
         }
+        if (this.activityRequest) this.finishActivityRequest(this.activityRequest.id, NO_ACTIVITY);
 
         this.postMessage('m:stop');
         await this.terminateWorker();
+    }
+
+    // What the admin UI's client view shows of each TCP client's traffic, by client id, from the
+    // worker, which counts it. Asked for, and answered, only while an admin UI page shows it: one
+    // round trip a second. Requests made while one is waiting share its answer. Resolves with
+    // nothing for a client the worker did not report, and with nothing at all if the worker has not
+    // answered within CLIENT_ACTIVITY_TIMEOUT_MILLIS.
+    public clientActivity(timeoutMillis = CLIENT_ACTIVITY_TIMEOUT_MILLIS): Promise<ReadonlyMap<string, ClientActivity>> {
+        if (this.clients.size === 0) return Promise.resolve(NO_ACTIVITY);
+        if (this.activityRequest) return this.activityRequest.promise;
+
+        const id = ++this.lastActivityRequest;
+        let resolve!: (activity: ReadonlyMap<string, ClientActivity>) => void;
+        const promise = new Promise<ReadonlyMap<string, ClientActivity>>(r => (resolve = r));
+        const timeout = setTimeout(() => this.finishActivityRequest(id, NO_ACTIVITY), timeoutMillis);
+        timeout.unref();
+        this.activityRequest = {
+            id,
+            promise,
+            resolve: (activity) => {
+                clearTimeout(timeout);
+                resolve(activity);
+            },
+        };
+        this.postMessage('m:clientActivity', { request: id });
+        return promise;
+    }
+
+    private onClientActivity(report: TcpClientActivityReport): void {
+        const activity = new Map<string, ClientActivity>();
+        for (const { id, ...rest } of report.clients ?? []) activity.set(id, rest);
+        this.finishActivityRequest(report.request, activity);
+    }
+
+    // An answer that comes after its request timed out is dropped: a later request is waiting for
+    // its own.
+    private finishActivityRequest(id: number, activity: ReadonlyMap<string, ClientActivity>): void {
+        if (this.activityRequest?.id !== id) return;
+        const { resolve } = this.activityRequest;
+        this.activityRequest = undefined;
+        resolve(activity);
     }
 
     // The TCP transport is the whole reason this process exists for Unity clients, so a
@@ -234,7 +313,7 @@ export class TCPServerProxy
         };
     }
 
-    private onClientConnected(client: NetworkClient): void {
+    private onClientConnected(client: TcpNetworkClient): void {
         // A client completing a handshake proves the (possibly restarted) worker is
         // healthy, so the restart budget starts over from here.
         this.restartAttempts = 0;
@@ -269,7 +348,7 @@ export class TCPServerProxy
         this.clientStream.next(this.currentClients);
     }
 
-    private addToAppIndex(client: NetworkClient): void {
+    private addToAppIndex(client: TcpNetworkClient): void {
         let ids = this.clientIdsByApp.get(client.app);
         if (!ids) {
             ids = new Set();
@@ -278,7 +357,7 @@ export class TCPServerProxy
         ids.add(client.id);
     }
 
-    private removeFromAppIndex(client: NetworkClient): void {
+    private removeFromAppIndex(client: TcpNetworkClient): void {
         const ids = this.clientIdsByApp.get(client.app);
         if (!ids) return;
 

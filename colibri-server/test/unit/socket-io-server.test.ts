@@ -417,6 +417,68 @@ describe('SocketIOServer rate limit', () => {
         expect(lost[0]).toContain('disconnected while briefly over the message rate limit');
         expect(lost[0]).toContain(`more objects than the ${MAX_HELD_OBJECTS} one client can have held back at once`);
     });
+
+    // The admin UI's client view. The clock is set by hand, as above: the rates are per second.
+    describe('client activity for the admin UI', () => {
+        let clock: number;
+        const sweep = (now: number) => (server as unknown as { sweepRateLimit(now: number): void }).sweepRateLimit(now);
+        const clientOf = (socket: ClientSocket) => server.getClient(socket.id!)!;
+
+        beforeEach(() => {
+            clock = 0;
+            vi.spyOn(performance, 'now').mockImplementation(() => clock);
+        });
+
+        it('counts the messages a client sends, and those it is sent, alone or through its app\'s room', async () => {
+            await start({ messagesPerSecond: 0, burst: 1 });
+            const sender = await connect();
+            const other = await connect();
+            await connect('otherApp');
+
+            for (let i = 0; i < 6; i++) sender.emit('objects', { command: 'model::request', payload: {} });
+            // A latency echo is not a message, as a heartbeat is not on TCP.
+            sender.emit('colibri', { command: 'latency', payload: 1 });
+            await flush(sender);
+            for (let i = 0; i < 4; i++) {
+                server.broadcastToApp({ channel: 'objects', command: 'broadcast::x', origin: clientOf(sender) }, 'appA', sender.id);
+            }
+            server.broadcastToApp({ channel: 'objects', command: 'broadcast::x' }, 'appA');
+            server.broadcast({ channel: 'objects', command: 'model::update' }, [ clientOf(sender), clientOf(sender) ]);
+            server.broadcast({ channel: 'colibri', command: 'latency' }, server.currentClients);
+
+            clock = 1000;
+            sweep(clock);
+
+            // flush() sent one more, the marker.
+            expect(server.activityOf(clientOf(sender))).toEqual({ in: 7, out: 3, limit: null, held: 0 });
+            expect(server.activityOf(clientOf(other))).toEqual({ in: 0, out: 5, limit: null, held: 0 });
+
+            clock = 3000;
+            sweep(clock);
+            expect(server.activityOf(clientOf(sender))).toEqual({ in: 0, out: 0, limit: null, held: 0 });
+        });
+
+        it('has no rates for a client connected less than a second ago', async () => {
+            await start({ messagesPerSecond: 0, burst: 1 });
+            const socket = await connect();
+            sweep(500);
+            expect(server.activityOf(clientOf(socket))).toEqual({ in: null, out: null, limit: null, held: 0 });
+        });
+
+        it('names the rate limit while it holds a client\'s updates back', async () => {
+            await start({ messagesPerSecond: 1, burst: 1 });
+            const socket = await connect();
+
+            for (let i = 0; i < 4; i++) socket.emit('objects', { command: 'model::update', payload: { id: `o${i}` } });
+            socket.emit('myChannel', { command: 'broadcast::json', payload: {} });
+            await new Promise(resolve => setTimeout(resolve, 50));
+            expect(server.activityOf(clientOf(socket))).toMatchObject({ limit: 'rate', held: 3 });
+
+            // One token a second passes them on; a second later the episode is over.
+            for (clock = 1000; clock <= 5000; clock += 1000) sweep(clock);
+            expect(server.activityOf(clientOf(socket))).toMatchObject({ limit: null, held: 0 });
+        });
+    });
 });
 
 // Behind a reverse proxy every client comes from the proxy's address; a trusted one names the client

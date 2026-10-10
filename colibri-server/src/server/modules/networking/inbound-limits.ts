@@ -287,6 +287,12 @@ export class InboundRateLimiter<K> {
         }
     }
 
+    // Whether the client is over its limit now: it had a message held back or dropped within the
+    // last EPISODE_QUIET_MILLIS. For the admin UI.
+    public isLimited(client: K): boolean {
+        return this.limited.has(client);
+    }
+
     // Reports the end of every episode that has gone quiet. Call it periodically.
     public sweep(now: number): void {
         for (const client of this.limited) {

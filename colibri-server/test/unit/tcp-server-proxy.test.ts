@@ -399,4 +399,70 @@ describe('TCPServerProxy', () => {
             expect(sent.filter(m => m.channel === 'm:tlsCredentials')).toEqual([]);
         });
     });
+
+    // The admin UI's client view: one round trip to the worker per refresh, and only then.
+    describe('client activity', () => {
+        let sent: { channel: string; content?: Record<string, unknown> }[];
+
+        beforeEach(() => {
+            sent = [];
+            vi.spyOn(WorkerServiceProxy.prototype as unknown as { postMessage(channel: string, content?: Record<string, unknown>): void }, 'postMessage')
+                .mockImplementation((channel, content) => {
+                    sent.push({ channel, content });
+                });
+        });
+
+        const asked = () => sent.filter(m => m.channel === 'm:clientActivity').map(m => m.content?.request as number);
+
+        it('knows each client\'s address, TLS and connection time from its handshake', () => {
+            fromWorker('clientConnected$', { id: 'c1', app: 'appA', name: 'quest', version: '2', address: '10.0.0.7', tls: true, connectedAt: 123 });
+
+            expect(proxy.currentClients).toEqual([
+                { id: 'c1', app: 'appA', name: 'quest', version: '2', address: '10.0.0.7', tls: true, connectedAt: 123, metadata: {} },
+            ]);
+        });
+
+        it('asks the worker and resolves with its answer, by client id', async () => {
+            handshake('c1', 'appA');
+            const activity = proxy.clientActivity();
+            expect(asked()).toEqual([ 1 ]);
+
+            fromWorker('clientActivity$', { request: 1, clients: [ { id: 'c1', in: 5, out: 7, limit: 'rate', held: 2 } ] });
+            expect(Array.from(await activity)).toEqual([ [ 'c1', { in: 5, out: 7, limit: 'rate', held: 2 } ] ]);
+        });
+
+        it('shares one request among callers while it waits for the answer', async () => {
+            handshake('c1', 'appA');
+            const first = proxy.clientActivity();
+            const second = proxy.clientActivity();
+            expect(asked()).toEqual([ 1 ]);
+
+            fromWorker('clientActivity$', { request: 1, clients: [] });
+            expect(await second).toBe(await first);
+            proxy.clientActivity();
+            expect(asked()).toEqual([ 1, 2 ]);
+        });
+
+        it('asks nothing while there is no TCP client', async () => {
+            expect((await proxy.clientActivity()).size).toBe(0);
+            expect(asked()).toEqual([]);
+        });
+
+        it('gives up on a worker that does not answer, and ignores its late answer', async () => {
+            vi.useFakeTimers();
+            try {
+                handshake('c1', 'appA');
+                const activity = proxy.clientActivity(500);
+                vi.advanceTimersByTime(500);
+                expect((await activity).size).toBe(0);
+
+                const next = proxy.clientActivity(500);
+                fromWorker('clientActivity$', { request: 1, clients: [ { id: 'c1', in: 1, out: 1, limit: null, held: 0 } ] });
+                fromWorker('clientActivity$', { request: 2, clients: [ { id: 'c1', in: 2, out: 2, limit: null, held: 0 } ] });
+                expect((await next).get('c1')?.in).toBe(2);
+            } finally {
+                vi.useRealTimers();
+            }
+        });
+    });
 });

@@ -22,6 +22,7 @@ import {
 } from './protocol.js';
 import {
     DEFAULT_RATE_LIMIT,
+    EPISODE_QUIET_MILLIS,
     HeldUpdate,
     HeldUpdates,
     InboundBacklog,
@@ -40,6 +41,7 @@ import {
     warnsAtEnd,
 } from './inbound-limits.js';
 import { AddressThrottle } from './address-throttle.js';
+import { ClientActivity, RATE_WINDOW_MILLIS, TrafficMeter } from './client-activity.js';
 import { readProxyHeader } from './proxy-protocol.js';
 import { TrustProxy, compileTrustedProxies, trustNoProxy } from './trusted-proxies.js';
 
@@ -85,6 +87,27 @@ export const DEFAULT_INBOUND_BACKLOG_LIMIT = 2000;
 
 // Which limit kept a message from passing on at once.
 type Refusal = 'rate' | 'backlog';
+
+// What the worker posts as 'clientConnected$' once a client's handshake is accepted.
+export interface TcpClientConnected {
+    id: string;
+    app: string;
+    name: string;
+    version: string;
+    // Its address: the one its PROXY protocol header named, if it had one; see clientAddress.
+    address: string;
+    tls: boolean;
+    // Date.now() of the connection, before its handshake.
+    connectedAt: number;
+}
+
+// What the worker posts as 'clientActivity$', answering an 'm:clientActivity' from TCPServerProxy:
+// the activity of every client whose handshake was accepted. Only ever posted when asked, which the
+// proxy does only while an admin UI page shows it.
+export interface TcpClientActivityReport {
+    request: number;
+    clients: (ClientActivity & { id: string })[];
+}
 
 // How long a client may send nothing at all before it is taken for gone. A Quest that drops off
 // the Wi-Fi sends no FIN, so without this its connection stayed open - a connected client, keeping
@@ -318,6 +341,12 @@ interface TcpClient {
     receivedAny: boolean;
     // Model updates over a limit, waiting for room; see HeldUpdates.
     held: HeldUpdates;
+    // For the admin UI: Date.now() of the connection, the messages it sent and was sent, and the
+    // limit that last refused one of its messages, and when (performance.now()).
+    connectedAt: number;
+    traffic: TrafficMeter;
+    limitedBy: Refusal | undefined;
+    limitedAt: number;
 }
 
 export class TCPServerWorker extends WorkerService {
@@ -365,6 +394,8 @@ export class TCPServerWorker extends WorkerService {
 
     private idleTimeoutMillis = DEFAULT_IDLE_TIMEOUT_MILLIS;
     private lastTickAt: number | undefined;
+    // When the clients' message rates were last sampled; see TrafficMeter.
+    private trafficSampledAt = 0;
 
     // When a Colibri 1.x client at each remote address was last warned about.
     private readonly v1WarnedAt = new AddressThrottle();
@@ -412,6 +443,10 @@ export class TCPServerWorker extends WorkerService {
 
             case 'm:tlsCredentials':
                 this.useTlsCredentials(msg.content.tls as TcpTlsCredentials);
+                break;
+
+            case 'm:clientActivity':
+                this.postClientActivity(typeof msg.content.request === 'number' ? msg.content.request : 0);
                 break;
 
             case 'm:broadcast': {
@@ -768,6 +803,39 @@ export class TCPServerWorker extends WorkerService {
         const stalled = this.lastTickAt !== undefined && now - this.lastTickAt > TICK_STALL_MILLIS;
         this.lastTickAt = now;
         if (!stalled) this.endIdleClients(now);
+
+        if (now - this.trafficSampledAt >= RATE_WINDOW_MILLIS) {
+            this.trafficSampledAt = now;
+            for (const client of this.clients.values()) client.traffic.sample(now);
+        }
+    }
+
+    // Answers TCPServerProxy.clientActivity(): one compact report on every handshaked client. Never
+    // posted unasked, so a server without an admin UI page open pays nothing for it beyond the
+    // counting itself.
+    private postClientActivity(request: number): void {
+        const now = performance.now();
+        const clients: TcpClientActivityReport['clients'] = [];
+        for (const client of this.clients.values()) {
+            clients.push({
+                id: client.id,
+                in: client.traffic.receivedPerSecond,
+                out: client.traffic.sentPerSecond,
+                limit: this.limitOf(client, now),
+                held: client.held.size,
+            });
+        }
+        const report: TcpClientActivityReport = { request, clients };
+        this.postMessage('clientActivity$', report as unknown as { [key: string]: unknown });
+    }
+
+    // The limit holding the client's updates back now: the one that last refused one of its
+    // messages, as long as it still has updates held back or was refused within the last
+    // EPISODE_QUIET_MILLIS (a client that only sends broadcasts never has anything held).
+    private limitOf(client: TcpClient, now: number): Refusal | null {
+        if (!client.limitedBy) return null;
+        if (client.held.size > 0 || now - client.limitedAt < EPISODE_QUIET_MILLIS) return client.limitedBy;
+        return null;
     }
 
     // Ends every client that has sent nothing for idleTimeoutMillis, plus its idleAllowanceMillis,
@@ -891,6 +959,7 @@ export class TCPServerWorker extends WorkerService {
             client.lastLargeWrittenAt = process.hrtime.bigint();
         }
         client.bytesSinceHeartbeat += packet.length;
+        client.traffic.sent += 1;
         this.write(client, packet, reply ? 'reply' : 'relayed');
     }
 
@@ -1023,6 +1092,10 @@ export class TCPServerWorker extends WorkerService {
             lastLargeWrittenAt: 0n,
             receivedAny: false,
             held: new HeldUpdates(),
+            connectedAt: Date.now(),
+            traffic: new TrafficMeter(performance.now()),
+            limitedBy: undefined,
+            limitedAt: 0,
         };
         this.waitingClients.set(tcpClient.id, tcpClient);
 
@@ -1122,6 +1195,7 @@ export class TCPServerWorker extends WorkerService {
                         break;
                     }
 
+                    client.traffic.received += 1;
                     if (!isLimitable(frame.channel, frame.command)) {
                         // Nothing may overtake what the client sent before it, so whatever of its
                         // updates is held back goes first - a model::delete must not arrive ahead
@@ -1168,7 +1242,16 @@ export class TCPServerWorker extends WorkerService {
         this.waitingClients.delete(client.id);
         this.clients.set(client.id, client);
         this.addToAppIndex(client);
-        this.postMessage('clientConnected$', { id: client.id, app, name, version });
+        const connected: TcpClientConnected = {
+            id: client.id,
+            app,
+            name,
+            version,
+            address: client.address,
+            tls: (client.socket as tls.TLSSocket).encrypted === true,
+            connectedAt: client.connectedAt,
+        };
+        this.postMessage('clientConnected$', connected as unknown as { [key: string]: unknown });
     }
 
     // Tells the client why it was refused and closes the connection. Only a client that speaks
@@ -1389,6 +1472,8 @@ export class TCPServerWorker extends WorkerService {
     }
 
     private recordLimited(client: TcpClient, refusedBy: Refusal, limited: Limited, now: number): void {
+        client.limitedBy = refusedBy;
+        client.limitedAt = now;
         if (refusedBy === 'rate') {
             this.rateLimiter.record(client, now, limited);
             return;
