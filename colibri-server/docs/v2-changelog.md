@@ -510,13 +510,14 @@ The endpoints are documented under [REST store](./protocol.md#rest-store).
   *Sync traffic* switch, off by default, for the `broadcast::` messages. The server applies both
   filters, so the page is only sent what it shows.
 - Repeated log lines are merged into one entry with a count however much other traffic arrives in
-  between, and a merged entry updates on screen. Lines from different apps are no longer merged,
-  and an entry records when it first occurred.
+  between, and a merged entry updates on screen. Lines from or about different clients are no
+  longer merged, and an entry records when it first occurred.
 - The Log page works at any width, phones included; below 1365px it used to be cut off at the
   right. Each line shows its time, level (ERR, WRN, INF, DBG), app and client or server source, and
-  message in columns, a repeat as `×10` at the end. A click shows a line's details; clicking an app
-  shows only that app. The filters are in a toolbar of the page, folded away on a phone, with a
-  search over the loaded lines and a count per level.
+  message in columns, a repeat as `×10` after the message. A web client, whose name is its address,
+  shows as the start of its id. A click shows a line's details; clicking an app shows only that app.
+  The filters are in a toolbar of the page, folded away on a phone, with a search over the loaded
+  lines and a count per level.
 - Scrolling up in any way pauses the log and keeps the lines still, with a button to jump to the
   new ones. Only the mouse wheel paused it before.
 - The history arrives as one message, in the order the lines last occurred, so merged lines no
@@ -526,7 +527,8 @@ The endpoints are documented under [REST store](./protocol.md#rest-store).
 - A web client's refusal, malformed events and rate limit warnings carry its app, so the app filter
   shows them.
 - The Statistics page is dark like the rest, its chart fits its card, and a table lists the clients
-  with their latency.
+  with their latency. A client keeps its colour while others connect and leave, and the chart shows
+  each client's median per second, across the whole width from the first sample.
 - The SPA fallback no longer adds a log entry every time an admin UI page is loaded.
 - The admin UI keeps its dark theme whatever colour scheme the visitor's system prefers.
 - Replaced the dead Karma/Protractor `test`/`server-app-e2e` targets in `angular.json` (both pointed

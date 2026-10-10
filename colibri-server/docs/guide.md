@@ -405,8 +405,8 @@ Server messages, and lines clients send through colibri-unity's `RemoteLogging` 
   and warnings on stderr. `docker logs colibri` shows them, including refused clients, failed
   `store.json` writes and client errors. `CONSOLE_LOG_LEVEL` sets the minimum level (default:
   everything but debug). `broadcast::` messages appear only with `CONSOLE_LOG_BROADCAST_TRAFFIC=true`.
-- **Admin UI *Log* page:** the last 20,000 messages of every level, in memory, repeats of a line from
-  one app merged into one entry. The page loads the newest 10,000 that match its filters and shows a
+- **Admin UI *Log* page:** the last 20,000 messages of every level, in memory, repeats of a line merged
+  into one entry per client. The page loads the newest 10,000 that match its filters and shows a
   repeat where it last occurred. Lost on restart. Times are the browser's local time; hover one for
   UTC, as `docker logs` prints it.
 
