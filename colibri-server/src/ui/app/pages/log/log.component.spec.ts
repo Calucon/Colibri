@@ -147,6 +147,21 @@ describe('LogComponent', () => {
         expect(log.filter()).toBe('');
     });
 
+    it('pauses on a click on a line, but not on the empty state\'s button', () => {
+        const { fixture, component, log } = create();
+        history([ message({ id: 'a', message: 'Scene loaded' }) ]);
+        log.search.set('zzz');
+        fixture.detectChanges();
+
+        (fixture.nativeElement.querySelector('.empty button') as HTMLElement).click();
+        fixture.detectChanges();
+        expect(log.search()).toBe('');
+        expect(component.following()).toBe(true);
+
+        (fixture.nativeElement.querySelector('app-log-message .message') as HTMLElement).click();
+        expect(component.following()).toBe(false);
+    });
+
     it('shows that the connection is lost', () => {
         const { fixture } = create();
         history([ message({ id: 'a' }) ]);

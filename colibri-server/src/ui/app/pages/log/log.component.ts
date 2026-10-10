@@ -16,6 +16,10 @@ const screenPageSize = (): number => window.matchMedia?.('(max-width: 699.98px)'
 /** How close to the end, in px, still counts as at the end. */
 const END_SLACK = 24;
 
+/** Whether an event is on a line, or on "Show older lines" above them. */
+const onLine = (event: Event): boolean =>
+    event.target instanceof Element && event.target.closest('app-log-message, .older') !== null;
+
 interface EmptyState {
     text: string;
     action?: { label: string; run: () => void };
@@ -193,9 +197,15 @@ export class LogComponent implements AfterViewInit, OnDestroy {
         if (y > this.touchY + 8 && el.scrollHeight > el.clientHeight) this.pause();
     };
 
-    // Pressing the mouse in the log is the start of reading, selecting or opening a line.
+    // Pressing the mouse on a line is the start of reading, selecting or opening it.
     onPointerDown(event: PointerEvent): void {
-        if (event.pointerType === 'mouse' && event.button === 0) this.pause();
+        if (event.pointerType === 'mouse' && event.button === 0 && onLine(event)) this.pause();
+    }
+
+    // A tap opens a line, and the lines stay still while it is read. Not a button of the empty
+    // state: "Clear search" left the log paused.
+    onClick(event: MouseEvent): void {
+        if (onLine(event)) this.pause();
     }
 
     private scrollToEnd(): void {
