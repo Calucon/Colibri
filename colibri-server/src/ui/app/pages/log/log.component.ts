@@ -110,6 +110,8 @@ export class LogComponent implements AfterViewInit, OnDestroy {
     private resizeObserver: ResizeObserver | undefined;
 
     constructor() {
+        afterNextRender(() => this.log.showFilterInAddress());
+
         afterRenderEffect(() => {
             this.rows();
             if (this.following()) this.scrollToEnd();

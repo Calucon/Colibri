@@ -85,6 +85,18 @@ export class LogService {
         this.levels.set(new Set(values));
     }
 
+    /**
+     * Puts the app filter back in the address, which a link to the page, such as its tab, leaves
+     * out: a reload or a copied link would show every app again.
+     */
+    public showFilterInAddress(): void {
+        const filter = this.filter();
+        if (filter && readHash() !== filter) {
+            // the whole path: a bare #fragment resolves against <base href="/">
+            history.replaceState(history.state, '', `${location.pathname}${location.search}#${encodeURIComponent(filter)}`);
+        }
+    }
+
     public clearFilters(): void {
         this.filter.set('');
         this.showBroadcastTraffic.set(false);

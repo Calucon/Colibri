@@ -134,6 +134,23 @@ describe('LogService', () => {
         expect(service.messages().map(m => m.id)).toEqual([ 'current', 'after' ]);
     });
 
+    // the tab back from Statistics links to /log, without the app filter the page still has
+    it('puts the app filter back in the address', () => {
+        const service = start();
+        const path = location.pathname;
+        try {
+            service.filter.set('demo app');
+            TestBed.flushEffects();
+            window.history.replaceState(null, '', '/log');
+
+            service.showFilterInAddress();
+
+            expect(location.pathname + location.hash).toBe('/log#demo%20app');
+        } finally {
+            window.history.replaceState(null, '', path);
+        }
+    });
+
     it('shows live lines in batches', () => {
         const service = start();
 
