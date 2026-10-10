@@ -85,11 +85,25 @@ const onOff = function (label: string, on: boolean, variable?: string, note?: st
     return { label, variable, value: on ? 'On' : 'Off', tone: on ? 'ok' : 'off', note };
 };
 
+/** Why the web port counts as HTTPS at a proxy, on hover. */
+const WEB_TLS_AT_PROXY = 'A trusted proxy reported HTTPS in X-Forwarded-Proto for a web client or admin page connected now';
+
 export const serverSections = function (s: ServerSnapshot, format: (time: number) => string): Section[] {
     const set = s.settings;
     const tls = s.tls;
-    const scheme = tls ? 'HTTPS and WSS' : 'HTTP and WS';
     const proxies = Array.isArray(set['TRUSTED_PROXIES']) ? set['TRUSTED_PROXIES'] : [];
+
+    // TLS that ends at a reverse proxy in front of this server. The server then sees only the
+    // proxy's plain connections, so the rule goes by what the proxy reported for the web clients and
+    // admin pages connected now, this page included: HTTPS at the proxy if any of them came through
+    // a TRUSTED_PROXIES address whose X-Forwarded-Proto said https (tlsAtProxy.web). With the
+    // server's own TLS on, that is what a direct connection uses, and the rows say so instead.
+    const webTlsAtProxy = tls === null && s.tlsAtProxy.web;
+    const scheme = tls ? 'HTTPS and WSS' : webTlsAtProxy ? 'HTTP here, HTTPS at the proxy' : 'HTTP and WS';
+    // Not a bare Off, which reads as "turn TLS off in the clients".
+    const tlsFact: Fact = webTlsAtProxy
+        ? { label: 'TLS', variable: 'TLS_CERT, TLS_KEY', value: 'Not on this server', note: 'HTTPS at the proxy', title: WEB_TLS_AT_PROXY }
+        : onOff('TLS', tls !== null, 'TLS_CERT, TLS_KEY');
 
     const sections: Section[] = [
         {
@@ -121,11 +135,14 @@ export const serverSections = function (s: ServerSnapshot, format: (time: number
         },
         {
             id: 'network', title: 'Network', facts: [
-                { label: 'Web', variable: 'WEBSERVER_HOST, WEBSERVER_PORT', value: `${text(set['WEBSERVER_HOST'])}:${text(set['WEBSERVER_PORT'])}`, mono: true, note: scheme },
+                {
+                    label: 'Web', variable: 'WEBSERVER_HOST, WEBSERVER_PORT', value: `${text(set['WEBSERVER_HOST'])}:${text(set['WEBSERVER_PORT'])}`, mono: true,
+                    note: scheme, title: webTlsAtProxy ? WEB_TLS_AT_PROXY : undefined
+                },
                 { label: 'TCP', variable: 'TCP_HOST, TCP_PORT', value: `${text(set['TCP_HOST'])}:${text(set['TCP_PORT'])}`, mono: true, note: tls ? 'TLS' : 'unencrypted' },
                 { label: 'Voice', variable: 'VOICE_HOST, VOICE_PORT', value: `${text(set['VOICE_HOST'])}:${text(set['VOICE_PORT'])}`, mono: true, note: 'UDP' },
                 { label: 'Base URL', variable: 'BASE_URL', value: text(set['BASE_URL']) || '/', mono: true },
-                onOff('TLS', tls !== null, 'TLS_CERT, TLS_KEY'),
+                tlsFact,
                 {
                     label: 'Trusted proxies', variable: 'TRUSTED_PROXIES', value: proxies.length > 0 ? proxies.join(', ') : 'None',
                     mono: proxies.length > 0, tone: proxies.length > 0 ? undefined : 'off'

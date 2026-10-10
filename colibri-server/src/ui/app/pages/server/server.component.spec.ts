@@ -24,6 +24,7 @@ const snapshot = (overrides: Partial<ServerSnapshot> = {}): ServerSnapshot => ({
         TRUSTED_PROXIES: [], TCP_PROXY_PROTOCOL: false
     },
     tls: null,
+    tlsAtProxy: { web: false },
     voice: { listening: true, recording: false, samplingRate: 48000, clients: 0 },
     counts: {
         tcpClients: 3, webClients: 2, adminPages: 1, apps: 2, models: 1234, modelApps: 2, modelChannels: 3,

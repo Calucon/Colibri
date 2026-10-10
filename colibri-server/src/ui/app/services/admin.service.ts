@@ -52,6 +52,11 @@ export interface ServerSnapshot extends Snapshot {
     /** The settings in effect, by the variables that set them. */
     settings: Record<string, SettingValue>;
     tls: TlsInfo | null;
+    /**
+     * TLS that ends at a trusted proxy in front of the server. `web`: a web client or admin page
+     * connected now, this one included, reached the proxy over TLS, by its X-Forwarded-Proto.
+     */
+    tlsAtProxy: { web: boolean };
     voice: VoiceStatus | null;
     counts: {
         tcpClients: number;
