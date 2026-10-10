@@ -252,7 +252,7 @@ Show [`LastConnectFailure`](#connection-and-outages) in your app.
 | `Colibri: 192.168.0.10:9012 did not answer within 5 s. …` | Wrong IP, server on another network or subnet, Wi-Fi client isolation, or a firewall dropping packets | Fix the address or the network |
 | `Colibri: connection to 192.168.0.10 failed (ConnectionRefused), retrying...` | The machine is reachable, but nothing listens on the TCP port | Start colibri-server, or check *TCP server Port* |
 | `… failed (HostUnreachable) …`, `(NetworkUnreachable)` or another socket error | Wrong address or network | Fix the address or the network |
-| `Colibri: no answer from 192.0.2.10:9012 within 2.5 s, trying [2001:db8::1]:9012` or `Colibri: no connection to 192.0.2.10:9012 (…), trying …` | The server name has several addresses and this one does not work from here: no route, a firewall, or the server does not listen on it. The next address is tried. | None for TCP if the next one connects, but voice still goes to the first IPv4 address and is not heard ([Server addresses](#server-addresses)). Make the address reachable, or remove it from DNS |
+| `Colibri: no connection to 192.0.2.10:9012 within 2.5 s, trying [2001:db8::1]:9012` or `Colibri: no connection to 192.0.2.10:9012 (…), trying …` | The server name has several addresses and this one does not work from here: no route, a firewall, or the server does not listen on it. The next address is tried. | None for TCP if the next one connects, but voice still goes to the first IPv4 address and is not heard ([Server addresses](#server-addresses)). Make the address reachable, or remove it from DNS |
 | `Colibri: colibri.example.org could not be resolved within 5 s. …` | The device's DNS server does not answer | Check the network, or use the server's IP address |
 | `Colibri voice: the server address '…' has only IPv6 addresses (…), and this device has no route to them, …` or `Colibri voice: sending to … failed (NetworkUnreachable), dropping voice until a send works again` | No route to the server's voice address: a server name with only IPv6 addresses on a network without IPv6, or a network change | Use a network with IPv6, or give the server name an IPv4 address. After a network change, voice resumes with the first send that works |
 | `Colibri: invalid frame from server, dropping connection: …` if the server sends anything, then `Colibri: 3 connections in a row were accepted but ended before a single frame could be read. …` | A 1.x server, an address that is not a colibri-server, or [TLS](#tls) on the server only. With *Server supports SSL/TLS?* off, also a proxy or port forwarding whose backend is not running. | Use a 2.x server, correct the address, tick *Server supports SSL/TLS?*, or start the server behind the proxy |
@@ -636,7 +636,7 @@ voice use the same IP version, as the server's voice check needs.
   IPv6, fail at once and are not counted. A loopback address followed by others gets 0.25 s,
   because Windows takes a second or more to report a refusal, e.g. on `127.0.0.1` when the server
   listens on `::1` only.
-- Moving on is logged (`Colibri: no answer from …, trying …`). With a host name, the connect line
+- Moving on is logged (`Colibri: no connection to …, trying …`). With a host name, the connect line
   names the address used: `Colibri: connected to colibri.example.org:9012 (192.0.2.10) as app …`.
 
 An IPv6 address works with or without brackets. `Store` URLs get the brackets either way. With TLS,

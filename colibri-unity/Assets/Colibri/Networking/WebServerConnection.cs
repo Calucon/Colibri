@@ -1828,9 +1828,11 @@ namespace HCIKonstanz.Colibri.Networking
                     if (i + 1 < addresses.Count && clock.ElapsedMilliseconds < timeoutMs)
                     {
                         var next = Endpoint(addresses[i + 1], port);
-                        // Two decimals: a loopback address's 250 ms read as 0.3 s with one.
+                        // Two decimals: a loopback address's 250 ms read as 0.3 s with one. "No connection",
+                        // not "no answer": Windows retries a refused connect for about a second, so a
+                        // loopback address that refused is given up on before the refusal arrives.
                         Debug.Log(e is TimeoutException
-                            ? $"Colibri: no answer from {Endpoint(address, port)} within "
+                            ? $"Colibri: no connection to {Endpoint(address, port)} within "
                                 + $"{(attemptMs / 1000f).ToString("0.##", CultureInfo.InvariantCulture)} s, trying {next}"
                             : $"Colibri: no connection to {Endpoint(address, port)} "
                                 + $"({(e is SocketException refused ? refused.SocketErrorCode.ToString() : e.Message)}), trying {next}");

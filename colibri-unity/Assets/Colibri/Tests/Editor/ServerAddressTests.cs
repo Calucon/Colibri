@@ -311,7 +311,7 @@ namespace HCIKonstanz.Colibri.Tests
             // Proves that ::1 is there, and leaves nothing listening on it.
             Listen(IPAddress.IPv6Loopback, port).Stop();
 
-            LogAssert.Expect(LogType.Log, $"Colibri: no answer from 127.0.0.1:{port} within 0.25 s, trying [::1]:{port}");
+            LogAssert.Expect(LogType.Log, $"Colibri: no connection to 127.0.0.1:{port} within 0.25 s, trying [::1]:{port}");
 
             var e = Assert.Throws<SocketException>(() => Wait(WebServerConnection.ConnectAnyAsync(
                 new[] { IPAddress.Loopback, IPAddress.IPv6Loopback }, "localhost", port, 5000, 5000, Attempting, CancellationToken.None)));
@@ -356,7 +356,7 @@ namespace HCIKonstanz.Colibri.Tests
             var other = IPAddress.Parse("127.0.0.2");
             Listen(other, unanswered);
 
-            LogAssert.Expect(LogType.Log, $"Colibri: no answer from 127.0.0.1:{unanswered} within 0.25 s, trying 127.0.0.2:{unanswered}");
+            LogAssert.Expect(LogType.Log, $"Colibri: no connection to 127.0.0.1:{unanswered} within 0.25 s, trying 127.0.0.2:{unanswered}");
 
             var clock = Stopwatch.StartNew();
             var (_, address) = Wait(WebServerConnection.ConnectAnyAsync(new[] { IPAddress.Loopback, other },
