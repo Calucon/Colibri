@@ -23,9 +23,9 @@ const colors = [
     '#5E81AC', // blue
 ];
 
-/** The colour of the client at this index of ClientService.clients, in the chart and its table. */
-export const clientColor = function (index: number): string {
-    return colors[index % colors.length];
+/** The colour of a client's slot (ColibriClient.slot), in the chart and its table. */
+export const clientColor = function (slot: number): string {
+    return colors[slot % colors.length];
 };
 
 const timeLabel = function (value: Date | d3.NumberValue): string {
@@ -180,9 +180,9 @@ export class LatencyChartComponent implements AfterViewInit, OnDestroy {
         const { band } = this.layout();
         const boxWidth = Math.max(4, band - boxplotPadding);
 
-        // coloured by the client's place in the list, the same as in the table under the chart
+        // coloured by the client's slot, the same as in the table under the chart
         const lines: Line[] = clients
-            .map((client, index) => ({ client, color: clientColor(index) }))
+            .map(client => ({ client, color: clientColor(client.slot) }))
             .filter(line => line.client.latency.length > 0);
 
         const xScale = d3.scalePoint()

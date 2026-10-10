@@ -58,6 +58,21 @@ describe('ClientService', () => {
         expect(service.clients().map(c => c.id)).toEqual(['b']);
     });
 
+    // the colour of every client after a leaving one used to change
+    it('gives a client the lowest free colour slot, and keeps it while others leave', () => {
+        const service = TestBed.inject(ClientService);
+        const connect = (id: string) => clientsChannel.next({ command: 'client::connected', payload: { id, app: 'demo', name: id, version: '2' } });
+
+        connect('a');
+        connect('b');
+        connect('c');
+        clientsChannel.next({ command: 'client::disconnected', payload: { id: 'a' } });
+        connect('d');
+        connect('e');
+
+        expect(service.clients().map(c => [ c.id, c.slot ])).toEqual([ [ 'b', 1 ], [ 'c', 2 ], [ 'd', 0 ], [ 'e', 3 ] ]);
+    });
+
     it('appends latency samples for a known client', () => {
         const service = TestBed.inject(ClientService);
 

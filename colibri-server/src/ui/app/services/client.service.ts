@@ -6,7 +6,12 @@ export interface ColibriClient {
     app: string;
     name: string;
     version: string;
-    latency: [number, number][]
+    latency: [number, number][];
+    /**
+     * Its colour on the Statistics page: the lowest no other client had when it connected, kept
+     * until it leaves. Its place in the list changed whenever a client before it left.
+     */
+    slot: number;
 }
 
 @Injectable({
@@ -42,9 +47,14 @@ export class ClientService {
             .listen('colibri::clients')
             .subscribe(msg => {
                 if (msg.command === 'client::connected') {
+                    const taken = new Set(this._clients().map(c => c.slot));
+                    let slot = 0;
+                    while (taken.has(slot)) slot++;
+
                     const client = {
                         ...msg.payload,
-                        latency: []
+                        latency: [],
+                        slot
                     };
                     this._clients.set([...this._clients(), client]);
                 } else if (msg.command === 'client::disconnected') {

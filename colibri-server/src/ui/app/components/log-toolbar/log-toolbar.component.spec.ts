@@ -16,7 +16,7 @@ describe('LogToolbarComponent', () => {
     };
     let clients: ReturnType<typeof signal<ReadonlyArray<ColibriClient>>>;
 
-    const client = (id: string, app: string): ColibriClient => ({ id, app, name: id, version: '2', latency: [] });
+    const client = (id: string, app: string): ColibriClient => ({ id, app, name: id, version: '2', latency: [], slot: 0 });
 
     beforeEach(() => {
         log = {

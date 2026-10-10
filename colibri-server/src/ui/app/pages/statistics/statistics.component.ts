@@ -36,11 +36,11 @@ export class StatisticsComponent {
             names.set(key, (names.get(key) ?? 0) + 1);
         }
 
-        return clients.map((client, index) => {
+        return clients.map(client => {
             const latency = (client.latency || []).map(sample => sample[1]);
             return {
                 id: client.id,
-                color: clientColor(index),
+                color: clientColor(client.slot),
                 app: client.app,
                 appColor: appColor(client.app),
                 name: client.name,
