@@ -275,7 +275,12 @@ namespace HCIKonstanz.Colibri.Tests
             Assert.Throws<ObjectDisposedException>(() => _ = _attempted[0].Available, "The refused attempt's socket was left open");
         }
 
-        /// <summary>When every address fails, the last one's error is the one reported.</summary>
+        /// <summary>
+        /// localhost with no server running fails as a refusal, which says to start the server. On
+        /// Windows, 127.0.0.1 refuses only after its 0.25 s are up and reads as no answer, so the
+        /// refusal reported is the one from ::1. ARefusalIsReportedOverAnAddressGivenUpBeforeIt
+        /// covers that case on every system.
+        /// </summary>
         [Test]
         public void EveryAddressRefusedFailsAsARefusal()
         {
@@ -289,6 +294,30 @@ namespace HCIKonstanz.Colibri.Tests
             Assert.That(_attempted, Has.Count.EqualTo(2));
             foreach (var socket in _attempted)
                 Assert.Throws<ObjectDisposedException>(() => _ = socket.Available, "A failed attempt's socket was left open");
+        }
+
+        /// <summary>
+        /// localhost on Windows with no server running: Windows reports a refused loopback
+        /// connection only after a second or more, so 127.0.0.1 is given up after its 0.25 s as no
+        /// answer, and ::1 then refuses. The refusal is reported, which says to start the server;
+        /// the timeout said to check the address and the network. A loopback port that never
+        /// answers stands in for the late refusal on 127.0.0.1.
+        /// </summary>
+        [Test]
+        public void ARefusalIsReportedOverAnAddressGivenUpBeforeIt()
+        {
+            RequireIPv6();
+            var port = UnansweredPort();
+            // Proves that ::1 is there, and leaves nothing listening on it.
+            Listen(IPAddress.IPv6Loopback, port).Stop();
+
+            LogAssert.Expect(LogType.Log, $"Colibri: no answer from 127.0.0.1:{port} within 0.25 s, trying [::1]:{port}");
+
+            var e = Assert.Throws<SocketException>(() => Wait(WebServerConnection.ConnectAnyAsync(
+                new[] { IPAddress.Loopback, IPAddress.IPv6Loopback }, "localhost", port, 5000, 5000, Attempting, CancellationToken.None)));
+
+            Assert.That(e.SocketErrorCode, Is.EqualTo(SocketError.ConnectionRefused));
+            Assert.That(_attempted, Has.Count.EqualTo(2));
         }
 
         /// <summary>

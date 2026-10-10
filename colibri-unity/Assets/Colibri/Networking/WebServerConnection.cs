@@ -1392,12 +1392,13 @@ namespace HCIKonstanz.Colibri.Networking
         /// Called with the socket for each address, before it is tried. The sockets stay this
         /// method's: it closes every one but the one it returns, and that one too if it throws.
         /// </param>
-        /// <exception cref="TimeoutException">The name did not resolve, or nothing answered the connection, in time.</exception>
+        /// <exception cref="TimeoutException">The name did not resolve, or nothing answered the connection, in time, and nothing refused it.</exception>
         /// <exception cref="TlsHandshakeException">The TLS handshake failed or did not finish in time.</exception>
         /// <exception cref="OperationCanceledException"><paramref name="token"/> was cancelled first.</exception>
         /// <exception cref="ObjectDisposedException">A socket was closed while connecting.</exception>
         /// <exception cref="SocketException">
-        /// The name does not resolve, or every address failed before the time was up, refused, say.
+        /// The name does not resolve, or every address failed, one of them refused or all of them
+        /// before their time was up, unreachable, say. See <see cref="ConnectAnyAsync"/> for which error.
         /// </exception>
         /// <remarks>Internal for the EditMode tests.</remarks>
         internal static async Task<Session> OpenSessionAsync(string host, int port, ServerCertificateCheck tls, int timeoutMs,
@@ -1730,15 +1731,17 @@ namespace HCIKonstanz.Colibri.Networking
         /// <summary>
         /// Connects to the first of <paramref name="addresses"/> that answers. They are tried in
         /// order, each with a socket of its own family and the time <see cref="AttemptTimeoutMs"/>
-        /// gives it, and the next is tried at once when one is refused or unreachable.
+        /// gives it, and the next is tried at once when one is refused or unreachable. When every
+        /// address fails, the error that says the most about the server is reported (see
+        /// <see cref="FailureRank"/>), the first of equals.
         /// </summary>
         /// <param name="host">The server address as configured, for the messages.</param>
         /// <param name="timeoutMs">The time all attempts together may take.</param>
         /// <param name="totalTimeoutMs">The time the whole connection had, lookup included, which a timeout names.</param>
         /// <param name="attempting">See <see cref="OpenSessionAsync"/>.</param>
         /// <returns>The connected socket, and the address it is connected to.</returns>
-        /// <exception cref="TimeoutException">An address did not answer within its time before any refused, or no time was left to try one.</exception>
-        /// <exception cref="SocketException">Every address failed: the first refusal, or with neither a refusal nor a missing answer, the first address's error.</exception>
+        /// <exception cref="TimeoutException">No address refused, and one did not answer within its time, or no time was left to try one.</exception>
+        /// <exception cref="SocketException">Every address failed, and one refused or none went unanswered: the first refusal, or else the first address's error.</exception>
         /// <exception cref="OperationCanceledException"><paramref name="token"/> was cancelled first.</exception>
         /// <exception cref="ObjectDisposedException">A socket was closed while connecting.</exception>
         /// <remarks>Internal for the EditMode tests.</remarks>
@@ -1779,11 +1782,9 @@ namespace HCIKonstanz.Colibri.Networking
                     // Refused, unreachable, an address family this device has no sockets for, no
                     // answer within this address's share, or anything else a runtime throws for one
                     // address family and not the other: the next address may still answer.
-                    // Reported if none does: the first refusal or missing answer, which says what is
-                    // wrong with the server, else the first error. An IPv6 address tried after IPv4
-                    // on a network without IPv6 fails as unreachable, which hid a refused IPv4
-                    // address: a server that was down read as a network without a route.
-                    if (failure == null || (IsAboutTheServer(e) && !IsAboutTheServer(failure)))
+                    // Reported if none does: the error that says the most about the server, the
+                    // first of equals.
+                    if (failure == null || FailureRank(e) > FailureRank(failure))
                         failure = e;
 
                     if (i + 1 < addresses.Count && clock.ElapsedMilliseconds < timeoutMs)
@@ -1817,12 +1818,25 @@ namespace HCIKonstanz.Colibri.Networking
         }
 
         /// <summary>
-        /// Whether a failed attempt says something about the server rather than about the path to
-        /// it: a refusal (the machine is there, nothing listens on the port) or no answer.
+        /// How much a failed attempt says about the server, to choose the error reported when every
+        /// address failed. A refusal says the most (the machine is there, nothing listens on the
+        /// port), then no answer, then anything else, which is about the path to the server.
         /// </summary>
-        private static bool IsAboutTheServer(Exception failure)
-            => failure is TimeoutException
-                || (failure is SocketException refused && refused.SocketErrorCode == SocketError.ConnectionRefused);
+        /// <remarks>
+        /// An IPv6 address tried after IPv4 on a network without IPv6 fails as unreachable, which hid
+        /// a refused IPv4 address: a server that was down read as a network without a route. A
+        /// refusal beats no answer because Windows reports a refused loopback connection only after
+        /// a second or more: with no server running, "localhost" gave up on 127.0.0.1 after its
+        /// 0.25 s, ::1 then refused, and the timeout pointed to the address and the network rather
+        /// than to starting the server.
+        /// </remarks>
+        private static int FailureRank(Exception failure)
+        {
+            if (failure is SocketException refused && refused.SocketErrorCode == SocketError.ConnectionRefused)
+                return 2;
+
+            return failure is TimeoutException ? 1 : 0;
+        }
 
         /// <summary>An address as a URL writes it: IPv6 in brackets.</summary>
         private static string HostOf(IPAddress address)
