@@ -253,7 +253,8 @@ namespace HCIKonstanz.Colibri.Tests
         /// An address that nothing answers on, an IPv6 address on a network that does not route
         /// IPv6, say, holds up the attempt only for its share of the time. Here the first address is
         /// a loopback port that never answers, and the second is another loopback address, which
-        /// only Linux routes without further setup.
+        /// only Linux routes without further setup. The log gives the loopback address's 250 ms
+        /// as 0.25 s, as the guide does.
         /// </summary>
         [Test]
         public void AnAddressThatDoesNotAnswerLeavesTimeForTheNext()
@@ -261,6 +262,8 @@ namespace HCIKonstanz.Colibri.Tests
             var unanswered = UnansweredPort();
             var other = IPAddress.Parse("127.0.0.2");
             Listen(other, unanswered);
+
+            LogAssert.Expect(LogType.Log, $"Colibri: no answer from 127.0.0.1:{unanswered} within 0.25 s, trying 127.0.0.2:{unanswered}");
 
             var clock = Stopwatch.StartNew();
             var (_, address) = Wait(WebServerConnection.ConnectAnyAsync(new[] { IPAddress.Loopback, other },
