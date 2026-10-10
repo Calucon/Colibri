@@ -927,8 +927,14 @@ describe.skipIf(!hasIPv6Loopback)('VoiceServer on an IPv6 VOICE_HOST', () => {
         await server?.stop();
     });
 
+    // Voice is relayed only from the address of a Unity client of its app, one voice client per
+    // Unity client: two on the IPv6 loopback, one on the IPv4 loopback.
     const start = async (host: string): Promise<dgram.Socket> => {
-        server = new VoiceServer(48000, '/nonexistent-voice-recordings');
+        const unity = new FakeUnityClients();
+        unity.connect('voice-test', '::1');
+        unity.connect('voice-test', '::1');
+        unity.connect('voice-test', '127.0.0.1');
+        server = new VoiceServer(48000, '/nonexistent-voice-recordings', false, unity);
         server.start(0, host);
         const udpSocket = (server as unknown as VoiceServerInternals).udpSocket;
         await once(udpSocket, 'listening');
