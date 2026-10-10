@@ -136,7 +136,7 @@ with its default.
 | `APP_CLIENT_WARNING_THRESHOLD` | `8` | Warn when one app has more clients than this, Unity and web together, admin UI excluded. Common cause: separate projects using the same app name. `0`: never. |
 | `MODEL_TOMBSTONE_SECONDS` | `600` | Seconds a deleted synced object (model) is remembered. Meanwhile updates for it are ignored, so they cannot re-create it, and a re-request after a reconnect is answered with a delete. A client with the object in its scene again ends this early. Cleared with the app's models when its last client leaves. `0`: off. See [Deleted models](protocol.md#deleted-models). |
 | `TLS_CERT`, `TLS_KEY` | empty | PEM files of the certificate with its chain, and of its private key. With both set, the TCP and web ports serve [TLS](#tls) only. |
-| `TRUSTED_PROXIES` | empty | Reverse proxies trusted to report the client's address: IP addresses, CIDR ranges and `loopback`, `linklocal`, `uniquelocal`, separated by commas, as in Express's `trust proxy`. Empty: none. See [Behind a reverse proxy](#behind-a-reverse-proxy). |
+| `TRUSTED_PROXIES` | empty | Reverse proxies trusted to report the client's address: IP addresses, CIDR ranges and `loopback`, `linklocal`, `uniquelocal`, separated by commas, as in Express's `trust proxy`. Voice from them is relayed unchecked ([Voice relay](#voice-relay)). Empty: none. See [Behind a reverse proxy](#behind-a-reverse-proxy). |
 | `TCP_PROXY_PROTOCOL` | `false` | `true`: a connection to the TCP port from a `TRUSTED_PROXIES` address must start with a PROXY protocol header, which names the Unity client. Requires `TRUSTED_PROXIES`. |
 
 The `*_HOST` settings take an IPv4 address, an IPv6 address without brackets, or a host name. The
@@ -184,8 +184,9 @@ client's address:
 - **TCP port:** with `TCP_PROXY_PROTOCOL=true`, a connection from a trusted peer must start with a
   PROXY protocol header, version 1 or 2, which names the Unity client
   ([PROXY protocol](protocol.md#proxy-protocol)). Other peers connect as before.
-- **Voice (UDP):** unchanged. nginx's PROXY protocol covers TCP only, so voice sent through a proxy
-  still shows the proxy's address.
+- **Voice (UDP):** nginx's PROXY protocol covers TCP only, so voice sent through a proxy shows the
+  proxy's address, and is relayed without the [voice check](#voice-relay). Publish the voice port
+  directly, as below, to keep the check.
 
 With Docker, publish the web and TCP ports on `127.0.0.1`, so that clients reach them only through
 the proxy:
@@ -405,9 +406,8 @@ The cost of TLS on a headset was not measured.
 - **REST store** at `/api/store` on the web port, saved to `store.json` in the data directory
   ([REST store](protocol.md#rest-store)).
 - **Voice relay** on UDP port 9013. A voice packet goes to the other clients of the sender's app that
-  send voice to this server. Each packet carries the app as an app id, the hash of the app name
-  ([Voice packets](protocol.md#voice-packets-udp)). Like the app name on TCP, it separates apps but is
-  not access control. Voice is not encrypted.
+  send voice to this server, if a Unity client of that app is connected from the sender's address
+  ([Voice relay](#voice-relay)). Voice is not encrypted.
 
 ### Logs
 
@@ -531,6 +531,30 @@ colibri-unity echoes heartbeats off Unity's main thread, so a long scene load do
 timeout. A debugger stopped at a breakpoint usually pauses all threads and does trigger it. For long
 breakpoints against your own server, raise `TCP_IDLE_TIMEOUT_SECONDS` or set it to `0`. Web clients
 are not affected. Socket.IO's own ping detects a lost web client within about 45 s.
+
+### Voice relay
+
+Each voice packet carries its app as an app id, the hash of the app name
+([Voice packets](protocol.md#voice-packets-udp)). The server relays a packet, and relays voice to its
+sender, only if a Unity client of that app is connected on the TCP port from the packet's source
+address. Anyone can compute an app id and forge a UDP source address. Without the check, one forged
+packet every 2 s would have the server send an app's voice to any address. When the last Unity client
+of an app at an address disconnects, the voice clients at that address stop receiving at once.
+
+Other packets are dropped with a warning, at most once per source every 10 s:
+`Ignoring voice packet from <address>:<port> for app <app id>: no Unity client of that app is connected from <address> ...`.
+This is expected for a moment while a Unity client connects or reconnects. If it persists, the
+client's voice and its TCP connection reach the server from different addresses, e.g. through a proxy.
+
+Voice from an address in `TRUSTED_PROXIES` is relayed without the check, since through a proxy every
+packet comes from the proxy's address. The server logs this once per address:
+`Relaying voice from <address> unchecked: it is in TRUSTED_PROXIES ...`. With `uniquelocal` trusted,
+that is every private address, and a forged private source address gets past the check. To keep the
+check, publish the voice port directly and trust only the proxy's address
+([Behind a reverse proxy](#behind-a-reverse-proxy)).
+
+The check is not access control. Anyone who can reach the TCP port can join any app, and send and
+receive its voice. Voice is not encrypted, with [TLS](#tls) on too.
 
 ## Protocol version
 

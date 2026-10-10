@@ -18,9 +18,9 @@ this is the server's full detail.
   envelope still works; use colibri-web 2.x. See
   [Protocol version checking](#protocol-version-checking).
 - **Voice packets carry the app.** The voice header has a header version and an app id now, and
-  the relay passes a packet on only to the voice clients of the sender's app. Voice packets from
-  colibri-unity 1.x are dropped; use colibri-unity 2.x. See
-  [Voice relay](#voice-relay-breaking-change).
+  the relay passes a packet on only to the voice clients of the sender's app. It relays voice only
+  from the address of a Unity client of that app. Voice packets from colibri-unity 1.x are dropped;
+  use colibri-unity 2.x. See [Voice relay](#voice-relay-breaking-change).
 - **Node 24 and native ESM** to run from source.
 - **Docker image.** The server runs as the non-root `node` user, started through a new
   `colibri-entrypoint.sh` that replaces the node base image's entrypoint; `CMD` is
@@ -132,7 +132,9 @@ this is the server's full detail.
   from any other peer, are refused with a warning at most once a minute per address. The setting
   takes only `true` or `false`, and needs `TRUSTED_PROXIES`. See
   [PROXY protocol](./protocol.md#proxy-protocol).
-- Voice (UDP) still shows the proxy's address: nginx's PROXY protocol covers TCP only.
+- Voice (UDP) still shows the proxy's address: nginx's PROXY protocol covers TCP only. Voice from
+  an address in `TRUSTED_PROXIES` is relayed without the check that its sender is a Unity client's
+  address ([Voice relay](#voice-relay-breaking-change)).
 
 ### Docker
 
@@ -340,8 +342,16 @@ EditMode tests, which `npm run test:vectors` checks in CI.
   `rec_<start time>_ID_<voice id>.wav`. Two recordings with the same voice id that started in the
   same millisecond, as clients of two apps can after a restart, got the same name, and the second
   replaced the first.
-- The app id keeps apps apart but is not access control: anyone who knows an app's name can send
-  and receive its voice. Voice is not encrypted.
+- **Voice only from a Unity client's address.** A packet is relayed, and its sender relayed to,
+  only if a Unity client of the packet's app is connected on the TCP port from the packet's source
+  address. Every sender used to be registered: one packet with a forged source address every 2 s
+  had the server stream an app's voice to that address, for an app id anyone can compute from the
+  app name. The voice clients at an address stop receiving as soon as the last Unity client of
+  their app there disconnects. Other packets are dropped with a warning, at most once per source
+  every 10 s. Voice from an address in `TRUSTED_PROXIES` is relayed unchecked, which is logged once
+  per address. See [Voice relay](./guide.md#voice-relay).
+- The app id keeps apps apart but is not access control: anyone who knows an app's name and can
+  reach the TCP port can join the app and send and receive its voice. Voice is not encrypted.
 - **Voice on IPv6.** A `VOICE_HOST` that is an IPv6 address, `::` included, gets an IPv6 socket
   that takes IPv4 clients as well and relays between the two kinds. The voice socket was always
   IPv4, which cannot bind an IPv6 address: `VOICE_HOST=::` failed with `bind EINVAL` and voice
@@ -616,7 +626,8 @@ The endpoints are documented under [REST store](./protocol.md#rest-store).
   (including both original key bugs), `ConnectionPool`, `Payload` (memoization and the
   `undefined`/`null`/empty-string/invalid-JSON edge cases), the TCP worker and its proxy, the
   Socket.IO server against real `socket.io-client` sockets, the REST store and web server, the
-  voice server (apps kept apart, a client changing app, 1.x voice packets) and the voice packet
+  voice server (apps kept apart, a client changing app, 1.x voice packets, senders matched to
+  the Unity clients' addresses) and the voice packet
   format, `WebLog`, `ClientLogger`, `BroadcastLogger`, the console log, the `DATA_ROOT`
   check, the configuration, the ring buffer, the deprecated serialization helpers, and the inbound
   limits: the backlog count, the rate limit and the merging of held updates, on both transports.
@@ -688,7 +699,8 @@ Not part of this release:
   the admin UI, CORS allows any origin, there are no connection caps, and [TLS](#tls) is off
   unless `TLS_CERT` and `TLS_KEY` are set; the per-client message rate limit is there to catch a
   runaway send loop, not a hostile client, which can open as many connections as it likes. Model objects are plain objects, not null-prototype ones. Voice
-  is kept within an app by an app id anyone can compute from the app name, and is not encrypted.
+  is kept within an app by an app id anyone can compute from the app name, is relayed only from the
+  address of a Unity client of that app, and is not encrypted.
   The structural changes that would have come first (Socket.IO rooms, `Map` keying in `DataStore` and
   the REST store, bounds checks on TCP ingress and egress) landed anyway, on performance and
   robustness grounds.

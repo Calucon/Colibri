@@ -830,14 +830,20 @@ byte XOR it in and multiply by `0x01000193`, modulo 2^32. The empty name hashes 
 (`VoicePacketCodec.AppId`). The server's implementation is `voiceAppId` in
 `src/server/modules/web/voice-packet.ts`.
 
-The server registers the sender of a valid packet as a voice client, by address and port, and passes
-the packet on unchanged to every other voice client with the same `appId`. A client sending another
-`appId` from the same address and port moves to that app. A client is dropped after 2 to 3 s without a
-packet, so it hears voice only while it sends voice itself, as colibri-unity's `VoiceBroadcast` does
-while broadcasting. With `VOICE_RECORDING=true`, the server also saves the samples of each client's PCM
-packets as a `.wav` file in the data directory, named after the time of the client's first packet
-(UTC), its app id, its voice id and its source port:
-`rec_2026-10-09T11_07_58.502Z_app_0xe40c292c_ID_1_port_52114.wav`.
+The server accepts a valid packet only from the address of a Unity client of its app, connected on
+the TCP port. An IPv4-mapped IPv6 address (`::ffff:192.0.2.1`) counts as the IPv4 address it maps.
+From an address in `TRUSTED_PROXIES` it accepts every valid packet: through a proxy, all of them come
+from the proxy's address ([guide](guide.md#voice-relay)).
+
+The server registers the sender of an accepted packet as a voice client, by address and port, and
+passes the packet on unchanged to every other voice client with the same `appId`. A client sending
+another `appId` from the same address and port moves to that app, if a packet for it is accepted. A
+client is dropped after 2 to 3 s without a packet, so it hears voice only while it sends voice itself,
+as colibri-unity's `VoiceBroadcast` does while broadcasting. It is dropped at once when the last Unity
+client of its app at its address disconnects, unless it came from a trusted proxy. With
+`VOICE_RECORDING=true`, the server also saves the samples of each client's PCM packets as a `.wav`
+file in the data directory, named after the time of the client's first packet (UTC), its app id, its
+voice id and its source port: `rec_2026-10-09T11_07_58.502Z_app_0xe40c292c_ID_1_port_52114.wav`.
 
 The server drops these packets, reporting at most one per source address and port every 10 s:
 
@@ -847,11 +853,13 @@ The server drops these packets, reporting at most one per source address and por
 | a header version other than `0` and `2` | error `Ignoring malformed voice packet from <address>:<port>: its header version is <n>, not 2` |
 | shorter than the 11-byte header | error `Ignoring malformed voice packet from <address>:<port>: <n> bytes is shorter than the 11-byte header` |
 | from source port 0 | error `Ignoring malformed voice packet from <address>:<port>: its source port is 0, ...` |
+| from an address without a Unity client of its app | warning `Ignoring voice packet from <address>:<port> for app <app id>: no Unity client of that app is connected from <address>` |
 
 The app id keeps the voice of different apps apart, as the app name does on TCP. It is not access
-control. Anyone who knows an app's name can send voice to its clients and receive theirs. Two app
-names can have the same app id, by chance about 1 in 4 billion for any two, and their voice clients
-then hear each other. Voice is never encrypted. [TLS](#tls) covers only the TCP and web ports.
+control. Anyone who knows an app's name and can reach the TCP port can join the app, and send voice to
+its clients and receive theirs. Two app names can have the same app id, by chance about 1 in 4 billion
+for any two, and their voice clients then hear each other. Voice is never encrypted. [TLS](#tls)
+covers only the TCP and web ports.
 
 ## Known limits
 
