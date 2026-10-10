@@ -49,6 +49,20 @@ describe('UnityClientAddresses', () => {
         expect(addresses.has('192.0.2.3', LAB)).toBe(false);
     });
 
+    it('counts the clients of each app at each address', () => {
+        const { addresses, connected, disconnected } = create([ { app: 'lab', address: '192.0.2.1' } ]);
+        const second = { app: 'lab', address: '::ffff:192.0.2.1' };
+        connected.next(second);
+        connected.next({ app: 'other', address: '192.0.2.1' });
+
+        expect(addresses.count('192.0.2.1', LAB)).toBe(2);
+        expect(addresses.count('192.0.2.1', OTHER)).toBe(1);
+        expect(addresses.count('192.0.2.2', LAB)).toBe(0);
+
+        disconnected.next(second);
+        expect(addresses.count('192.0.2.1', LAB)).toBe(1);
+    });
+
     it('says when the last client of an app at an address has left, and not before', async () => {
         const { addresses, connected, disconnected, left } = create();
         const first = { app: 'lab', address: '192.0.2.1' };

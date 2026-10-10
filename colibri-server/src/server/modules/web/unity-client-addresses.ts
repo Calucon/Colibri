@@ -64,6 +64,11 @@ export class UnityClientAddresses {
         return this.apps.get(address)?.has(appId) === true;
     }
 
+    // How many Unity clients of the app `appId` are connected from `address`, normalized.
+    public count(address: string, appId: number): number {
+        return this.apps.get(address)?.get(appId) ?? 0;
+    }
+
     private add(client: UnityClient): void {
         const address = normalizeAddress(client.address);
         const appId = voiceAppId(client.app);
