@@ -35,15 +35,15 @@ this is the server's full detail.
 - **Both transports check the protocol version.** `PROTOCOL_VERSION` in
   [`protocol.ts`](../src/server/modules/networking/protocol.ts) is the single source of truth
   for the TCP handshake and the Socket.IO query. Until now the version was parsed, stored and
-  logged - and compared against nothing, so a client built against the wrong protocol reconnected
+  logged, but compared against nothing, so a client built against the wrong protocol reconnected
   forever against a server that said nothing unusual.
 
   A mismatched client is refused: it is told why with a `colibri` / `protocol::rejected` message
   (`{ reason, serverVersion, clientVersion }`) and then disconnected, and it never enters the app
   index or `clientConnected$`, so no half-connected ghost reaches the admin UI. The server logs
-  every refusal with the client's address and both versions. The admin UI itself is exempt - it
+  every refusal with the client's address and both versions. The admin UI itself is exempt: it
   ships with the server, and a check that can lock you out of your own console is worse than the
-  mismatch it detects - and its own query was bumped from the stale `'1'` to `'2'`. `clientVersion`
+  mismatch it detects. Its own query was bumped from the stale `'1'` to `'2'`. `clientVersion`
   is always a string: `''` when a Socket.IO client sent no version, with a reason that says
   `'(none)'`. Documented under [Version checking](./protocol.md#version-checking).
 
@@ -53,7 +53,7 @@ this is the server's full detail.
   a refused handshake were logged as `Ignoring message ... without app`. A peer that never closes
   its side is disconnected after 5 s. The same goes for a client cut off for an invalid frame.
 
-- **A Colibri 1.x Unity client is named in the log.** The refusal cannot reach it - it cannot
+- **A Colibri 1.x Unity client is named in the log.** The refusal cannot reach it: it cannot
   decode the new framing, and its own handshake fails to parse before its version is read. The
   server now recognises the 1.x framing and logs one warning naming the client's address, the
   protocol version the server speaks and the Unity package to upgrade, at most once a minute per
@@ -150,13 +150,13 @@ this is the server's full detail.
   `127.0.0.1:9011/` would leave it unhealthy for good, and restarted over and over by anything
   that acts on health.
 - The server runs as the non-root `node` user (uid 1000). The image starts as root only long
-  enough to give `/srv/colibri/data` to `node` - when something in it belongs to someone else, and
-  never following a symlink - and then runs the server as `node`. So a bind-mounted directory that
+  enough to give `/srv/colibri/data` to `node` (when something in it belongs to someone else, and
+  never following a symlink), and then runs the server as `node`. So a bind-mounted directory that
   Docker creates, or a root-owned `data/` left by 1.x, works as it is; before, writing
   `store.json` failed with `EACCES` while `PUT /api/store` kept answering 201. Started with
   `--user`, the container cannot do this, and the server's own startup check reports that it
-  cannot write there (see [Logging](#logging)). When `chown` fails - on a read-only mount, a file
-  system without Unix owners, or without `CAP_CHOWN` - the entrypoint says so and starts the
+  cannot write there (see [Logging](#logging)). When `chown` fails (on a read-only mount, a file
+  system without Unix owners, or without `CAP_CHOWN`), the entrypoint says so and starts the
   server anyway, which then checks whether it can write there. A `DATA_ROOT` outside
   `/srv/colibri/data` is not touched, and `docker exec` opens a root shell by default.
 - Only `/srv/colibri/data` belongs to `node`. The server's own code stays root's, so the user the
@@ -189,9 +189,9 @@ this is the server's full detail.
   escaped and continuation lines indented, so text from a client cannot pass for a server line,
   and a message over 8 KiB is cut.
 - **The server checks at startup that `DATA_ROOT` is writable.** If it is not, it prints a
-  banner on stderr naming the path, the error and its uid, with a fix for that error - `chown`
+  banner on stderr naming the path, the error and its uid, with a fix for that error (`chown`
   or a named volume for missing permissions, dropping `:ro` for a read-only mount, moving a file
-  that is in the way, freeing space on a full disk - and logs an error in the admin UI. It keeps
+  that is in the way, freeing space on a full disk), and logs an error in the admin UI. It keeps
   running without persistence, but no longer silently: before, `PUT /api/store` answered 201 and
   the only sign that nothing was saved was an `EACCES` in the admin UI's log.
 - **`broadcast::` traffic is logged**, at Debug level and tagged `broadcastTraffic`, so the
@@ -314,7 +314,7 @@ Checked end to end against colibri-unity 2.0.0, with a decoding proxy in front o
   **byte-verbatim**: a `broadcast::string` payload arrives as `"hello from unity round 1"`, 26 bytes
   for 24 characters, while the `log` channel's `verification log line 1` stays unquoted at 23 bytes
   for 23 characters. What a client sends is what the other side receives, quoting included, with
-  no re-serialization in between - which is what `Payload` was meant to achieve.
+  no re-serialization in between. That is what `Payload` was meant to achieve.
 - **Heartbeat/latency merge.** The 100 ms server heartbeat was echoed continuously by the Unity
   client; a raw client counted 369 heartbeats in one 40 s session, and the client-side 2 s watchdog
   never fired across many minutes of connected time.
@@ -519,7 +519,7 @@ EditMode tests, which `npm run test:vectors` checks in CI.
 - **A `PUT` without a JSON body is refused.** With no body, an empty one, or a `Content-Type`
   other than JSON or form data (`text/plain`, say), `PUT /api/store/:app/:name` answers 400 with
   an error that names `Content-Type: application/json`, and stores nothing. It used to store
-  `undefined` - a name listed under its app that `GET` and `DELETE` then answered 404 for - or,
+  `undefined` (a name listed under its app that `GET` and `DELETE` then answered 404 for) or,
   for an empty JSON body, `{}`. colibri-unity's `Store` and colibri-web's `setRestObject` send a
   JSON body for every value, `null` included, except that `setRestObject(key, undefined)` sends
   none: it now gets `false` back and stores nothing, where it used to store `{}`. Store `null`
