@@ -417,6 +417,12 @@ rationale, migration steps, and what the Editor verification did and did not cov
   in that frame. A receiver destroyed without `StopPlayback`, as the VoiceChat sample does, stops
   receiving and frees its Opus decoder; its buffer used to grow with every packet. A packet that
   arrives before the receiver's `Start` is dropped; with an output rate other than 48 kHz it threw.
+  The playback buffer was a List that the main thread and the audio thread changed unguarded, which
+  now and then threw; it is a lock-free ring now, and the audio thread no longer allocates.
+  Fast-forward threw on a frame longer than its latency, and at 48 kHz acted at half the *Fast
+  Forward Latency Milliseconds* set; the latency now counts at the output rate. `StartPlayback`
+  twice with one voice id played every packet twice. It now changes nothing, another id replaces
+  the one playing, and `StopPlayback` when nothing plays does nothing.
 - **`Store`** serializes with Newtonsoft instead of `JsonUtility`, which cannot handle dictionaries,
   properties, or top-level arrays and so silently disagreed with what `Sync` can carry. What that
   costs a 1.x project is under Breaking changes. A value that cannot be converted, or a saved
@@ -761,6 +767,9 @@ otherwise spend on their prototype, so:
   960-sample frames and no lost audio from a 44.1 kHz microphone, an encoder that always fails, and
   resampling without drift however the stream is cut. `VoiceDecoderTests` cover received packets:
   PCM plays, and an Opus decoder that cannot be created or fails drops only Opus, with one report.
+  `VoicePlaybackBufferTests` and `VoicePlaybackTests` cover the hand-over to the audio thread: a
+  writer and a reader on two threads, frames longer than the fast-forward latency, and starting and
+  stopping twice.
   `FrameCodecTests` also covers the colon at either end of a handshake field.
 - New PlayMode assembly `HCIKonstanz.Colibri.E2E` (`Assets/Tests/`, in the development project
   rather than the shipped package). A real Unity client, a real colibri-server and a raw v3 peer as
@@ -853,7 +862,7 @@ otherwise spend on their prototype, so:
   licence secret. Voice chat has no end-to-end coverage (it needs a microphone); only the choice of
   the server's address, the packet format, the queue that hands received packets to the main
   thread, how recorded audio is resampled and cut into frames, and how received packets are
-  decoded are unit-tested.
+  decoded and handed to the audio thread are unit-tested.
 - `run-tests.mjs --stripping` builds a Release IL2CPP player with *Managed Stripping Level* High and
   checks inside it that every `[Sync]` member survived with its `[Sync]` and still syncs. Off by
   default; skipped with a notice without the platform's IL2CPP module.
