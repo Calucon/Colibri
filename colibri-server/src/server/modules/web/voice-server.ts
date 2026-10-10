@@ -69,6 +69,9 @@ interface VoiceClientGroup {
     readonly address: string;
     readonly appId: number;
     readonly clients: Set<VoiceClient>;
+    // When a Unity client of its app last left its address and left fewer of them than voice
+    // clients here, if the extra ones have not been dropped since (see onUnityClientsLeft).
+    shrunkAt: number | undefined;
 }
 
 // Why a voice packet may be relayed: there is room for its sender among the voice clients of its
@@ -84,7 +87,18 @@ const groupKey = (address: string, appId: number): string => `${address} ${appId
 // Waiting for the 2 s disconnect timeout would cut that client's voice for 2 to 3 s. Taking the
 // place of one still sending would let any forged packet take it, and two clients that both send
 // would take it from each other at packet rate, cutting their recordings into 20 ms pieces.
+// It is also how long after a Unity client leaves the voice clients over those left at its address
+// are dropped (see onUnityClientsLeft).
 const VOICE_CLIENT_GONE_MILLIS = 500;
+
+// The voice client in `group` that has gone the longest without a packet.
+const stalestOf = function (group: VoiceClientGroup): VoiceClient | undefined {
+    let stalest: VoiceClient | undefined;
+    for (const client of group.clients) {
+        if (!stalest || client.lastHeartbeat < stalest.lastHeartbeat) stalest = client;
+    }
+    return stalest;
+};
 
 // What getAppClients hands back for an app with no voice clients.
 const NO_CLIENTS: readonly VoiceClient[] = [];
@@ -431,26 +445,48 @@ export class VoiceServer extends Service {
     // Makes room in `group` for `source` by dropping the voice client that has gone the longest
     // without a packet, if that is VOICE_CLIENT_GONE_MILLIS or more.
     private dropGoneVoiceClient(group: VoiceClientGroup, source: string, nowMillis: number): boolean {
-        let stalest: VoiceClient | undefined;
-        for (const client of group.clients) {
-            if (!stalest || client.lastHeartbeat < stalest.lastHeartbeat) stalest = client;
-        }
+        const stalest = stalestOf(group);
         if (!stalest || nowMillis - stalest.lastHeartbeat < VOICE_CLIENT_GONE_MILLIS) return false;
 
         this.dropVoiceClient(stalest, `no packet for ${nowMillis - stalest.lastHeartbeat} ms, and ${source} takes its place`);
         return true;
     }
 
-    // The last Unity client of the app `appId` at `address` has left. The voice clients it let in
-    // stop receiving now rather than once they go quiet: one that kept sending, forged packets
-    // included, would otherwise keep receiving the app's voice for as long as it liked.
+    // A Unity client of the app `appId` has left `address`. With none left there, the voice clients
+    // they let in stop receiving now rather than once they go quiet: one that kept sending, forged
+    // packets included, would otherwise keep receiving the app's voice for as long as it liked.
+    // With fewer left than voice clients, the extra ones are dropped VOICE_CLIENT_GONE_MILLIS later
+    // (trimGroups), once the voice client of the one that left has gone quiet. Right now, the one
+    // that has gone the longest without a packet may well be one still sending: a client that quits
+    // closes its TCP connection and its voice socket at about the same time.
     private onUnityClientsLeft(address: string, appId: number): void {
         const group = this.groups.get(groupKey(address, appId));
         if (!group) return;
 
+        const unityClients = this.unityClients.count(address, appId);
+        if (unityClients > 0) {
+            if (group.clients.size > unityClients) group.shrunkAt = Date.now();
+            return;
+        }
         // dropVoiceClient takes each out of the set: deleting the entry being visited is safe.
         for (const client of group.clients) {
             this.dropVoiceClient(client, `no Unity client of app ${formatAppId(appId)} is connected from ${address} any more`);
+        }
+    }
+
+    // Drops the voice clients each group has over the Unity clients of its app left at its address,
+    // the one that has gone the longest without a packet first, VOICE_CLIENT_GONE_MILLIS after one
+    // of those Unity clients left (see onUnityClientsLeft).
+    private trimGroups(nowMillis: number): void {
+        for (const group of this.groups.values()) {
+            if (group.shrunkAt === undefined || nowMillis - group.shrunkAt < VOICE_CLIENT_GONE_MILLIS) continue;
+
+            group.shrunkAt = undefined;
+            const unityClients = this.unityClients.count(group.address, group.appId);
+            while (group.clients.size > unityClients) {
+                this.dropVoiceClient(stalestOf(group)!,
+                    `${group.address} has only ${unityClients} Unity client(s) of app ${formatAppId(group.appId)} left`);
+            }
         }
     }
 
@@ -470,7 +506,7 @@ export class VoiceServer extends Service {
         const key = groupKey(normalized, client.appId);
         let group = this.groups.get(key);
         if (!group) {
-            group = { key, address: normalized, appId: client.appId, clients: new Set() };
+            group = { key, address: normalized, appId: client.appId, clients: new Set(), shrunkAt: undefined };
             this.groups.set(key, group);
         }
         group.clients.add(client);
@@ -575,9 +611,10 @@ export class VoiceServer extends Service {
             // Remove inactive clients
             if (now - client.lastHeartbeat > this.disconnectTimeoutMillis) this.dropVoiceClient(client);
         }
+        this.trimGroups(now);
 
-        // Those just timed out, and those dropped since the last check for another reason (see
-        // dropVoiceClient's callers).
+        // Those just timed out or trimmed, and those dropped since the last check for another
+        // reason (see dropVoiceClient's callers).
         const pendingRecordings = this.droppedRecordings;
         this.droppedRecordings = [];
         if (pendingRecordings.length === 0) return;

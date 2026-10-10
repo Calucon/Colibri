@@ -721,6 +721,48 @@ describe('VoiceServer', () => {
             expect(ignoredReports()).toHaveLength(1);
         });
 
+        // Two headsets behind one NAT address, one of which quits. Its voice client may well have
+        // sent its last packet after the other's latest, so the one that has gone the longest
+        // without a packet is the right one to drop only once the one that left has gone quiet.
+        it('drops the voice clients over the Unity clients of their app left at an address 500 ms after one leaves, the quietest first', async () => {
+            const leaving = unity.connect('lab', '192.0.2.1');
+            unity.connect('lab', '192.0.2.1');
+
+            vi.useFakeTimers({ toFake: [ 'Date' ] });
+            try {
+                const start = Date.now();
+                deliver(internals.udpSocket, '192.0.2.1', 5001, voicePacket(1, 0, [], LAB));
+                vi.setSystemTime(start + 10);
+                deliver(internals.udpSocket, '192.0.2.1', 5003, voicePacket(3, 0, [], LAB));
+                vi.setSystemTime(start + 20);
+                deliver(internals.udpSocket, '192.0.2.1', 5001, voicePacket(1, 1, [], LAB));
+                unity.disconnect(leaving);
+                await settled();
+
+                // The headset left sends on.
+                vi.setSystemTime(start + 519);
+                deliver(internals.udpSocket, '192.0.2.1', 5001, voicePacket(1, 2, [], LAB));
+                await internals.checkClientsDisconnected();
+                expect([ ...internals.clients.keys() ].sort()).toEqual([ '192.0.2.1:5001', '192.0.2.1:5003' ]);
+
+                vi.setSystemTime(start + 520);
+                await internals.checkClientsDisconnected();
+                expect([ ...internals.clients.keys() ]).toEqual([ '192.0.2.1:5001' ]);
+
+                // Nor is there room for it again while the other sends.
+                deliver(internals.udpSocket, '192.0.2.1', 5003, voicePacket(3, 1, [], LAB));
+                expect([ ...internals.clients.keys() ]).toEqual([ '192.0.2.1:5001' ]);
+            } finally {
+                vi.useRealTimers();
+            }
+
+            const dropped = logs.filter(l => l.origin === 'VoiceServer' && /Unity client\(s\) of app .* left$/.test(l.message));
+            expect(dropped.map(l => [ l.level, l.message, l.metadata ])).toEqual([
+                [ LogLevel.Debug, `Voice client 192.0.2.1:5003 disconnected ID: 3: 192.0.2.1 has only 1 Unity client(s) of app ${appHex(LAB)} left`, { connection: true } ],
+            ]);
+            expect(noRoomReports()).toHaveLength(1);
+        });
+
         // TCPServerProxy reports a second handshake as the client leaving and connecting again.
         it('keeps the voice clients of a Unity client that handshakes again into the same app', async () => {
             const client = unity.connect('lab', '192.0.2.1');

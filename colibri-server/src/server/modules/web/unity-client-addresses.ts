@@ -16,7 +16,7 @@ export interface UnityClientSource {
     readonly clientDisconnected$: Observable<UnityClient>;
 }
 
-// An app, and an address its last Unity client there has left.
+// An app, and an address one of its Unity clients there has left.
 export interface UnityClientLeft {
     address: string;
     appId: number;
@@ -54,7 +54,8 @@ export class UnityClientAddresses {
         source.clientDisconnected$.subscribe(client => this.remove(client));
     }
 
-    // Each time the last Unity client of an app at an address leaves.
+    // Each time a Unity client of an app leaves an address, unless another is back in its place at
+    // once (see remove). count() then says how many are left there.
     public get left$(): Observable<UnityClientLeft> {
         return this.leftStream.asObservable();
     }
@@ -87,19 +88,21 @@ export class UnityClientAddresses {
         const count = counts?.get(appId);
         if (!counts || count === undefined) return;
 
-        if (count > 1) {
-            counts.set(appId, count - 1);
-            return;
+        const left = count - 1;
+        if (left > 0) {
+            counts.set(appId, left);
+        } else {
+            counts.delete(appId);
+            if (counts.size === 0) this.apps.delete(address);
         }
-        counts.delete(appId);
-        if (counts.size === 0) this.apps.delete(address);
 
         // A client that handshakes again on its connection is reported gone and then connected,
-        // one right after the other (TCPServerProxy.onClientConnected). Told once that is over, so
-        // that one staying in its app does not lose its voice, nor have its recording cut in two.
-        // A microtask still runs before the next voice packet is handled.
+        // one right after the other (TCPServerProxy.onClientConnected). Told once that is over, and
+        // only if fewer are left then, so that one staying in its app does not lose its voice, nor
+        // have its recording cut in two. A microtask still runs before the next voice packet is
+        // handled.
         queueMicrotask(() => {
-            if (!this.has(address, appId)) this.leftStream.next({ address, appId });
+            if (this.count(address, appId) <= left) this.leftStream.next({ address, appId });
         });
     }
 }

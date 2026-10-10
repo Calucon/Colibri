@@ -63,7 +63,7 @@ describe('UnityClientAddresses', () => {
         expect(addresses.count('192.0.2.1', LAB)).toBe(1);
     });
 
-    it('says when the last client of an app at an address has left, and not before', async () => {
+    it('says each time a client of an app leaves an address, once it has been counted out', async () => {
         const { addresses, connected, disconnected, left } = create();
         const first = { app: 'lab', address: '192.0.2.1' };
         const second = { app: 'lab', address: '::ffff:192.0.2.1' };
@@ -71,27 +71,30 @@ describe('UnityClientAddresses', () => {
         connected.next(second);
 
         disconnected.next(first);
-        await settled();
-        expect(addresses.has('192.0.2.1', LAB)).toBe(true);
         expect(left).toEqual([]);
+        await settled();
+        expect(addresses.count('192.0.2.1', LAB)).toBe(1);
+        expect(left).toEqual([ { address: '192.0.2.1', appId: LAB } ]);
 
         disconnected.next(second);
         expect(addresses.has('192.0.2.1', LAB)).toBe(false);
         await settled();
-        expect(left).toEqual([ { address: '192.0.2.1', appId: LAB } ]);
+        expect(left).toEqual([ { address: '192.0.2.1', appId: LAB }, { address: '192.0.2.1', appId: LAB } ]);
     });
 
     // TCPServerProxy reports a second handshake on a connection as the client leaving, then connecting.
     it('says nothing for a client that leaves and is back in its app in one go', async () => {
         const { addresses, connected, disconnected, left } = create();
         const client = { app: 'lab', address: '192.0.2.1' };
+        const other = { app: 'lab', address: '192.0.2.1' };
         connected.next(client);
+        connected.next(other);
 
         disconnected.next(client);
         connected.next({ ...client });
         await settled();
 
-        expect(addresses.has('192.0.2.1', LAB)).toBe(true);
+        expect(addresses.count('192.0.2.1', LAB)).toBe(2);
         expect(left).toEqual([]);
     });
 
