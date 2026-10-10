@@ -829,24 +829,24 @@ otherwise spend on their prototype, so:
 - The send-rate limit, the connect timeout and the outbox cap have tests of their own. In EditMode,
   `SendRateTests` drive the limit on a clock of their own: the leading edge, a burst, the held
   update going out when its interval is up, 30 a second at 72, 90 and 120 fps, a limit of `0`,
-  showing and hiding, a server value replacing a held change, a delete from another client
-  dropping it, and where the limit comes from. `ModelUpdateTests` cover an update reaching a model
-  before any object of its type has woken; `AppNameCheckTests` the shared-app-name warning;
-  `SetupWindowTests` that a value the Setup window marks as an error stays out of the configuration
-  without holding back a valid change or undoing one made elsewhere;
-  `ConnectTimeoutTests` an attempt nothing answers, cancelling one, and a refusal reported at
-  once; `ServerAddressTests` IP addresses with and without brackets, the order a name's addresses
-  are tried in, their shares of the connect timeout, and moving on from an address that refuses or
-  does not answer, IPv6 then IPv4 on the loopback; `VoicePacketQueueTests` voice packets from several receive threads at once, a listener that throws, and the app id of an App Name the handshake changes; `OutboxTests`
-  the 10 000-message cap, connected and not; `RemoteLoggingTests` the missing-lines note. In
-  PlayMode, `SyncModelTests` and `SyncTransformTests` run the limit end to end (a burst, a limit of
-  `0`, what is held going out on quit, pause and focus loss, a destroy and a delete from another
-  client, hiding a moving object) and objects built from a disabled template, visible and hidden;
-  `ReconnectTests` a drop and reconnect within one frame and the missing-lines note;
-  `ProtocolMismatchDetectionTests` an attempt nothing answers, given up after 5 s and retried.
-  `FakeColibriServer` now stays silent until it has read the handshake, as colibri-server does;
-  its old behaviour, heartbeating before it has read the handshake and refusing after, is kept as
-  `HeartbeatThenRefuse`.
+  showing and hiding, a server value replacing a held change, a delete from another client dropping
+  it, and where the limit comes from. `ModelUpdateTests` cover an update reaching a model before any
+  object of its type has woken; `AppNameCheckTests` the shared-app-name warning; `SetupWindowTests`
+  that a value the Setup window marks as an error stays out of the configuration without holding
+  back a valid change or undoing one made elsewhere; `ConnectTimeoutTests` an attempt nothing
+  answers, cancelling one, and a refusal reported at once; `ServerAddressTests` IP addresses with
+  and without brackets, the order a name's addresses are tried in, their shares of the connect
+  timeout, and moving on from an address that refuses or does not answer, IPv6 then IPv4 on the
+  loopback; `VoicePacketQueueTests` voice packets from several receive threads at once, a listener
+  that throws, and the app id of an App Name the handshake changes; `OutboxTests` the 10 000-message
+  cap, connected and not; `RemoteLoggingTests` the missing-lines note. In PlayMode, `SyncModelTests`
+  and `SyncTransformTests` run the limit end to end (a burst, a limit of `0`, what is held going out
+  on quit, pause and focus loss, a destroy and a delete from another client, hiding a moving object)
+  and objects built from a disabled template, visible and hidden; `ReconnectTests` a drop and
+  reconnect within one frame and the missing-lines note; `ProtocolMismatchDetectionTests` an attempt
+  nothing answers, given up after 5 s and retried. `FakeColibriServer` now stays silent until it has
+  read the handshake, as colibri-server does; its old behaviour, heartbeating before it has read the
+  handshake and refusing after, is kept as `HeartbeatThenRefuse`.
 - The tests that need a port that never answers are skipped on Windows, which refuses a
   connection to a full listen backlog instead of leaving it unanswered:
   `ConnectTimeoutTests.AnAttemptNothingAnswersIsGivenUpAfterTheTimeout` and
