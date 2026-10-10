@@ -826,9 +826,9 @@ client's packets can mix both.
 
 `appId` is the 32-bit FNV-1a hash of the app name's UTF-8 bytes: start with `0x811c9dc5`, then for each
 byte XOR it in and multiply by `0x01000193`, modulo 2^32. The empty name hashes to `0x811c9dc5`, `a` to
-`0xe40c292c`. colibri-unity hashes the *App Name* of its Colibri configuration
-(`VoicePacketCodec.AppId`). The server's implementation is `voiceAppId` in
-`src/server/modules/web/voice-packet.ts`.
+`0xe40c292c`. colibri-unity hashes the app name its TCP handshake sends: the *App Name* of its Colibri
+configuration, with `::` and a `:` at either end replaced by `_` (`VoicePacketCodec.AppId`). The
+server's implementation is `voiceAppId` in `src/server/modules/web/voice-packet.ts`.
 
 The server accepts a valid packet only from the address of a Unity client of its app, connected on
 the TCP port. An IPv4-mapped IPv6 address (`::ffff:192.0.2.1`) counts as the IPv4 address it maps.
