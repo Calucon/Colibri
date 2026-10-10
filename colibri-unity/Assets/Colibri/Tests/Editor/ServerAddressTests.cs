@@ -292,6 +292,28 @@ namespace HCIKonstanz.Colibri.Tests
         }
 
         /// <summary>
+        /// An IPv6 address the device has no route to, tried after a refused IPv4 address, does not
+        /// hide the refusal: on a network without IPv6, a server that is down reads as down, not as
+        /// a network without a route. The IPv6 address here is link-local without a scope, which no
+        /// socket connects to. Windows reports the loopback refusal only after the 0.25 s a
+        /// loopback address gets here, as no answer.
+        /// </summary>
+        [Test]
+        public void AnUnreachableAddressAfterARefusedOneDoesNotHideTheRefusal()
+        {
+            var port = ClosedIPv4Port();
+
+            LogAssert.Expect(LogType.Log, new Regex(
+                $@"^Colibri: no (connection to 127\.0\.0\.1:{port} \(ConnectionRefused\)|answer from 127\.0\.0\.1:{port} within [0-9.]+ s), trying \[fe80::1\]:{port}$"));
+
+            var e = Assert.Catch(() => Wait(WebServerConnection.ConnectAnyAsync(new[] { IPAddress.Loopback, IPAddress.Parse("fe80::1") },
+                "colibri.example.org", port, 3000, 3000, Attempting, CancellationToken.None)));
+
+            Assert.That(e is TimeoutException || (e is SocketException refused && refused.SocketErrorCode == SocketError.ConnectionRefused),
+                Is.True, $"The unreachable address's error was reported: {e}");
+        }
+
+        /// <summary>
         /// An address that nothing answers on, an IPv6 address on a network that does not route
         /// IPv6, say, holds up the attempt only for its share of the time. Here the first address is
         /// a loopback port that never answers, and the second is another loopback address, which
@@ -439,6 +461,16 @@ namespace HCIKonstanz.Colibri.Tests
         }
 
         private static int Port(TcpListener listener) => ((IPEndPoint)listener.LocalEndpoint).Port;
+
+        /// <summary>A port nothing listens on, on the IPv4 loopback.</summary>
+        private static int ClosedIPv4Port()
+        {
+            var listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            var port = Port(listener);
+            listener.Stop();
+            return port;
+        }
 
         /// <summary>A port nothing listens on, on either loopback.</summary>
         private int ClosedPort()

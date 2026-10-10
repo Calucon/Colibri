@@ -1737,8 +1737,8 @@ namespace HCIKonstanz.Colibri.Networking
         /// <param name="totalTimeoutMs">The time the whole connection had, lookup included, which a timeout names.</param>
         /// <param name="attempting">See <see cref="OpenSessionAsync"/>.</param>
         /// <returns>The connected socket, and the address it is connected to.</returns>
-        /// <exception cref="TimeoutException">The time was up before an address answered.</exception>
-        /// <exception cref="SocketException">Every address failed: the last one's error, usually this one.</exception>
+        /// <exception cref="TimeoutException">An address did not answer within its time before any refused, or no time was left to try one.</exception>
+        /// <exception cref="SocketException">Every address failed: the first refusal, or with neither a refusal nor a missing answer, the first address's error.</exception>
         /// <exception cref="OperationCanceledException"><paramref name="token"/> was cancelled first.</exception>
         /// <exception cref="ObjectDisposedException">A socket was closed while connecting.</exception>
         /// <remarks>Internal for the EditMode tests.</remarks>
@@ -1779,7 +1779,12 @@ namespace HCIKonstanz.Colibri.Networking
                     // Refused, unreachable, an address family this device has no sockets for, no
                     // answer within this address's share, or anything else a runtime throws for one
                     // address family and not the other: the next address may still answer.
-                    failure = e;
+                    // Reported if none does: the first refusal or missing answer, which says what is
+                    // wrong with the server, else the first error. An IPv6 address tried after IPv4
+                    // on a network without IPv6 fails as unreachable, which hid a refused IPv4
+                    // address: a server that was down read as a network without a route.
+                    if (failure == null || (IsAboutTheServer(e) && !IsAboutTheServer(failure)))
+                        failure = e;
 
                     if (i + 1 < addresses.Count && clock.ElapsedMilliseconds < timeoutMs)
                     {
@@ -1801,8 +1806,7 @@ namespace HCIKonstanz.Colibri.Networking
 
             token.ThrowIfCancellationRequested();
 
-            // The last address's error: the one tried last is the fallback, IPv6 after IPv4, and
-            // whether it refused or did not answer is what tells what is wrong.
+            // Whether the server refused or did not answer is what tells what is wrong.
             if (failure != null && !(failure is TimeoutException))
                 ExceptionDispatchInfo.Capture(failure).Throw();
 
@@ -1811,6 +1815,14 @@ namespace HCIKonstanz.Colibri.Networking
             throw new TimeoutException(
                 $"{host}:{port} did not answer within {(totalTimeoutMs / 1000f).ToString("0.#", CultureInfo.InvariantCulture)} s", failure);
         }
+
+        /// <summary>
+        /// Whether a failed attempt says something about the server rather than about the path to
+        /// it: a refusal (the machine is there, nothing listens on the port) or no answer.
+        /// </summary>
+        private static bool IsAboutTheServer(Exception failure)
+            => failure is TimeoutException
+                || (failure is SocketException refused && refused.SocketErrorCode == SocketError.ConnectionRefused);
 
         /// <summary>An address as a URL writes it: IPv6 in brackets.</summary>
         private static string HostOf(IPAddress address)
