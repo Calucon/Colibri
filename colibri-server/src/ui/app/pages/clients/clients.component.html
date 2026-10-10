@@ -70,6 +70,7 @@
                 @if (row.tls) {
                   <span class="tls" title="Encrypted: TLS"><i class="pi pi-lock" aria-hidden="true"></i> TLS</span>
                 }
+                <span class="version" title="The protocol version it announced">v{{ row.version }}</span>
               </td>
               <td class="c-version">v{{ row.version }}</td>
               <td class="c-connected num" [title]="'Since ' + (row.connectedAt | date:'yyyy-MM-dd HH:mm:ss')" data-label="Connected">{{ row.connected }}</td>

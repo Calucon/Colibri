@@ -113,9 +113,21 @@ td.c-log a {
     font-weight: 500;
 }
 
-@media (max-width: 999.98px) {
+// the protocol version under the transport where its own column does not fit
+td.c-transport .version {
+    display: none;
+    color: var(--text-muted);
+    font-size: 12px;
+    line-height: 18px;
+}
+
+@media (min-width: 700px) and (max-width: 999.98px) {
     .c-version {
         display: none;
+    }
+
+    td.c-transport .version {
+        display: block;
     }
 }
 

@@ -98,6 +98,8 @@ describe('ClientsComponent', () => {
         expect(web).toEqual(expect.objectContaining({ label: 'web1', byId: true, transport: 'Web', connected: '1 min', in: '-', color: clientColor(3) }));
         expect(component.summary()).toBe('2 connected: 1 TCP, 1 web');
         expect(harness.routeNativeElement!.querySelector('tr[data-id="q1"] td.c-limit')?.textContent).toContain('4 held');
+        // under the transport too, for tablets, where the protocol column is left out
+        expect(harness.routeNativeElement!.querySelector('tr[data-id="q1"] td.c-transport .version')?.textContent).toBe('v2');
     });
 
     it('shows the app in the address only, and links each client to its log', async () => {
