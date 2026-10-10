@@ -90,6 +90,7 @@ data, and read the log, the connected clients and the server settings. Run the s
 | Warning naming `CLIENT_MESSAGE_RATE_LIMIT` | The named client sends too much, usually every frame | Cap that client's send rate |
 | No voice, and the log shows `Ignoring voice packet from <address>:<port> for app <app id>: no Unity client of that app is connected from <address>`, logged once that source's voice has been dropped for 3 s | The voice comes from another address than the Unity client's TCP connection: a proxy, NAT, or TCP fell back to IPv6 because the server name's IPv4 address does not answer. Or the Unity app never connects over TCP. | See [Voice relay](docs/guide.md#voice-relay) |
 | Every client is logged at the reverse proxy's address | The server does not trust the proxy | Set `TRUSTED_PROXIES`, and for Unity clients `TCP_PROXY_PROTOCOL` ([Behind a reverse proxy](docs/guide.md#behind-a-reverse-proxy)) |
+| Admin UI shows TLS *Off* and no TLS for web clients behind a proxy that serves HTTPS | The server does not trust the proxy, or the proxy sends no `X-Forwarded-Proto` | Set `TRUSTED_PROXIES` and `proxy_set_header X-Forwarded-Proto $scheme;` ([Behind a reverse proxy](docs/guide.md#behind-a-reverse-proxy)) |
 | Admin UI Log page empty after a restart | The admin UI keeps only the last 20,000 messages, in memory | Use `docker logs colibri`, filtered by `CONSOLE_LOG_LEVEL` |
 
 ## Development
