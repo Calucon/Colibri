@@ -581,6 +581,9 @@ client disconnects, the voice clients of its app at its address over the number 
 there are dropped within 1.5 s, the one quiet the longest first. With none left, all of them are
 dropped at once.
 
+The server learns a voice client's address only from the packets it sends, and drops a voice client
+after 2 to 3 s without one. A client that only listens receives nothing: it has to send voice too.
+
 Other packets are dropped. A Unity client's voice often starts a moment before its TCP handshake is
 in, so the first packet dropped from a source is only a debug line. The source is reported as a
 warning once its packets have been dropped for 3 s, at most once every 10 s:
