@@ -817,6 +817,9 @@ datagram: an 11-byte header, then the audio. All integers are little-endian.
 | 7 | 4 | `appId`: the app id of the sender's app |
 | 11 | rest | PCM: mono `i16` samples. Opus: one Opus packet. |
 
+The codec is per packet. colibri-unity sends a frame that Opus fails to encode as PCM, so one
+client's packets can mix both.
+
 `appId` is the 32-bit FNV-1a hash of the app name's UTF-8 bytes: start with `0x811c9dc5`, then for each
 byte XOR it in and multiply by `0x01000193`, modulo 2^32. The empty name hashes to `0x811c9dc5`, `a` to
 `0xe40c292c`. colibri-unity hashes the *App Name* of its Colibri configuration
