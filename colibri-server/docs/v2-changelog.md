@@ -218,9 +218,10 @@ this is the server's full detail.
   `source-map-support/register` replaced with `--enable-source-maps`.
 - Dependencies updated: Angular 17 → 22.1, Express 4 → 5, dotenv 16 → 17. engine.io 6.6.11 and
   qs 6.16.0 fix the advisories `npm audit` reported against them (GHSA-2gc4-cqfq-p2gv,
-  GHSA-x5fp-wj9c-mxmx, GHSA-4mjr-xmp4-gh2g), and proxy-addr 2.0.8, which Express uses, fixes
-  GHSA-jqcg-44mw-7w3h. That one concerns trusted proxy addresses, and the server trusts no
-  proxy, so it could not be exploited here.
+  GHSA-x5fp-wj9c-mxmx, GHSA-4mjr-xmp4-gh2g), and proxy-addr 2.0.8 fixes GHSA-jqcg-44mw-7w3h,
+  which concerns trusted proxy addresses.
+- proxy-addr is now a direct dependency: `TRUSTED_PROXIES` uses it for `X-Forwarded-For` and for
+  the PROXY protocol's trust check.
 - `package-lock.json` un-ignored and committed; Docker build uses `npm ci` instead of `npm install`.
 - Added Vitest (`test`/`bench` scripts), a `test/` unit suite, and a `bench/` harness
   (`connection-pool.bench.ts`, `data-store.bench.ts`, `framing.bench.ts`). Benchmark results are
