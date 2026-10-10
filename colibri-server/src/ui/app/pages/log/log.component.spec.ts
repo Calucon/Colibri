@@ -105,12 +105,14 @@ describe('LogComponent', () => {
         component.pause();
         live({ id: 'c' });
         live({ id: 'a', count: 1, created: 2000 });
+        live({ id: 'c', count: 1, created: 3000 });
 
         expect(component.rows().map(r => r.id)).toEqual([ 'a', 'b' ]);
-        expect(component.newLines()).toBe(2);
+        // a repeat is not a new line
+        expect(component.newLines()).toBe(1);
 
         component.follow();
-        expect(component.rows().map(r => r.id)).toEqual([ 'b', 'c', 'a' ]);
+        expect(component.rows().map(r => r.id)).toEqual([ 'b', 'a', 'c' ]);
         expect(component.newLines()).toBe(0);
     });
 

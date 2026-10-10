@@ -57,10 +57,6 @@ export class LogService {
     /** The loaded lines in the order they last occurred, oldest first. */
     public readonly messages = this._messages.asReadonly();
 
-    private readonly _appended = signal(0);
-    /** How many lines were added at the end, new or repeated, since the page loaded. */
-    public readonly appended = this._appended.asReadonly();
-
     private readonly _loading = signal(true);
     /** Whether the history for the current filters is still on its way. */
     public readonly loading = this._loading.asReadonly();
@@ -234,6 +230,5 @@ export class LogService {
         }
 
         this._messages.set(messages);
-        this._appended.update(n => n + added.size);
     }
 }

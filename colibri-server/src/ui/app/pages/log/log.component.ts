@@ -40,7 +40,7 @@ export class LogComponent implements AfterViewInit, OnDestroy {
     // While paused, the page shows the lines it had then: new lines, repeats moving to the end and
     // the oldest lines making room would all shift what is being read.
     private frozen = signal<ReadonlyArray<LogMessage> | null>(null);
-    private appendedAtPause = signal(0);
+    private frozenIds = computed(() => new Set(this.frozen()?.map(line => line.id)));
     private readonly pageSize = screenPageSize();
     private limit = signal(this.pageSize);
 
@@ -61,8 +61,16 @@ export class LogComponent implements AfterViewInit, OnDestroy {
     hidden = computed(() => this.matches().length - this.rows().length);
     olderStep = computed(() => Math.min(this.pageSize, this.hidden()));
 
-    /** How many lines arrived since the page was paused. */
-    newLines = computed(() => this.frozen() ? this.log.appended() - this.appendedAtPause() : 0);
+    /** How many lines arrived since the page was paused, not counting repeats of lines it shows. */
+    newLines = computed(() => {
+        if (!this.frozen()) return 0;
+        const shown = this.frozenIds();
+        let count = 0;
+        for (const line of this.log.messages()) {
+            if (!shown.has(line.id) && !line.reconnect) count++;
+        }
+        return count;
+    });
 
     /** When the connection was lost, while it is. */
     offline = computed(() => this.socketio.state() === 'reconnecting' ? this.socketio.lostAt() : null);
@@ -135,7 +143,6 @@ export class LogComponent implements AfterViewInit, OnDestroy {
     pause(): void {
         if (!this.following()) return;
         this.frozen.set(this.log.messages());
-        this.appendedAtPause.set(this.log.appended());
         this.following.set(false);
     }
 

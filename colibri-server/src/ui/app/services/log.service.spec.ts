@@ -144,7 +144,6 @@ describe('LogService', () => {
         vi.advanceTimersByTime(FLUSH_INTERVAL);
 
         expect(service.messages().map(m => m.id)).toEqual([ '1', '2' ]);
-        expect(service.appended()).toBe(2);
     });
 
     it('updates an existing message and moves it to the end', () => {
@@ -176,7 +175,6 @@ describe('LogService', () => {
         vi.advanceTimersByTime(FLUSH_INTERVAL);
 
         expect(service.messages().map(m => m.id)).toEqual([ '1', '2' ]);
-        expect(service.appended()).toBe(2);
     });
 
     it('keeps the newest MAX_MESSAGES lines', () => {
