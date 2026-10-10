@@ -96,7 +96,19 @@ describe('VoiceServer', () => {
         await server.stop();
     });
 
-    // For the admin log's Connections switch.
+    // For the admin UI's server info, and its log's Connections switch.
+    it('says whether it listens and records, and how many clients it has', async () => {
+        expect(server.status).toEqual({ listening: true, recording: false, samplingRate: 48000, clients: 0 });
+        const a = await openClient();
+        const b = await openClient();
+        await send(a, voicePacket(1, 1));
+        await roundTrip(b, a, 2);
+        expect(server.status.clients).toBe(2);
+
+        expect(new VoiceServer(16000, '/nonexistent-voice-recordings', true).status)
+            .toEqual({ listening: false, recording: true, samplingRate: 16000, clients: 0 });
+    });
+
     it('tags the line for a new client as a connection line', async () => {
         const a = await openClient();
         const b = await openClient();

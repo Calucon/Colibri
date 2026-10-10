@@ -129,15 +129,22 @@ export class VoiceServer extends Service {
     // reported. See REPORT_INTERVAL_MILLIS; pruned every disconnect-check tick.
     private readonly reportedAt = new Map<string, number>();
 
+    // Whether the UDP socket is listening: false before start(), and for good if it could not bind.
+    private listening = false;
+
     public constructor(private samplingRate: number, private voiceRecordingPath: string, private recordingVoiceData: boolean = false) {
         super();
     }
 
+    // For the admin UI's server info.
+    public get status(): { listening: boolean; recording: boolean; samplingRate: number; clients: number } {
+        return { listening: this.listening, recording: this.recordingVoiceData, samplingRate: this.samplingRate, clients: this.clients.size };
+    }
+
     public start(voicePort: number, hostname: string) {
-        let listening = false;
         this.udpSocket = dgram.createSocket('udp4');
         this.udpSocket.on('listening', () => {
-            listening = true;
+            this.listening = true;
             const address = this.udpSocket.address() as AddressInfo;
             this.logInfo(`Voice server listening on ${address.address}:${address.port}`);
             this.logInfo(`Voice server Sampling Rate: ${this.samplingRate} Hz`);
@@ -260,7 +267,7 @@ export class VoiceServer extends Service {
         // only, never in the admin UI's log, and as nothing more than
         // 'bind EADDRINUSE 0.0.0.0:9013', without saying what had failed or what it meant.
         this.udpSocket.on('error', (err: NodeJS.ErrnoException) => {
-            if (!listening) {
+            if (!this.listening) {
                 const inUse = err.code === 'EADDRINUSE' ? ', which another process is already using' : '';
                 this.logError(`Voice server could not listen on UDP ${hostname}:${voicePort}${inUse}: ${err.message}. `
                     + 'Voice is disabled until the server is restarted with a VOICE_HOST and VOICE_PORT it can listen on; '

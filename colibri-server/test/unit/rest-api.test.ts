@@ -187,6 +187,15 @@ describe('RestAPI', () => {
             await expect(get('/appA')).resolves.toMatchObject({ status: 404 });
             await expect(del('/appA')).resolves.toMatchObject({ status: 404 });
         });
+
+        // For the admin UI's server info.
+        it('counts its apps and values', async () => {
+            expect(api.counts()).toEqual({ apps: 0, keys: 0 });
+            await put('/appA/one', 1);
+            await put('/appA/two', 2);
+            await put('/appB/one', 1);
+            expect(api.counts()).toEqual({ apps: 2, keys: 3 });
+        });
     });
 
     // Every name used to be looked up on a plain object, so a name Object.prototype also has

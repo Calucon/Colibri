@@ -144,6 +144,13 @@ export class RestAPI extends Service {
             }));
     }
 
+    // How many apps the store holds values for, and how many values, for the admin UI.
+    public counts(): { apps: number; keys: number } {
+        let keys = 0;
+        for (const values of this.data.values()) keys += values.size;
+        return { apps: this.data.size, keys };
+    }
+
     // Runs before the web server starts serving requests, so a request can never observe
     // the empty default `data` instead of what was actually persisted.
     public override async init(): Promise<void> {
