@@ -1,4 +1,4 @@
-import { AfterViewInit, ChangeDetectionStrategy, Component, ElementRef, OnDestroy, afterRenderEffect, computed, effect, inject, signal, untracked, viewChild } from '@angular/core';
+import { AfterViewInit, ChangeDetectionStrategy, Component, ElementRef, Injector, OnDestroy, afterNextRender, afterRenderEffect, computed, effect, inject, signal, untracked, viewChild } from '@angular/core';
 import { DatePipe } from '@angular/common';
 import { LogMessage, LogService, SocketIOService } from '../../services';
 import { LogMessageComponent } from '../../components/log-message/log-message.component';
@@ -35,6 +35,7 @@ interface EmptyState {
 export class LogComponent implements AfterViewInit, OnDestroy {
     log = inject(LogService);
     private socketio = inject(SocketIOService);
+    private injector = inject(Injector);
 
     private scroller = viewChild.required<ElementRef<HTMLElement>>('scroller');
 
@@ -205,7 +206,13 @@ export class LogComponent implements AfterViewInit, OnDestroy {
     // A tap opens a line, and the lines stay still while it is read. Not a button of the empty
     // state: "Clear search" left the log paused.
     onClick(event: MouseEvent): void {
-        if (onLine(event)) this.pause();
+        if (!onLine(event)) return;
+        this.pause();
+
+        // Once paused, the "Jump to latest" button covers the bottom of the log, where the newest
+        // line, the one opened most, is. Its scroll-padding makes this move the line above it.
+        const line = (event.target as Element).closest('app-log-message');
+        if (line) afterNextRender(() => line.scrollIntoView({ block: 'nearest' }), { injector: this.injector });
     }
 
     private scrollToEnd(): void {

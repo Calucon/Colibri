@@ -35,9 +35,11 @@
         opacity: 0.7;
     }
 
-    // room to scroll the last line out from under "Jump to latest"
+    // room to scroll the last line out from under "Jump to latest", and where an opened line
+    // scrolls to
     &.paused {
         padding-bottom: 72px;
+        scroll-padding-bottom: 72px;
     }
 }
 
