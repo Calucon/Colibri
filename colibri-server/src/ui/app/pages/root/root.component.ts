@@ -24,6 +24,7 @@ export class RootComponent {
     tabs = [
         { label: 'Log', path: '/log' },
         { label: 'Statistics', path: '/statistics' },
+        { label: 'Server', path: '/server' },
     ];
 
     state = this.socketio.state;
