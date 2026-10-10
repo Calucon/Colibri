@@ -288,12 +288,13 @@ rationale, migration steps, and what the Editor verification did and did not cov
   unreachable address is followed by the next at once, and moving on is logged. One without an
   answer is given up after its share of the time left (at least 1 s, 0.25 s for a loopback address
   followed by others: Windows takes a second or more to report a refusal, e.g. on `127.0.0.1` from
-  a server on `::1` only). When every address fails, a refusal is reported over no answer, and no
-  answer over anything else, such as an unreachable IPv6 address: `localhost` with no server
-  running reports the refusal from `::1` on Windows, not the 0.25 s on `127.0.0.1`. With a host
-  name, the `connected to` line names the address used. An IPv6 address may be written with or
-  without brackets, and `Store` URLs put it in brackets. TLS still checks the certificate against
-  the server address as entered.
+  a server on `::1` only). An address the device has no route to, such as IPv6 on Wi-Fi without
+  IPv6, fails at once and takes no share from the addresses before it. When every address fails,
+  a refusal is reported over no answer, and no answer over anything else, such as an unreachable
+  IPv6 address: `localhost` with no server running reports the refusal from `::1` on Windows, not
+  the 0.25 s on `127.0.0.1`. With a host name, the `connected to` line names the address used. An
+  IPv6 address may be written with or without brackets, and `Store` URLs put it in brackets. TLS
+  still checks the certificate against the server address as entered.
 - **Disabling and enabling the connection in one frame** no longer takes 5 s on Mono or leaves sends stuck.
 - **Connected means the server has spoken.** A session becomes `Connected` on the first frame the
   server sends, not when the TCP connection opens. Only then is the backoff reset, `OnConnected`
@@ -852,9 +853,9 @@ otherwise spend on their prototype, so:
   back a valid change or undoing one made elsewhere; `ConnectTimeoutTests` an attempt nothing
   answers, cancelling one, and a refusal reported at once; `ServerAddressTests` IP addresses with
   and without brackets, the order a name's addresses are tried in (IPv4 first), their shares of
-  the connect timeout, moving on from an address that refuses or does not answer, IPv4 then IPv6
-  on the loopback, and a refusal not hidden by an unreachable address after it or by an address
-  given up before it; `StorePathTests`
+  the connect timeout and none for an address without a route, moving on from an address that
+  refuses or does not answer, IPv4 then IPv6 on the loopback, and a refusal not hidden by an
+  unreachable address after it or by an address given up before it; `StorePathTests`
   the escaping of the app name and the key in Store URLs, and the
   brackets around an IPv6 server address there; `VoicePacketQueueTests` voice packets from several receive threads at once, a listener
   that throws, and the app id of an App Name the handshake changes; `OutboxTests` the 10 000-message

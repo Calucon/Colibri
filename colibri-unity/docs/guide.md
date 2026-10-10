@@ -632,9 +632,10 @@ voice use the same IP version, as the server's voice check needs.
 
 - A refused or unreachable address is followed by the next at once.
 - An address without an answer is given up after its share of the 5 s: the time left divided by the
-  addresses left, at least 1 s. A loopback address followed by others gets 0.25 s, because Windows
-  takes a second or more to report a refusal, e.g. on `127.0.0.1` when the server listens on `::1`
-  only.
+  addresses left, at least 1 s. Addresses the device has no route to, such as IPv6 on Wi-Fi without
+  IPv6, fail at once and are not counted. A loopback address followed by others gets 0.25 s,
+  because Windows takes a second or more to report a refusal, e.g. on `127.0.0.1` when the server
+  listens on `::1` only.
 - Moving on is logged (`Colibri: no answer from …, trying …`). With a host name, the connect line
   names the address used: `Colibri: connected to colibri.example.org:9012 (192.0.2.10) as app …`.
 
