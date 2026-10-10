@@ -58,8 +58,8 @@ export class TCPServerProxy
     // without paying asBytes() and a structured clone to find out the answer is no.
     private readonly clientIdsByApp = new Map<string, Set<string>>();
     private clientStream = new Subject<ReadonlyArray<NetworkClient>>();
-    private clientAddedStream = new Subject<NetworkClient>();
-    private clientRemovedStream = new Subject<NetworkClient>();
+    private clientAddedStream = new Subject<TcpNetworkClient>();
+    private clientRemovedStream = new Subject<TcpNetworkClient>();
 
     private messageStream = new Subject<NetworkMessage>();
 
@@ -89,10 +89,11 @@ export class TCPServerProxy
     public get currentClients(): ReadonlyArray<TcpNetworkClient> {
         return Array.from(this.clients.values());
     }
-    public get clientConnected$(): Observable<NetworkClient> {
+    // TcpNetworkClient rather than NetworkClient: the voice server needs each client's address.
+    public get clientConnected$(): Observable<TcpNetworkClient> {
         return this.clientAddedStream.asObservable();
     }
-    public get clientDisconnected$(): Observable<NetworkClient> {
+    public get clientDisconnected$(): Observable<TcpNetworkClient> {
         return this.clientRemovedStream.asObservable();
     }
     public get messages$(): Observable<NetworkMessage> {
