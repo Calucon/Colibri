@@ -85,7 +85,7 @@
                 }
               </td>
               <td class="c-log">
-                <a routerLink="/log" [queryParams]="{ q: row.id }" [fragment]="row.app" [title]="'The log of ' + row.app + ', searched for this client'">Log</a>
+                <a routerLink="/log" [queryParams]="{ q: row.id }" title="The log, searched for this client">Log</a>
               </td>
             </tr>
           }

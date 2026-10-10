@@ -108,7 +108,9 @@ describe('ClientsComponent', () => {
         expect(component.rows().map(row => row.id)).toEqual([ 'a' ]);
         expect(component.summary()).toBe('1 of 2 connected: 1 TCP, 0 web');
         expect(component.appOptions()).toEqual([ { name: 'demo', clients: 1 }, { name: 'other', clients: 1 } ]);
-        expect(root.querySelector('td.c-log a')?.getAttribute('href')).toBe('/log?q=a#demo');
+        // not filtered to its app: the server's lines about a client, such as its rate limit
+        // warning, name the client but not the app
+        expect(root.querySelector('td.c-log a')?.getAttribute('href')).toBe('/log?q=a');
     });
 
     it('sorts by a column from the address, the rows without a value last', async () => {
