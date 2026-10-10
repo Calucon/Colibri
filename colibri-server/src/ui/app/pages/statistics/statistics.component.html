@@ -29,7 +29,8 @@
           @for (row of rows(); track row.id) {
             <tr>
               <td><span class="swatch" [style.background]="row.color"></span></td>
-              <td><span class="app-chip" [style.--app]="row.appColor">{{ row.app }}</span></td>
+              <!-- plain: the swatch is the row's one colour key -->
+              <td>{{ row.app }}</td>
               <td class="name">{{ row.name }}@if (row.idHint) { <span class="muted">{{ row.idHint }}</span>}</td>
               <td class="version">{{ row.version }}</td>
               <td class="num">{{ row.median === null ? '-' : (row.median | number:'1.1-1') + ' ms' }}</td>

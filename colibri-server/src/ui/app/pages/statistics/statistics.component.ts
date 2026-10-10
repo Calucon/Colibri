@@ -3,13 +3,12 @@ import { DecimalPipe } from '@angular/common';
 import * as d3 from 'd3';
 import { ClientService } from '../../services';
 import { LatencyChartComponent, clientColor } from '../../components/latency-chart/latency-chart.component';
-import { appColor, isAddress, shortId } from '../../components/log-message/log-format';
+import { isAddress, shortId } from '../../components/log-message/log-format';
 
 interface ClientRow {
     id: string;
     color: string;
     app: string;
-    appColor: string;
     name: string;
     /** The start of the id, for a web client and for clients of one app that have the same name. */
     idHint: string | null;
@@ -42,7 +41,6 @@ export class StatisticsComponent {
                 id: client.id,
                 color: clientColor(client.slot),
                 app: client.app,
-                appColor: appColor(client.app),
                 name: client.name,
                 idHint: isAddress(client.name) || (names.get(`${client.app}\n${client.name}`) ?? 0) > 1 ? shortId(client.id) : null,
                 version: client.version ? `v${client.version}` : '',
