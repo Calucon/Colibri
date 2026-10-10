@@ -1,3 +1,4 @@
+using HCIKonstanz.Colibri.Setup;
 using NUnit.Framework;
 using ColibriStore = HCIKonstanz.Colibri.Store.Store;
 
@@ -29,6 +30,17 @@ namespace HCIKonstanz.Colibri.Tests
         public void TheAppNameIsEscapedTheSameWay()
         {
             Assert.That(ColibriStore.StorePath("my app/1", "key"), Is.EqualTo("api/store/my%20app%2F1/key"));
+        }
+
+        /// <summary>"http://2001:db8::1:9011/" is no URL: an IPv6 server address needs brackets there.</summary>
+        [TestCase("2001:db8::1", "[2001:db8::1]")]
+        [TestCase("[2001:db8::1]", "[2001:db8::1]")]
+        [TestCase("::1", "[::1]")]
+        [TestCase("192.168.0.10", "192.168.0.10")]
+        [TestCase("colibri.example.org", "colibri.example.org")]
+        public void AnIPv6ServerAddressGoesInBracketsInTheUrl(string serverAddress, string expected)
+        {
+            Assert.That(ColibriConfig.UrlHost(serverAddress), Is.EqualTo(expected));
         }
     }
 }

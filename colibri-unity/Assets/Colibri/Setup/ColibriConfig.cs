@@ -157,8 +157,17 @@ namespace HCIKonstanz.Colibri.Setup
             var protocol = config.IsSSL ? "https" : "http";
             endpoint = endpoint.TrimStart('/'); // remove leading slash
 
-            var uri = $"{protocol}://{config.ServerAddress}:{config.WebServerPort}/{endpoint}";
+            var uri = $"{protocol}://{UrlHost(config.ServerAddress)}:{config.WebServerPort}/{endpoint}";
             return uri;
         }
+
+        /// <summary>
+        /// The server address as the host of a URL: an IPv6 address goes in brackets there, so
+        /// that its colons are not read as the port's. One typed with brackets keeps them. A host
+        /// name never contains a colon, so a colon means an IPv6 address.
+        /// </summary>
+        /// <remarks>Internal for the EditMode tests.</remarks>
+        internal static string UrlHost(string serverAddress)
+            => serverAddress.IndexOf(':') >= 0 && !serverAddress.StartsWith("[") ? $"[{serverAddress}]" : serverAddress;
     }
 }
