@@ -34,7 +34,7 @@ class FakeSocketIOServer {
     public get histories() {
         return this.broadcasts
             .filter(b => b.message.command === 'history')
-            .map(b => b.message.payload!.asValue<{ request: number | null; messages: { message: string; created: number; first: number; count: number }[] }>());
+            .map(b => b.message.payload!.asValue<{ request: number | null; at: number; messages: { message: string; created: number; first: number; count: number }[] }>());
     }
 
     public connectClient(client: SocketIoClient): void {
@@ -240,22 +240,29 @@ describe('WebLog', () => {
     });
 
     it('answers requestLog with a history even when nothing matches, echoing a numeric request only', async () => {
-        const server = new FakeSocketIOServer();
-        const webLog = new WebLog(server as unknown as SocketIOServer);
-        await webLog.init();
+        vi.useFakeTimers({ toFake: [ 'Date' ] });
+        try {
+            vi.setSystemTime(1_700_000_000_000);
+            const server = new FakeSocketIOServer();
+            const webLog = new WebLog(server as unknown as SocketIOServer);
+            await webLog.init();
 
-        const admin = makeClient('admin1', 'colibri');
-        server.connectClient(admin);
+            const admin = makeClient('admin1', 'colibri');
+            server.connectClient(admin);
 
-        requestLog(server, admin, { filter: 'no-such-app', request: 3 });
-        requestLog(server, admin, { filter: 'no-such-app', request: '4' });
-        requestLog(server, admin, { filter: 'no-such-app' });
+            requestLog(server, admin, { filter: 'no-such-app', request: 3 });
+            requestLog(server, admin, { filter: 'no-such-app', request: '4' });
+            requestLog(server, admin, { filter: 'no-such-app' });
 
-        expect(server.histories).toEqual([
-            { request: 3, messages: [] },
-            { request: null, messages: [] },
-            { request: null, messages: [] }
-        ]);
+            // with the server's time, by which the lines are stamped
+            expect(server.histories).toEqual([
+                { request: 3, at: 1_700_000_000_000, messages: [] },
+                { request: null, at: 1_700_000_000_000, messages: [] },
+                { request: null, at: 1_700_000_000_000, messages: [] }
+            ]);
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it('sends the history in the order the lines last occurred, so a merged entry sits at its latest repeat', async () => {

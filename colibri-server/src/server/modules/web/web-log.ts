@@ -129,11 +129,12 @@ export class WebLog extends Service {
 
         // One message, and sent even when empty: the admin UI ignores live lines from asking until
         // this arrives, since those were filtered by its previous preferences. It used to be one
-        // event per line, 10,000 of them for a full history.
+        // event per line, 10,000 of them for a full history. `at` is this server's clock, which
+        // stamps the lines, for a page whose own clock is off.
         this.socketio.broadcast({
             channel: 'colibri::log',
             command: 'history',
-            payload: Payload.fromValue({ request, messages })
+            payload: Payload.fromValue({ request, at: Date.now(), messages })
         }, [ socketClient ]);
     }
 
