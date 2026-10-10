@@ -30,6 +30,30 @@ export const addSample = function (samples: ReadonlyArray<Sample>, sample: Sampl
     return [ ...samples.filter(s => s.at >= sample.at - keepFor && s.at < sample.at), sample ];
 };
 
+/**
+ * What a snapshot's rate history stands for: the samples of the snapshots a page would have had in
+ * each second before it, which arrived at `at`. Each client keeps its colour now.
+ */
+export const historySamples = function (snapshot: ClientsSnapshot, at: number, color: (id: string) => string): Sample[] {
+    const seconds = snapshot.clients.reduce((most, client) => Math.max(most, client.history?.length ?? 0), 0);
+    const samples: Sample[] = [];
+    for (let ago = seconds; ago >= 1; ago--) {
+        const clients = new Map<string, ClientRate>();
+        for (const client of snapshot.clients) {
+            const rates = client.history?.[client.history.length - ago];
+            if (rates) clients.set(client.id, { app: client.app, color: color(client.id), in: rates[0], out: rates[1] });
+        }
+        samples.push({ at: at - ago * 1000, clients });
+    }
+    return samples;
+};
+
+/** The samples with the history in place of those it covers. */
+export const withHistory = function (samples: ReadonlyArray<Sample>, history: ReadonlyArray<Sample>): Sample[] {
+    const from = history[0]?.at;
+    return from === undefined ? [ ...samples ] : [ ...samples.filter(s => s.at < from), ...history ];
+};
+
 export interface StackRow {
     at: number;
     /** A pause in the snapshots: the areas stop here and start again after it. */
@@ -160,22 +184,27 @@ export class ThroughputChartComponent implements AfterViewInit, OnDestroy {
 
     constructor() {
         // Each snapshot once, with each client's colour as it was then: a client that left keeps it.
+        // The first of a subscription, after the page opens or reconnects, brings the rates of the
+        // seconds before it.
         effect(() => {
             const snapshot = this.snapshot();
             if (!snapshot) return;
             untracked(() => {
+                const now = Date.now();
                 const slots = new Map(this.clientService.clients().map(client => [ client.id, client.slot ]));
+                const color = (id: string) => {
+                    const slot = slots.get(id);
+                    return slot === undefined ? 'var(--text-muted)' : clientColor(slot);
+                };
                 const clients = new Map<string, ClientRate>();
                 for (const client of snapshot.clients) {
-                    const slot = slots.get(client.id);
-                    clients.set(client.id, {
-                        app: client.app,
-                        color: slot === undefined ? 'var(--text-muted)' : clientColor(slot),
-                        in: client.in,
-                        out: client.out
-                    });
+                    clients.set(client.id, { app: client.app, color: color(client.id), in: client.in, out: client.out });
                 }
-                this.samples.set(addSample(this.samples(), { at: Date.now(), clients }));
+
+                const samples = snapshot.clients.some(client => client.history)
+                    ? withHistory(this.samples(), historySamples(snapshot, now, color))
+                    : this.samples();
+                this.samples.set(addSample(samples, { at: now, clients }));
             });
         });
     }

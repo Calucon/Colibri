@@ -78,6 +78,8 @@ export interface ClientRow {
     limit: LoadLimit | null;
     /** Objects with updates held back. */
     held: number;
+    /** In the first snapshot of a subscription: its rates in each second of the 122 before `at`, oldest first, as [in, out]. */
+    history?: [number, number][];
     truncated?: true;
 }
 
