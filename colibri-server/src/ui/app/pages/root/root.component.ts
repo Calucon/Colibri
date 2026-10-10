@@ -23,7 +23,7 @@ export class RootComponent {
 
     tabs = [
         { label: 'Log', path: '/log' },
-        { label: 'Statistics', path: '/statistics' },
+        { label: 'Clients', path: '/clients' },
         { label: 'Server', path: '/server' },
     ];
 

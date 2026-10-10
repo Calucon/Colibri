@@ -8,7 +8,7 @@ export interface ColibriClient {
     version: string;
     latency: [number, number][];
     /**
-     * Its colour on the Statistics page: the lowest no other client had when it connected, kept
+     * Its colour on the Clients page: the lowest no other client had when it connected, kept
      * until it leaves. Its place in the list changed whenever a client before it left.
      */
     slot: number;

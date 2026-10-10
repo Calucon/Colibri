@@ -1,4 +1,4 @@
-import { AfterViewInit, ChangeDetectionStrategy, Component, ElementRef, Injector, OnDestroy, computed, effect, inject, viewChild } from '@angular/core';
+import { AfterViewInit, ChangeDetectionStrategy, Component, ElementRef, Injector, OnDestroy, computed, effect, inject, input, viewChild } from '@angular/core';
 import { ClientService, ColibriClient } from '../../services';
 import * as d3 from 'd3';
 import { BoxplotStats, boxplot, boxplotStats, boxplotSymbolDot } from './boxplot';
@@ -71,12 +71,20 @@ export class LatencyChartComponent implements AfterViewInit, OnDestroy {
     private injector = inject(Injector);
 
     private latencyChart = viewChild.required<ElementRef<HTMLDivElement>>('latencyChart');
-    clients = this.clientService.clients;
+
+    /** The app whose clients it shows, or '' for all. */
+    app = input('');
+
+    clients = computed(() => {
+        const app = this.app();
+        const clients = this.clientService.clients();
+        return app ? clients.filter(client => client.app === app) : clients;
+    });
 
     /** What the chart says instead of an empty plot. */
     message = computed(() => {
         const clients = this.clients();
-        if (clients.length === 0) return 'No clients connected.';
+        if (clients.length === 0) return this.app() ? `No clients of ${this.app()} connected.` : 'No clients connected.';
         if (clients.every(client => client.latency.length === 0)) return 'Collecting latency samples…';
         return null;
     });
