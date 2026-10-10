@@ -32,7 +32,7 @@
   <div class="more" id="log-filters" [class.open]="open()">
     <div class="search" [class.counted]="matches() !== null">
       <i class="pi pi-search" aria-hidden="true"></i>
-      <input #searchInput type="search" placeholder="Search" aria-label="Search the loaded lines" [value]="log.search()"
+      <input #searchInput type="search" placeholder="Search" aria-label="Search the loaded lines"
         (input)="onSearch(searchInput.value)" (keydown.escape)="clearSearch(searchInput)">
       @if (matches() !== null) {
         <span class="matches">{{ matches() }} found</span>

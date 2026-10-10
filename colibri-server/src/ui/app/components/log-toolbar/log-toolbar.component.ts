@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, ElementRef, HostListener, OnDestroy, computed, inject, input, output, signal, viewChild } from '@angular/core';
+import { ChangeDetectionStrategy, Component, ElementRef, HostListener, OnDestroy, computed, effect, inject, input, output, signal, untracked, viewChild } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { SelectModule } from 'primeng/select';
 import { ToggleSwitchModule } from 'primeng/toggleswitch';
@@ -44,6 +44,9 @@ export class LogToolbarComponent implements OnDestroy {
 
     private searchInput = viewChild.required<ElementRef<HTMLInputElement>>('searchInput');
     private searchTimer: ReturnType<typeof setTimeout> | undefined;
+    // The search this field set last. The field is written only for a search set elsewhere (Clear
+    // filters, a removed filter chip): writing back its own, trimmed, ate the space just typed.
+    private searchSent: string | null = null;
 
     allLevels = computed(() => this.log.levels().size === LOG_LEVELS.length);
 
@@ -74,6 +77,18 @@ export class LogToolbarComponent implements OnDestroy {
         return active;
     });
 
+    constructor() {
+        effect(() => {
+            const search = this.log.search();
+            untracked(() => {
+                if (search === this.searchSent) return;
+                clearTimeout(this.searchTimer);
+                this.searchSent = search;
+                this.searchInput().nativeElement.value = search;
+            });
+        });
+    }
+
     /** 1234 as 1.2k: a chip keeps its width as the log grows. */
     shortCount(count: number): string {
         if (count < 1000) return `${count}`;
@@ -94,12 +109,16 @@ export class LogToolbarComponent implements OnDestroy {
 
     onSearch(value: string): void {
         clearTimeout(this.searchTimer);
-        this.searchTimer = setTimeout(() => this.log.search.set(value.trim()), SEARCH_DELAY);
+        this.searchTimer = setTimeout(() => {
+            this.searchSent = value.trim();
+            this.log.search.set(this.searchSent);
+        }, SEARCH_DELAY);
     }
 
     clearSearch(input: HTMLInputElement): void {
         clearTimeout(this.searchTimer);
         input.value = '';
+        this.searchSent = '';
         this.log.search.set('');
         input.blur();
     }

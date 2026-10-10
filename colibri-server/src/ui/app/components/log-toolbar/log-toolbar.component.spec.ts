@@ -92,6 +92,34 @@ describe('LogToolbarComponent', () => {
         }
     });
 
+    // the trimmed search used to be written back into the field, eating the space just typed
+    it('keeps what is typed in the field, and shows a search set elsewhere', () => {
+        vi.useFakeTimers();
+        try {
+            const fixture = TestBed.createComponent(LogToolbarComponent);
+            fixture.detectChanges();
+            const input: HTMLInputElement = fixture.nativeElement.querySelector('.search input');
+
+            input.value = 'frame ';
+            input.dispatchEvent(new Event('input'));
+            vi.advanceTimersByTime(SEARCH_DELAY);
+            fixture.detectChanges();
+            expect(log.search()).toBe('frame');
+            expect(input.value).toBe('frame ');
+
+            input.value = 'frame t';
+            input.dispatchEvent(new Event('input'));
+            log.search.set('');
+            fixture.detectChanges();
+            vi.advanceTimersByTime(SEARCH_DELAY);
+            fixture.detectChanges();
+            expect(input.value).toBe('');
+            expect(log.search()).toBe('');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it('lists the filters folded away on a phone, each with a way to remove it', () => {
         log.filter.set('demo');
         log.search.set('asset');
