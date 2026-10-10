@@ -268,3 +268,34 @@ td.c-transport .version {
         grid-area: limit;
     }
 }
+
+// In or Out for the throughput chart: two joined buttons, the one in use filled
+.direction {
+    display: inline-flex;
+    align-self: center;
+
+    .btn {
+        height: 28px;
+        padding: 0 10px;
+
+        &:first-child {
+            border-radius: 6px 0 0 6px;
+        }
+
+        &:last-child {
+            margin-left: -1px;
+            border-radius: 0 6px 6px 0;
+        }
+
+        &.on {
+            color: var(--text-strong);
+            background: var(--surface-2);
+        }
+
+        // the size of every other button for a finger
+        @media (pointer: coarse), (max-width: 699.98px) {
+            height: 40px;
+            padding: 0 14px;
+        }
+    }
+}

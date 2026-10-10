@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, ElementRef, afterRenderEffect, computed, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, ElementRef, afterRenderEffect, computed, inject, signal, viewChild } from '@angular/core';
 import { DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
@@ -6,6 +6,7 @@ import { toSignal } from '@angular/core/rxjs-interop';
 import { SelectModule } from 'primeng/select';
 import { AdminService, ClientRow, ClientService, ClientsSnapshot } from '../../services';
 import { LatencyChartComponent, clientColor } from '../../components/latency-chart/latency-chart.component';
+import { Direction, ThroughputChartComponent } from '../../components/throughput-chart/throughput-chart.component';
 import { LiveStatusComponent } from '../../components/live-status/live-status.component';
 import { OfflineBannerComponent } from '../../components/offline-banner/offline-banner.component';
 import { appColor, isAddress, shortId } from '../../components/log-message/log-format';
@@ -65,7 +66,7 @@ export interface ClientView {
     limit: string | null;
     limitTitle: string;
     held: number;
-    /** Its colour in the latency chart. */
+    /** Its colour in the charts. */
     color: string | null;
     truncated: boolean;
 }
@@ -112,7 +113,7 @@ export const sortClients = function (rows: ReadonlyArray<ClientRow>, sort: Sort 
     selector: 'app-clients',
     templateUrl: './clients.component.html',
     styleUrl: './clients.component.scss',
-    imports: [DatePipe, FormsModule, RouterLink, SelectModule, LatencyChartComponent, LiveStatusComponent, OfflineBannerComponent],
+    imports: [DatePipe, FormsModule, RouterLink, SelectModule, LatencyChartComponent, ThroughputChartComponent, LiveStatusComponent, OfflineBannerComponent],
     changeDetection: ChangeDetectionStrategy.OnPush
 })
 export class ClientsComponent {
@@ -131,6 +132,8 @@ export class ClientsComponent {
     sort = computed(() => parseSort(this.params().get('sort')));
     /** The client a link from the log points at. */
     marked = computed(() => this.params().get('client'));
+    /** What the throughput chart counts: the messages the clients sent, or those sent to them. */
+    direction = computed<Direction>(() => this.params().get('throughput') === 'out' ? 'out' : 'in');
 
     /** Every app with a client connected, and the one filtered to. */
     appOptions = computed(() => {
@@ -219,6 +222,19 @@ export class ClientsComponent {
 
     adminPages = computed(() => this.feed.data()?.adminPages ?? 0);
 
+    // by its name in the template, so that a test's stand-in answers too
+    private throughputChart = viewChild<ThroughputChartComponent>('throughput');
+
+    /**
+     * What the throughput chart shows, and its total now: the chart's, which keeps a client's last
+     * rate through a second the server had none.
+     */
+    throughputHint = computed(() => {
+        const what = this.direction() === 'in' ? 'Messages per second each client sent' : 'Messages per second sent to each client';
+        const total = this.throughputChart()?.total() ?? null;
+        return `${what}, stacked, over the last 110 s${total === null ? '' : `; total now ${decimal(total)}`}`;
+    });
+
     empty = computed(() => {
         if (!this.feed.data()) return 'Loading the clients…';
         return this.app() ? `No clients of ${this.app()} connected.` : 'No clients connected.';
@@ -264,6 +280,10 @@ export class ClientsComponent {
         const descending = current?.key === key ? !current.descending : firstDescending;
         const isDefault = key === 'app' && !descending;
         return this.navigate({ sort: isDefault ? null : `${descending ? '-' : ''}${key}` });
+    }
+
+    setDirection(direction: Direction): Promise<boolean> {
+        return this.navigate({ throughput: direction === 'out' ? 'out' : null });
     }
 
     setSort(value: string | null): Promise<boolean> {

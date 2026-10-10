@@ -33,7 +33,7 @@
       <table class="data clients">
         <thead>
           <tr>
-            <th class="c-swatch"><span class="visually-hidden">Colour in the latency chart</span></th>
+            <th class="c-swatch"><span class="visually-hidden">Colour in the charts</span></th>
             @for (column of columns; track column.key) {
               <th [class]="column.class" [class.num]="column.num" [attr.aria-sort]="ariaSort(column.key)">
                 <button type="button" class="sort" [class.on]="ariaSort(column.key) !== null" [title]="column.title" (click)="sortBy(column.key)">
@@ -52,7 +52,7 @@
             <tr [attr.data-id]="row.id" [class.marked]="row.id === marked()" [class.held]="row.limit !== null">
               <td class="c-swatch">
                 @if (row.color) {
-                  <span class="swatch" [style.background]="row.color" title="Its colour in the latency chart"></span>
+                  <span class="swatch" [style.background]="row.color" title="Its colour in the charts"></span>
                 }
               </td>
               <td class="c-app">
@@ -103,5 +103,20 @@
       <span class="hint">Round trip to each client over the last 110 s, in ms</span>
     </div>
     <app-latency-chart [app]="app()"></app-latency-chart>
+  </section>
+
+  <section class="card" aria-labelledby="throughput-title">
+    <div class="card-head">
+      <h2 id="throughput-title">Throughput</h2>
+      <!-- before the hint, whose width changes every second: after it, the buttons jumped between lines -->
+      <div class="direction" role="group" aria-label="Messages">
+        <button type="button" class="btn" [class.on]="direction() === 'in'" [attr.aria-pressed]="direction() === 'in'"
+          title="Messages the clients sent" (click)="setDirection('in')">In</button>
+        <button type="button" class="btn" [class.on]="direction() === 'out'" [attr.aria-pressed]="direction() === 'out'"
+          title="Messages sent to the clients" (click)="setDirection('out')">Out</button>
+      </div>
+      <span class="hint">{{ throughputHint() }}</span>
+    </div>
+    <app-throughput-chart #throughput [snapshot]="feed.data()" [app]="app()" [direction]="direction()"></app-throughput-chart>
   </section>
 </div>

@@ -1,10 +1,11 @@
 import { TestBed } from '@angular/core/testing';
 import { Component, input, signal } from '@angular/core';
-import { provideRouter } from '@angular/router';
+import { Router, provideRouter } from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
 import { Subject } from 'rxjs';
 import { ClientRow, ClientService, ColibriClient, ConnectionState, Reconnect, SocketIOService } from '../../services';
 import { LatencyChartComponent, clientColor } from '../../components/latency-chart/latency-chart.component';
+import { ThroughputChartComponent } from '../../components/throughput-chart/throughput-chart.component';
 import { ClientsComponent, parseSort, sortClients } from './clients.component';
 
 const client = (overrides: Partial<ClientRow>): ClientRow => ({
@@ -28,6 +29,14 @@ const client = (overrides: Partial<ClientRow>): ClientRow => ({
 @Component({ selector: 'app-latency-chart', template: '' })
 class LatencyChartStub {
     app = input('');
+}
+
+@Component({ selector: 'app-throughput-chart', template: '' })
+class ThroughputChartStub {
+    snapshot = input<unknown>(null);
+    app = input('');
+    direction = input('in');
+    total = signal<number | null>(null);
 }
 
 describe('ClientsComponent', () => {
@@ -68,7 +77,10 @@ describe('ClientsComponent', () => {
                 { provide: ClientService, useValue: { clients } }
             ]
         });
-        TestBed.overrideComponent(ClientsComponent, { remove: { imports: [ LatencyChartComponent ] }, add: { imports: [ LatencyChartStub ] } });
+        TestBed.overrideComponent(ClientsComponent, {
+            remove: { imports: [ LatencyChartComponent, ThroughputChartComponent ] },
+            add: { imports: [ LatencyChartStub, ThroughputChartStub ] }
+        });
     });
 
     it('subscribes to the clients while open, and stops when it closes', async () => {
@@ -149,6 +161,35 @@ describe('ClientsComponent', () => {
         expect(component.empty()).toBe('Loading the clients…');
         snapshot([]);
         expect(component.empty()).toBe('No clients of gone connected.');
+    });
+
+    it('switches the throughput chart between In and Out in the address, with the chart\'s total', async () => {
+        const { harness, component, root } = await open('/clients?app=demo');
+        snapshot([ client({ id: 'q1', in: 30, out: 120.5 }) ]);
+        harness.detectChanges();
+        const chart = () => harness.fixture.debugElement.query(debug => debug.componentInstance instanceof ThroughputChartStub).componentInstance as ThroughputChartStub;
+        const button = (label: string) => Array.from(root.querySelectorAll<HTMLButtonElement>('.direction button')).find(b => b.textContent?.trim() === label)!;
+
+        expect(component.direction()).toBe('in');
+        expect(chart().direction()).toBe('in');
+        expect(chart().app()).toBe('demo');
+        expect(button('In').getAttribute('aria-pressed')).toBe('true');
+        expect(component.throughputHint()).toBe('Messages per second each client sent, stacked, over the last 110 s');
+        chart().total.set(42.25);
+        expect(component.throughputHint()).toBe('Messages per second each client sent, stacked, over the last 110 s; total now 42.3');
+
+        // setDirection, as the button's click: a DOM click in this harness ticks recursively (NG0101)
+        await component.setDirection('out');
+        harness.detectChanges();
+
+        expect(TestBed.inject(Router).url).toBe('/clients?app=demo&throughput=out');
+        expect(chart().direction()).toBe('out');
+        expect(button('Out').getAttribute('aria-pressed')).toBe('true');
+        expect(button('In').getAttribute('aria-pressed')).toBe('false');
+        expect(component.throughputHint()).toBe('Messages per second sent to each client, stacked, over the last 110 s; total now 42.3');
+
+        await component.setDirection('in');
+        expect(TestBed.inject(Router).url).toBe('/clients?app=demo');
     });
 });
 
