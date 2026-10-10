@@ -9,18 +9,18 @@ const timeRange = 110 * 1000;
 const barWidth = 24;
 const boxplotPadding = 5;
 
-// https://www.nordtheme.com/docs/colors-and-palettes
+// Nord hues (https://www.nordtheme.com/docs/colors-and-palettes), made lighter or stronger: each at
+// 3:1 or more on the card. No red or yellow, which mean errors and warnings. In this order, each
+// is easy to tell from the next, and the first four from each other.
 const colors = [
-    '#88C0D0', // cyan
-    '#A3BE8C', // green
-    '#B48EAD', // purple
-    '#EBCB8B', // yellow
-    '#D08770', // orange
-    '#81A1C1', // light blue
-    '#BF616A', // red
-    '#8FBCBB', // light cyan
-    '#D8DEE9', // snow
-    '#5E81AC', // blue
+    '#df8f48', // orange
+    '#c595db', // purple
+    '#d8dee9', // snow
+    '#62b7a1', // teal
+    '#c8c8fb', // lavender
+    '#89da9b', // green
+    '#67aaed', // blue
+    '#90e1ea', // cyan
 ];
 
 /** The colour of a client's slot (ColibriClient.slot), in the chart and its table. */
