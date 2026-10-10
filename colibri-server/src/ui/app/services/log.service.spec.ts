@@ -1,6 +1,6 @@
 import { TestBed } from '@angular/core/testing';
 import { Subject } from 'rxjs';
-import { FLUSH_INTERVAL, LogMessage, LogService, MAX_MESSAGES } from './log.service';
+import { FLUSH_INTERVAL, LogMessage, LogService, MAX_MESSAGES, readAddress, writeAddress } from './log.service';
 import { Reconnect, SocketIOService } from './socketio.service';
 
 const message = (overrides: Partial<LogMessage>): LogMessage => ({
@@ -149,21 +149,77 @@ describe('LogService', () => {
         expect(emit).toHaveBeenLastCalledWith('colibri::log', 'requestLog', expect.objectContaining({ showConnections: true, request: 3 }));
     });
 
-    // the tab back from Statistics links to /log, without the app filter the page still has
-    it('puts the app filter back in the address', () => {
+    // a tab, or a link from another page, opens /log without the filters the page still has
+    it('puts its filters back in an address without them', () => {
         const service = start();
-        const path = location.pathname;
+        const path = location.pathname + location.search + location.hash;
         try {
             service.filter.set('demo app');
+            service.setLevels([ 0, 1 ]);
+            service.search.set('asset');
+            service.showConnections.set(false);
             TestBed.flushEffects();
             window.history.replaceState(null, '', '/log');
 
-            service.showFilterInAddress();
+            service.openPage();
 
-            expect(location.pathname + location.hash).toBe('/log#demo%20app');
+            expect(location.pathname + location.search + location.hash).toBe('/log?levels=error,warn&q=asset&connections=0#demo%20app');
         } finally {
+            service.closePage();
             window.history.replaceState(null, '', path);
         }
+    });
+
+    it('takes its filters from a link with them in the address, with one new request', () => {
+        const service = start();
+        const path = location.pathname + location.search + location.hash;
+        try {
+            window.history.replaceState(null, '', '/log?levels=error,debug&q=frame+time&sync=1&connections=0#demo');
+            const requests = emit.mock.calls.length;
+
+            service.openPage();
+            TestBed.flushEffects();
+
+            expect([ service.filter(), [ ...service.levels() ], service.search(), service.showBroadcastTraffic(), service.showConnections() ])
+                .toEqual([ 'demo', [ 0, 3 ], 'frame time', true, false ]);
+            expect(emit.mock.calls.length).toBe(requests + 1);
+        } finally {
+            service.closePage();
+            window.history.replaceState(null, '', path);
+        }
+    });
+
+    it('follows the address when it changes on the open page, and only there', () => {
+        const service = start();
+        const path = location.pathname + location.search + location.hash;
+        try {
+            window.history.replaceState(null, '', '/log');
+            service.openPage();
+
+            location.hash = 'other-app';
+            window.dispatchEvent(new HashChangeEvent('hashchange'));
+            expect(service.filter()).toBe('other-app');
+
+            // on the way to another page, the address is that page's
+            window.history.replaceState(null, '', '/clients?app=x');
+            window.dispatchEvent(new PopStateEvent('popstate'));
+            expect(service.filter()).toBe('other-app');
+        } finally {
+            service.closePage();
+            window.history.replaceState(null, '', path);
+        }
+    });
+
+    it('writes the filters into the address and reads them back, the defaults left out', () => {
+        const address = { filter: 'a b', levels: [ 1, 2 ], search: 'x&y=z', showBroadcastTraffic: true, showConnections: false };
+        const { search, hash } = writeAddress(address);
+
+        expect(search).toBe('?levels=warn,info&q=x%26y%3Dz&sync=1&connections=0');
+        expect(readAddress(search, hash)).toEqual(address);
+        expect(writeAddress({ ...address, filter: '', levels: [ 0, 1, 2, 3 ], search: '', showBroadcastTraffic: false, showConnections: true }))
+            .toEqual({ search: '', hash: '' });
+        expect(readAddress('?levels=none', '').levels).toEqual([]);
+        expect(readAddress('?levels=bogus,ERROR', '').levels).toEqual([ 0 ]);
     });
 
     it('shows live lines in batches', () => {
@@ -276,16 +332,6 @@ describe('LogService', () => {
         expect([ service.filter(), [ ...service.levels() ], service.showBroadcastTraffic(), service.search() ])
             .toEqual([ '', [ 0, 1, 2, 3 ], false, '' ]);
         expect(emit.mock.calls.length).toBe(requests + 1);
-    });
-
-    it('follows the app in the address when it changes on the open page', () => {
-        const service = start();
-
-        location.hash = 'other-app';
-        window.dispatchEvent(new HashChangeEvent('hashchange'));
-
-        expect(service.filter()).toBe('other-app');
-        location.hash = '';
     });
 
     it('remembers every app it has seen, across filter changes', () => {

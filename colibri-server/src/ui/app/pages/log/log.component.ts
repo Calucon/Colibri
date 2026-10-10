@@ -108,7 +108,8 @@ export class LogComponent implements AfterViewInit, OnDestroy {
     private resizeObserver: ResizeObserver | undefined;
 
     constructor() {
-        afterNextRender(() => this.log.showFilterInAddress());
+        // After the first render: by then the address is this page's, not the one it came from.
+        afterNextRender(() => this.log.openPage());
 
         afterRenderEffect(() => {
             this.rows();
@@ -140,6 +141,7 @@ export class LogComponent implements AfterViewInit, OnDestroy {
     }
 
     ngOnDestroy(): void {
+        this.log.closePage();
         this.resizeObserver?.disconnect();
         const el = this.scroller().nativeElement;
         el.removeEventListener('wheel', this.onWheel);

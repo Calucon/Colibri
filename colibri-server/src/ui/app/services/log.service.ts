@@ -39,12 +39,68 @@ export const MAX_MESSAGES = 10000;
 /** How long live lines are collected before the page shows them, in ms. */
 export const FLUSH_INTERVAL = 100;
 
-const readHash = function (): string {
+const decode = function (text: string): string {
     try {
-        return decodeURIComponent(location.hash.substring(1));
+        return decodeURIComponent(text);
     } catch {
-        return location.hash.substring(1);
+        return text;
     }
+};
+
+// Whether the address is the log page's: on the way to another page, it is that page's.
+const isLogPath = function (): boolean {
+    return location.pathname.endsWith('/log');
+};
+
+/** The level names in the address: ?levels=error,warn. */
+const LEVEL_NAMES: ReadonlyArray<string> = [ 'error', 'warn', 'info', 'debug' ];
+
+/**
+ * The log's filters as the address holds them, so that a reload or a shared link shows the same:
+ * the app in the hash, as before, the rest in the query. Left out at their defaults.
+ */
+export interface LogAddress {
+    filter: string;
+    levels: ReadonlyArray<number>;
+    search: string;
+    showBroadcastTraffic: boolean;
+    showConnections: boolean;
+}
+
+export const readAddress = function (search: string, hash: string): LogAddress {
+    const params = new Map<string, string>();
+    for (const part of search.replace(/^\?/, '').split('&')) {
+        if (!part) continue;
+        const at = part.indexOf('=');
+        // a + in a query is a space, as a form writes it
+        const [ key, value ] = at < 0 ? [ part, '' ] : [ part.slice(0, at), part.slice(at + 1) ];
+        params.set(decode(key.replace(/\+/g, ' ')), decode(value.replace(/\+/g, ' ')));
+    }
+
+    const levels = params.get('levels');
+    return {
+        filter: decode(hash.replace(/^#/, '')),
+        levels: levels === undefined
+            ? LOG_LEVELS.map(l => l.value)
+            : levels.split(',').map(name => LEVEL_NAMES.indexOf(name.trim().toLowerCase())).filter(l => l >= 0).sort(),
+        search: params.get('q') ?? '',
+        showBroadcastTraffic: params.get('sync') === '1',
+        showConnections: params.get('connections') !== '0'
+    };
+};
+
+export const writeAddress = function (address: LogAddress): { search: string; hash: string } {
+    const params: string[] = [];
+    if (address.levels.length !== LOG_LEVELS.length) {
+        params.push(`levels=${address.levels.map(l => LEVEL_NAMES[l]).join(',') || 'none'}`);
+    }
+    if (address.search) params.push(`q=${encodeURIComponent(address.search)}`);
+    if (address.showBroadcastTraffic) params.push('sync=1');
+    if (!address.showConnections) params.push('connections=0');
+    return {
+        search: params.length > 0 ? `?${params.join('&')}` : '',
+        hash: address.filter ? `#${encodeURIComponent(address.filter)}` : ''
+    };
 };
 
 @Injectable({
@@ -65,14 +121,16 @@ export class LogService {
     /** Every app seen in a log line since the page loaded, whatever the filters. */
     public readonly apps = this._apps.asReadonly();
 
-    public readonly filter = signal<string>(readHash());
-    public readonly levels = signal<ReadonlySet<number>>(new Set(LOG_LEVELS.map(l => l.value)));
-    public readonly showBroadcastTraffic = signal(false);
+    private readonly initial = isLogPath() ? readAddress(location.search, location.hash) : readAddress('', '');
+
+    public readonly filter = signal<string>(this.initial.filter);
+    public readonly levels = signal<ReadonlySet<number>>(new Set(this.initial.levels));
+    public readonly showBroadcastTraffic = signal(this.initial.showBroadcastTraffic);
     /** Whether the routine connect and disconnect lines are shown. */
-    public readonly showConnections = signal(true);
+    public readonly showConnections = signal(this.initial.showConnections);
 
     /** Text to look for in the loaded lines. Unlike the filters above, the page applies it itself. */
-    public readonly search = signal('');
+    public readonly search = signal(this.initial.search);
 
     /** How many of the loaded lines there are of each level. */
     public readonly levelCounts = computed(() => {
@@ -87,16 +145,22 @@ export class LogService {
         this.levels.set(new Set(values));
     }
 
+    // Whether the log page is open: only then is the address the log's.
+    private pageOpen = false;
+
     /**
-     * Puts the app filter back in the address, which a link to the page, such as its tab, leaves
-     * out: a reload or a copied link would show every app again.
+     * Called by the log page when it opens. A link with filters in it, such as one from the Clients
+     * page, sets them; a link without, such as the page's tab, keeps the filters and puts them back
+     * in the address, or a reload or a copied link would lose them.
      */
-    public showFilterInAddress(): void {
-        const filter = this.filter();
-        if (filter && readHash() !== filter) {
-            // the whole path: a bare #fragment resolves against <base href="/">
-            history.replaceState(history.state, '', `${location.pathname}${location.search}#${encodeURIComponent(filter)}`);
-        }
+    public openPage(): void {
+        this.pageOpen = true;
+        if (location.search || location.hash.length > 1) this.applyAddress();
+        else this.updateAddress(true);
+    }
+
+    public closePage(): void {
+        this.pageOpen = false;
     }
 
     public clearFilters(): void {
@@ -105,6 +169,37 @@ export class LogService {
         this.showConnections.set(true);
         this.search.set('');
         if (this.levels().size !== LOG_LEVELS.length) this.setLevels(LOG_LEVELS.map(l => l.value));
+    }
+
+    private applyAddress(): void {
+        const address = readAddress(location.search, location.hash);
+        this.filter.set(address.filter);
+        this.search.set(address.search);
+        this.showBroadcastTraffic.set(address.showBroadcastTraffic);
+        this.showConnections.set(address.showConnections);
+        // a new set only for other levels: a new one would request the log again
+        const levels = this.levels();
+        if (levels.size !== address.levels.length || address.levels.some(l => !levels.has(l))) this.setLevels(address.levels);
+    }
+
+    // The query is replaced, so that each key typed is not a step back. A new app is a new entry, as
+    // it always was: the browser's back button goes back to the previous app. `replace` replaces
+    // the app too, for a page opened without one in its address.
+    private updateAddress(replace = false): void {
+        if (!this.pageOpen || !isLogPath()) return;
+        const { search, hash } = writeAddress({
+            filter: this.filter(),
+            levels: [ ...this.levels() ].sort(),
+            search: this.search(),
+            showBroadcastTraffic: this.showBroadcastTraffic(),
+            showConnections: this.showConnections()
+        });
+        const currentHash = location.hash.length > 1 ? location.hash : '';
+        if (location.search !== search || (replace && currentHash !== hash)) {
+            // the whole path: a bare ?query resolves against <base href>
+            history.replaceState(history.state, '', `${location.pathname}${search}${replace ? hash : currentHash}`);
+        }
+        if (!replace && currentHash !== hash) location.hash = hash;
     }
 
     private readonly byId = new Map<string, LogMessage>();
@@ -128,7 +223,7 @@ export class LogService {
             });
 
         effect(() => {
-            const filter = this.filter();
+            this.filter();
             this.levels();
             this.showBroadcastTraffic();
             this.showConnections();
@@ -137,11 +232,24 @@ export class LogService {
                 this.clear();
                 this.requestLog();
             });
-            location.hash = filter || '';
         });
 
-        // a link to another app's log opened on this page, or the address edited by hand
-        window.addEventListener('hashchange', () => this.filter.set(readHash()));
+        effect(() => {
+            this.filter();
+            this.levels();
+            this.showBroadcastTraffic();
+            this.showConnections();
+            this.search();
+            untracked(() => this.updateAddress());
+        });
+
+        // the browser's back and forward buttons, a link to another app's log opened on this page,
+        // or the address edited by hand
+        const follow = () => {
+            if (this.pageOpen && isLogPath()) this.applyAddress();
+        };
+        window.addEventListener('popstate', follow);
+        window.addEventListener('hashchange', follow);
 
         // The lines from before stay. The history fills in what was logged meanwhile, below a
         // row that marks the gap; after a server restart that is the new server's whole log.
