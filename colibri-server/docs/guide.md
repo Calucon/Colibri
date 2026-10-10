@@ -581,12 +581,14 @@ client disconnects, the voice clients of its app at its address over the number 
 there are dropped within 1.5 s, the one quiet the longest first. With none left, all of them are
 dropped at once.
 
-Other packets are dropped with a warning, at most once per source every 10 s:
+Other packets are dropped. A Unity client's voice often starts a moment before its TCP handshake is
+in, so the first packet dropped from a source is only a debug line. The source is reported as a
+warning once its packets have been dropped for 3 s, at most once every 10 s:
 
 | Warning | Cause |
 | --- | --- |
-| `Ignoring voice packet from <address>:<port> for app <app id>: no Unity client of that app is connected from <address> ...` | Expected for a moment while a Unity client connects or reconnects. If it persists, the client's voice and its TCP connection reach the server from different addresses, e.g. through a proxy, or TCP fell back to IPv6 because the server name's IPv4 address does not answer on the TCP port ([Configuration](#configuration)). |
-| `Ignoring voice packet from <address>:<port> for app <app id>: <address> has <n> Unity client(s) of that app, and as many voice clients already ...` | Expected for up to 0.5 s after a Unity client's voice socket is opened again. If it persists, more voice sockets than TCP connections of that app send from the address, or someone forges packets from it. |
+| `Ignoring voice packet from <address>:<port> for app <app id>: no Unity client of that app is connected from <address> ...` | The client's voice and its TCP connection reach the server from different addresses, e.g. through a proxy, or TCP fell back to IPv6 because the server name's IPv4 address does not answer on the TCP port ([Configuration](#configuration)). |
+| `Ignoring voice packet from <address>:<port> for app <app id>: <address> has <n> Unity client(s) of that app, and as many voice clients already ...` | More voice sockets than TCP connections of that app send from the address, or someone forges packets from it. |
 
 Voice from an address in `TRUSTED_PROXIES` is relayed without the check and the limit, since through
 a proxy every packet comes from the proxy's address. The server logs this once per address:

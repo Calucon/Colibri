@@ -354,10 +354,12 @@ EditMode tests, which `npm run test:vectors` checks in CI.
   the place of a voice client quiet for 500 ms, so that a Unity client's voice socket opened again
   on a new port gets in within 0.5 s. The voice clients at an address stop receiving as soon as the
   last Unity client of their app there disconnects; those over the number left after one
-  disconnects are dropped within 1.5 s. Other packets are dropped with a warning, at most once per
-  source every 10 s. Voice from an address in `TRUSTED_PROXIES` is relayed unchecked and
-  unlimited, also while a Unity client is connected from the proxy's machine; the server logs this
-  once per address. See [Voice relay](./guide.md#voice-relay).
+  disconnects are dropped within 1.5 s. Other packets are dropped. A Unity client's voice often
+  starts a moment before its TCP handshake is in, so a source is reported as a warning only once its
+  packets have been dropped for 3 s, at most once every 10 s, and its first dropped packet is a debug
+  line. Voice from an address in `TRUSTED_PROXIES` is relayed unchecked and unlimited, also while a
+  Unity client is connected from the proxy's machine; the server logs this once per address. See
+  [Voice relay](./guide.md#voice-relay).
 - An address with n Unity clients of an app can still be sent n copies of the app's voice: a
   forged sender can take the place of one of them that sends no voice.
 - The app id keeps apps apart but is not access control: anyone who knows an app's name and can
@@ -639,8 +641,8 @@ The endpoints are documented under [REST store](./protocol.md#rest-store).
   `undefined`/`null`/empty-string/invalid-JSON edge cases), the TCP worker and its proxy, the
   Socket.IO server against real `socket.io-client` sockets, the REST store and web server, the
   voice server (apps kept apart, a client changing app, 1.x voice packets, senders matched to
-  the Unity clients' addresses, one per Unity client) and the voice packet
-  format, `WebLog`, `ClientLogger`, `BroadcastLogger`, the console log, the `DATA_ROOT`
+  the Unity clients' addresses, one per Unity client, dropped senders reported after 3 s) and the
+  voice packet format, `WebLog`, `ClientLogger`, `BroadcastLogger`, the console log, the `DATA_ROOT`
   check, the configuration, the ring buffer, the deprecated serialization helpers, and the inbound
   limits: the backlog count, the rate limit and the merging of held updates, on both transports.
 - `npm run test:vectors` checks the cross-implementation protocol vectors in colibri-unity's

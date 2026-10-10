@@ -862,8 +862,8 @@ The server drops these packets, reporting at most one per source address and por
 | a header version other than `0` and `2` | error `Ignoring malformed voice packet from <address>:<port>: its header version is <n>, not 2` |
 | shorter than the 11-byte header | error `Ignoring malformed voice packet from <address>:<port>: <n> bytes is shorter than the 11-byte header` |
 | from source port 0 | error `Ignoring malformed voice packet from <address>:<port>: its source port is 0, ...` |
-| from an address without a Unity client of its app | warning `Ignoring voice packet from <address>:<port> for app <app id>: no Unity client of that app is connected from <address>` |
-| from a new sender at an address with as many voice clients of its app as Unity clients, none of them quiet for 500 ms | warning `Ignoring voice packet from <address>:<port> for app <app id>: <address> has <n> Unity client(s) of that app, and as many voice clients already` |
+| from an address without a Unity client of its app | warning `Ignoring voice packet from <address>:<port> for app <app id>: no Unity client of that app is connected from <address>`, once the source's packets have been dropped for 3 s; a debug line for its first one |
+| from a new sender at an address with as many voice clients of its app as Unity clients, none of them quiet for 500 ms | warning `Ignoring voice packet from <address>:<port> for app <app id>: <address> has <n> Unity client(s) of that app, and as many voice clients already`, once the source's packets have been dropped for 3 s; a debug line for its first one |
 
 The app id keeps the voice of different apps apart, as the app name does on TCP. It is not access
 control. Anyone who knows an app's name and can reach the TCP port can join the app, and send voice to
