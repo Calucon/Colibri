@@ -1,6 +1,6 @@
 import { CONNECTION_LINE, Service } from '../core/index.js';
 import * as dgram from 'dgram';
-import { AddressInfo } from 'net';
+import { AddressInfo, isIPv6 } from 'net';
 import { mkdir, writeFile } from 'fs/promises';
 import { endianness } from 'os';
 import * as path from 'path';
@@ -88,6 +88,16 @@ export const wavHeader = function (samplingRate: number, dataBytes: number): Buf
     return header;
 };
 
+/**
+ * The UDP socket voice listens on, for VOICE_HOST. An IPv6 address, `::` included, gets an IPv6
+ * socket that takes IPv4 as well (ipv6Only false), so that VOICE_HOST=:: serves Unity clients of
+ * either kind. Anything else, a host name included, gets the IPv4 socket voice always had: a udp4
+ * socket cannot bind an IPv6 address at all, so an IPv6 VOICE_HOST used to leave voice off.
+ */
+export const voiceSocketOptions = function (hostname: string): dgram.SocketOptions {
+    return isIPv6(hostname) ? { type: 'udp6', ipv6Only: false } : { type: 'udp4' };
+};
+
 const formatAppId = (appId: number): string => `0x${appId.toString(16).padStart(8, '0')}`;
 
 /** The samples as the little-endian bytes a .wav file holds, without copying them where it can. */
@@ -142,7 +152,7 @@ export class VoiceServer extends Service {
     }
 
     public start(voicePort: number, hostname: string) {
-        this.udpSocket = dgram.createSocket('udp4');
+        this.udpSocket = dgram.createSocket(voiceSocketOptions(hostname));
         this.udpSocket.on('listening', () => {
             this.listening = true;
             const address = this.udpSocket.address() as AddressInfo;

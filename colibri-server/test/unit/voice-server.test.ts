@@ -1,13 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as dgram from 'dgram';
 import { once } from 'events';
+import { existsSync, readFileSync } from 'fs';
 import { mkdir, mkdtemp, readdir, readFile, rm } from 'fs/promises';
 import { AddressInfo } from 'net';
-import { tmpdir } from 'os';
+import { networkInterfaces, tmpdir } from 'os';
 import * as path from 'path';
 import { Subscription } from 'rxjs';
 import wavefile from 'wavefile';
-import { VoiceServer, wavHeader } from '../../src/server/modules/web/voice-server.js';
+import { VoiceServer, voiceSocketOptions, wavHeader } from '../../src/server/modules/web/voice-server.js';
 import { VoiceCodec, encodeVoicePacket, voiceAppId } from '../../src/server/modules/web/voice-packet.js';
 import { ConsoleLog, LogLevel, LogMessage, Service } from '../../src/server/modules/core/index.js';
 
@@ -548,6 +549,98 @@ describe('VoiceServer startup', () => {
             expect(errors()[0]!.message).not.toContain('Voice is disabled');
             expect(consoleError).not.toHaveBeenCalled();
         });
+    });
+});
+
+describe('voiceSocketOptions', () => {
+    // An IPv6 VOICE_HOST used to get the udp4 socket as well, which cannot bind it (EINVAL), and
+    // voice stayed off.
+    it.each([ '::', '::1', '2001:db8::1', 'fe80::1%lo' ])('gives %s an IPv6 socket that takes IPv4 as well', (host) => {
+        expect(voiceSocketOptions(host)).toEqual({ type: 'udp6', ipv6Only: false });
+    });
+
+    it.each([ '0.0.0.0', '127.0.0.1', 'localhost', 'voice.example.org' ])('gives %s the IPv4 socket', (host) => {
+        expect(voiceSocketOptions(host)).toEqual({ type: 'udp4' });
+    });
+});
+
+// Whether this machine has an IPv6 loopback, and whether its IPv6 sockets take IPv4 too, which
+// they do unless the system says otherwise (on Linux, net.ipv6.bindv6only=1).
+const hasIPv6Loopback = Object.values(networkInterfaces()).some(addresses => addresses?.some(a => a.address === '::1'));
+const BINDV6ONLY = '/proc/sys/net/ipv6/bindv6only';
+const ipv6TakesIPv4 = !existsSync(BINDV6ONLY) || readFileSync(BINDV6ONLY, 'utf8').trim() === '0';
+
+describe.skipIf(!hasIPv6Loopback)('VoiceServer on an IPv6 VOICE_HOST', () => {
+    let server: VoiceServer | undefined;
+    let sockets: dgram.Socket[];
+
+    beforeEach(() => {
+        server = undefined;
+        sockets = [];
+    });
+
+    afterEach(async () => {
+        for (const socket of sockets) socket.close();
+        await server?.stop();
+    });
+
+    const start = async (host: string): Promise<dgram.Socket> => {
+        server = new VoiceServer(48000, '/nonexistent-voice-recordings');
+        server.start(0, host);
+        const udpSocket = (server as unknown as VoiceServerInternals).udpSocket;
+        await once(udpSocket, 'listening');
+        return udpSocket;
+    };
+
+    const openClient = async (type: 'udp4' | 'udp6'): Promise<dgram.Socket> => {
+        const socket = dgram.createSocket(type);
+        sockets.push(socket);
+        socket.bind(0, type === 'udp4' ? '127.0.0.1' : '::1');
+        await once(socket, 'listening');
+        return socket;
+    };
+
+    const sendTo = (socket: dgram.Socket, port: number, host: string, packet: Buffer): Promise<void> =>
+        new Promise((resolve, reject) => socket.send(packet, port, host, err => err ? reject(err) : resolve()));
+
+    const nextMessage = (socket: dgram.Socket): Promise<Buffer> =>
+        new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error('no voice packet relayed within 2s')), 2000);
+            socket.once('message', (msg) => {
+                clearTimeout(timeout);
+                resolve(msg);
+            });
+        });
+
+    it('relays between clients on the IPv6 loopback', async () => {
+        const udpSocket = await start('::1');
+        const { port, family } = udpSocket.address() as AddressInfo;
+        expect(family).toBe('IPv6');
+        const a = await openClient('udp6');
+        const b = await openClient('udp6');
+
+        await sendTo(a, port, '::1', voicePacket(1, 1));
+        const relayed = nextMessage(a);
+        await sendTo(b, port, '::1', voicePacket(2, 1));
+
+        expect(await relayed).toEqual(voicePacket(2, 1));
+    });
+
+    // VOICE_HOST=:: for a server reached over IPv6, where Unity clients on IPv4 still have to be heard.
+    it.skipIf(!ipv6TakesIPv4)('takes IPv4 clients as well on ::, and relays between the two kinds', async () => {
+        const { port } = (await start('::')).address() as AddressInfo;
+        const v4 = await openClient('udp4');
+        const v6 = await openClient('udp6');
+
+        await sendTo(v4, port, '127.0.0.1', voicePacket(1, 1));
+        const toV4 = nextMessage(v4);
+        await sendTo(v6, port, '::1', voicePacket(2, 1));
+        expect(await toV4).toEqual(voicePacket(2, 1));
+
+        const toV6 = nextMessage(v6);
+        await sendTo(v4, port, '127.0.0.1', voicePacket(1, 2));
+        expect(await toV6).toEqual(voicePacket(1, 2));
+        expect(server!.status.clients).toBe(2);
     });
 });
 
