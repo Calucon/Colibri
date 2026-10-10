@@ -167,6 +167,40 @@ namespace HCIKonstanz.Colibri.Tests
         }
 
         /// <summary>
+        /// A listener that throws, such as a VoiceReceiver without an Opus decoder in the macOS
+        /// Editor, used to throw out of the delivery, and every packet still to be delivered in
+        /// that frame was dropped, other senders' included.
+        /// </summary>
+        [Test]
+        public void AListenerThatThrowsDoesNotKeepTheOtherPacketsFromBeingDelivered()
+        {
+            var first = new List<short>();
+            var second = new List<short>();
+            var other = new List<short>();
+            _voice.AddVoicePacketListener(1, packet => first.Add(packet.Sequence));
+            _voice.AddVoicePacketListener(1, packet =>
+            {
+                if (packet.Sequence == 1)
+                    throw new System.InvalidOperationException("listener bug");
+                second.Add(packet.Sequence);
+            });
+            _voice.AddVoicePacketListener(2, packet => other.Add(packet.Sequence));
+
+            for (short sequence = 0; sequence < 3; sequence++)
+            {
+                _voice.EnqueueReceived(new VoicePacket { Id = 1, Sequence = sequence, FrameSize = 960, Codec = Codec.PCM });
+                _voice.EnqueueReceived(new VoicePacket { Id = 2, Sequence = sequence, FrameSize = 960, Codec = Codec.PCM });
+            }
+
+            LogAssert.Expect(LogType.Error, new Regex(@"^Colibri voice: a listener for voice id 1 threw an exception\..*listener bug", RegexOptions.Singleline));
+            Assert.DoesNotThrow(() => _voice.DeliverReceivedPackets());
+
+            Assert.That(first, Is.EqualTo(new short[] { 0, 1, 2 }));
+            Assert.That(second, Is.EqualTo(new short[] { 0, 2 }));
+            Assert.That(other, Is.EqualTo(new short[] { 0, 1, 2 }));
+        }
+
+        /// <summary>
         /// The server relays only the voice of this client's app. Whatever reaches the socket some
         /// other way is dropped before it is queued: a packet of another app with the same voice
         /// id, one from a Colibri 1.x client, one too short for the header. A short one used to

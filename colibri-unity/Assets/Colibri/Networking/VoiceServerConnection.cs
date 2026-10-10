@@ -510,7 +510,19 @@ namespace HCIKonstanz.Colibri.Networking
             if (voicePacketListeners.ContainsKey(voicePacket.Id))
             {
                 foreach (var voicePacketListener in voicePacketListeners[voicePacket.Id].ToArray())
-                    voicePacketListener.Invoke(voicePacket);
+                {
+                    try
+                    {
+                        voicePacketListener.Invoke(voicePacket);
+                    }
+                    catch (Exception e)
+                    {
+                        // Thrown out of DeliverReceivedPackets, it dropped every packet still to
+                        // be delivered in this frame, other senders' included.
+                        Debug.LogError($"Colibri voice: a listener for voice id {voicePacket.Id} threw an exception. "
+                            + $"The other listeners and packets were still delivered.\n{e}");
+                    }
+                }
             }
         }
     }
