@@ -268,6 +268,18 @@ rationale, migration steps, and what the Editor verification did and did not cov
   failed (the timeout, a refusal or another socket error) and is `null` once a connection has
   opened; *Window → Colibri Status* shows it under *Not connected* as *Last attempt: …*. None of
   these counts towards a suspected protocol mismatch, since nothing was ever accepted.
+- **Servers reached over IPv6.** The TCP socket was IPv4 and connected by name, so a server name
+  with only IPv6 addresses (AAAA records), such as a server whose IPv4 address is behind
+  carrier-grade NAT, or an IPv6 address could not be reached at all (in 1.3.1 too). The name is now
+  looked up at every attempt, within the 5 s connect timeout, and its addresses are tried in the
+  order the device's resolver returns them, each with a socket of its own family. A refused or
+  unreachable address is followed by the next at once, and moving on is logged. One without an
+  answer is given up after its share of the time left (at least 1 s, 0.25 s for a loopback address
+  followed by others: Windows resolves `localhost` to `::1` first and takes a second or more to
+  report a refusal, while colibri-server listens on IPv4 by default). With a host name, the
+  `connected to` line names the address used. An IPv6 address may be written with or without
+  brackets, and `Store` URLs put it in brackets. TLS still checks the certificate against the
+  server address as entered.
 - **Disabling and enabling the connection in one frame** no longer takes 5 s on Mono or leaves sends stuck.
 - **Connected means the server has spoken.** A session becomes `Connected` on the first frame the
   server sends, not when the TCP connection opens. Only then is the backoff reset, `OnConnected`
@@ -356,10 +368,12 @@ rationale, migration steps, and what the Editor verification did and did not cov
   `Receive()`. `OnDisable` no longer NREs when `Connect()` bailed out. The receive socket binds to
   port **0** instead of the hardcoded 9014: the server replies to the datagram's source port
   (`voice-server.ts`), so the fixed port bought nothing and capped a machine at one Unity client.
-  Voice now goes to an IPv4 address of the server, since both voice sockets are IPv4: on Windows
-  `localhost` resolved to `::1` first and every send failed. An IP address is no longer
-  reverse-resolved (`Dns.GetHostEntry` threw for a LAN address without a DNS name), and an address
-  that cannot be resolved, or has no IPv4 address, turns voice off with a clear error instead of
+  Voice now goes to an IPv4 address of the server when it has one, since the server's voice socket
+  is IPv4 by default: on Windows `localhost` resolved to `::1` first and every send failed. A server
+  address with only IPv6 addresses gets voice over IPv6, from an IPv6 socket, and the log says once
+  that the server needs `VOICE_HOST=::` for it. An IP address is no longer reverse-resolved
+  (`Dns.GetHostEntry` threw for a LAN address without a DNS name), and an address that cannot be
+  resolved, or has no address voice can be sent to, turns voice off with a clear error instead of
   throwing from `OnEnable`. Received packets now reach the main thread through a per-instance
   `ConcurrentQueue`. They went through a static `LockFreeQueue`, which is only safe with one thread
   enqueueing (and after a quick disable and enable the old receive thread may still be handing over
@@ -721,11 +735,12 @@ otherwise spend on their prototype, so:
   1000-line bound; `SyncAccessorTests` the IL2CPP accessor path, run in the Editor;
   `SyncStrippingTests` that `[Sync]` is a `PreserveAttribute` and carries `[RequireAttributeUsages]`; `WireNameTests` the wire names under
   a Turkish culture; `AndroidSettingsCheckTests` the Android build check;
-  `VoiceServerAddressTests` the choice of the server's IPv4 address; `VoicePacketCodecTests`
-  the voice header and the app id, with `VoicePacketQueueTests` which received packets are played;
-  and `VoiceFramerTests` with `StreamingResamplerTests` how recorded audio becomes voice frames:
-  only 960-sample frames and no lost audio from a 44.1 kHz microphone, an encoder that always
-  fails, and resampling without drift however the stream is cut.
+  `VoiceServerAddressTests` the choice of the server's address, IPv4 first, and voice over IPv6 on
+  the loopback; `VoicePacketCodecTests` the voice header and the app id, with
+  `VoicePacketQueueTests` which received packets are played; and `VoiceFramerTests` with
+  `StreamingResamplerTests` how recorded audio becomes voice frames: only 960-sample frames and no
+  lost audio from a 44.1 kHz microphone, an encoder that always fails, and resampling without drift
+  however the stream is cut.
   `FrameCodecTests` also covers the colon at either end of a handshake field.
 - New PlayMode assembly `HCIKonstanz.Colibri.E2E` (`Assets/Tests/`, in the development project
   rather than the shipped package). A real Unity client, a real colibri-server and a raw v3 peer as
@@ -786,7 +801,9 @@ otherwise spend on their prototype, so:
   `SetupWindowTests` that a value the Setup window marks as an error stays out of the configuration
   without holding back a valid change or undoing one made elsewhere;
   `ConnectTimeoutTests` an attempt nothing answers, cancelling one, and a refusal reported at
-  once; `VoicePacketQueueTests` voice packets from several receive threads at once; `OutboxTests`
+  once; `ServerAddressTests` IP addresses with and without brackets, the order a name's addresses
+  are tried in, their shares of the connect timeout, and moving on from an address that refuses or
+  does not answer, IPv6 then IPv4 on the loopback; `VoicePacketQueueTests` voice packets from several receive threads at once; `OutboxTests`
   the 10 000-message cap, connected and not; `RemoteLoggingTests` the missing-lines note. In
   PlayMode, `SyncModelTests` and `SyncTransformTests` run the limit end to end (a burst, a limit of
   `0`, what is held going out on quit, pause and focus loss, a destroy and a delete from another

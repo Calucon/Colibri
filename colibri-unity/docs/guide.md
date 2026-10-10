@@ -92,7 +92,7 @@ project has no configuration. *Save Config* writes `Assets/Resources/ColibriConf
 | Setting | Default | Description |
 |---|---|---|
 | App Name | empty | Required. Only clients with the same app name exchange data. |
-| Server Address | `colibri.hci.uni-konstanz.de` | Host name or IP address of the [server](../../colibri-server), without `http://`. On a headset or phone, `localhost` is the device. Use the server's LAN IPv4 address. The preset public test server works only while it runs colibri-server 2.x. |
+| Server Address | `colibri.hci.uni-konstanz.de` | Host name, IPv4 address or IPv6 address of the [server](../../colibri-server), without `http://`. An IPv6 address may be in brackets, e.g. `[2001:db8::1]` ([Server addresses](#server-addresses)). On a headset or phone, `localhost` is the device. Use the server's LAN IPv4 address. The preset public test server works only while it runs colibri-server 2.x. |
 
 - Use an app name that is unique on the server. All clients with one app name see each other's
   objects and messages, and the server's load grows with the square of their number.
@@ -199,9 +199,8 @@ buttons under **Android / Meta Quest** (Android target) or **Player build** (oth
 
 ### Platform notes
 
-- Use the server's LAN IPv4 address, not `localhost`. Voice chat works only over IPv4. A headset
-  that cannot reach the server keeps retrying, and [`LastConnectFailure`](#connection-and-outages)
-  holds the reason.
+- Use the server's LAN IPv4 address, not `localhost`. A headset that cannot reach the server keeps
+  retrying, and [`LastConnectFailure`](#connection-and-outages) holds the reason.
 - *Run In Background* has no effect on Android.
 - Managed code stripping keeps `[Sync]` members. Your classes that only Newtonsoft JSON uses
   (`JToken.FromObject`, `ToObject<T>`, `Store`) are reached only through reflection, so stripping
@@ -253,6 +252,8 @@ Show [`LastConnectFailure`](#connection-and-outages) in your app.
 | `Colibri: 192.168.0.10:9012 did not answer within 5 s. …` | Wrong IP, server on another network or subnet, Wi-Fi client isolation, or a firewall dropping packets | Fix the address or the network |
 | `Colibri: connection to 192.168.0.10 failed (ConnectionRefused), retrying...` | The machine is reachable, but nothing listens on the TCP port | Start colibri-server, or check *TCP server Port* |
 | `… failed (HostUnreachable) …`, `(NetworkUnreachable)` or another socket error | Wrong address or network | Fix the address or the network |
+| `Colibri: no answer from [2001:db8::1]:9012 within 2.5 s, trying 192.0.2.10:9012` or `Colibri: no connection to [2001:db8::1]:9012 (…), trying …` | The server name has several addresses and this one does not work from here: no IPv6 route, or the server does not listen on IPv6. The next address is tried. | None if the next one connects. To avoid the delay, set `TCP_HOST=::` on the server or remove the address from DNS ([Server addresses](#server-addresses)) |
+| `Colibri: colibri.example.org could not be resolved within 5 s. …` | The device's DNS server does not answer | Check the network, or use the server's IP address |
 | `Colibri: invalid frame from server, dropping connection: …` if the server sends anything, then `Colibri: 3 connections in a row were accepted but ended before a single frame could be read. …` | A 1.x server, an address that is not a colibri-server, or [TLS](#tls) on the server only. With *Server supports SSL/TLS?* off, also a proxy or port forwarding whose backend is not running. | Use a 2.x server, correct the address, tick *Server supports SSL/TLS?*, or start the server behind the proxy |
 | `Colibri: 192.168.0.10:9012 accepted the connection but has not sent anything in 2 s, dropping it` (with TLS also `Colibri: server closed the connection`), then `Colibri: 3 connections in a row to 192.168.0.10:9012 were accepted, but nothing was received on any of them: …` | A proxy or port forwarding whose backend is down, a captive portal or a firewall accepts connections, then closes them or forwards nothing. Or the server does not answer or is not a colibri-server. | Check that colibri-server runs and is reachable at that address and port |
 | `… did not answer the TLS handshake …` or `rejected the certificate of …` | TLS settings do not match the server | See [TLS errors](#tls-errors) |
@@ -620,6 +621,27 @@ An attempt that never connected raises no event. Events are raised in order, so 
 the current state. A drop and reconnect between two frames raises `OnDisconnected`, then
 `OnConnected`.
 
+### Server addresses
+
+The server address is looked up at every attempt. Its addresses are tried in the order the device's
+resolver returns them, usually IPv6 first, each with a socket of its own family:
+
+- A refused or unreachable address is followed by the next at once.
+- An address without an answer is given up after its share of the 5 s: the time left divided by the
+  addresses left, at least 1 s. A loopback address followed by others gets 0.25 s, because Windows
+  resolves `localhost` to `::1` first and takes a second or more to report a refusal.
+- Moving on is logged (`Colibri: no answer from …, trying …`). With a host name, the connect line
+  names the address used: `Colibri: connected to colibri.example.org:9012 (2001:db8::1) as app …`.
+
+An IPv6 address works with or without brackets. `Store` URLs get the brackets either way. With TLS,
+the certificate is checked against the server address as entered.
+
+colibri-server listens on IPv4 only by default. For a server name with only IPv6 addresses, such as
+a server whose IPv4 address is behind carrier-grade NAT, the server needs `TCP_HOST=::` and
+`VOICE_HOST=::`, or a proxy listening on IPv6 ([server
+guide](../../colibri-server/docs/guide.md#configuration)). Voice prefers IPv4 ([Voice
+chat](#voice-chat)).
+
 ### Sending during an outage
 
 Messages sent while disconnected are queued. After the reconnect, they go out in order, before
@@ -792,9 +814,11 @@ and instantiates `VoiceReceiver` prefabs.
 - The voice plays at the `VoiceReceiver`'s position. For spatial audio, enable *Spatialize* on the
   `AudioSource` and set *Spatial Blend* to `1`. Spatializer plugins set in the audio settings also
   work.
-- The voice server listens on IPv4 only. Colibri sends voice to an IPv4 address of the server, so
-  `localhost` also works on Windows, which resolves it to `::1` first. If the server address has no
-  IPv4 address or cannot be resolved, Colibri logs an error and turns voice chat off.
+- The voice server listens on IPv4 unless `VOICE_HOST` is an IPv6 address. Colibri sends voice to an
+  IPv4 address of the server when it has one, so `localhost` also works on Windows, which resolves
+  it to `::1` first. A server address with only IPv6 addresses gets voice over IPv6, and the log
+  says so once: the server then needs `VOICE_HOST=::` or a proxy listening on IPv6. If the server
+  address cannot be resolved, Colibri logs an error and turns voice chat off.
 - The server forwards voice only to clients with the same App Name, so voice ids must be unique only
   within an app. Each voice packet carries an app id, a hash of the App Name ([Voice
   packets](../../colibri-server/docs/protocol.md#voice-packets-udp)). Without an App Name, no voice
