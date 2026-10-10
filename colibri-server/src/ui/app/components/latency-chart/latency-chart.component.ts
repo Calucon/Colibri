@@ -1,4 +1,4 @@
-import { AfterViewInit, ChangeDetectionStrategy, Component, ElementRef, Injector, OnDestroy, effect, inject, viewChild } from '@angular/core';
+import { AfterViewInit, ChangeDetectionStrategy, Component, ElementRef, Injector, OnDestroy, computed, effect, inject, viewChild } from '@angular/core';
 import { ClientService, ColibriClient } from '../../services';
 import * as d3 from 'd3';
 import { BoxplotStats, boxplot, boxplotStats, boxplotSymbolDot } from './boxplot';
@@ -6,6 +6,9 @@ import { BoxplotStats, boxplot, boxplotStats, boxplotSymbolDot } from './boxplot
 const margin = { top: 12, right: 12, bottom: 28, left: 44 };
 // we ping every 100ms and store the last 1000 values (and query every 1s = 1000ms)
 const timeRange = 110 * 1000;
+// Until the samples cover timeRange, the time axis spans what they cover, but at least this: the
+// first two minutes were a sliver at the right edge.
+const minTimeRange = 10 * 1000;
 const barWidth = 24;
 const boxplotPadding = 5;
 
@@ -33,6 +36,25 @@ const timeLabel = function (value: Date | d3.NumberValue): string {
     return d3.timeFormat(date.getSeconds() === 0 ? '%H:%M' : ':%S')(date);
 };
 
+/**
+ * The median of each second of a client's samples, at their mean time. The 100 ms samples of a few
+ * clients drew a solid band, with each client's colour lost in it.
+ */
+export const perSecond = function (samples: ReadonlyArray<[number, number]>): [number, number][] {
+    const medians: [number, number][] = [];
+    for (let i = 0; i < samples.length;) {
+        const second = Math.floor(samples[i][0] / 1000);
+        const times: number[] = [];
+        const values: number[] = [];
+        for (; i < samples.length && Math.floor(samples[i][0] / 1000) === second; i++) {
+            times.push(samples[i][0]);
+            values.push(samples[i][1]);
+        }
+        medians.push([ d3.mean(times) ?? second * 1000, d3.median(values) ?? 0 ]);
+    }
+    return medians;
+};
+
 interface Line {
     client: ColibriClient;
     color: string;
@@ -51,6 +73,14 @@ export class LatencyChartComponent implements AfterViewInit, OnDestroy {
     private latencyChart = viewChild.required<ElementRef<HTMLDivElement>>('latencyChart');
     clients = this.clientService.clients;
 
+    /** What the chart says instead of an empty plot. */
+    message = computed(() => {
+        const clients = this.clients();
+        if (clients.length === 0) return 'No clients connected.';
+        if (clients.every(client => client.latency.length === 0)) return 'Collecting latency samples…';
+        return null;
+    });
+
     private svg: d3.Selection<SVGSVGElement, unknown, null, undefined> | null = null;
     private lineChartSvg: d3.Selection<SVGGElement, unknown, null, undefined> | null = null;
     private boxplotSvg: d3.Selection<SVGGElement, unknown, null, undefined> | null = null;
@@ -63,6 +93,8 @@ export class LatencyChartComponent implements AfterViewInit, OnDestroy {
     private intervalTimer: number | null = null;
 
     private lineX: d3.ScaleTime<number, number, never> = d3.scaleTime();
+    /** The time of the first sample shown, while there are any. */
+    private since: number | undefined;
 
     ngAfterViewInit(): void {
         this.initChart();
@@ -144,32 +176,41 @@ export class LatencyChartComponent implements AfterViewInit, OnDestroy {
                 .attr('transform', `translate(${margin.left + linechartWidth}, ${margin.top})`);
         }
 
+        // Not the oldest sample still kept: a client keeps 100 s of them, less than timeRange.
+        const first = d3.min(this.clients(), client => client.latency[0]?.[0]);
+        this.since = first === undefined ? undefined : Math.min(this.since ?? first, first);
+        const start = Math.max(now - timeRange, Math.min(this.since ?? now, now - minTimeRange));
+        const filling = start > now - timeRange;
+
+        const axis = d3.axisBottom(this.lineX)
+            .ticks(Math.max(2, Math.floor(linechartWidth / 80)))
+            .tickFormat(timeLabel);
+        this.lineChartSvg?.interrupt().attr('transform', 'translate(0, 0)');
+        this.axisBottom?.interrupt();
+
+        // While the samples do not cover timeRange yet, the scale grows with them each second.
+        if (filling) {
+            this.lineX = d3.scaleTime().domain([ start, now ]).range([0, linechartWidth]);
+            this.axisBottom?.call(axis.scale(this.lineX));
+            return;
+        }
+
         this.lineX = d3.scaleTime()
             .domain([ now - timeRange - 1000, now ])
             .range([0, linechartWidth]);
 
-        if (this.lineChartSvg) {
-            // animate until next (expected) update
-            this.lineChartSvg
-                .interrupt()
-                .attr('transform', 'translate(0, 0)');
+        // slides left until the next (expected) update
+        this.lineChartSvg
+            ?.transition()
+            .ease(d3.easeLinear)
+            .duration(1000)
+            .attr('transform', `translate(${-this.lineX(now - timeRange)}, 0)`);
 
-            this.lineChartSvg
-                .transition()
-                .ease(d3.easeLinear)
-                .duration(1000)
-                .attr('transform', `translate(${-this.lineX(now - timeRange)}, 0)`);
-        }
-
-        if (this.axisBottom) {
-            this.axisBottom
-                .transition()
-                .duration(1000)
-                .ease(d3.easeLinear)
-                .call(d3.axisBottom(this.lineX)
-                    .ticks(Math.max(2, Math.floor(linechartWidth / 80)))
-                    .tickFormat(timeLabel));
-        }
+        this.axisBottom
+            ?.transition()
+            .duration(1000)
+            .ease(d3.easeLinear)
+            .call(axis.scale(this.lineX));
     }
 
     private updateChart(): void {
@@ -231,7 +272,7 @@ export class LatencyChartComponent implements AfterViewInit, OnDestroy {
                 .attr('fill', 'none')
                 .attr('stroke', d => d.color)
                 .attr('stroke-width', 1.5)
-                .attr('d', d => line(d.client.latency));
+                .attr('d', d => line(perSecond(d.client.latency)));
         }
 
         if (this.axisLeft) {
