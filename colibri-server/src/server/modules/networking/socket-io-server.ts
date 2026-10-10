@@ -27,7 +27,7 @@ import {
     rateLimitStartWarning,
     warnsAtEnd,
 } from './inbound-limits.js';
-import { TrustProxy, forwardedClientAddress, trustNoProxy } from './trusted-proxies.js';
+import { TrustProxy, forwardedClientAddress, forwardedTls, trustNoProxy } from './trusted-proxies.js';
 import { ClientActivity, RATE_WINDOW_MILLIS, TrafficMeter } from './client-activity.js';
 
 // How often held-back updates are passed on as a limited client's tokens refill, and finished
@@ -43,7 +43,8 @@ const aboutClient = function (client: { app: string; name: string; id: string })
 export interface SocketIoServerOptions {
     // Per client; see InboundRateLimiter.
     rateLimit?: RateLimit;
-    // The proxies whose X-Forwarded-For names the client; see TRUSTED_PROXIES. None if left out.
+    // The proxies whose X-Forwarded-For names the client, and whose X-Forwarded-Proto says whether it
+    // used TLS; see TRUSTED_PROXIES. None if left out.
     trustProxy?: TrustProxy;
 }
 
@@ -57,6 +58,9 @@ const MAX_SOCKET_IO_PACKET_BYTES = MAX_FRAME_LENGTH + 2 * MAX_FIELD_LENGTH + 102
 export interface SocketIoClient extends NetworkClient {
     socket: SocketIoSocket;
     version: string;
+    // Whether it reached a trusted proxy over TLS, by the proxy's X-Forwarded-Proto (see
+    // forwardedTls). Its connection to this server is in socket.handshake.secure.
+    tlsAtProxy: boolean;
 }
 
 // A web client's messages, for the admin UI. What it sends is counted as it arrives. What it is
@@ -346,7 +350,8 @@ export class SocketIOServer extends Service implements NetworkServer {
             version: typeof version === 'string' ? version : '',
             name: address,
             metadata: {},
-            socket
+            socket,
+            tlsAtProxy: forwardedTls(peer, socket.handshake.headers['x-forwarded-proto'], this.trustProxy),
         };
 
         if (!client.app) {
