@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { DataStore } from '../../src/server/modules/command-hooks/data-store.js';
 import {
     FORMATTED_MODELS_KEPT,
+    LARGE_MODEL_BYTES,
+    LARGE_MODEL_SIZE_REFRESH_MILLIS,
     MAX_MODEL_JSON_LENGTH,
     MODEL_SIZE_REFRESH_MILLIS,
     ModelMeasures,
@@ -98,6 +100,18 @@ describe('ModelMeasures', () => {
         }
         // 60 s: the first measure, and one each 10 s after it
         expect(serialized).toBe(60_000 / MODEL_SIZE_REFRESH_MILLIS);
+    });
+
+    it('measures a large model that changes once per LARGE_MODEL_SIZE_REFRESH_MILLIS, each measure a longer stall', () => {
+        store.updateModel('app', 'c', { id: 'a', text: 'x'.repeat(LARGE_MODEL_BYTES), probe });
+        const measures = new ModelMeasures();
+
+        for (let second = 1; second <= 120; second++) {
+            store.updateModel('app', 'c', { id: 'a', x: second });
+            vi.advanceTimersByTime(1000);
+            measures.bytes(entry('a'));
+        }
+        expect(serialized).toBe(120_000 / LARGE_MODEL_SIZE_REFRESH_MILLIS);
     });
 
     it('measures no more a second than its budget, whatever asks', () => {

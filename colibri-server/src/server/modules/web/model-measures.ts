@@ -10,7 +10,10 @@ export const MODEL_BYTES_PER_SECOND = 2 * 1024 * 1024;
 
 // How long the size of a model that has changed since it was measured is shown before it is
 // measured again. A model that changes every frame would otherwise be measured on every refresh.
+// Measuring stalls the main thread for about 10 ms a MiB, so a large model waits longer.
 export const MODEL_SIZE_REFRESH_MILLIS = 10_000;
+export const LARGE_MODEL_BYTES = 1024 * 1024;
+export const LARGE_MODEL_SIZE_REFRESH_MILLIS = 60_000;
 
 // How much of a model's formatted JSON the model topic carries.
 export const MAX_MODEL_JSON_LENGTH = 512 * 1024;
@@ -53,12 +56,15 @@ export class ModelMeasures {
 
     /**
      * The model's size as compact JSON, in bytes: measured afresh when the budget allows, otherwise
-     * the size it had when it was last measured, at most MODEL_SIZE_REFRESH_MILLIS before, or null
-     * if it has not been measured yet.
+     * the size it had when it was last measured, at most MODEL_SIZE_REFRESH_MILLIS before (or
+     * LARGE_MODEL_SIZE_REFRESH_MILLIS for a large one), or null if it has not been measured yet.
      */
     public bytes(entry: Readonly<ModelEntry>, now = performance.now()): number | null {
         const known = this.sizes.get(entry);
-        if (known && (known.version === entry.version || now - known.at < MODEL_SIZE_REFRESH_MILLIS)) return known.bytes;
+        if (known) {
+            const refresh = known.bytes >= LARGE_MODEL_BYTES ? LARGE_MODEL_SIZE_REFRESH_MILLIS : MODEL_SIZE_REFRESH_MILLIS;
+            if (known.version === entry.version || now - known.at < refresh) return known.bytes;
+        }
 
         // A model is measured once the budget holds as much as it took last time, or the budget is
         // full. One larger than the budget leaves it in debt, which the following seconds pay off.
