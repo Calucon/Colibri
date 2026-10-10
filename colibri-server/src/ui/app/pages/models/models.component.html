@@ -89,7 +89,7 @@
                         <span class="id mono" [title]="row.id">{{ row.id }}</span>
                         <span class="tag" title="Longer than 512 characters: cut, and the server cannot look it up">cut</span>
                       } @else {
-                        <a class="id mono" [routerLink]="[]" [queryParams]="modelParams(row)" queryParamsHandling="merge" [title]="row.id"
+                        <a class="id mono" [routerLink]="[]" [queryParams]="modelParams(row)" queryParamsHandling="merge" [title]="row.id" [attr.data-key]="row.key"
                           [attr.aria-current]="row.open ? 'true' : null" (click)="$event.stopPropagation()">{{ row.id }}</a>
                       }
                     </span>
@@ -196,7 +196,7 @@
           <i class="pi pi-arrow-left" aria-hidden="true"></i><span>Models</span>
         </button>
         <div class="title">
-          <h2 id="model-title" class="mono">{{ open.id }}</h2>
+          <h2 id="model-title" class="mono" tabindex="-1">{{ open.id }}</h2>
           <span class="where">{{ open.app }} / {{ open.channel }}</span>
         </div>
         <button type="button" class="close" aria-label="Close" title="Close (Esc)" (click)="close()">

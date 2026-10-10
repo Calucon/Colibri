@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, HostListener, OnDestroy, computed, effect, inject, signal, untracked } from '@angular/core';
+import { ChangeDetectionStrategy, Component, ElementRef, HostListener, Injector, OnDestroy, afterNextRender, computed, effect, inject, signal, untracked } from '@angular/core';
 import { DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
@@ -58,6 +58,14 @@ export const jsonParts = function (json: string): JsonPart[] {
 const sameKey = (a: ModelKey | null, b: ModelKey | null): boolean =>
     a === b || (a !== null && b !== null && a.app === b.app && a.channel === b.channel && a.id === b.id);
 
+const rowKey = (model: ModelKey): string => `${model.app}\n${model.channel}\n${model.id}`;
+
+/** Whether the element is one the keyboard is still on: in the page and shown. */
+const holdsFocus = function (element: Element | null): boolean {
+    if (!element || element === document.body || !element.isConnected) return false;
+    return typeof element.checkVisibility !== 'function' || element.checkVisibility();
+};
+
 interface AppOption {
     name: string;
     models: number;
@@ -80,6 +88,8 @@ export class ModelsComponent implements OnDestroy {
     private admin = inject(AdminService);
     private route = inject(ActivatedRoute);
     private router = inject(Router);
+    private host = inject<ElementRef<HTMLElement>>(ElementRef);
+    private injector = inject(Injector);
 
     private params = toSignal(this.route.queryParamMap, { requireSync: true });
     app = computed(() => this.params().get('app') ?? '');
@@ -176,7 +186,7 @@ export class ModelsComponent implements OnDestroy {
         const open = this.open();
         return data.models.map(model => ({
             ...model,
-            key: `${model.app}\n${model.channel}\n${model.id}`,
+            key: rowKey(model),
             size: model.bytes === null ? null : bytes(model.bytes),
             age: duration((data.at - model.updatedAt) / 1000),
             open: open !== null && open.app === model.app && open.channel === model.channel && open.id === model.id
@@ -186,7 +196,7 @@ export class ModelsComponent implements OnDestroy {
     deleted = computed(() => {
         const data = this.list.data();
         if (!data) return [];
-        return data.deleted.map(row => ({ ...row, key: `${row.app}\n${row.channel}\n${row.id}`, age: duration((data.at - row.deletedAt) / 1000) }));
+        return data.deleted.map(row => ({ ...row, key: rowKey(row), age: duration((data.at - row.deletedAt) / 1000) }));
     });
 
     readonly DELETED_SHOWN = DELETED_SHOWN;
@@ -242,6 +252,28 @@ export class ModelsComponent implements OnDestroy {
             });
         });
 
+        // Below 1100px the open model replaces the list: opening one hides the link that opened it,
+        // and closing it removes the Back button. Either left the keyboard on the page's body.
+        let shown: ModelKey | null | undefined;
+        effect(() => {
+            const open = this.open();
+            const closed = shown;
+            shown = open;
+            // not on the page's first model, or none: nothing had the focus to lose
+            if (closed === undefined) return;
+            afterNextRender(() => this.keepFocus(open, closed), { injector: this.injector });
+        });
+    }
+
+    private keepFocus(open: ModelKey | null, closed: ModelKey | null): void {
+        if (holdsFocus(document.activeElement)) return;
+        const host = this.host.nativeElement;
+        if (open) {
+            host.querySelector<HTMLElement>('#model-title')?.focus();
+        } else if (closed) {
+            const key = rowKey(closed);
+            Array.from(host.querySelectorAll<HTMLElement>('.models-table a.id')).find(link => link.dataset['key'] === key)?.focus();
+        }
     }
 
     ngOnDestroy(): void {

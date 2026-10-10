@@ -121,6 +121,22 @@ describe('ModelsComponent', () => {
         expect(root.querySelectorAll('.deleted-table tbody tr')).toHaveLength(DELETED_SHOWN + 5);
     });
 
+    it('moves the focus to the opened model, and back to its row when it closes', async () => {
+        const { harness } = await open('/models');
+        list([ model('a'), model('b') ]);
+        harness.detectChanges();
+
+        // as below 1100px, where the list goes and the link that had the focus with it
+        await harness.navigateByUrl('/models?model=b&modelApp=demo&modelChannel=scene');
+        TestBed.tick();
+        expect(document.activeElement?.id).toBe('model-title');
+
+        // and the Back button that closes it
+        await harness.navigateByUrl('/models');
+        TestBed.tick();
+        expect(document.activeElement?.getAttribute('data-key')).toBe('demo\nscene\nb');
+    });
+
     it('offers the last page when the page asked for is past the end', async () => {
         const { harness, component } = await open('/models?page=9');
         list([], { total: 120, query: { app: '', channel: '', filter: '', offset: 400, limit: MODELS_PAGE_SIZE } });
