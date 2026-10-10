@@ -628,6 +628,8 @@ package to upgrade, at most once a minute per address ([Version checking](protoc
 - `npm run build`: compile. Records the commit in `dist/server/build-info.json`, from
   `COLIBRI_COMMIT` and `COLIBRI_COMMIT_DIRTY` (`true`) if set, else from git.
 - `npm start`: start the server. Compile first.
+- `npm run publish`: maintainers only. Builds the image with the commit, then pushes
+  `hcikn/colibri:<version>` and `hcikn/colibri:latest`.
 - `npm run lint`: lint the server and admin UI sources.
 - `npm test`: vitest unit tests. The TLS tests need `openssl` on `PATH` (Git for Windows ships it in
   `usr/bin`). In a test,
