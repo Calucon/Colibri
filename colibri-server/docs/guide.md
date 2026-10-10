@@ -194,8 +194,9 @@ client's address:
   PROXY protocol header, version 1 or 2, which names the Unity client
   ([PROXY protocol](protocol.md#proxy-protocol)). Other peers connect as before.
 - **Voice (UDP):** nginx's PROXY protocol covers TCP only, so voice sent through a proxy shows the
-  proxy's address, and is relayed without the [voice check](#voice-relay). Publish the voice port
-  directly, as below, to keep the check.
+  proxy's address, and is relayed without the [voice check](#voice-relay). To keep the check,
+  publish the voice port directly, as below, and keep the clients' addresses out of
+  `TRUSTED_PROXIES`.
 
 With Docker, publish the web and TCP ports on `127.0.0.1`, so that clients reach them only through
 the proxy:
@@ -208,7 +209,8 @@ the proxy:
 ```
 
 The proxy then appears as the gateway of the Docker network, e.g. `172.20.0.1`, and its subnet can
-change when compose recreates the network. The usual setting is:
+change when compose recreates the network. The simplest setting trusts loopback and every private
+address:
 
 ```yaml
     environment:
@@ -220,9 +222,23 @@ A connection from a trusted address that does not come through the proxy can nam
 address: on the web port with its own `X-Forwarded-For`, on the TCP port with its own PROXY protocol
 header. With a new address on each connection, it also gets past the per-address warning limits.
 With the ports above, only processes on the host and containers on the compose network can connect
-directly. `uniquelocal` also covers clients on a private network, so such a client can do the same on
-the web port through the proxy, with its own `X-Forwarded-For`. To limit this to processes on the
-host, give the compose network a fixed subnet and trust only its gateway.
+directly. `uniquelocal` also covers clients on a private network (`10.0.0.0/8`, `172.16.0.0/12`,
+`192.168.0.0/16`, `fc00::/7`): such a client can do the same on the web port through the proxy, with
+its own `X-Forwarded-For`, and its voice is relayed without the [voice check](#voice-relay). To limit this to processes on the host,
+give the compose network a fixed subnet and trust only its gateway:
+
+```yaml
+    environment:
+      TRUSTED_PROXIES: 172.30.0.1
+      TCP_PROXY_PROTOCOL: "true"
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24 # any subnet not in use on the host
+          gateway: 172.30.0.1
+```
 
 In nginx, add to each `location` that proxies to the web port:
 
