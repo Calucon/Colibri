@@ -1,6 +1,11 @@
 services:
   colibri:
-    build: .
+    # COLIBRI_COMMIT=$(git rev-parse HEAD) docker compose build: the commit the admin UI shows.
+    build:
+      context: .
+      args:
+        COLIBRI_COMMIT: ${COLIBRI_COMMIT:-}
+        COLIBRI_COMMIT_DIRTY: ${COLIBRI_COMMIT_DIRTY:-}
     restart: unless-stopped
     container_name: colibri
     # The server logs to stdout/stderr, client log lines included, and Docker's default
