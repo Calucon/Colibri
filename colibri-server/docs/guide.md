@@ -205,8 +205,9 @@ used HTTPS:
   HTTP can then claim TLS. Only the admin UI's display depends on it.
 - **TCP port:** with `TCP_PROXY_PROTOCOL=true`, a connection from a trusted peer must start with a
   PROXY protocol header, version 1 or 2, which names the Unity client
-  ([PROXY protocol](protocol.md#proxy-protocol)). Other peers connect as before. The header does not
-  say whether the proxy ended TLS, so the admin UI shows these connections as unencrypted either way.
+  ([PROXY protocol](protocol.md#proxy-protocol)). Other peers connect as before. nginx's header,
+  version 1, does not say whether the proxy ended TLS, and the server skips the TLS details a
+  version 2 header can carry, so the admin UI shows these connections as unencrypted either way.
 - **Voice (UDP):** nginx's PROXY protocol covers TCP only, so voice sent through a proxy shows the
   proxy's address, and is relayed without the [voice check](#voice-relay). To keep the check,
   publish the voice port directly, as below, and keep the clients' addresses out of

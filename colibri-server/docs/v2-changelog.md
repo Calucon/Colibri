@@ -131,8 +131,9 @@ this is the server's full detail.
   set the header, replacing the client's. The Clients page shows it as *TLS at proxy*. Without a certificate, and while such a client or admin page is
   connected, the Server page shows the web port as *HTTP here, HTTPS at the proxy* and TLS as *Not
   on this server*. The admin topics carry it as `tlsAtProxy`
-  ([Admin UI channel](./protocol.md#admin-ui-channel)). A PROXY protocol header does not say
-  whether the proxy ended TLS, so Unity clients through it still show as unencrypted.
+  ([Admin UI channel](./protocol.md#admin-ui-channel)). nginx's PROXY protocol header, version 1,
+  does not say whether the proxy ended TLS, and the server skips the TLS details a version 2
+  header can carry, so Unity clients through a proxy still show as unencrypted.
 - **TCP port:** with new `TCP_PROXY_PROTOCOL=true`, a connection from a trusted peer must start
   with a PROXY protocol header, version 1 (nginx's `proxy_protocol on`) or 2. It is read ahead of a
   TLS handshake, also when it arrives in pieces. The client it names is the one in every log line

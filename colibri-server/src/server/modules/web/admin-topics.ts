@@ -339,8 +339,8 @@ export interface ClientRow {
     // the proxy's connection.
     tls: boolean;
     // Whether it reached a trusted proxy over TLS, as the proxy reported: a web client's
-    // X-Forwarded-Proto (see forwardedTls). Always false for a TCP client: a PROXY protocol header
-    // does not say.
+    // X-Forwarded-Proto (see forwardedTls). Always false for a TCP client: nginx's PROXY protocol
+    // header, version 1, does not say, and the TLS details a version 2 header can carry are skipped.
     tlsAtProxy: boolean;
     // Its own address, behind a trusted proxy the one the proxy named.
     address: string;

@@ -347,7 +347,8 @@ connection from an address in `TRUSTED_PROXIES` starts with a
 by the proxy, never by a Unity client: version 1, a line of text of at most 107 bytes ending in CRLF,
 or version 2, binary, with at most 4 KiB after its fixed 16 bytes. Its source address replaces the
 connection's address as the client's. Version 1 `UNKNOWN`, version 2 `LOCAL`, and anything but TCP
-over IPv4 or IPv6 keep the connection's address. The connection goes on after the header as without
+over IPv4 or IPv6 keep the connection's address. A version 2 header's TLVs, such as the TLS details
+of HAProxy's `send-proxy-v2-ssl`, are skipped. The connection goes on after the header as without
 one: the TLS handshake on a TLS port, then the handshake frame. A connection without a header is told
 apart by its 4th byte at the latest: read as a v3 length field, the first 4 bytes of either header
 exceed 5 MiB, and a TLS handshake starts with `0x16`. A trusted peer without a valid header within
@@ -540,8 +541,9 @@ sending the previous one; the next replaces it.
   `transport` is `tcp` or `web`, `address` the client's own address (from the PROXY protocol header or
   `X-Forwarded-For` behind a trusted proxy), `tls` whether its connection to this server is encrypted,
   `tlsAtProxy` whether it reached a trusted proxy over TLS: the proxy's right-most `X-Forwarded-Proto`
-  entry is `https` or `wss`, in any case (always `false` for `tcp`: a PROXY protocol header does not
-  say), `latency` the median round trip of the last second in ms, `in` and `out` the messages it sent and
+  entry is `https` or `wss`, in any case (always `false` for `tcp`: nginx's PROXY protocol header,
+  version 1, does not say, and the server skips the TLS details a version 2 header can carry),
+  `latency` the median round trip of the last second in ms, `in` and `out` the messages it sent and
   was sent per second (heartbeats and `colibri` latency pings not counted; `colibri::latency` is, so
   an idle web client shows about 1 out), `null` in its first second, and for every TCP client when
   the TCP worker did not answer within 1 s, `limit` the load limit holding its updates back now
