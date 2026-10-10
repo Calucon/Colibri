@@ -46,6 +46,9 @@ const CYCLE_SECONDS = 180;
 const RECONNECT_MILLIS = 3000;
 // colibri-unity's SyncTransform channel.
 const SYNC_TRANSFORM = 'synctransform';
+// The longest --minutes: setTimeout takes at most 2^31 - 1 ms (about 24.8 days) and fires at once
+// for more.
+const MAX_MINUTES = Math.floor((2 ** 31 - 1) / 60_000);
 
 interface DemoOptions extends ProbeOptions {
     webPort: number;
@@ -78,7 +81,7 @@ const parseDemoArgs = function (argv: readonly string[]): DemoOptions {
         switch (arg) {
             case '--web-port': options.webPort = positive(arg, value, true, 65535); break;
             case '--tcp-port': options.tcpPort = positive(arg, value, true, 65535); break;
-            case '--minutes': options.minutes = positive(arg, value, false); break;
+            case '--minutes': options.minutes = positive(arg, value, false, MAX_MINUTES); break;
             case '--apps': options.apps = positive(arg, value, true); break;
             default: throw new Error(`Unknown argument '${arg}'`);
         }

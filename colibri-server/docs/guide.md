@@ -621,7 +621,7 @@ package to upgrade, at most once a minute per address ([Version checking](protoc
   exception, annotations added and deleted, and a headset that leaves and rejoins. The scene repeats
   every 3 minutes, and clients reconnect after a server restart, so it can run for hours. The server
   receives up to about 250 messages a second from them and sends up to about 550.
-  - `-- --minutes <n>`: stop after n minutes. Default: run until Ctrl+C.
+  - `-- --minutes <n>`: stop after n minutes, at most 35791 (about 24.8 days). Default: run until Ctrl+C.
   - `-- --apps <n>`: n copies of both apps, the others named `ArchViz-2`, `MuseumGuide-2` and so on,
     each with the same load.
   - `--web-port <port>`, `--tcp-port <port>`: default `WEBSERVER_PORT` and `TCP_PORT`. `--host <name>`:
