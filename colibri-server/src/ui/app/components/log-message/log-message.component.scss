@@ -81,6 +81,8 @@
 
 .level {
     grid-area: level;
+    // holds its visually hidden name, which would otherwise make the page around the log scroll
+    position: relative;
     margin-top: 2px;
 
     font: 700 10.5px/16px var(--sans);

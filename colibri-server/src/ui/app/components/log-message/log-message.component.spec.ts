@@ -37,7 +37,8 @@ describe('LogMessageComponent', () => {
         const root: HTMLElement = render(message({})).nativeElement;
 
         expect(text(root, '.time')).toBe('12:00:09.970');
-        expect(text(root, '.level')).toBe('ERR');
+        expect(text(root, '.level [aria-hidden]')).toBe('ERR');
+        expect(text(root, '.level .visually-hidden')).toBe('Error');
         expect(text(root, '.app-chip')).toBe('demo-app');
         expect(text(root, '.client')).toBe('Quest');
         expect(text(root, '.message')).toBe('Failed to load asset');

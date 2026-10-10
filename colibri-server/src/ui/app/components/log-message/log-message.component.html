@@ -8,7 +8,8 @@
   <div class="row level-{{ log().level }}" [class.open]="expanded()" (click)="onRowClick()">
     <!-- opens the row by the row's click handler, and is what makes that reachable by keyboard -->
     <button type="button" class="time" [attr.aria-expanded]="expanded()" [title]="utc()">{{ log().created | date:'HH:mm:ss.SSS' }}</button>
-    <span class="level" [attr.aria-label]="levelName()">{{ tag() }}</span>
+    <!-- a label on a plain span is not read out: screen readers said "DBG" -->
+    <span class="level"><span aria-hidden="true">{{ tag() }}</span><span class="visually-hidden">{{ levelName() }}</span></span>
     <span class="source">
       @if (source().app; as app) {
         <button type="button" class="app-chip" [style.--app]="appColor()" [title]="'Show only ' + app" (click)="filterApp($event, app)">{{ app }}</button>
