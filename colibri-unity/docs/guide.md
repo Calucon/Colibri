@@ -858,8 +858,11 @@ and instantiates `VoiceReceiver` prefabs.
   new App Name. Synced objects and `Sync` messages, such as voice ids sent with `Sync.Send`, stay in
   the old app until then. Disable and re-enable that component to move them.
 - Colibri 1.x clients are not heard. Their voice packets have no app id, and the server drops them.
-- A client receives voice only while its own `VoiceBroadcast` is broadcasting. The server registers
-  voice clients by the packets they send.
+- A client receives voice only while its own `VoiceBroadcast` is broadcasting: the server learns a
+  client's voice address only from the packets it sends. A client that only listens, with
+  `VoiceReceiver`s and no broadcast, receives nothing, so it has to broadcast too. Sending silence
+  or muted packets would still need `VoiceBroadcast` running, which needs a microphone. The
+  `Samples/VoiceChat` sample always broadcasts.
 
 ### Limitations
 
