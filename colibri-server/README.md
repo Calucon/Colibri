@@ -76,7 +76,7 @@ All variables: [`.env.example`](.env.example), [reference](docs/guide.md#configu
 ## Security
 
 Colibri has no authentication. Anyone who can reach the ports can join any app, read and change its
-data, and read the log. Run the server on a trusted network.
+data, and read the log, the connected clients and the server settings. Run the server on a trusted network.
 
 ## Troubleshooting
 

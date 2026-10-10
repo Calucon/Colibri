@@ -6,7 +6,7 @@ Full reference for colibri-server. Overview: [README](../README.md). Wire protoc
 ## Security
 
 Colibri has no authentication. Anyone who can reach the ports can join any app, read and change its
-data, and read the log. Run the server on a trusted network.
+data, and read the log, the connected clients and the server settings. Run the server on a trusted network.
 
 ## Setup
 
@@ -409,6 +409,27 @@ Server messages, and lines clients send through colibri-unity's `RemoteLogging` 
   into one entry per client. The page loads the newest 10,000 that match its filters and shows a
   repeat where it last occurred. Lost on restart. Times are the browser's local time; hover one for
   UTC, as `docker logs` prints it.
+
+### Admin UI
+
+Besides the log, the admin UI reads from the server, over the Socket.IO channel `colibri::admin`
+([Admin UI channel](protocol.md#admin-ui-channel)):
+
+- **Server info:** version, protocol version, Node.js version, uptime, the settings in effect (ports,
+  load limits, `TRUSTED_PROXIES`, `TCP_PROXY_PROTOCOL`, idle timeout, voice and recording), the TLS
+  certificate's names, issuer and expiry, and counts of clients, apps, synchronized models and REST
+  store values. Never certificate or key paths, key material or file contents.
+- **Clients:** every connected Unity and web client with its app, name, protocol version, address
+  (as resolved behind a trusted proxy), TLS, connection time, latency, messages per second in and out,
+  and whether a [load limit](#load-limits) holds its updates back.
+- **Models:** the synchronized models of every app and channel, with their size, number of fields and
+  last update, filtered and in pages of at most 200, and one model's value as JSON. Also the ids
+  deleted within `MODEL_TOMBSTONE_SECONDS`.
+
+All of it is read only: the admin UI cannot change, delete or disconnect anything. A page asks for
+data while it is open and the server sends it at most once a second, with bounded sizes. With no
+admin page open, the server computes nothing for it. The log page can leave out the routine connect
+and disconnect lines.
 
 ### Load limits
 

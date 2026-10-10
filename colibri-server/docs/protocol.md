@@ -487,7 +487,71 @@ names, or the app name `colibri`.
 
 `name` is the handshake name for a TCP client and the IP address for a Socket.IO client, taken from
 `X-Forwarded-For` behind a trusted proxy ([Behind a reverse proxy](guide.md#behind-a-reverse-proxy)).
-The admin UI also uses `colibri::log` and `colibri::latency`.
+The admin UI also uses `colibri::log`, `colibri::latency` and `colibri::admin`
+([Admin UI channel](#admin-ui-channel)).
+
+## Admin UI channel
+
+The admin UI reads server data over Socket.IO on the channel `colibri::admin`, as a client of the app
+`colibri`. Clients of other apps are ignored. Everything on this channel is read only. There is no
+authentication, so anyone who can reach the web port can read it ([Security](guide.md#security)).
+
+A page sends one of three commands, each with a `topic`:
+
+| Command | Payload | Server action |
+| --- | --- | --- |
+| `request` | `{ topic, request?, ...query }` | Answers once. |
+| `subscribe` | `{ topic, request?, ...query }` | Answers now and then every second, until `unsubscribe` or disconnect. One subscription per topic and page: subscribing again replaces the query. |
+| `unsubscribe` | `{ topic }`, or `{}` for every topic | Stops the answers. |
+
+The answer comes on `colibri::admin` with the topic as its command. Its payload is the snapshot plus
+`request`, the number from the request or subscribe that asked for it (`null` without one), and `at`,
+the server's `Date.now()`. Times are `Date.now()` milliseconds, rates are per second over the last
+second. A page may send 10 `request` and `subscribe` messages a second, bursts of 20; the server
+ignores the rest. With no subscription the server computes nothing, and the TCP worker reports nothing.
+
+| Topic | Query | Snapshot |
+| --- | --- | --- |
+| `server` | none | `{ version, protocolVersion, node, startedAt, uptime, settings, tls, voice, counts }` |
+| `clients` | none | `{ clients: ClientRow[], total, adminPages }`, at most 1000 rows |
+| `models` | `{ app?, channel?, filter?, offset?, limit? }` | `{ query, channels, channelsTotal, models: ModelRow[], total, deleted, deletedTotal, tombstoneSeconds }` |
+| `model` | `{ app, channel, id }` | `{ app, channel, id, found, deletedAt?, fields?, bytes?, updatedAt?, json?, truncated? }` |
+
+- **`server`:** `settings` maps the configuration variables in effect to their values: ports and hosts,
+  `BASE_URL`, `VOICE_SAMPLING_RATE`, `VOICE_RECORDING`, `TCP_IDLE_TIMEOUT_SECONDS`, the load limits,
+  `APP_CLIENT_WARNING_THRESHOLD`, `MODEL_TOMBSTONE_SECONDS`, `TRUSTED_PROXIES` and
+  `TCP_PROXY_PROTOCOL`. `tls` is `null` without TLS, otherwise
+  `{ names, issuer, selfSigned, validFrom, validTo, fingerprint256 }` of the certificate served now;
+  never paths, key material or file contents. `voice` is `{ listening, recording, samplingRate, clients }`.
+  `counts` is `{ tcpClients, webClients, adminPages, apps, models, modelApps, modelChannels,
+  deletedModels, storeApps, storeKeys }`. `uptime` is in seconds.
+- **`clients`:** every client except admin UI pages. A row is
+  `{ id, app, name, transport, version, tls, address, connectedAt, latency, in, out, limit, held }`:
+  `transport` is `tcp` or `web`, `address` the client's own address (from the PROXY protocol header or
+  `X-Forwarded-For` behind a trusted proxy), `tls` whether its connection to this server is encrypted,
+  `latency` the median round trip of the last second in ms, `in` and `out` the messages it sent and
+  was sent per second (heartbeats and latency pings not counted, `null` in its first second),
+  `limit` the load limit holding its updates back now (`rate`, `backlog` or `null`) and `held` the
+  number of objects with updates held back ([Inbound limits](#inbound-limits)).
+- **`models`:** the synchronized models of every app, in store order (app, channel, creation).
+  `app` and `channel` match exactly, `filter` is part of an id or channel name in any case. `limit` is
+  1 to 200 (default 50), `total` counts all matches. A `ModelRow` is
+  `{ app, channel, id, fields, bytes, updatedAt }`: `fields` is the number of top-level fields besides
+  `id`, `bytes` the compact JSON size. A snapshot measures at most 8 MiB of changed models; the
+  size of any further one is `null` until a later snapshot gets to it.
+  `channels` lists `{ app, channel, models, deleted }` for every app and channel, at most 500.
+  `deleted` lists the newest 100 matching ids deleted within `MODEL_TOMBSTONE_SECONDS`, as
+  `{ app, channel, id, deletedAt }`.
+- **`model`:** one model's value as JSON indented by two spaces, cut to 512 KiB with `truncated: true`.
+  A model the server does not hold has `found: false`, and `deletedAt` if it was deleted within
+  `MODEL_TOMBSTONE_SECONDS`.
+
+Names longer than 512 characters are cut, and their row has `truncated: true`; such a model cannot be
+looked up with `model`.
+
+The admin log's `requestLog` (`colibri::log`) takes `showConnections`, default `true`. With `false`, the
+server leaves out the routine connect and disconnect lines, which carry `metadata.connection: true`.
+Warnings and errors about connections are not tagged.
 
 ## Model synchronization
 

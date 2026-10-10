@@ -529,6 +529,17 @@ The endpoints are documented under [REST store](./protocol.md#rest-store).
 - The Statistics page is dark like the rest, its chart fits its card, and a table lists the clients
   with their latency. A client keeps its colour while others connect and leave, and the chart shows
   each client's median per second, across the whole width from the first sample.
+- The server answers the admin UI's read-only requests on the new channel `colibri::admin`: server
+  info (versions, uptime, settings in effect, TLS certificate description, counts), every connected
+  client with its transport, address, TLS, connection time, latency, messages per second in and out
+  and load limit, and the synchronized models with their tombstones, paginated and filtered, plus one
+  model's value. A page asks once or subscribes while it is open; subscriptions are sent again once a
+  second and end with the page. Sizes are bounded. Without a subscription the server computes nothing
+  for it and the TCP worker reports nothing. See [Admin UI channel](./protocol.md#admin-ui-channel).
+- The model store records each model's last update time. Sizes are measured only when the admin UI
+  asks, and once per change.
+- Routine connect and disconnect log lines carry `metadata.connection: true`, and `requestLog` takes
+  `showConnections` to leave them out.
 - The SPA fallback no longer adds a log entry every time an admin UI page is loaded.
 - The admin UI keeps its dark theme whatever colour scheme the visitor's system prefers.
 - Replaced the dead Karma/Protractor `test`/`server-app-e2e` targets in `angular.json` (both pointed
@@ -584,6 +595,9 @@ The endpoints are documented under [REST store](./protocol.md#rest-store).
 - Unit tests for `TRUSTED_PROXIES` matching, `X-Forwarded-For` on Socket.IO and `req.ip`, the
   PROXY protocol reader (both versions, split, malformed and oversized headers), and the TCP worker
   behind a proxy, with and without TLS.
+- Unit tests for the admin UI channel: snapshot sizes bounded for large stores, the store left
+  unchanged, nothing sent or asked of the TCP worker without a subscription, subscriptions ending with
+  the page, the request limit, and the message counts and load limits on both transports.
 
 ### Documentation
 
