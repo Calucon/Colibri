@@ -321,6 +321,26 @@ describe('WebLog', () => {
         expect(sent[1]!.id).not.toBe(sent[0]!.id);
     });
 
+    it('does not merge the same line about two clients of one app', async () => {
+        const server = new FakeSocketIOServer();
+        const webLog = new WebLog(server as unknown as SocketIOServer);
+        await webLog.init();
+
+        const admin = makeClient('admin1', 'colibri');
+        server.connectClient(admin);
+
+        const emitter = new Emitter();
+        emitter.emitDebug('Colibri client 127.0.0.1 disconnected', { clientApp: 'app-a', clientName: 'ud-0', clientId: 'id-0' });
+        emitter.emitDebug('Colibri client 127.0.0.1 disconnected', { clientApp: 'app-a', clientName: 'ud-1', clientId: 'id-1' });
+        emitter.emitDebug('Colibri client 127.0.0.1 disconnected', { clientApp: 'app-a', clientName: 'ud-0', clientId: 'id-0' });
+
+        const sent = server.broadcasts
+            .map(b => b.message.payload!.asValue<{ id: string; count: number; metadata: { clientName: string } }>());
+        expect(sent.map(m => [ m.metadata.clientName, m.count ])).toEqual([ [ 'ud-0', 0 ], [ 'ud-1', 0 ], [ 'ud-0', 1 ] ]);
+        expect(sent[2]!.id).toBe(sent[0]!.id);
+        expect(sent[1]!.id).not.toBe(sent[0]!.id);
+    });
+
     it('does not merge into a message that has since been evicted from history', async () => {
         const server = new FakeSocketIOServer();
         const webLog = new WebLog(server as unknown as SocketIOServer);
