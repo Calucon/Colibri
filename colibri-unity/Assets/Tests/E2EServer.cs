@@ -170,34 +170,47 @@ namespace HCIKonstanz.Colibri.E2E
 
         private static bool IsReachable(int port)
         {
-            // Each address the host resolves to, with a socket of its family: `new TcpClient()` is an
-            // IPv4 socket on Mono, so a server on "::1" was never found and the suites skipped.
-            System.Net.IPAddress[] addresses;
             try
             {
-                var host = Host.Length > 2 && Host[0] == '[' && Host[Host.Length - 1] == ']' ? Host.Substring(1, Host.Length - 2) : Host;
-                addresses = System.Net.Dns.GetHostAddresses(host);
+                var connecting = ConnectTcpAsync(Host, port);
+                if (!connecting.Wait(TimeSpan.FromSeconds(2)))
+                    return false;
+                connecting.Result.Close();
+                return true;
             }
             catch (Exception)
             {
                 return false;
             }
+        }
 
-            foreach (var address in addresses)
+        /// <summary>
+        /// A TCP connection to <paramref name="host"/>, trying each address it resolves to with a
+        /// socket of that address's family. <c>new TcpClient()</c> is an IPv4 socket on Mono, so the
+        /// probe, the raw peer and the proxy never reached a server on "::1", and the suites
+        /// skipped or failed in their SetUp. Brackets around an IPv6 address are allowed.
+        /// </summary>
+        public static async Task<TcpClient> ConnectTcpAsync(string host, int port, bool noDelay = false)
+        {
+            var name = host.Length > 2 && host[0] == '[' && host[host.Length - 1] == ']' ? host.Substring(1, host.Length - 2) : host;
+            Exception last = null;
+            foreach (var address in await System.Net.Dns.GetHostAddressesAsync(name).ConfigureAwait(false))
             {
+                var client = new TcpClient(address.AddressFamily) { NoDelay = noDelay };
                 try
                 {
-                    using (var probe = new TcpClient(address.AddressFamily))
-                        if (probe.ConnectAsync(address, port).Wait(TimeSpan.FromSeconds(2)))
-                            return true;
+                    await client.ConnectAsync(address, port).ConfigureAwait(false);
+                    return client;
                 }
-                catch (Exception)
+                catch (Exception e)
                 {
                     // Refused or unreachable on this address: the next one.
+                    last = e;
+                    client.Close();
                 }
             }
 
-            return false;
+            throw last ?? new SocketException((int)SocketError.HostNotFound);
         }
 
         /// <summary>

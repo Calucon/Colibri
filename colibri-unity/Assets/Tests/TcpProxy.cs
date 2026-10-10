@@ -101,7 +101,15 @@ namespace HCIKonstanz.Colibri.E2E
             if (terminateTls)
                 _ = TestTls.Certificate;
 
-            var listener = new TcpListener(IPAddress.Loopback, 0);
+            // The loopback of the server's address family: the client is pointed at the proxy by the
+            // server's host name (E2EServer.ConfigureInProcess), so for "::1" it has to be the IPv6 one.
+            var host = upstreamHost.Length > 2 && upstreamHost[0] == '[' && upstreamHost[upstreamHost.Length - 1] == ']'
+                ? upstreamHost.Substring(1, upstreamHost.Length - 2)
+                : upstreamHost;
+            var loopback = IPAddress.TryParse(host, out var address) && address.AddressFamily == AddressFamily.InterNetworkV6
+                ? IPAddress.IPv6Loopback
+                : IPAddress.Loopback;
+            var listener = new TcpListener(loopback, 0);
             listener.Start();
 
             var proxy = new TcpProxy(listener, upstreamHost, upstreamPort, recordMessages, terminateTls);
@@ -169,14 +177,11 @@ namespace HCIKonstanz.Colibri.E2E
 
         private async Task Relay(TcpClient downstream, int session)
         {
-            var upstream = new TcpClient { NoDelay = true };
+            TcpClient upstream = null;
             downstream.NoDelay = true;
 
             lock (_open)
-            {
                 _open.Add(downstream);
-                _open.Add(upstream);
-            }
 
             Stream client = null;
             Stream server = null;
@@ -191,7 +196,9 @@ namespace HCIKonstanz.Colibri.E2E
                 while (_isHolding)
                     await Task.Delay(10, _lifetime.Token).ConfigureAwait(false);
 
-                await upstream.ConnectAsync(_upstreamHost, _upstreamPort).ConfigureAwait(false);
+                upstream = await E2EServer.ConnectTcpAsync(_upstreamHost, _upstreamPort, noDelay: true).ConfigureAwait(false);
+                lock (_open)
+                    _open.Add(upstream);
                 server = upstream.GetStream();
                 if (_terminateTls)
                     server = await TestTls.ConnectAsync(server, _upstreamHost).ConfigureAwait(false);
@@ -211,11 +218,13 @@ namespace HCIKonstanz.Colibri.E2E
                 lock (_open)
                 {
                     _open.Remove(downstream);
-                    _open.Remove(upstream);
+                    if (upstream != null)
+                        _open.Remove(upstream);
                 }
 
                 Reset(downstream);
-                Reset(upstream);
+                if (upstream != null)
+                    Reset(upstream);
                 CloseQuietly(client);
                 CloseQuietly(server);
             }

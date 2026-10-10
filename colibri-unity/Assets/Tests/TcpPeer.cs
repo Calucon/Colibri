@@ -33,7 +33,7 @@ namespace HCIKonstanz.Colibri.E2E
     {
         private static readonly Encoding Utf8 = new UTF8Encoding(false, false);
 
-        private readonly TcpClient _client = new TcpClient();
+        private TcpClient _client;
         private readonly FrameReader _reader = new FrameReader();
         private readonly ConcurrentQueue<DecodedFrame> _inbox = new ConcurrentQueue<DecodedFrame>();
         private readonly SemaphoreSlim _writeLock = new SemaphoreSlim(1, 1);
@@ -106,7 +106,7 @@ namespace HCIKonstanz.Colibri.E2E
 
         private async Task ConnectAsync(string name, string version)
         {
-            await _client.ConnectAsync(E2EServer.Host, _port);
+            _client = await E2EServer.ConnectTcpAsync(E2EServer.Host, _port);
 
             Stream stream = _client.GetStream();
             if (_useTls)
@@ -306,7 +306,7 @@ namespace HCIKonstanz.Colibri.E2E
             try
             {
                 _stream?.Dispose();
-                _client.Close();
+                _client?.Close();
             }
             catch (Exception)
             {
