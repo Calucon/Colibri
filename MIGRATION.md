@@ -538,6 +538,13 @@ In 1.x, every voice packet went to every client on the server that was sending v
 an App Name sends no voice. This separates apps but is not access control. Anyone who knows the App
 Name can listen, and voice is not encrypted.
 
+The server also relays voice only from the address of a Unity client connected with the same App
+Name, one voice sender per such client. Voice therefore needs `WebServerConnection` connected, which
+`VoiceBroadcast`, `VoiceReceiver` and `VoiceServerConnection` do not start. A scene that uses voice
+without any `Sync` call or `SyncBehaviour` gets no voice at all, and Unity logs nothing. Call
+`Sync.Receive`, or read `WebServerConnection.Instance`, in such a scene. After an App Name change at
+runtime, voice stops until `WebServerConnection` reconnects with the new name.
+
 ### Latency echo removed
 
 The `colibri` / `latency` message round trip was removed. TCP latency comes from the 100 ms
