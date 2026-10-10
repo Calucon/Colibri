@@ -87,6 +87,9 @@ const onOff = function (label: string, on: boolean, variable?: string, note?: st
 
 /** Why the web port counts as HTTPS at a proxy, on hover. */
 const WEB_TLS_AT_PROXY = 'A trusted proxy reported HTTPS in X-Forwarded-Proto for a web client or admin page connected now';
+/** Why the TCP port is only unencrypted here, on hover. */
+const TCP_THROUGH_PROXY = 'Unity clients come through a trusted proxy (TCP_PROXY_PROTOCOL), which may end TLS without saying so '
+    + 'in its PROXY protocol header. Unity apps tick "Server supports SSL/TLS?" when the proxy\'s TCP port uses TLS';
 
 export const serverSections = function (s: ServerSnapshot, format: (time: number) => string): Section[] {
     const set = s.settings;
@@ -100,6 +103,10 @@ export const serverSections = function (s: ServerSnapshot, format: (time: number
     // server's own TLS on, that is what a direct connection uses, and the rows say so instead.
     const webTlsAtProxy = tls === null && s.tlsAtProxy.web;
     const scheme = tls ? 'HTTPS and WSS' : webTlsAtProxy ? 'HTTP here, HTTPS at the proxy' : 'HTTP and WS';
+    // Unity clients through a proxy: the server cannot tell whether the proxy ended TLS, so the TCP
+    // row says only that the connection here is unencrypted, not that the clients use no TLS.
+    const tcpThroughProxy = tls === null && set['TCP_PROXY_PROTOCOL'] === true && proxies.length > 0;
+    const tcpNote = tls ? 'TLS' : tcpThroughProxy ? 'unencrypted here, proxy TLS not reported' : 'unencrypted';
     // Not a bare Off, which reads as "turn TLS off in the clients".
     const tlsFact: Fact = webTlsAtProxy
         ? { label: 'TLS', variable: 'TLS_CERT, TLS_KEY', value: 'Not on this server', note: 'HTTPS at the proxy', title: WEB_TLS_AT_PROXY }
@@ -139,7 +146,10 @@ export const serverSections = function (s: ServerSnapshot, format: (time: number
                     label: 'Web', variable: 'WEBSERVER_HOST, WEBSERVER_PORT', value: `${text(set['WEBSERVER_HOST'])}:${text(set['WEBSERVER_PORT'])}`, mono: true,
                     note: scheme, title: webTlsAtProxy ? WEB_TLS_AT_PROXY : undefined
                 },
-                { label: 'TCP', variable: 'TCP_HOST, TCP_PORT', value: `${text(set['TCP_HOST'])}:${text(set['TCP_PORT'])}`, mono: true, note: tls ? 'TLS' : 'unencrypted' },
+                {
+                    label: 'TCP', variable: 'TCP_HOST, TCP_PORT', value: `${text(set['TCP_HOST'])}:${text(set['TCP_PORT'])}`, mono: true,
+                    note: tcpNote, title: tcpThroughProxy ? TCP_THROUGH_PROXY : undefined
+                },
                 { label: 'Voice', variable: 'VOICE_HOST, VOICE_PORT', value: `${text(set['VOICE_HOST'])}:${text(set['VOICE_PORT'])}`, mono: true, note: 'UDP' },
                 { label: 'Base URL', variable: 'BASE_URL', value: text(set['BASE_URL']) || '/', mono: true },
                 tlsFact,
