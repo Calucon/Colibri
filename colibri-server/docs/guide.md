@@ -537,24 +537,37 @@ are not affected. Socket.IO's own ping detects a lost web client within about 45
 Each voice packet carries its app as an app id, the hash of the app name
 ([Voice packets](protocol.md#voice-packets-udp)). The server relays a packet, and relays voice to its
 sender, only if a Unity client of that app is connected on the TCP port from the packet's source
-address. Anyone can compute an app id and forge a UDP source address. Without the check, one forged
-packet every 2 s would have the server send an app's voice to any address. When the last Unity client
-of an app at an address disconnects, the voice clients at that address stop receiving at once.
+address. Anyone can compute an app id and forge a UDP source address and port. Without the check, one
+forged packet every 2 s would have the server send an app's voice to any address.
+
+Each source address and port is a voice client, and is sent the app's voice. An address gets at most
+one voice client of an app per Unity client of that app connected from it, so forged packets from
+other ports at a participant's address cannot multiply the voice sent there. A sender over that
+number takes the place of the voice client that has gone the longest without a packet, if that is
+500 ms or more, as when a Unity client's voice socket is opened again on a new port. When a Unity
+client disconnects, the voice clients of its app at its address over the number of Unity clients left
+there are dropped within 1.5 s, the one quiet the longest first. With none left, all of them are
+dropped at once.
 
 Other packets are dropped with a warning, at most once per source every 10 s:
-`Ignoring voice packet from <address>:<port> for app <app id>: no Unity client of that app is connected from <address> ...`.
-This is expected for a moment while a Unity client connects or reconnects. If it persists, the
-client's voice and its TCP connection reach the server from different addresses, e.g. through a proxy.
 
-Voice from an address in `TRUSTED_PROXIES` is relayed without the check, since through a proxy every
-packet comes from the proxy's address. The server logs this once per address:
+| Warning | Cause |
+| --- | --- |
+| `Ignoring voice packet from <address>:<port> for app <app id>: no Unity client of that app is connected from <address> ...` | Expected for a moment while a Unity client connects or reconnects. If it persists, the client's voice and its TCP connection reach the server from different addresses, e.g. through a proxy. |
+| `Ignoring voice packet from <address>:<port> for app <app id>: <address> has <n> Unity client(s) of that app, and as many voice clients already ...` | Expected for up to 0.5 s after a Unity client's voice socket is opened again. If it persists, more voice sockets than TCP connections of that app send from the address, or someone forges packets from it. |
+
+Voice from an address in `TRUSTED_PROXIES` is relayed without the check and the limit, since through
+a proxy every packet comes from the proxy's address. The server logs this once per address:
 `Relaying voice from <address> unchecked: it is in TRUSTED_PROXIES ...`. With `uniquelocal` trusted,
 that is every private address, and a forged private source address gets past the check. To keep the
 check, publish the voice port directly and trust only the proxy's address
 ([Behind a reverse proxy](#behind-a-reverse-proxy)).
 
 The check is not access control. Anyone who can reach the TCP port can join any app, and send and
-receive its voice. Voice is not encrypted, with [TLS](#tls) on too.
+receive its voice. An address with n Unity clients of an app can still be sent n copies of the app's
+voice, as many as those clients get when all of them send voice: a forged sender can take the place
+of one that sends none, and keep that client out while it sends at least every 0.5 s. Voice is not
+encrypted, with [TLS](#tls) on too.
 
 ## Protocol version
 

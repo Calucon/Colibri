@@ -832,18 +832,23 @@ byte XOR it in and multiply by `0x01000193`, modulo 2^32. The empty name hashes 
 
 The server accepts a valid packet only from the address of a Unity client of its app, connected on
 the TCP port. An IPv4-mapped IPv6 address (`::ffff:192.0.2.1`) counts as the IPv4 address it maps.
-From an address in `TRUSTED_PROXIES` it accepts every valid packet: through a proxy, all of them come
-from the proxy's address ([guide](guide.md#voice-relay)).
+It registers at most as many voice clients of an app from one address as there are Unity clients of
+that app connected from it. A new sender beyond that takes the place of the voice client that has
+gone the longest without a packet, if that is 500 ms or more, and is dropped otherwise. From an
+address in `TRUSTED_PROXIES` it accepts every valid packet, without that limit: through a proxy, all
+of them come from the proxy's address ([guide](guide.md#voice-relay)).
 
 The server registers the sender of an accepted packet as a voice client, by address and port, and
 passes the packet on unchanged to every other voice client with the same `appId`. A client sending
 another `appId` from the same address and port moves to that app, if a packet for it is accepted. A
 client is dropped after 2 to 3 s without a packet, so it hears voice only while it sends voice itself,
 as colibri-unity's `VoiceBroadcast` does while broadcasting. It is dropped at once when the last Unity
-client of its app at its address disconnects, unless it came from a trusted proxy. With
-`VOICE_RECORDING=true`, the server also saves the samples of each client's PCM packets as a `.wav`
-file in the data directory, named after the time of the client's first packet (UTC), its app id, its
-voice id and its source port: `rec_2026-10-09T11_07_58.502Z_app_0xe40c292c_ID_1_port_52114.wav`.
+client of its app at its address disconnects, unless it came from a trusted proxy. When one of
+several disconnects, the voice clients at that address over the number left are dropped 0.5 to 1.5 s
+later, the one that has gone the longest without a packet first. With `VOICE_RECORDING=true`, the
+server also saves the samples of each client's PCM packets as a `.wav` file in the data directory,
+named after the time of the client's first packet (UTC), its app id, its voice id and its source
+port: `rec_2026-10-09T11_07_58.502Z_app_0xe40c292c_ID_1_port_52114.wav`.
 
 The server drops these packets, reporting at most one per source address and port every 10 s:
 
@@ -854,6 +859,7 @@ The server drops these packets, reporting at most one per source address and por
 | shorter than the 11-byte header | error `Ignoring malformed voice packet from <address>:<port>: <n> bytes is shorter than the 11-byte header` |
 | from source port 0 | error `Ignoring malformed voice packet from <address>:<port>: its source port is 0, ...` |
 | from an address without a Unity client of its app | warning `Ignoring voice packet from <address>:<port> for app <app id>: no Unity client of that app is connected from <address>` |
+| from a new sender at an address with as many voice clients of its app as Unity clients, none of them quiet for 500 ms | warning `Ignoring voice packet from <address>:<port> for app <app id>: <address> has <n> Unity client(s) of that app, and as many voice clients already` |
 
 The app id keeps the voice of different apps apart, as the app name does on TCP. It is not access
 control. Anyone who knows an app's name and can reach the TCP port can join the app, and send voice to

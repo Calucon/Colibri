@@ -344,12 +344,19 @@ EditMode tests, which `npm run test:vectors` checks in CI.
   replaced the first.
 - **Voice only from a Unity client's address.** A packet is relayed, and its sender relayed to,
   only if a Unity client of the packet's app is connected on the TCP port from the packet's source
-  address. Every sender used to be registered: one packet with a forged source address every 2 s
-  had the server stream an app's voice to that address, for an app id anyone can compute from the
-  app name. The voice clients at an address stop receiving as soon as the last Unity client of
-  their app there disconnects. Other packets are dropped with a warning, at most once per source
-  every 10 s. Voice from an address in `TRUSTED_PROXIES` is relayed unchecked, which is logged once
-  per address. See [Voice relay](./guide.md#voice-relay).
+  address, and an address gets at most one voice client of an app per such Unity client. Every
+  sender used to be registered: one packet with a forged source address every 2 s had the server
+  stream an app's voice to that address, for an app id anyone can compute from the app name, and
+  each forged source port at one address was sent its own copy. A new sender over the limit takes
+  the place of a voice client quiet for 500 ms, so that a Unity client's voice socket opened again
+  on a new port gets in within 0.5 s. The voice clients at an address stop receiving as soon as the
+  last Unity client of their app there disconnects; those over the number left after one
+  disconnects are dropped within 1.5 s. Other packets are dropped with a warning, at most once per
+  source every 10 s. Voice from an address in `TRUSTED_PROXIES` is relayed unchecked and
+  unlimited, also while a Unity client is connected from the proxy's machine; the server logs this
+  once per address. See [Voice relay](./guide.md#voice-relay).
+- An address with n Unity clients of an app can still be sent n copies of the app's voice: a
+  forged sender can take the place of one of them that sends no voice.
 - The app id keeps apps apart but is not access control: anyone who knows an app's name and can
   reach the TCP port can join the app and send and receive its voice. Voice is not encrypted.
 - **Voice on IPv6.** A `VOICE_HOST` that is an IPv6 address, `::` included, gets an IPv6 socket
@@ -627,7 +634,7 @@ The endpoints are documented under [REST store](./protocol.md#rest-store).
   `undefined`/`null`/empty-string/invalid-JSON edge cases), the TCP worker and its proxy, the
   Socket.IO server against real `socket.io-client` sockets, the REST store and web server, the
   voice server (apps kept apart, a client changing app, 1.x voice packets, senders matched to
-  the Unity clients' addresses) and the voice packet
+  the Unity clients' addresses, one per Unity client) and the voice packet
   format, `WebLog`, `ClientLogger`, `BroadcastLogger`, the console log, the `DATA_ROOT`
   check, the configuration, the ring buffer, the deprecated serialization helpers, and the inbound
   limits: the backlog count, the rate limit and the merging of held updates, on both transports.
@@ -700,7 +707,7 @@ Not part of this release:
   unless `TLS_CERT` and `TLS_KEY` are set; the per-client message rate limit is there to catch a
   runaway send loop, not a hostile client, which can open as many connections as it likes. Model objects are plain objects, not null-prototype ones. Voice
   is kept within an app by an app id anyone can compute from the app name, is relayed only from the
-  address of a Unity client of that app, and is not encrypted.
+  address of a Unity client of that app, one voice client per Unity client, and is not encrypted.
   The structural changes that would have come first (Socket.IO rooms, `Map` keying in `DataStore` and
   the REST store, bounds checks on TCP ingress and egress) landed anyway, on performance and
   robustness grounds.
