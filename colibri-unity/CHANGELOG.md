@@ -278,15 +278,19 @@ rationale, migration steps, and what the Editor verification did and did not cov
 - **Servers reached over IPv6.** The TCP socket was IPv4 and connected by name, so a server name
   with only IPv6 addresses (AAAA records), such as a server whose IPv4 address is behind
   carrier-grade NAT, or an IPv6 address could not be reached at all (in 1.3.1 too). The name is now
-  looked up at every attempt, within the 5 s connect timeout, and its addresses are tried in the
-  order the device's resolver returns them, each with a socket of its own family. A refused or
+  looked up at every attempt, within the 5 s connect timeout, and its IPv4 addresses are tried
+  first, then its IPv6 addresses, each in the order the device's resolver returns them, with a
+  socket of its own family. IPv4 first because voice goes to IPv4 too when the name has an IPv4
+  address, and the server relays voice only from the TCP connection's address. A name with only
+  IPv6 addresses connects over IPv6, and voice follows. If the IPv4 address does not answer while
+  the IPv6 address does, TCP falls back to IPv6 and voice, still on IPv4, is dropped. A refused or
   unreachable address is followed by the next at once, and moving on is logged. One without an
   answer is given up after its share of the time left (at least 1 s, 0.25 s for a loopback address
-  followed by others: Windows resolves `localhost` to `::1` first and takes a second or more to
-  report a refusal, while colibri-server listens on IPv4 by default). With a host name, the
-  `connected to` line names the address used. An IPv6 address may be written with or without
-  brackets, and `Store` URLs put it in brackets. TLS still checks the certificate against the
-  server address as entered.
+  followed by others: Windows takes a second or more to report a refusal, e.g. on `127.0.0.1` from
+  a server on `::1` only). When every address fails, the first refusal is reported rather than an
+  unreachable IPv6 address after it. With a host name, the `connected to` line names the address
+  used. An IPv6 address may be written with or without brackets, and `Store` URLs put it in
+  brackets. TLS still checks the certificate against the server address as entered.
 - **Disabling and enabling the connection in one frame** no longer takes 5 s on Mono or leaves sends stuck.
 - **Connected means the server has spoken.** A session becomes `Connected` on the first frame the
   server sends, not when the TCP connection opens. Only then is the backoff reset, `OnConnected`
@@ -844,9 +848,10 @@ otherwise spend on their prototype, so:
   that a value the Setup window marks as an error stays out of the configuration without holding
   back a valid change or undoing one made elsewhere; `ConnectTimeoutTests` an attempt nothing
   answers, cancelling one, and a refusal reported at once; `ServerAddressTests` IP addresses with
-  and without brackets, the order a name's addresses are tried in, their shares of the connect
-  timeout, and moving on from an address that refuses or does not answer, IPv6 then IPv4 on the
-  loopback; `StorePathTests` the escaping of the app name and the key in Store URLs, and the
+  and without brackets, the order a name's addresses are tried in (IPv4 first), their shares of
+  the connect timeout, moving on from an address that refuses or does not answer, IPv4 then IPv6
+  on the loopback, and a refusal not hidden by an unreachable address after it; `StorePathTests`
+  the escaping of the app name and the key in Store URLs, and the
   brackets around an IPv6 server address there; `VoicePacketQueueTests` voice packets from several receive threads at once, a listener
   that throws, and the app id of an App Name the handshake changes; `OutboxTests` the 10 000-message
   cap, connected and not; `RemoteLoggingTests` the missing-lines note. In PlayMode, `SyncModelTests`

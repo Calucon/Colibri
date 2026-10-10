@@ -252,7 +252,7 @@ Show [`LastConnectFailure`](#connection-and-outages) in your app.
 | `Colibri: 192.168.0.10:9012 did not answer within 5 s. …` | Wrong IP, server on another network or subnet, Wi-Fi client isolation, or a firewall dropping packets | Fix the address or the network |
 | `Colibri: connection to 192.168.0.10 failed (ConnectionRefused), retrying...` | The machine is reachable, but nothing listens on the TCP port | Start colibri-server, or check *TCP server Port* |
 | `… failed (HostUnreachable) …`, `(NetworkUnreachable)` or another socket error | Wrong address or network | Fix the address or the network |
-| `Colibri: no answer from [2001:db8::1]:9012 within 2.5 s, trying 192.0.2.10:9012` or `Colibri: no connection to [2001:db8::1]:9012 (…), trying …` | The server name has several addresses and this one does not work from here: no IPv6 route, or the server does not listen on IPv6. The next address is tried. | None if the next one connects. To avoid the delay, remove the address from DNS. `TCP_HOST=::` on the server avoids it too, but then the server drops the voice of devices that connect over IPv6 ([Server addresses](#server-addresses)) |
+| `Colibri: no answer from 192.0.2.10:9012 within 2.5 s, trying [2001:db8::1]:9012` or `Colibri: no connection to 192.0.2.10:9012 (…), trying …` | The server name has several addresses and this one does not work from here: no route, a firewall, or the server does not listen on it. The next address is tried. | None for TCP if the next one connects, but voice still goes to the first IPv4 address and is not heard ([Server addresses](#server-addresses)). Make the address reachable, or remove it from DNS |
 | `Colibri: colibri.example.org could not be resolved within 5 s. …` | The device's DNS server does not answer | Check the network, or use the server's IP address |
 | `Colibri voice: the server address '…' has only IPv6 addresses (…), and this device has no route to them, …` or `Colibri voice: sending to … failed (NetworkUnreachable), dropping voice until a send works again` | No route to the server's voice address: a server name with only IPv6 addresses on a network without IPv6, or a network change | Use a network with IPv6, or give the server name an IPv4 address. After a network change, voice resumes with the first send that works |
 | `Colibri: invalid frame from server, dropping connection: …` if the server sends anything, then `Colibri: 3 connections in a row were accepted but ended before a single frame could be read. …` | A 1.x server, an address that is not a colibri-server, or [TLS](#tls) on the server only. With *Server supports SSL/TLS?* off, also a proxy or port forwarding whose backend is not running. | Use a 2.x server, correct the address, tick *Server supports SSL/TLS?*, or start the server behind the proxy |
@@ -269,7 +269,7 @@ Show [`LastConnectFailure`](#connection-and-outages) in your app.
 | Two clients do not see each other | Different app names | Compare the names in the log line `Colibri: connected to <host>:<port> as app '<app>'. …` |
 | Unknown objects or messages appear | Another project uses the same app name. Unity reports nothing at runtime. | Choose a unique app name ([Configuration](#configuration)). The server log warns, naming the app, above 8 clients by default (`APP_CLIENT_WARNING_THRESHOLD`). |
 | One client is connected but sends and receives nothing | Its Editor is in the background with *Run In Background* off | Enable *Run In Background* ([Quickstart](#quickstart), step 3) |
-| Voice is not heard, and the server logs `Ignoring voice packet from <address>:<port> for app <app id>: no Unity client of that app is connected from <address>` | The server relays voice only from the address of a client connected with the same App Name: `WebServerConnection` is not connected, voice goes through a proxy, or TCP uses IPv6 and voice IPv4 | See [Voice chat](#voice-chat) and [Server addresses](#server-addresses) |
+| Voice is not heard, and the server logs `Ignoring voice packet from <address>:<port> for app <app id>: no Unity client of that app is connected from <address>` | The server relays voice only from the address of a client connected with the same App Name: `WebServerConnection` is not connected, voice goes through a proxy, or TCP fell back to IPv6 because the server name's IPv4 address does not answer | See [Voice chat](#voice-chat) and [Server addresses](#server-addresses) |
 
 ## Sending data between clients
 
@@ -625,15 +625,18 @@ the current state. A drop and reconnect between two frames raises `OnDisconnecte
 
 ### Server addresses
 
-The server address is looked up at every attempt. Its addresses are tried in the order the device's
-resolver returns them, usually IPv6 first, each with a socket of its own family:
+The server address is looked up at every attempt. Its IPv4 addresses are tried first, then its IPv6
+addresses, each in the order the device's resolver returns them, with a socket of its own family.
+Voice goes to IPv4 too when the name has an IPv4 address ([Voice chat](#voice-chat)), so TCP and
+voice use the same IP version, as the server's voice check needs.
 
 - A refused or unreachable address is followed by the next at once.
 - An address without an answer is given up after its share of the 5 s: the time left divided by the
   addresses left, at least 1 s. A loopback address followed by others gets 0.25 s, because Windows
-  resolves `localhost` to `::1` first and takes a second or more to report a refusal.
+  takes a second or more to report a refusal, e.g. on `127.0.0.1` when the server listens on `::1`
+  only.
 - Moving on is logged (`Colibri: no answer from …, trying …`). With a host name, the connect line
-  names the address used: `Colibri: connected to colibri.example.org:9012 (2001:db8::1) as app …`.
+  names the address used: `Colibri: connected to colibri.example.org:9012 (192.0.2.10) as app …`.
 
 An IPv6 address works with or without brackets. `Store` URLs get the brackets either way. With TLS,
 the certificate is checked against the server address as entered.
@@ -643,13 +646,12 @@ a server whose IPv4 address is behind carrier-grade NAT, the server needs `TCP_H
 `VOICE_HOST=::` and, for `Store`, `WEBSERVER_HOST=::`, or a proxy listening on IPv6 ([server
 guide](../../colibri-server/docs/guide.md#configuration)).
 
-Voice goes to an IPv4 address when the server name has one ([Voice chat](#voice-chat)), and the
-server relays it only from the address of the TCP connection. With a name that has both an IPv4 and
-an IPv6 address, a device whose TCP connection gets through over IPv6 is therefore not heard. The
-server logs `Ignoring voice packet from <IPv4 address>:<port> for app <app id>: no Unity client of
-that app is connected from <IPv4 address>`, Unity nothing. For voice, keep the server's TCP port off
-IPv6, remove one of the addresses from DNS, or enter the IPv4 address as the server address. The same
-happens with `localhost` and `TCP_HOST=::` on Windows: TCP from `::1`, voice from `127.0.0.1`.
+The server relays voice only from the address of the TCP connection. If the name's IPv4 address does
+not answer on the TCP port while its IPv6 address does, TCP falls back to IPv6, voice stays on IPv4,
+and the device is not heard. If the voice reaches the server, it logs
+`Ignoring voice packet from <IPv4 address>:<port> for app <app id>: no Unity client of that app is
+connected from <IPv4 address>`, Unity nothing. Make the IPv4 address reachable, or remove it from
+DNS.
 
 ### Sending during an outage
 
@@ -846,8 +848,9 @@ and instantiates `VoiceReceiver` prefabs.
   not connect it ([Connection and outages](#connection-and-outages)). In a scene without `Sync`
   calls or a `SyncBehaviour`, call `Sync.Receive` or read `WebServerConnection.Instance`. Voice
   sent through a reverse proxy comes from the proxy's address instead
-  ([Voice relay](../../colibri-server/docs/guide.md#voice-relay)), and voice over IPv4 from another
-  address than a TCP connection over IPv6 ([Server addresses](#server-addresses)).
+  ([Voice relay](../../colibri-server/docs/guide.md#voice-relay)). Voice also stays on IPv4 when TCP
+  falls back to IPv6 because the server name's IPv4 address does not answer, and is dropped then
+  ([Server addresses](#server-addresses)).
 - The server takes one voice sender per connected client. Disabling and re-enabling
   `VoiceServerConnection` sends from a new port, which the server lets in once the old one has been
   quiet for 0.5 s.
