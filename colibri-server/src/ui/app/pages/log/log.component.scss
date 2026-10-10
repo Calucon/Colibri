@@ -33,10 +33,6 @@
     // a line scrolled into view stops below the date bar, not under it
     scroll-padding-top: 22px;
 
-    &.stale {
-        opacity: 0.7;
-    }
-
     // room to scroll the last line out from under "Jump to latest", and where an opened line
     // scrolls to
     &.paused {
