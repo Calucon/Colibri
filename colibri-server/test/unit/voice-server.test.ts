@@ -96,6 +96,17 @@ describe('VoiceServer', () => {
         await server.stop();
     });
 
+    // For the admin log's Connections switch.
+    it('tags the line for a new client as a connection line', async () => {
+        const a = await openClient();
+        const b = await openClient();
+        await send(a, voicePacket(1, 1));
+        await roundTrip(b, a, 2);
+
+        const connected = logs.find(l => l.message.startsWith('New voice client connected'));
+        expect(connected?.metadata).toEqual({ connection: true });
+    });
+
     it('survives a datagram shorter than the header and still relays valid packets', async () => {
         const a = await openClient();
         const b = await openClient();

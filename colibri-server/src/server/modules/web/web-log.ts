@@ -1,4 +1,4 @@
-import { LogLevel, LogMessage, Metadata, Payload, RingBuffer, Service } from '../core/index.js';
+import { CONNECTION_METADATA_KEY, LogLevel, LogMessage, Metadata, Payload, RingBuffer, Service } from '../core/index.js';
 import { NetworkMessage } from '../command-hooks/index.js';
 import { SocketIoClient, SocketIOServer } from '../networking/socket-io-server.js';
 import { filter } from 'rxjs';
@@ -25,6 +25,8 @@ interface LogPreferences {
     filter: string;
     levels: Set<number> | undefined;
     showBroadcastTraffic: boolean;
+    /** Whether routine connect and disconnect lines (see CONNECTION_LINE) are shown. */
+    showConnections: boolean;
     /** Echoed in the history, so the admin UI can tell it from the answer to an earlier request. */
     request: number | null;
 }
@@ -42,7 +44,8 @@ const KNOWN_LEVELS: ReadonlySet<number> = new Set([ LogLevel.Error, LogLevel.War
 
 // requestLog is accepted from any Socket.IO client of any app, so its payload is whatever
 // that client chose to send. Each field is taken only if it has the expected type and is
-// otherwise left at its default (no filter, all levels, no broadcast traffic): `levels: 1`
+// otherwise left at its default (no filter, all levels, no broadcast traffic, connection lines
+// shown, as before the switch existed): `levels: 1`
 // used to reach `new Set(1)` and throw, `levels: 'x'` became Set {'x'} and silently hid
 // every level, and a non-string `filter` silently hid every message.
 const parseLogPreferences = function (body: unknown): LogPreferences {
@@ -53,6 +56,7 @@ const parseLogPreferences = function (body: unknown): LogPreferences {
             ? new Set(fields.levels.filter((level): level is number => typeof level === 'number' && KNOWN_LEVELS.has(level)))
             : undefined,
         showBroadcastTraffic: fields.showBroadcastTraffic === true,
+        showConnections: fields.showConnections !== false,
         request: typeof fields.request === 'number' && Number.isFinite(fields.request) ? fields.request : null
     };
 };
@@ -103,11 +107,11 @@ export class WebLog extends Service {
             return;
         }
 
-        const { filter, levels, showBroadcastTraffic, request } = parseLogPreferences(networkMsg.payload?.asValue());
+        const preferences = parseLogPreferences(networkMsg.payload?.asValue());
+        const { filter, request } = preferences;
 
         socketClient.metadata['log::filter'] = filter;
-        socketClient.metadata['log::levels'] = levels;
-        socketClient.metadata['log::broadcast'] = showBroadcastTraffic;
+        socketClient.metadata['log::preferences'] = preferences;
 
         // client can't handle too many messages at once
         const clientLimit = 10000;
@@ -118,7 +122,7 @@ export class WebLog extends Service {
         const messages = this.logMessages
             .toArray()
             .filter(msg => !filter || msg.metadata.clientApp === filter)
-            .filter(msg => this.isVisibleToClient(msg.level, msg.metadata, levels, showBroadcastTraffic))
+            .filter(msg => this.isVisibleToClient(msg.level, msg.metadata, preferences))
             .sort((a, b) => a.created - b.created)
             .slice(-clientLimit)
             .map(msg => ({ ...msg }));
@@ -167,9 +171,8 @@ export class WebLog extends Service {
             const clientFilter = client.metadata['log::filter'];
             if (clientFilter && clientFilter !== log.metadata.clientApp) continue;
 
-            const clientLevels = client.metadata['log::levels'] as Set<number> | undefined;
-            const clientBroadcast = client.metadata['log::broadcast'] as boolean | undefined;
-            if (!this.isVisibleToClient(log.level, log.metadata, clientLevels, clientBroadcast)) continue;
+            const preferences = client.metadata['log::preferences'] as LogPreferences | undefined;
+            if (!this.isVisibleToClient(log.level, log.metadata, preferences)) continue;
 
             clients.push(client);
         }
@@ -203,11 +206,16 @@ export class WebLog extends Service {
 
     // Broadcast/sync traffic is governed exclusively by showBroadcastTraffic, never by levels,
     // even though it's always logged at Debug: lets an admin watch Debug output without sync
-    // spam, or watch sync spam without unrelated Debug noise.
-    private isVisibleToClient(level: number, metadata: Metadata, levels: Set<number> | undefined, showBroadcastTraffic: boolean | undefined): boolean {
+    // spam, or watch sync spam without unrelated Debug noise. Connection lines are hidden by
+    // their own switch, and otherwise shown at their level like any other line. Without
+    // preferences (no requestLog yet): every line but sync traffic.
+    private isVisibleToClient(level: number, metadata: Metadata, preferences: LogPreferences | undefined): boolean {
         if (metadata['broadcastTraffic'] === true) {
-            return showBroadcastTraffic === true;
+            return preferences?.showBroadcastTraffic === true;
         }
-        return !levels || levels.has(level);
+        if (metadata[CONNECTION_METADATA_KEY] === true && preferences?.showConnections === false) {
+            return false;
+        }
+        return !preferences?.levels || preferences.levels.has(level);
     }
 }

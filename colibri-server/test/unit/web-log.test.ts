@@ -198,6 +198,47 @@ describe('WebLog', () => {
         expect(server.histories[0]!.messages.map(m => m.message)).toEqual([ 'err' ]);
     });
 
+    // The Connections switch: routine connect and disconnect lines, tagged by whoever logs them.
+    it('hides connection lines live and in the history once asked to, and shows them by default', async () => {
+        const server = new FakeSocketIOServer();
+        const webLog = new WebLog(server as unknown as SocketIOServer);
+        await webLog.init();
+
+        const emitter = new Emitter();
+        emitter.emitDebug('client connected', { connection: true, clientApp: 'appA' });
+        emitter.emitWarning('client gone quiet', { clientApp: 'appA' });
+
+        const quiet = makeClient('quiet', 'colibri');
+        const all = makeClient('all', 'colibri');
+        server.connectClient(quiet);
+        server.connectClient(all);
+        requestLog(server, quiet, { showConnections: false, request: 1 });
+        requestLog(server, all, { request: 2 });
+
+        expect(server.histories.find(h => h.request === 1)!.messages.map(m => m.message)).toEqual([ 'client gone quiet' ]);
+        expect(server.histories.find(h => h.request === 2)!.messages.map(m => m.message)).toEqual([ 'client connected', 'client gone quiet' ]);
+
+        server.broadcasts.length = 0;
+        emitter.emitDebug('client disconnected', { connection: true });
+        emitter.emitInfo('something else');
+        expect(server.live.map(b => [ b.message.payload!.asValue<{ message: string }>().message, b.clients.map(c => c.id) ])).toEqual([
+            [ 'client disconnected', [ 'all' ] ],
+            [ 'something else', [ 'quiet', 'all' ] ],
+        ]);
+    });
+
+    it('still applies the level filter to connection lines it shows', async () => {
+        const server = new FakeSocketIOServer();
+        const webLog = new WebLog(server as unknown as SocketIOServer);
+        await webLog.init();
+        const admin = makeClient('admin1', 'colibri');
+        server.connectClient(admin);
+        requestLog(server, admin, { levels: [ 0, 1, 2 ], showConnections: true });
+
+        new Emitter().emitDebug('client connected', { connection: true });
+        expect(server.live).toEqual([]);
+    });
+
     it('answers requestLog with a history even when nothing matches, echoing a numeric request only', async () => {
         const server = new FakeSocketIOServer();
         const webLog = new WebLog(server as unknown as SocketIOServer);

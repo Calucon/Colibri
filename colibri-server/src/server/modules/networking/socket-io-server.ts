@@ -2,7 +2,7 @@ import { Server as SocketIoServer, Socket as SocketIoSocket, Event as SocketIoEv
 import { Server as HttpServer } from 'http';
 import { Observable, Subject } from 'rxjs';
 
-import { Metadata, Payload, Service } from '../core/index.js';
+import { CONNECTION_LINE, Metadata, Payload, Service } from '../core/index.js';
 import { NetworkClient, NetworkMessage, NetworkServer } from '../command-hooks/index.js';
 import {
     COLIBRI_CHANNEL,
@@ -314,7 +314,10 @@ export class SocketIOServer extends Service implements NetworkServer {
             // One line: a Socket.IO client names its app as it connects, unlike a TCP client, so
             // "waiting for app name" followed by the app, as the TCP server logs it, was noise.
             const through = address === peer ? '' : ` through ${peer}`;
-            this.logDebug(`New client '${client.name}' (${client.id}, v${client.version}) connected to app "${client.app}" from ${address}${through}`, aboutClient(client));
+            this.logDebug(
+                `New client '${client.name}' (${client.id}, v${client.version}) connected to app "${client.app}" from ${address}${through}`,
+                { ...aboutClient(client), ...CONNECTION_LINE }
+            );
         }
 
         // Announced to everyone that got this far, before any application traffic. A client
@@ -381,7 +384,7 @@ export class SocketIOServer extends Service implements NetworkServer {
             this.releaseHeld(rc);
             this.rateLimiter.forget(rc);
             if (rc.app !== 'colibri') { // ignore colibri web interface clients
-                this.logDebug(`Colibri client '${rc.name}' (${rc.id}) disconnected`, aboutClient(rc));
+                this.logDebug(`Colibri client '${rc.name}' (${rc.id}) disconnected`, { ...aboutClient(rc), ...CONNECTION_LINE });
             }
             this.clientDisconnectedStream.next(rc);
         }

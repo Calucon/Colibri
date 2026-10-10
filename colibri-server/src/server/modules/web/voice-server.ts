@@ -1,4 +1,4 @@
-import { Service } from '../core/index.js';
+import { CONNECTION_LINE, Service } from '../core/index.js';
 import * as dgram from 'dgram';
 import { AddressInfo } from 'net';
 import { mkdir, writeFile } from 'fs/promises';
@@ -210,7 +210,10 @@ export class VoiceServer extends Service {
                 };
                 this.clients.set(clientKey, voiceClient);
                 this.appClients = undefined;
-                this.logDebug(`New voice client connected from ${remote.address}:${remote.port} ID: ${userId} App: ${formatAppId(appId)} Codec: ${codec === VoiceCodec.OPUS ? 'Opus' : 'PCM'}`);
+                this.logDebug(
+                    `New voice client connected from ${remote.address}:${remote.port} ID: ${userId} App: ${formatAppId(appId)} Codec: ${codec === VoiceCodec.OPUS ? 'Opus' : 'PCM'}`,
+                    CONNECTION_LINE
+                );
                 if (this.recordingVoiceData) {
                     this.logWarning('Warning: Voice recording is enabled');
                     if (codec !== VoiceCodec.PCM) this.logWarning('Voice recording is only supported for PCM data');
@@ -380,7 +383,7 @@ export class VoiceServer extends Service {
             if (now - value.lastHeartbeat > this.disconnectTimeoutMillis) {
                 this.clients.delete(key);
                 this.appClients = undefined;
-                this.logDebug(`Voice client ${value.ip}:${value.port} disconnected ID: ${value.userId}`);
+                this.logDebug(`Voice client ${value.ip}:${value.port} disconnected ID: ${value.userId}`, CONNECTION_LINE);
 
                 // Check if recording data is available
                 if (value.recordingData.length > 0) {

@@ -1912,6 +1912,36 @@ describe('TCPServerWorker', () => {
         });
     });
 
+    // The admin log's Connections switch hides these, and only these.
+    describe('connection lines', () => {
+        const tagged = (): string[] => posted
+            .filter(p => p.channel === 'log' && (p.content.metadata as Record<string, unknown>).connection === true)
+            .map(p => String(p.content.msg));
+
+        it('tags the routine connect and disconnect lines', () => {
+            const { socket } = connect('10.0.0.7');
+            socket.emit('data', encodeHandshakeFrame(PROTOCOL_VERSION, 'appA', 'quest'));
+            socket.emit('close');
+
+            expect(tagged()).toEqual([
+                expect.stringContaining('connected from 10.0.0.7, waiting for app name'),
+                expect.stringContaining('Setting app of new colibri client \'quest\''),
+                expect.stringContaining('Colibri client 10.0.0.7 disconnected'),
+            ]);
+        });
+
+        it('tags a peer that went away, but not a refusal', () => {
+            const gone = connect('10.0.0.8');
+            gone.socket.emit('data', encodeHandshakeFrame(PROTOCOL_VERSION, 'appA', 'quest'));
+            gone.socket.emit('error', Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }));
+            const refused = connect('10.0.0.9');
+            refused.socket.emit('data', encodeHandshakeFrame('1', 'appA', 'old'));
+
+            expect(tagged()).toContainEqual(expect.stringContaining('Lost the connection to client'));
+            expect(tagged().some(line => line.includes('Refusing'))).toBe(false);
+        });
+    });
+
     describe('stop', () => {
         it('destroys live sockets and clears every index', () => {
             const connected = connect();

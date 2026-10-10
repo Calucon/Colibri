@@ -207,6 +207,21 @@ describe('SocketIOServer', () => {
             expect(server.hasRecipients('appA')).toBe(true);
             expect(logged(LogLevel.Error)).toEqual([]);
         });
+
+        // The admin log's Connections switch hides these.
+        it('tags its connect and disconnect lines as connection lines', async () => {
+            const { socket } = connect({ app: 'appA', version: PROTOCOL_VERSION });
+            await nextColibriEvent(socket);
+            const gone = firstValueFrom(server.clientDisconnected$);
+            socket.disconnect();
+            await gone;
+
+            const tagged = logs.filter(l => l.metadata.connection === true).map(l => l.message);
+            expect(tagged).toEqual([
+                expect.stringMatching(/^New client '.+' \(.+\) connected to app "appA"/),
+                expect.stringMatching(/^Colibri client '.+' \(.+\) disconnected$/),
+            ]);
+        });
     });
 });
 

@@ -1,6 +1,6 @@
 import * as net from 'net';
 import * as tls from 'tls';
-import { WorkerMessage, WorkerService } from '../core/index.js';
+import { CONNECTION_LINE, WorkerMessage, WorkerService } from '../core/index.js';
 import * as threads from 'worker_threads';
 import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
@@ -992,7 +992,8 @@ export class TCPServerWorker extends WorkerService {
         const tcpSocket = tcpSocketOf(socket);
         const through = this.proxiedAddresses.has(tcpSocket) ? ` through ${tcpSocket.remoteAddress}` : '';
         this.logDebug(
-            `New client (${id}) connected from ${address}${through}, waiting for app name`
+            `New client (${id}) connected from ${address}${through}, waiting for app name`,
+            CONNECTION_LINE
         );
         socket.setNoDelay(true);
         // The kernel's own dead-peer detection, for a socket with nothing in flight - one waiting
@@ -1161,6 +1162,7 @@ export class TCPServerWorker extends WorkerService {
                 clientApp: client.app,
                 clientName: client.name,
                 clientId: client.id,
+                ...CONNECTION_LINE,
             }
         );
         this.waitingClients.delete(client.id);
@@ -1411,7 +1413,7 @@ export class TCPServerWorker extends WorkerService {
         // A peer that closed abruptly - an EPIPE as much as an ECONNRESET - is not this server's
         // error. Matched by code: it used to be the message, which let EPIPE through at ERROR.
         if (code && PEER_GONE_ERRORS.has(code)) {
-            this.logDebug(`Lost the connection to ${who}: ${error.message}`);
+            this.logDebug(`Lost the connection to ${who}: ${error.message}`, CONNECTION_LINE);
         } else {
             this.logError(`Socket error on ${who}: ${error.message}`, false);
         }
@@ -1428,6 +1430,7 @@ export class TCPServerWorker extends WorkerService {
             clientApp: client.app,
             clientName: client.name,
             clientId: client.id,
+            ...CONNECTION_LINE,
         });
         this.clients.delete(client.id);
         this.waitingClients.delete(client.id);
