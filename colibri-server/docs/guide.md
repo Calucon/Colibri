@@ -200,6 +200,9 @@ used HTTPS:
   receives ([Server messages](protocol.md#server-messages)).
   From a trusted peer, the client used TLS to the proxy if the right-most `X-Forwarded-Proto` entry
   is `https` or `wss`, in any case. The admin UI then shows *TLS at proxy* ([Admin UI](#admin-ui)).
+  The proxy must set this header, replacing the client's: nginx passes on what the client sent
+  unless `proxy_set_header X-Forwarded-Proto $scheme;` is in each `location`, and a client on plain
+  HTTP can then claim TLS. Only the admin UI's display depends on it.
 - **TCP port:** with `TCP_PROXY_PROTOCOL=true`, a connection from a trusted peer must start with a
   PROXY protocol header, version 1 or 2, which names the Unity client
   ([PROXY protocol](protocol.md#proxy-protocol)). Other peers connect as before. The header does not
@@ -231,7 +234,8 @@ address:
 
 A connection from a trusted address that does not come through the proxy can name any client
 address: on the web port with its own `X-Forwarded-For`, on the TCP port with its own PROXY protocol
-header. With a new address on each connection, it also gets past the per-address warning limits.
+header. On the web port, its own `X-Forwarded-Proto` also shows it as *TLS at proxy*. With a new
+address on each connection, it also gets past the per-address warning limits.
 With the ports above, only processes on the host and containers on the compose network can connect
 directly. `uniquelocal` also covers clients on a private network (`10.0.0.0/8`, `172.16.0.0/12`,
 `192.168.0.0/16`, `fc00::/7`): such a client can do the same on the web port through the proxy, with

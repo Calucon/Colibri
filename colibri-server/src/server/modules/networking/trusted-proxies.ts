@@ -68,10 +68,12 @@ export const forwardedClientAddress = function (
 };
 
 // Whether a web request came to a trusted peer over TLS, as the peer reports it in
-// X-Forwarded-Proto: its right-most entry, the one the peer itself set or appended, is https, or wss
-// as Traefik sends for a WebSocket, in any case. Never from a peer that is not trusted, as with
-// X-Forwarded-For: a client can send the header itself. Unlike Express's req.protocol, which takes
-// the left-most entry, a value a client sent ahead of the proxy's is never believed.
+// X-Forwarded-Proto: its right-most entry is https, or wss as Traefik sends for a WebSocket, in any
+// case. Never from a peer that is not trusted, as with X-Forwarded-For: a client can send the header
+// itself. What stops a client's own value is the proxy replacing the header (nginx: proxy_set_header
+// X-Forwarded-Proto $scheme). A proxy that passes it on unchanged forwards the client's value as if
+// it were its own, and nothing here can tell. The right-most entry covers a proxy that appends its
+// own value, where Express's req.protocol would take the left-most one, the client's.
 export const forwardedTls = function (
     peer: string,
     forwardedProto: string | string[] | undefined,

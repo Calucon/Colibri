@@ -127,8 +127,8 @@ this is the server's full detail.
   `colibri::clients`, which every client of the app receives. Express's `req.ip` agrees.
 - **TLS at the proxy:** a proxy that ends TLS connects unencrypted, so the admin UI showed no TLS
   anywhere and TLS as *Off*. From a trusted peer, a Socket.IO client now counts as TLS at the proxy
-  when the right-most `X-Forwarded-Proto` entry is `https` or `wss`, in any case. The Clients page
-  shows it as *TLS at proxy*. Without a certificate, and while such a client or admin page is
+  when the right-most `X-Forwarded-Proto` entry is `https` or `wss`, in any case. The proxy must
+  set the header, replacing the client's. The Clients page shows it as *TLS at proxy*. Without a certificate, and while such a client or admin page is
   connected, the Server page shows the web port as *HTTP here, HTTPS at the proxy* and TLS as *Not
   on this server*. The admin topics carry it as `tlsAtProxy`
   ([Admin UI channel](./protocol.md#admin-ui-channel)). A PROXY protocol header does not say
