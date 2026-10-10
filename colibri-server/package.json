@@ -19,6 +19,7 @@
     "server:build": "tsc --p src/server && node dist/server/write-build-info.js",
     "server:watch:ts": "tsc --p src/server -w",
     "server:watch:node": "nodemon --watch dist/server/* --exec \"npm run server:start\"",
+    "demo": "tsx test/demo-clients.ts",
     "test:tcpclient": "tsx test/tcp-client-test.ts",
     "test:stressecho": "tsx test/stress-echo-peer.ts",
     "test:vectors": "tsx test/emit-protocol-vectors.ts",
