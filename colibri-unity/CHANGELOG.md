@@ -422,7 +422,10 @@ rationale, migration steps, and what the Editor verification did and did not cov
   receiving and frees its Opus decoder; its buffer used to grow with every packet. A packet that
   arrives before the receiver's `Start` is dropped; with an output rate other than 48 kHz it threw.
   The playback buffer was a List that the main thread and the audio thread changed unguarded, which
-  now and then threw; it is a lock-free ring now, and the audio thread no longer allocates.
+  now and then threw; it is a lock-free ring now, and the audio thread no longer allocates. The
+  buffer held stereo samples whatever the output's channel count, which played voice wrong on a
+  mono or surround output; each sample now goes to every channel. An exception on the audio thread
+  plays silence and is logged once per receiver.
   Fast-forward threw on a frame longer than its latency, and at 48 kHz acted at half the *Fast
   Forward Latency Milliseconds* set; the latency now counts at the output rate. `StartPlayback`
   twice with one voice id played every packet twice. The second call now only restarts the
