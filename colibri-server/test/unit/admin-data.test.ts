@@ -41,9 +41,9 @@ class FakeSocketIOServer {
         return { in: 1, out: 2, limit: null, held: 0, ...(history ? { history: [ [ Date.now() - 1000, 1, 2 ] ] } : {}) };
     }
 
-    public connect(id: string, app = 'colibri'): SocketIoClient {
+    public connect(id: string, app = 'colibri', tlsAtProxy = false): SocketIoClient {
         const client: SocketIoClient = {
-            id, app, name: '127.0.0.1', version: '2', metadata: {},
+            id, app, name: '127.0.0.1', version: '2', metadata: {}, tlsAtProxy,
             socket: { handshake: { secure: false, issued: 0 }, conn: { transport: { writable: true } } } as never,
         };
         this.clients.push(client);
@@ -129,6 +129,18 @@ describe('AdminData', () => {
 
         await vi.advanceTimersByTimeAsync(5 * ADMIN_REFRESH_MILLIS);
         expect(sentTo(page)).toHaveLength(1);
+    });
+
+    it('tells a page that reached a trusted proxy over TLS that web TLS is at the proxy', async () => {
+        const direct = socketio.connect('direct');
+        send(direct, 'request', { topic: 'server' });
+        await settle();
+        expect(sentTo(direct)[0]!.payload).toMatchObject({ tls: null, tlsAtProxy: { web: false } });
+
+        const proxied = socketio.connect('proxied', 'colibri', true);
+        send(proxied, 'request', { topic: 'server' });
+        await settle();
+        expect(sentTo(proxied)[0]!.payload).toMatchObject({ tls: null, tlsAtProxy: { web: true } });
     });
 
     it('sends a subscribed topic at once and then every second, until unsubscribed', async () => {

@@ -309,8 +309,8 @@ describe('admin UI topics', () => {
             id, app, name: `headset-${id}`, version: PROTOCOL_VERSION, metadata: {},
             address: '10.0.0.5', tls: true, connectedAt: 1_699_999_990_000,
         });
-        const webClient = (id: string, app: string, secure = false): SocketIoClient => ({
-            id, app, name: '192.168.1.20', version: PROTOCOL_VERSION, metadata: {},
+        const webClient = (id: string, app: string, secure = false, tlsAtProxy = false): SocketIoClient => ({
+            id, app, name: '192.168.1.20', version: PROTOCOL_VERSION, metadata: {}, tlsAtProxy,
             socket: { handshake: { secure, issued: 1_699_999_995_000 } } as never,
         });
         const activity: ClientActivity = { in: 72.04, out: 143.96, limit: 'rate', held: 3 };
@@ -329,15 +329,31 @@ describe('admin UI topics', () => {
                 adminPages: 1,
                 clients: [
                     {
-                        id: 't1', app: 'app', name: 'headset-t1', transport: 'tcp', version: PROTOCOL_VERSION, tls: true,
+                        id: 't1', app: 'app', name: 'headset-t1', transport: 'tcp', version: PROTOCOL_VERSION, tls: true, tlsAtProxy: false,
                         address: '10.0.0.5', connectedAt: 1_699_999_990_000, latency: null, in: 72, out: 144, limit: 'rate', held: 3,
                     },
                     {
-                        id: 'w1', app: 'app', name: '192.168.1.20', transport: 'web', version: PROTOCOL_VERSION, tls: true,
+                        id: 'w1', app: 'app', name: '192.168.1.20', transport: 'web', version: PROTOCOL_VERSION, tls: true, tlsAtProxy: false,
                         address: '192.168.1.20', connectedAt: 1_699_999_995_000, latency: null, in: null, out: 0, limit: null, held: 0,
                     },
                 ],
             });
+        });
+
+        it('says which web clients reached a trusted proxy over TLS, apart from TLS to this server', () => {
+            const snapshot = clientsSnapshot({
+                tcpClients: [ { ...tcpClient('t1', 'app'), tls: false } ],
+                tcpActivity: new Map(),
+                webClients: [ webClient('plain', 'app'), webClient('proxied', 'app', false, true), webClient('direct', 'app', true) ],
+                webActivity: () => activity,
+            });
+
+            expect(snapshot.clients.map(row => [ row.id, row.tls, row.tlsAtProxy ])).toEqual([
+                [ 't1', false, false ],
+                [ 'plain', false, false ],
+                [ 'proxied', false, true ],
+                [ 'direct', true, false ],
+            ]);
         });
 
         it('has no activity for a TCP client the worker did not report', () => {
@@ -403,7 +419,7 @@ describe('admin UI topics', () => {
 
     describe('the latency history', () => {
         const client = (id: string, app = 'app'): SocketIoClient => ({
-            id, app, name: '192.168.1.20', version: PROTOCOL_VERSION, metadata: {},
+            id, app, name: '192.168.1.20', version: PROTOCOL_VERSION, metadata: {}, tlsAtProxy: false,
             socket: { handshake: { secure: false, issued: 0 } } as never,
         });
         // A sample every 100 ms over the last `seconds`, up to and including now, as MeasureLatency keeps them.
@@ -498,8 +514,21 @@ describe('admin UI topics', () => {
                 uptime: 91,
                 settings: { TCP_PORT: 9012, TRUSTED_PROXIES: [ 'loopback' ], TCP_PROXY_PROTOCOL: true },
                 tls: null,
+                tlsAtProxy: { web: false },
                 voice: { listening: true, recording: false, samplingRate: 48000, clients: 2 },
             });
+        });
+
+        it('says whether a web client or admin page connected now reached a trusted proxy over TLS', () => {
+            const web = (id: string, app: string, tlsAtProxy: boolean) => ({ id, app, tlsAtProxy } as SocketIoClient);
+
+            expect(serverSnapshot(sources({ webClients: [ web('w1', 'app1', false), web('a1', 'colibri', false) ] })).tlsAtProxy)
+                .toEqual({ web: false });
+            expect(serverSnapshot(sources({ webClients: [ web('w1', 'app1', true), web('a1', 'colibri', false) ] })).tlsAtProxy)
+                .toEqual({ web: true });
+            // the admin page asking, with no other web client
+            expect(serverSnapshot(sources({ webClients: [ web('a1', 'colibri', true) ] })).tlsAtProxy).toEqual({ web: true });
+            expect(serverSnapshot(sources()).tlsAtProxy).toEqual({ web: false });
         });
 
         it('describes the certificate, and nothing of its key or files', () => {
