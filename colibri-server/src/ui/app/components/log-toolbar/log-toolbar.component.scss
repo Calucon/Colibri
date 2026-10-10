@@ -183,18 +183,54 @@
             outline-offset: 0;
             border-color: var(--accent);
         }
+
+        // the page's own clear button, after the count, replaces the browser's
+        &::-webkit-search-cancel-button {
+            -webkit-appearance: none;
+            appearance: none;
+        }
     }
 
     .matches {
         position: absolute;
-        right: 32px;
+        right: 36px;
         color: var(--text-muted);
         font-size: 12px;
         pointer-events: none;
     }
 
+    .clear-search {
+        position: absolute;
+        right: 4px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 24px;
+        height: 24px;
+        padding: 0;
+
+        color: var(--text-muted);
+        background: none;
+        border: 0;
+        border-radius: 4px;
+        cursor: pointer;
+
+        &:hover {
+            color: var(--text);
+            background: var(--surface-2);
+        }
+
+        .pi {
+            font-size: 12px;
+        }
+    }
+
+    &.typed input {
+        padding-right: 32px;
+    }
+
     &.counted input {
-        padding-right: 100px;
+        padding-right: 104px;
     }
 }
 
@@ -370,6 +406,25 @@
     .apps ::ng-deep .p-select-label {
         padding-top: 11px;
         padding-bottom: 11px;
+    }
+
+    .search {
+        .clear-search {
+            width: 32px;
+            height: 32px;
+        }
+
+        .matches {
+            right: 40px;
+        }
+
+        &.typed input {
+            padding-right: 40px;
+        }
+
+        &.counted input {
+            padding-right: 108px;
+        }
     }
 }
 

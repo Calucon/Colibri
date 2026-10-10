@@ -120,6 +120,26 @@ describe('LogToolbarComponent', () => {
         }
     });
 
+    it('clears the search with its own button, and stays in the field', () => {
+        const fixture = TestBed.createComponent(LogToolbarComponent);
+        fixture.detectChanges();
+        document.body.appendChild(fixture.nativeElement);
+        const input: HTMLInputElement = fixture.nativeElement.querySelector('.search input');
+        expect(fixture.nativeElement.querySelector('.clear-search')).toBeNull();
+
+        input.value = 'asset';
+        input.dispatchEvent(new Event('input'));
+        fixture.detectChanges();
+        (fixture.nativeElement.querySelector('.clear-search') as HTMLElement).click();
+        fixture.detectChanges();
+
+        expect(input.value).toBe('');
+        expect(log.search()).toBe('');
+        expect(document.activeElement).toBe(input);
+        expect(fixture.nativeElement.querySelector('.clear-search')).toBeNull();
+        fixture.nativeElement.remove();
+    });
+
     it('lists the filters folded away on a phone, each with a way to remove it', () => {
         log.filter.set('demo');
         log.search.set('asset');

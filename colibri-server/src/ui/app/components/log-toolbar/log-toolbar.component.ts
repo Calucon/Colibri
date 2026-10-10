@@ -41,6 +41,8 @@ export class LogToolbarComponent implements OnDestroy {
 
     /** Whether the filters are shown on a phone, where they are folded away. */
     open = signal(false);
+    /** Whether the search field has text in it. */
+    typed = signal(false);
 
     private searchInput = viewChild.required<ElementRef<HTMLInputElement>>('searchInput');
     private searchTimer: ReturnType<typeof setTimeout> | undefined;
@@ -85,6 +87,7 @@ export class LogToolbarComponent implements OnDestroy {
                 clearTimeout(this.searchTimer);
                 this.searchSent = search;
                 this.searchInput().nativeElement.value = search;
+                this.typed.set(search !== '');
             });
         });
     }
@@ -108,6 +111,7 @@ export class LogToolbarComponent implements OnDestroy {
     }
 
     onSearch(value: string): void {
+        this.typed.set(value !== '');
         clearTimeout(this.searchTimer);
         this.searchTimer = setTimeout(() => {
             this.searchSent = value.trim();
@@ -115,12 +119,15 @@ export class LogToolbarComponent implements OnDestroy {
         }, SEARCH_DELAY);
     }
 
-    clearSearch(input: HTMLInputElement): void {
+    /** Escape leaves the field; the clear button stays in it, to type the next search. */
+    clearSearch(input: HTMLInputElement, stay = false): void {
         clearTimeout(this.searchTimer);
         input.value = '';
+        this.typed.set(false);
         this.searchSent = '';
         this.log.search.set('');
-        input.blur();
+        if (stay) input.focus();
+        else input.blur();
     }
 
     // '/' moves to the search, as in many developer tools, unless something else takes text
