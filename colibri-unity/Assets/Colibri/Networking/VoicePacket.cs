@@ -18,7 +18,7 @@ namespace HCIKonstanz.Colibri.Networking
     /// <code>
     /// [i16 id][i16 sequence][i16 frameSize][u8 version and codec][u32 appId][data]      11-byte header
     ///   version and codec   HeaderVersion in the high 4 bits, the Codec in the low 4 bits
-    ///   appId               AppId(App Name)
+    ///   appId               AppId(the app the TCP handshake sends for the App Name)
     /// </code>
     /// The server passes a packet on only to the voice clients with the same app id. The
     /// authority for this format is <c>colibri-server/src/server/modules/web/voice-packet.ts</c>

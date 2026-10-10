@@ -3,6 +3,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading;
 using HCIKonstanz.Colibri.Networking;
+using HCIKonstanz.Colibri.Networking.Protocol;
 using NUnit.Framework;
 using UnityEngine;
 using UnityEngine.TestTools;
@@ -223,6 +224,30 @@ namespace HCIKonstanz.Colibri.Tests
             LogAssert.Expect(LogType.Error, noAppName);
             Assert.That(_voice.TryEncodeToSend(1, 3, 960, Codec.OPUS, data, out _), Is.False, "Voice was sent after the App Name was cleared");
             LogAssert.NoUnexpectedReceived();
+        }
+
+        /// <summary>
+        /// The handshake replaces '::' and a ':' at either end of the App Name, and the server
+        /// relays voice only from the address of a Unity client whose app, as the handshake sent
+        /// it, hashes to the packet's app id. Voice used to hash the App Name as configured, so the
+        /// server dropped all voice of such an App Name.
+        /// </summary>
+        [TestCase(":my::app:")]
+        [TestCase("::app")]
+        [TestCase("app:")]
+        public void TheAppIdIsTheHashOfTheAppTheHandshakeSends(string appName)
+        {
+            _voice.UseAppName(appName);
+            Assert.That(_voice.TryEncodeToSend(1, 0, 960, Codec.PCM, new byte[] { 0, 0 }, out var packet), Is.True);
+            Assert.That(VoicePacketCodec.TryDecode(packet, out var appId, out _), Is.True);
+
+            // The app field as the server reads it out of the handshake frame.
+            var handshake = new FrameReader().Append(FrameCodec.EncodeHandshake("2", WebServerConnection.HandshakeAppName(appName), "device"));
+            Assert.That(handshake.Count, Is.EqualTo(1));
+            var handshakeApp = handshake[0].App;
+
+            Assert.That(handshakeApp, Is.Not.EqualTo(appName), "The test needs an App Name the handshake changes");
+            Assert.That(appId, Is.EqualTo(VoicePacketCodec.AppId(handshakeApp)));
         }
     }
 }

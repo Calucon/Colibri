@@ -125,7 +125,10 @@ namespace HCIKonstanz.Colibri.Networking
                 return;
 
             appIdName = appName;
-            appId = VoicePacketCodec.AppId(appName);
+            // Of the app the TCP handshake sends, which is not the App Name when that contains
+            // '::' or starts or ends with ':'. The server compares the hash of the app its Unity
+            // client sent with the packet's app id, and dropped all voice of such an App Name.
+            appId = VoicePacketCodec.AppId(WebServerConnection.HandshakeAppName(appName));
             hasAppName = !string.IsNullOrWhiteSpace(appName);
             if (hasAppName)
                 hasReportedMissingAppName = false;

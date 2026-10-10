@@ -1071,7 +1071,7 @@ namespace HCIKonstanz.Colibri.Networking
 
                 _hasReportedMissingConfig = false;
 
-                var handshakeApp = SanitizeHandshakeField(app);
+                var handshakeApp = HandshakeAppName(app);
                 if (handshakeApp != app && handshakeApp != _reportedSanitizedApp)
                 {
                     // Said rather than done quietly: only clients announcing the same app name
@@ -2922,6 +2922,14 @@ namespace HCIKonstanz.Colibri.Networking
                 return new JValue(text);
             }
         }
+
+        /// <summary>
+        /// The app the handshake sends for the App Name <paramref name="appName"/>, which is the
+        /// app the server puts this client in. Voice packets carry its hash as their app id, as
+        /// the server relays voice only from the address of a Unity client of the packet's app.
+        /// </summary>
+        /// <remarks>Internal for VoiceServerConnection and the EditMode tests.</remarks>
+        internal static string HandshakeAppName(string appName) => SanitizeHandshakeField(appName);
 
         /// <summary>
         /// Makes a device or app name safe to put in the handshake. '::' is the field separator,
