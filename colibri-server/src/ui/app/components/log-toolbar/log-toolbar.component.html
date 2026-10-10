@@ -95,9 +95,11 @@
       <i class="pi pi-download" aria-hidden="true"></i>
       <span>Download</span>
     </button>
-    <p-menu #saveMenu [model]="downloadItems" [popup]="true" appendTo="body" styleClass="small-menu" ariaLabel="Download as"></p-menu>
   </div>
 </div>
+
+<!-- outside the bar: an empty item in the row would add a gap after Download -->
+<p-menu #saveMenu [model]="downloadItems" [popup]="true" appendTo="body" styleClass="small-menu" ariaLabel="Download as"></p-menu>
 
 @if (!open() && activeFilters().length > 0) {
   <div class="active" role="group" aria-label="Active filters">
