@@ -16,7 +16,7 @@
               <div class="fact">
                 <dt>{{ fact.label }}</dt>
                 <dd>
-                  <span class="value {{ fact.tone ?? '' }}" [class.mono]="fact.mono">
+                  <span class="value {{ fact.tone ?? '' }}" [class.mono]="fact.mono" [attr.title]="fact.title ?? null">
                     @if (fact.link) {
                       <a [routerLink]="fact.link">{{ fact.value }}</a>
                     } @else {

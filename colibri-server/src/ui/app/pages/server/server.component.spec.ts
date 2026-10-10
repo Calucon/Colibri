@@ -1,5 +1,9 @@
-import { ServerSnapshot } from '../../services';
-import { Fact, serverSections } from './server.component';
+import { TestBed } from '@angular/core/testing';
+import { signal } from '@angular/core';
+import { provideRouter } from '@angular/router';
+import { Subject } from 'rxjs';
+import { ConnectionState, Reconnect, ServerSnapshot, SocketIOService } from '../../services';
+import { Fact, ServerComponent, serverSections } from './server.component';
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -7,6 +11,7 @@ const snapshot = (overrides: Partial<ServerSnapshot> = {}): ServerSnapshot => ({
     request: 1,
     at: 100 * DAY,
     version: '2.0.0',
+    build: { commit: '3e2855e0c1d2b3a4f5e6d7c8b9a0f1e2d3c4b5a6', dirty: false, builtAt: 99 * DAY },
     protocolVersion: '2',
     node: 'v24.21.0',
     startedAt: 100 * DAY - 3_725_000,
@@ -38,6 +43,25 @@ describe('serverSections', () => {
         expect(fact(s, 'counts', 'REST store')).toEqual(expect.objectContaining({ value: '7 values', note: 'in 1 app' }));
     });
 
+    it('shows the commit after the version, short, with the full hash and the build time on hover', () => {
+        const s = snapshot();
+        expect(serverSections(s, String).find(x => x.id === 'server')?.facts.map(f => f.label).slice(0, 2)).toEqual([ 'Version', 'Commit' ]);
+        expect(fact(s, 'server', 'Commit')).toEqual({
+            label: 'Commit', value: '3e2855e0c1', mono: true, note: undefined,
+            title: '3e2855e0c1d2b3a4f5e6d7c8b9a0f1e2d3c4b5a6\nBuilt 1970-04-10T00:00:00.000Z'
+        });
+    });
+
+    it('says when the build had uncommitted changes, or no git information', () => {
+        expect(fact(snapshot({ build: { commit: '3e2855e0c1d2b3a4f5e6d7c8b9a0f1e2d3c4b5a6', dirty: true, builtAt: null } }), 'server', 'Commit'))
+            .toEqual(expect.objectContaining({ value: '3e2855e0c1', note: 'uncommitted changes', title: '3e2855e0c1d2b3a4f5e6d7c8b9a0f1e2d3c4b5a6' }));
+
+        const unknown = fact(snapshot({ build: { commit: null, dirty: false, builtAt: null } }), 'server', 'Commit');
+        expect(unknown).toEqual(expect.objectContaining({ value: 'unknown', tone: 'off' }));
+        expect(unknown?.mono).toBeUndefined();
+        expect(unknown?.title).toBe('Built without git information, e.g. a Docker build without COLIBRI_COMMIT');
+    });
+
     it('says which limits are off, and which variable sets each', () => {
         const s = snapshot();
         s.settings = { ...s.settings, CLIENT_MESSAGE_RATE_LIMIT: 0, TCP_IDLE_TIMEOUT_SECONDS: 0 };
@@ -67,5 +91,56 @@ describe('serverSections', () => {
         s.settings = { ...s.settings, NEW_SETTING: 'x' };
         expect(fact(s, 'other', 'NEW_SETTING')?.value).toBe('x');
         expect(serverSections(snapshot(), String).some(x => x.id === 'other')).toBe(false);
+    });
+});
+
+describe('ServerComponent', () => {
+    let channel: Subject<{ command: string; payload: unknown }>;
+    let emit: ReturnType<typeof vi.fn>;
+
+    beforeEach(() => {
+        channel = new Subject();
+        emit = vi.fn();
+        TestBed.configureTestingModule({
+            providers: [
+                provideRouter([]),
+                {
+                    provide: SocketIOService,
+                    useValue: {
+                        listen: () => channel.asObservable(),
+                        emit,
+                        reconnected$: new Subject<Reconnect>().asObservable(),
+                        state: signal<ConnectionState>('connected'),
+                        lostAt: signal<number | null>(null)
+                    }
+                }
+            ]
+        });
+    });
+
+    const shown = (build: ServerSnapshot['build']) => {
+        const fixture = TestBed.createComponent(ServerComponent);
+        fixture.detectChanges();
+        const request = emit.mock.calls.filter(call => call[1] === 'subscribe').at(-1)![2].request;
+        channel.next({ command: 'server', payload: snapshot({ request, build }) });
+        fixture.detectChanges();
+        const row = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll('.fact')).find(f => f.querySelector('dt')?.textContent === 'Commit')!;
+        return { value: row.querySelector('.value')!, note: row.querySelector('.note')?.textContent ?? null };
+    };
+
+    it('shows the commit in mono with the full hash on hover, and a note for uncommitted changes', () => {
+        const { value, note } = shown({ commit: '3e2855e0c1d2b3a4f5e6d7c8b9a0f1e2d3c4b5a6', dirty: true, builtAt: null });
+        expect(value.textContent?.trim()).toBe('3e2855e0c1');
+        expect(value.classList.contains('mono')).toBe(true);
+        expect(value.getAttribute('title')).toBe('3e2855e0c1d2b3a4f5e6d7c8b9a0f1e2d3c4b5a6');
+        expect(note).toBe('uncommitted changes');
+    });
+
+    it('shows an unknown commit muted, saying why on hover', () => {
+        const { value, note } = shown({ commit: null, dirty: false, builtAt: null });
+        expect(value.textContent?.trim()).toBe('unknown');
+        expect(value.classList.contains('off')).toBe(true);
+        expect(value.getAttribute('title')).toContain('without git information');
+        expect(note).toBeNull();
     });
 });
