@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 using HCIKonstanz.Colibri.Networking;
+using HCIKonstanz.Colibri.Networking.Protocol;
 using UnityEngine.Android;
 using HCIKonstanz.Colibri.Setup;
 using System;
@@ -28,21 +29,20 @@ namespace HCIKonstanz.Colibri.Communication
         // Microphone recording
         private int serverSamplingRate = 48000;
         private AudioClip recordingAudioClip;
-        private List<float> recordingBuffer;
         private int lastRecordingSamplePosition = 0;
         private bool isInitialized = false;
         private bool startAfterInitialized = false;
         private short startId = -1;
         private int microphoneSamplingRate;
         private bool broadcast = false;
-        private Resampler resampler;
 
         // Networking
         private VoiceServerConnection voiceServerConnection;
+        private VoiceFramer framer;
         private int frameSize = 960;
         private short localUserId;
 
-        // Opus codec
+        // Opus codec, null when voice goes out as PCM
         private OpusEncoder opusEncoder;
 
         private void Start()
@@ -69,14 +69,13 @@ namespace HCIKonstanz.Colibri.Communication
         {
             if (isInitialized && broadcast)
             {
-                AddSamplesToRecordingBuffer();
-                SendSamples();
+                SendRecordedSamples();
             }
         }
 
         private void OnApplicationQuit()
         {
-            if (UseOpusCodec) opusEncoder.Destroy();
+            opusEncoder?.Destroy();
         }
 
         private void OnMicrophonePermissionGranted(string permissionName)
@@ -91,7 +90,10 @@ namespace HCIKonstanz.Colibri.Communication
 
         private void InitBroadcast()
         {
-            serverSamplingRate = ColibriConfig.Load().VoiceServerSamplingRate;
+            // As VoiceServerConnection has it: frames are counted at this rate, and at 0 they would
+            // hold no samples.
+            int configuredSamplingRate = ColibriConfig.Load().VoiceServerSamplingRate;
+            serverSamplingRate = configuredSamplingRate > 0 ? configuredSamplingRate : 48000;
             // Get all available recording devices and select recording device
             string[] recordingDevices = Microphone.devices;
             if (recordingDevices.Length == 0)
@@ -118,10 +120,17 @@ namespace HCIKonstanz.Colibri.Communication
             microphoneSamplingRate = maxSupportedSamplingRate;
             if (maxSupportedSamplingRate >= serverSamplingRate && minSupportedSamplingRate <= serverSamplingRate) microphoneSamplingRate = serverSamplingRate;
             if (Debugging) Debug.Log(DEBUG_HEADER + "Use sampling rate: " + microphoneSamplingRate);
-            if (microphoneSamplingRate != serverSamplingRate) resampler = new Resampler(microphoneSamplingRate, serverSamplingRate);
 
-            // Calculate package size based on requested frame size (milliseconds)
-            frameSize = (microphoneSamplingRate / 1000) * FrameSizeMilliseconds;
+            // Frames are cut at the server's sampling rate, which a packet's frame size counts in,
+            // after the audio is resampled to it: 20 ms is 960 samples at 48 kHz, whatever rate
+            // the microphone records at.
+            frameSize = VoiceFramer.FrameSampleCount(serverSamplingRate, FrameSizeMilliseconds);
+            if (frameSize < 1 || frameSize > VoiceFramer.MaxFrameSamples)
+            {
+                // A frame of no samples was sent over and over, and the send loop never ended.
+                Debug.LogError(DEBUG_HEADER + "Frame Size Milliseconds " + FrameSizeMilliseconds + " makes frames of " + frameSize + " samples at " + serverSamplingRate + " Hz, which a voice packet cannot carry. Using 20 ms.");
+                frameSize = VoiceFramer.FrameSampleCount(serverSamplingRate, 20);
+            }
             if (Debugging) Debug.Log(DEBUG_HEADER + "Frame size: " + FrameSizeMilliseconds + " ms, " + frameSize + " samples");
 
             // Init server connection
@@ -158,7 +167,10 @@ namespace HCIKonstanz.Colibri.Communication
                 if (Debugging) Debug.Log(DEBUG_HEADER + "Channel count: " + recordingAudioClip.channels);
                 lastRecordingSamplePosition = Microphone.GetPosition(null);
 
-                recordingBuffer = new List<float>();
+                // A new one for every broadcast, so that none of the last broadcast's audio goes
+                // out with this one.
+                framer = new VoiceFramer(microphoneSamplingRate, serverSamplingRate, frameSize,
+                    opusEncoder != null ? EncodeOpus : (VoiceFrameEncoder)null, SendFrame, ReportEncodeFailure);
                 broadcast = true;
             }
             else
@@ -181,7 +193,7 @@ namespace HCIKonstanz.Colibri.Communication
             }
         }
 
-        private void AddSamplesToRecordingBuffer()
+        private void SendRecordedSamples()
         {
             int differenceSinceLastAdd = 0;
 
@@ -207,43 +219,27 @@ namespace HCIKonstanz.Colibri.Communication
             // Get samples since last adding
             float[] data = new float[differenceSinceLastAdd];
             recordingAudioClip.GetData(data, lastRecordingSamplePosition);
-
-            // Add samples to recording buffer
-            recordingBuffer.AddRange(data);
             lastRecordingSamplePosition = currentSamplePosition;
+
+            // Sends every frame they fill; the rest waits for the next samples
+            framer.Add(data);
         }
 
-        private void SendSamples()
+        private byte[] EncodeOpus(byte[] pcm, int frameSamples, out string error)
         {
-            // Check if enough data is available to send a frame
-            while (recordingBuffer.Count > frameSize)
-            {
-                float[] samples = recordingBuffer.GetRange(0, frameSize).ToArray();
+            byte[] encoded = opusEncoder.TryEncode(pcm, frameSamples, out OpusError opusError);
+            error = encoded == null ? opusError.ToString() : null;
+            return encoded;
+        }
 
-                // The data is expected to be in the voice server sampling rate in mono
-                if (microphoneSamplingRate != serverSamplingRate)
-                {
-                    samples = resampler.ResampleStream(samples);
-                }
+        private void SendFrame(short frameSamples, Codec codec, byte[] data)
+        {
+            voiceServerConnection.SendByteData(localUserId, 0, frameSamples, codec, data);
+        }
 
-                // Convert to 16 bit short bytes
-                byte[] sendBytes = SamplingUtility.ConvertFloatToShortBytes(samples);
-
-                Codec codec = Codec.PCM;
-
-                if (UseOpusCodec)
-                {
-                    sendBytes = opusEncoder.Encode(sendBytes, samples.Length);
-                    if (sendBytes == null) continue;
-                    codec = Codec.OPUS;
-                }
-
-                // Send voice data to server
-                voiceServerConnection.SendByteData(localUserId, 0, (short)samples.Length, codec, sendBytes);
-
-                // Remove samples from recording buffer
-                recordingBuffer.RemoveRange(0, frameSize);
-            }
+        private void ReportEncodeFailure(string error)
+        {
+            Debug.LogWarning(DEBUG_HEADER + "Opus could not encode a frame (" + error + "). Frames it fails on go out as PCM. Reported once per broadcast.");
         }
     }
 }
