@@ -4,7 +4,7 @@ import { CertificateInfo, Payload, Service } from '../core/index.js';
 import { DataStore, NetworkMessage } from '../command-hooks/index.js';
 import { RateLimit, TokenBucket } from '../networking/inbound-limits.js';
 import { SocketIoClient, SocketIOServer } from '../networking/socket-io-server.js';
-import { TCPServerProxy } from '../networking/tcp-server-proxy.js';
+import { CLIENT_ACTIVITY_TIMEOUT_MILLIS, TCPServerProxy } from '../networking/tcp-server-proxy.js';
 import { ClientActivity } from '../networking/client-activity.js';
 import {
     ADMIN_APP,
@@ -246,7 +246,8 @@ export class AdminData extends Service {
 
     // Builds each snapshot once for all the pages that asked for the same thing, and sends it to
     // those still connected. A refresh skips the pages that have not taken the previous one yet:
-    // they would only pile up, and the next refresh replaces it anyway. Never rejects: its callers
+    // they would only pile up, and the next refresh replaces it anyway. Anything but a refresh is a
+    // page's first snapshot, whose client rows carry their rate history. Never rejects: its callers
     // do not wait for it.
     private async send(due: Due[], refresh = false): Promise<void> {
         try {
@@ -254,7 +255,7 @@ export class AdminData extends Service {
             if (due.length === 0) return;
 
             const tcpActivity = due.some(item => item.subscription.query.topic === 'clients')
-                ? await this.sources.tcp.clientActivity()
+                ? await this.sources.tcp.clientActivity(CLIENT_ACTIVITY_TIMEOUT_MILLIS, !refresh)
                 : undefined;
 
             const built = new Map<string, object>();
@@ -264,7 +265,7 @@ export class AdminData extends Service {
 
                 let snapshot = built.get(subscription.key);
                 if (snapshot === undefined) {
-                    snapshot = this.build(subscription.query, tcpActivity);
+                    snapshot = this.build(subscription.query, tcpActivity, !refresh);
                     built.set(subscription.key, snapshot);
                 }
 
@@ -279,7 +280,7 @@ export class AdminData extends Service {
         }
     }
 
-    private build(query: Query, tcpActivity: ReadonlyMap<string, ClientActivity> | undefined): object {
+    private build(query: Query, tcpActivity: ReadonlyMap<string, ClientActivity> | undefined, history: boolean): object {
         const { sources } = this;
         switch (query.topic) {
             case 'server':
@@ -300,8 +301,8 @@ export class AdminData extends Service {
                     tcpClients: sources.tcp.currentClients,
                     tcpActivity: tcpActivity ?? new Map(),
                     webClients: sources.socketio.currentClients,
-                    webActivity: client => sources.socketio.activityOf(client),
-                });
+                    webActivity: client => sources.socketio.activityOf(client, history),
+                }, history);
 
             case 'models':
                 return modelsSnapshot(sources.store, query.models, this.measures);

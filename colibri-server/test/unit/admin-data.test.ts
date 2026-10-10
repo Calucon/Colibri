@@ -37,8 +37,8 @@ class FakeSocketIOServer {
         }
     }
 
-    public activityOf(): ClientActivity {
-        return { in: 1, out: 2, limit: null, held: 0 };
+    public activityOf(_client: SocketIoClient, history = false): ClientActivity {
+        return { in: 1, out: 2, limit: null, held: 0, ...(history ? { history: [ [ Date.now() - 1000, 1, 2 ] ] } : {}) };
     }
 
     public connect(id: string, app = 'colibri'): SocketIoClient {
@@ -203,6 +203,25 @@ describe('AdminData', () => {
             adminPages: 2,
             clients: [ { id: 't1', transport: 'tcp', address: '10.0.0.5', in: 10, out: 20, limit: 'backlog', held: 4 } ],
         });
+    });
+
+    it('sends the clients\' rate history with a page\'s first clients snapshot only', async () => {
+        tcp.clientActivity.mockImplementation(async () => new Map([[ 't1', { in: 10, out: 20, limit: null, held: 0, history: [ [ Date.now() - 1500, 8, 9 ] ] } ]]));
+        socketio.connect('w1', 'app');
+        const page = socketio.connect('page');
+        send(page, 'subscribe', { topic: 'clients', request: 1 });
+        await settle();
+
+        expect(tcp.clientActivity).toHaveBeenLastCalledWith(expect.any(Number), true);
+        expect(sentTo(page)[0]!.payload.clients).toEqual([
+            expect.objectContaining({ id: 't1', in: 10, history: [ [ 8, 9 ] ] }),
+            expect.objectContaining({ id: 'w1', in: 1, history: [ [ 1, 2 ] ] }),
+        ]);
+
+        await vi.advanceTimersByTimeAsync(ADMIN_REFRESH_MILLIS);
+        expect(tcp.clientActivity).toHaveBeenLastCalledWith(expect.any(Number), false);
+        const refreshed = sentTo(page)[1]!.payload.clients as Record<string, unknown>[];
+        expect(refreshed.map(row => 'history' in row)).toEqual([ false, false ]);
     });
 
     it('skips a refresh for a page that has not taken the previous one, but answers its requests', async () => {

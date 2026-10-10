@@ -456,6 +456,10 @@ describe('SocketIOServer rate limit', () => {
             clock = 3000;
             sweep(clock);
             expect(server.activityOf(clientOf(sender))).toEqual({ in: 0, out: 0, limit: null, held: 0 });
+
+            // each rate at the Date.now() of its sample
+            vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
+            expect(server.activityOf(clientOf(sender), true).history).toEqual([ [ 1_699_999_998_000, 7, 3 ], [ 1_700_000_000_000, 0, 0 ] ]);
         });
 
         it('has no rates for a client connected less than a second ago', async () => {

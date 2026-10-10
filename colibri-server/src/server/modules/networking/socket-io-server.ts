@@ -226,9 +226,10 @@ export class SocketIOServer extends Service implements NetworkServer {
         return traffic.direct + (this.roomEmits.get(client.app) ?? 0) - traffic.roomBase - traffic.excluded;
     }
 
-    // What the admin UI's client view shows of a web client's traffic. A web client has only the
-    // rate limit: there is no queue to the main thread to fall behind on.
-    public activityOf(client: SocketIoClient): ClientActivity {
+    // What the admin UI's client view shows of a web client's traffic, with `history` its rate
+    // history too. A web client has only the rate limit: there is no queue to the main thread to
+    // fall behind on.
+    public activityOf(client: SocketIoClient, history = false): ClientActivity {
         const traffic = this.traffic.get(client.id);
         const held = this.heldUpdates.get(client)?.size ?? 0;
         return {
@@ -236,6 +237,7 @@ export class SocketIOServer extends Service implements NetworkServer {
             out: traffic?.meter.sentPerSecond ?? null,
             limit: held > 0 || this.rateLimiter.isLimited(client) ? 'rate' : null,
             held,
+            ...(history ? { history: traffic?.meter.history(performance.now()) ?? [] } : {}),
         };
     }
 

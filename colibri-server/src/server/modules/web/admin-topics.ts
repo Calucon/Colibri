@@ -4,7 +4,7 @@
 // state it reads.
 import { CertificateInfo, RingBuffer } from '../core/index.js';
 import { DataStore, ModelEntry, NetworkClient, Tombstone } from '../command-hooks/index.js';
-import { ClientActivity, LoadLimit } from '../networking/client-activity.js';
+import { ClientActivity, LoadLimit, RateSample } from '../networking/client-activity.js';
 import { PROTOCOL_VERSION } from '../networking/protocol.js';
 import { SocketIoClient } from '../networking/socket-io-server.js';
 import { TcpNetworkClient } from '../networking/tcp-server-proxy.js';
@@ -33,6 +33,10 @@ export const MAX_CLIENT_ROWS = 1000;
 
 // How far back a client's latency samples count towards its latency.
 const LATENCY_WINDOW_MILLIS = 1000;
+
+// How far back a client row's rate history goes: the 120 s the admin UI's throughput chart shows,
+// and the 2 s it slides. A client keeps RATE_HISTORY_LENGTH rates, at least a second apart.
+export const RATE_HISTORY_SECONDS = 122;
 
 // How far back the latency topic goes: the 120 s the admin UI's latency chart shows, and the 2 s it
 // slides. MeasureLatency keeps 125 s.
@@ -345,6 +349,9 @@ export interface ClientRow {
     out: number | null;
     limit: LoadLimit | null;
     held: number;
+    // Only in the answer to a request and the first answer to a subscribe: its rates in each of the
+    // RATE_HISTORY_SECONDS seconds before `at`, oldest first, as [in, out]; see rateHistory.
+    history?: [number, number][];
     truncated?: true;
 }
 
@@ -378,9 +385,24 @@ export const recentLatency = function (client: NetworkClient, now: number): numb
     return recent.length === 0 ? null : median(recent);
 };
 
+// The client's rates (see TrafficMeter.history) as a page open in each of the RATE_HISTORY_SECONDS
+// seconds before `now` would have been sent them: the latest sampled by then, one a second, oldest
+// first. It starts at the first second with one.
+export const rateHistory = function (samples: ReadonlyArray<RateSample>, now: number): [number, number][] {
+    const history: [number, number][] = [];
+    let i = samples.length - 1;
+    for (let ago = 1; ago <= RATE_HISTORY_SECONDS; ago++) {
+        while (i >= 0 && samples[i]![0] > now - ago * 1000) i--;
+        if (i < 0) break;
+        history.push([ round1(samples[i]![1])!, round1(samples[i]![2])! ]);
+    }
+    return history.reverse();
+};
+
 const NO_ACTIVITY: ClientActivity = { in: null, out: null, limit: null, held: 0 };
 
-export const clientsSnapshot = function (sources: ClientSources): ClientsSnapshot {
+// `history`: each row with its rate history, as far as the sources have it.
+export const clientsSnapshot = function (sources: ClientSources, history = false): ClientsSnapshot {
     const now = Date.now();
     const rows: ClientRow[] = [];
     let total = 0;
@@ -405,6 +427,7 @@ export const clientsSnapshot = function (sources: ClientSources): ClientsSnapsho
         out: round1(activity.out),
         limit: activity.limit,
         held: activity.held,
+        ...(history ? { history: rateHistory(activity.history ?? [], now) } : {}),
     });
 
     for (const client of sources.tcpClients) {

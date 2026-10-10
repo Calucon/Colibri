@@ -19,6 +19,7 @@ import {
     MAX_MODELS_LIMIT,
     MAX_MODEL_JSON_LENGTH,
     MAX_NAME_LENGTH,
+    RATE_HISTORY_SECONDS,
     ServerSources,
     clientsSnapshot,
     latencySnapshot,
@@ -26,6 +27,7 @@ import {
     modelsSnapshot,
     parseModelQuery,
     parseModelsQuery,
+    rateHistory,
     recentLatency,
     serverSnapshot,
 } from '../../src/server/modules/web/admin-topics.js';
@@ -347,11 +349,41 @@ describe('admin UI topics', () => {
             expect(snapshot.clients[0]).toMatchObject({ in: null, out: null, limit: null, held: 0 });
         });
 
+        it('gives each row its rate history only when asked, for TCP clients from the worker\'s report', () => {
+            const now = Date.now();
+            const snapshot = clientsSnapshot({
+                tcpClients: [ tcpClient('t1', 'app'), tcpClient('t2', 'app') ],
+                tcpActivity: new Map([[ 't1', { ...activity, history: [ [ now - 2000, 1.04, 2 ], [ now - 1000, 3, 4 ] ] } ]]),
+                webClients: [ webClient('w1', 'app') ],
+                webActivity: () => ({ ...activity, history: [ [ now - 1500, 5, 6 ] ] }),
+            }, true);
+
+            // t2 the worker did not report on this time
+            expect(snapshot.clients.map(row => [ row.id, row.history ])).toEqual([
+                [ 't1', [ [ 1, 2 ], [ 3, 4 ] ] ],
+                [ 't2', [] ],
+                [ 'w1', [ [ 5, 6 ] ] ],
+            ]);
+        });
+
         it('holds at most MAX_CLIENT_ROWS clients', () => {
             const tcpClients = Array.from({ length: MAX_CLIENT_ROWS + 5 }, (_, i) => tcpClient(`t${i}`, 'app'));
             const snapshot = clientsSnapshot({ tcpClients, tcpActivity: new Map(), webClients: [], webActivity: () => activity });
             expect(snapshot.clients).toHaveLength(MAX_CLIENT_ROWS);
             expect(snapshot.total).toBe(MAX_CLIENT_ROWS + 5);
+        });
+
+        it('gives the rates a page would have been sent in each second before now, from the first with one', () => {
+            const now = Date.now();
+            // sampled 1.5 s apart, as by a busy event loop, the newest 300 ms ago
+            const samples: [number, number, number][] = Array.from({ length: 5 }, (_, i) => [ now - 300 - (4 - i) * 1500, i, 10 * i ]);
+            expect(rateHistory(samples, now)).toEqual([ [ 0, 0 ], [ 0, 0 ], [ 1, 10 ], [ 2, 20 ], [ 2, 20 ], [ 3, 30 ] ]);
+            expect(rateHistory([], now)).toEqual([]);
+
+            const long: [number, number, number][] = Array.from({ length: 200 }, (_, i) => [ now - (199 - i) * 1000, i, i ]);
+            const history = rateHistory(long, now);
+            expect(history).toHaveLength(RATE_HISTORY_SECONDS);
+            expect(history.at(-1)).toEqual([ 198, 198 ]);
         });
 
         it('takes the median latency of the last second', () => {
