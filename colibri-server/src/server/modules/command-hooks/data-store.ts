@@ -14,6 +14,17 @@ export const DEFAULT_TOMBSTONE_MILLIS = 600_000;
 // keep. Past it the oldest is forgotten first.
 export const MAX_TOMBSTONES_PER_APP = 10_000;
 
+// A stored model, and what the admin UI's model inspector shows about it besides its value.
+export interface ModelEntry {
+    readonly model: SyncModel;
+    // Date.now() of its latest update.
+    updatedAt: number;
+    // Its size as compact JSON, in bytes: measured when the admin UI asks (see modelBytes), and
+    // forgotten whenever the model changes. Never measured per update, which would cost a
+    // JSON.stringify per model::update.
+    bytes: number | undefined;
+}
+
 // What is left of a deleted model.
 //
 // Who deleted it is not part of it. A client is known only by its connection id, which is new
@@ -46,7 +57,7 @@ export class DataStore extends Service {
     // 'bc') and made clearApp() match with a prefix scan (`key.startsWith(group)`), which
     // wiped app 'test2' when the last client of app 'test' disconnected. Both bugs are
     // structural here: clearApp() just deletes the one Map entry for that app.
-    private readonly store = new Map<string, Map<string, Map<string, SyncModel>>>();
+    private readonly store = new Map<string, Map<string, Map<string, ModelEntry>>>();
 
     private readonly tombstones = new Map<string, AppTombstones>();
 
@@ -58,19 +69,22 @@ export class DataStore extends Service {
     public addModel(group: string, channel: string, id: string): void {
         const models = this.getOrCreateChannel(group, channel);
         if (!models.has(id)) {
-            models.set(id, { id });
+            models.set(id, { model: { id }, updatedAt: Date.now(), bytes: undefined });
         }
     }
 
     public updateModel(group: string, channel: string, model: SyncModel): void {
         const models = this.getOrCreateChannel(group, channel);
-        const existingModel = models.get(model.id);
-        if (!existingModel) {
-            models.set(model.id, model);
+        const existing = models.get(model.id);
+        if (!existing) {
+            models.set(model.id, { model, updatedAt: Date.now(), bytes: undefined });
         } else {
+            const existingModel = existing.model;
             for (const k of Object.keys(model)) {
                 existingModel[k] = model[k];
             }
+            existing.updatedAt = Date.now();
+            existing.bytes = undefined;
         }
     }
 
@@ -123,12 +137,63 @@ export class DataStore extends Service {
     }
 
     public getModel(group: string, channel: string, id: string): SyncModel | undefined {
-        return this.store.get(group)?.get(channel)?.get(id);
+        return this.store.get(group)?.get(channel)?.get(id)?.model;
     }
 
     public getAll(group: string, channel: string): SyncModel[] {
         const models = this.store.get(group)?.get(channel);
-        return models ? Array.from(models.values()) : [];
+        return models ? Array.from(models.values(), entry => entry.model) : [];
+    }
+
+    // The rest of this class's public methods are for the admin UI (see AdminData), and read only:
+    // none of them changes a model, or forgets a tombstone, expired or not.
+
+    // A model with what the admin UI shows about it.
+    public getEntry(group: string, channel: string, id: string): Readonly<ModelEntry> | undefined {
+        return this.store.get(group)?.get(channel)?.get(id);
+    }
+
+    // Every app's channels, in the order they were first written to, with their models in the order
+    // they were created. A channel whose models have all been deleted is still listed, empty.
+    public *channels(): Generator<{ app: string; channel: string; models: ReadonlyMap<string, Readonly<ModelEntry>> }> {
+        for (const [app, byChannel] of this.store) {
+            for (const [channel, models] of byChannel) {
+                yield { app, channel, models };
+            }
+        }
+    }
+
+    // The model's tombstone if it has one that has not expired. Unlike deletion(), leaves an
+    // expired one where it is.
+    public liveDeletion(group: string, channel: string, id: string): Readonly<Tombstone> | undefined {
+        const tombstone = this.tombstones.get(group)?.byChannel.get(channel)?.get(id);
+        if (!tombstone || performance.now() - tombstone.deletedAt >= this.tombstoneMillis) return undefined;
+        return tombstone;
+    }
+
+    // The apps that hold tombstones, which may be apps without any model left.
+    public tombstoneApps(): string[] {
+        return Array.from(this.tombstones.keys());
+    }
+
+    // The app's tombstones that have not expired, the oldest first. Unlike deletion(), leaves the
+    // expired ones where they are.
+    public *liveTombstones(group: string): Generator<Readonly<Tombstone>> {
+        const app = this.tombstones.get(group);
+        if (!app) return;
+
+        const now = performance.now();
+        for (const tombstone of app.oldestFirst) {
+            if (now - tombstone.deletedAt < this.tombstoneMillis) yield tombstone;
+        }
+    }
+
+    // The model's size as compact JSON, in bytes. Measured once per change of the model, on request.
+    public modelBytes(entry: Readonly<ModelEntry>): number {
+        if (entry.bytes === undefined) {
+            (entry as ModelEntry).bytes = Buffer.byteLength(JSON.stringify(entry.model), 'utf8');
+        }
+        return entry.bytes!;
     }
 
     // How many tombstones the app holds, expired ones not yet dropped included. For the tests.
@@ -136,7 +201,7 @@ export class DataStore extends Service {
         return this.tombstones.get(group)?.oldestFirst.size ?? 0;
     }
 
-    private getOrCreateChannel(group: string, channel: string): Map<string, SyncModel> {
+    private getOrCreateChannel(group: string, channel: string): Map<string, ModelEntry> {
         let byChannel = this.store.get(group);
         if (!byChannel) {
             byChannel = new Map();

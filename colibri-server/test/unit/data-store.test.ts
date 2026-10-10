@@ -178,4 +178,70 @@ describe('DataStore', () => {
             expect(store.deletion('test2', 'channel', 'a')).toBeDefined();
         });
     });
+
+    // What the admin UI's model inspector reads. None of it may change the store.
+    describe('for the admin UI', () => {
+        beforeEach(() => {
+            vi.useFakeTimers();
+        });
+
+        afterEach(() => {
+            vi.useRealTimers();
+        });
+
+        it('records when a model was last updated, by the wall clock', () => {
+            const store = new DataStore();
+            vi.setSystemTime(1_000_000);
+            store.updateModel('app', 'channel', { id: 'a', x: 1 });
+            expect(store.getEntry('app', 'channel', 'a')?.updatedAt).toBe(1_000_000);
+
+            vi.setSystemTime(1_005_000);
+            store.updateModel('app', 'channel', { id: 'a', x: 2 });
+            expect(store.getEntry('app', 'channel', 'a')).toMatchObject({ updatedAt: 1_005_000, model: { id: 'a', x: 2 } });
+        });
+
+        it('measures a model\'s JSON size once per change, on request only', () => {
+            const store = new DataStore();
+            store.updateModel('app', 'channel', { id: 'a', text: 'äö' });
+            const entry = store.getEntry('app', 'channel', 'a')!;
+            expect(entry.bytes).toBeUndefined();
+
+            const stringify = vi.spyOn(JSON, 'stringify');
+            expect(store.modelBytes(entry)).toBe(Buffer.byteLength('{"id":"a","text":"äö"}'));
+            expect(store.modelBytes(entry)).toBe(Buffer.byteLength('{"id":"a","text":"äö"}'));
+            expect(stringify).toHaveBeenCalledTimes(1);
+
+            store.updateModel('app', 'channel', { id: 'a', text: 'x' });
+            expect(entry.bytes).toBeUndefined();
+            expect(store.modelBytes(entry)).toBe('{"id":"a","text":"x"}'.length);
+            stringify.mockRestore();
+        });
+
+        it('lists every app\'s channels in the order they were first written to', () => {
+            const store = new DataStore();
+            store.updateModel('app1', 'b', { id: 'x' });
+            store.updateModel('app2', 'a', { id: 'y' });
+            store.updateModel('app1', 'a', { id: 'z' });
+            store.updateModel('app1', 'b', { id: 'w' });
+
+            expect(Array.from(store.channels(), c => `${c.app}/${c.channel}: ${Array.from(c.models.keys()).join(',')}`))
+                .toEqual(['app1/b: x,w', 'app1/a: z', 'app2/a: y']);
+        });
+
+        it('lists the live tombstones oldest first, and leaves expired ones where they are', () => {
+            const store = new DataStore();
+            store.tombstoneMillis = 1000;
+            store.removeModel('app', 'channel', 'old');
+            vi.advanceTimersByTime(600);
+            store.removeModel('app', 'other', 'new');
+            vi.advanceTimersByTime(600);
+
+            expect(store.tombstoneApps()).toEqual(['app']);
+            expect(Array.from(store.liveTombstones('app'), t => t.id)).toEqual(['new']);
+            expect(store.liveDeletion('app', 'channel', 'old')).toBeUndefined();
+            expect(store.liveDeletion('app', 'other', 'new')).toMatchObject({ channel: 'other', id: 'new' });
+            // Only deletion() forgets an expired tombstone, as the model sync asks about it.
+            expect(store.tombstoneCount('app')).toBe(2);
+        });
+    });
 });
