@@ -3,7 +3,9 @@ import { ConnectionPool } from './connection-pool.js';
 import { hrtime } from 'process';
 import { SocketIOServer } from '../networking/index.js';
 
-const MAX_LATENCY_SAMPLES = 1000;
+// 125 s of the 100 ms pings: the admin UI's latency chart shows the last 120 s, and asks for them
+// when it opens.
+const MAX_LATENCY_SAMPLES = 1250;
 
 export class MeasureLatency extends Service {
     public get serviceName(): string { return 'MeasureLatency'; }
