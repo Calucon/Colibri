@@ -366,9 +366,10 @@ EditMode tests, which `npm run test:vectors` checks in CI.
   IPv4 clients as well and relays between the two kinds; on another IPv6 address it takes only
   that address. The voice socket was always IPv4, which cannot bind an IPv6 address:
   `VOICE_HOST=::` failed with `bind EINVAL` and voice stayed off. Any other `VOICE_HOST` keeps the
-  IPv4 socket. `TCP_HOST` and `WEBSERVER_HOST` already
-  took an IPv6 address, so `::` on all three serves clients that reach the server over IPv6, such
-  as colibri-unity 2.0.0 with a server name that has only an AAAA record. See
+  IPv4 socket. `TCP_HOST` and `WEBSERVER_HOST` already took an IPv6 address, so `::` on all three
+  serves clients that reach the server over IPv6, such as colibri-unity 2.0.0 with a server name
+  that has only an AAAA record. With an A record as well, colibri-unity 2.0.0 connects and sends
+  voice over IPv4, so TCP and voice come from the same address, as the voice check needs. See
   [Configuration](./guide.md#configuration).
 
 ### Load and lost connections
