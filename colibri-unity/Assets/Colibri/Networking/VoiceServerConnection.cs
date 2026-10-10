@@ -338,10 +338,11 @@ namespace HCIKonstanz.Colibri.Networking
                 client.Client.Bind(new IPEndPoint(AnyAddress(family), 0));
                 return client;
             }
-            catch (SocketException e)
+            catch (Exception e)
             {
                 client?.Close();
-                Debug.LogError($"Colibri voice: could not open a socket to send voice to {address} ({e.SocketErrorCode}). Voice chat is off.");
+                var reason = e is SocketException socketError ? socketError.SocketErrorCode.ToString() : e.Message;
+                Debug.LogError($"Colibri voice: could not open a socket to send voice to {address} ({reason}). Voice chat is off.");
                 return null;
             }
         }

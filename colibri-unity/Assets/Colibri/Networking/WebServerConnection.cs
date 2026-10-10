@@ -1725,7 +1725,7 @@ namespace HCIKonstanz.Colibri.Networking
         /// <param name="attempting">See <see cref="OpenSessionAsync"/>.</param>
         /// <returns>The connected socket, and the address it is connected to.</returns>
         /// <exception cref="TimeoutException">The time was up before an address answered.</exception>
-        /// <exception cref="SocketException">Every address failed: the last one's error.</exception>
+        /// <exception cref="SocketException">Every address failed: the last one's error, usually this one.</exception>
         /// <exception cref="OperationCanceledException"><paramref name="token"/> was cancelled first.</exception>
         /// <exception cref="ObjectDisposedException">A socket was closed while connecting.</exception>
         /// <remarks>Internal for the EditMode tests.</remarks>
@@ -1761,19 +1761,21 @@ namespace HCIKonstanz.Colibri.Networking
                     connected = true;
                     return (socket, address);
                 }
-                catch (Exception e) when ((e is SocketException || e is TimeoutException) && !token.IsCancellationRequested)
+                catch (Exception e) when (!(e is ObjectDisposedException) && !token.IsCancellationRequested)
                 {
-                    // Refused, unreachable, an address family this device has no sockets for, or no
-                    // answer within this address's share: the next address may still answer.
+                    // Refused, unreachable, an address family this device has no sockets for, no
+                    // answer within this address's share, or anything else a runtime throws for one
+                    // address family and not the other: the next address may still answer.
                     failure = e;
 
                     if (i + 1 < addresses.Count && clock.ElapsedMilliseconds < timeoutMs)
                     {
                         var next = Endpoint(addresses[i + 1], port);
-                        Debug.Log(e is SocketException refused
-                            ? $"Colibri: no connection to {Endpoint(address, port)} ({refused.SocketErrorCode}), trying {next}"
-                            : $"Colibri: no answer from {Endpoint(address, port)} within "
-                                + $"{(attemptMs / 1000f).ToString("0.#", CultureInfo.InvariantCulture)} s, trying {next}");
+                        Debug.Log(e is TimeoutException
+                            ? $"Colibri: no answer from {Endpoint(address, port)} within "
+                                + $"{(attemptMs / 1000f).ToString("0.#", CultureInfo.InvariantCulture)} s, trying {next}"
+                            : $"Colibri: no connection to {Endpoint(address, port)} "
+                                + $"({(e is SocketException refused ? refused.SocketErrorCode.ToString() : e.Message)}), trying {next}");
                     }
                 }
                 finally
@@ -1787,7 +1789,7 @@ namespace HCIKonstanz.Colibri.Networking
 
             // The last address's error: the one tried last is the platform's fallback, IPv4 after
             // IPv6, and whether it refused or did not answer is what tells what is wrong.
-            if (failure is SocketException)
+            if (failure != null && !(failure is TimeoutException))
                 ExceptionDispatchInfo.Capture(failure).Throw();
 
             // Invariant: this ends up in the log and on screen, and "0,5 s" in one locale and
