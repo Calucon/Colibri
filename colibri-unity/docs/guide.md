@@ -758,13 +758,13 @@ reconnecting. Queued and later messages are dropped with a one-time warning. `Se
 
 ## Web interface for logging
 
-<img src="../img/weblogger.png" alt="WebLogger" width=400/>
-
 `[RemoteLogger]` sends the Unity console log to the server's web interface, for devices without an
 accessible console such as headsets and phones.
 
-Add the `[RemoteLogger]` prefab to the scene. The log then appears at
-`http://<your-server-ip>:9011`.
+Add the `[RemoteLogger]` prefab to the scene. The log then appears on the admin UI's *Log* page at
+`http://<your-server-ip>:9011` ([Admin UI](../../colibri-server/docs/guide.md#admin-ui)).
+
+<img src="../../colibri-server/img/admin-log.png" alt="Log page of the admin UI" width="600"/>
 
 - Log lines are sent once per second. Identical lines in one batch are sent once.
 - Between two sends, at most the newest 1000 lines are kept. During an outage, the interval spans
