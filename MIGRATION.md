@@ -117,9 +117,10 @@ clients are not affected. For TCP clients:
 **Voice packet format.** The header grew to 11 bytes: the 7 bytes of 1.x, with a header version in
 the high 4 bits of the codec byte, then an app id, the 32-bit FNV-1a hash of the app name. The
 server forwards a packet only to voice clients with the same app id, and accepts one only from the
-address of a TCP client connected with that app. It drops 1.x voice packets, which have no app id,
-and logs a warning with the client's address. Colibri 1.x voice clients therefore work neither with
-a 2.0 server nor with 2.0 clients. Port your own voice code to
+address of a TCP client connected with that app, one voice sender (source port) per such TCP client.
+It drops 1.x voice packets, which have no app id, and logs a warning with the client's address.
+Colibri 1.x voice clients therefore work neither with a 2.0 server nor with 2.0 clients. Port your
+own voice code to
 [Voice packets](colibri-server/docs/protocol.md#voice-packets-udp).
 
 **Removed dependencies:** `flatbuffers`, `body-parser`, `uuid` and `source-map-support`.
