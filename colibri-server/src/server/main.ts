@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'url';
 import * as colibri from './modules/index.js';
 import { Config } from './configuration.js';
 
@@ -68,12 +69,45 @@ new colibri.BroadcastLogger(connectionPool);
 new colibri.ClientBroadcast(connectionPool);
 new colibri.MeasureLatency(connectionPool, socketioServer);
 
+// Read-only data for the admin UI's pages. The settings by the names of the variables that set
+// them; TLS_CERT and TLS_KEY only as the certificate's description, never their paths or contents.
+const adminData = new colibri.AdminData({
+    store: dataStore,
+    socketio: socketioServer,
+    tcp: tcpServer,
+    version: colibri.readServerVersion(fileURLToPath(new URL('../../package.json', import.meta.url))),
+    startedAt: Date.now(),
+    settings: {
+        WEBSERVER_HOST: Config.WEBSERVER_HOST,
+        WEBSERVER_PORT: Config.WEBSERVER_PORT,
+        BASE_URL: Config.BASE_URL,
+        TCP_HOST: Config.TCP_HOST,
+        TCP_PORT: Config.TCP_PORT,
+        VOICE_HOST: Config.VOICE_HOST,
+        VOICE_PORT: Config.VOICE_PORT,
+        VOICE_SAMPLING_RATE: Config.VOICE_SAMPLING_RATE,
+        VOICE_RECORDING: Config.VOICE_RECORDING,
+        TCP_IDLE_TIMEOUT_SECONDS: Config.TCP_IDLE_TIMEOUT_SECONDS,
+        TCP_INBOUND_BACKLOG_LIMIT: Config.TCP_INBOUND_BACKLOG_LIMIT,
+        CLIENT_MESSAGE_RATE_LIMIT: Config.CLIENT_MESSAGE_RATE_LIMIT,
+        CLIENT_MESSAGE_RATE_BURST: Config.CLIENT_MESSAGE_RATE_BURST,
+        APP_CLIENT_WARNING_THRESHOLD: Config.APP_CLIENT_WARNING_THRESHOLD,
+        MODEL_TOMBSTONE_SECONDS: Config.MODEL_TOMBSTONE_SECONDS,
+        TRUSTED_PROXIES: Config.TRUSTED_PROXIES,
+        TCP_PROXY_PROTOCOL: Config.TCP_PROXY_PROTOCOL,
+    },
+    tls: tlsCertificate,
+    voice: voiceServer,
+    restStore: restApi,
+});
+
 // Logs what happens to the process itself, and shuts it down, in this order. restApi.flush()
 // is the only thing standing between a crash and up to SAVE_DEBOUNCE_MILLIS of lost store
 // writes. The voice server goes last: it saves the voice recordings still in progress, which
 // can take a while for long ones, and must not leave the store's pending writes to the watchdog.
 const SHUTDOWN_TIMEOUT_MILLIS = 5000;
 const serverProcess = new colibri.ServerProcess([
+    { name: 'AdminData', stop: () => adminData.stop() },
     { name: 'WebServer', stop: () => webServer.stop() },
     { name: 'SocketIOServer', stop: () => socketioServer.stop() },
     { name: 'TCPServer', stop: () => tcpServer.stop() },

@@ -7,6 +7,7 @@ export * from './redirect-console.js';
 export * from './ring-buffer.js';
 export * from './serializable.js';
 export * from './server-process.js';
+export * from './server-version.js';
 export * from './service.js';
 export * from './tls-certificate.js';
 export * from './tls-files.js';
