@@ -501,7 +501,7 @@ A page sends one of three commands, each with a `topic`:
 | Command | Payload | Server action |
 | --- | --- | --- |
 | `request` | `{ topic, request?, ...query }` | Answers once. |
-| `subscribe` | `{ topic, request?, ...query }` | Answers now and then every second, until `unsubscribe` or disconnect. One subscription per topic and page: subscribing again replaces the query. |
+| `subscribe` | `{ topic, request?, ...query }` | Answers now and then every second, until `unsubscribe` or disconnect. One subscription per topic and page: subscribing again replaces the query. Ignored for `latency`. |
 | `unsubscribe` | `{ topic }`, or `{}` for every topic | Stops the answers. |
 
 The answer comes on `colibri::admin` with the topic as its command. Its payload is the snapshot plus
@@ -509,7 +509,9 @@ The answer comes on `colibri::admin` with the topic as its command. Its payload 
 the server's `Date.now()`. Times are `Date.now()` milliseconds, rates are per second over the last
 second. A page may send 10 `request` and `subscribe` messages a second, bursts of 20; the server
 ignores the rest. With no subscription the server computes nothing, and the TCP worker reports nothing.
-A refresh skips a page whose connection is still sending the previous one; the next replaces it.
+Either way, it keeps each client's latency samples of the last 125 s and its last 125 message rates, one
+a second, for the histories below. A refresh skips a page whose connection is still sending the previous
+one; the next replaces it.
 
 | Topic | Query | Snapshot |
 | --- | --- | --- |
@@ -517,6 +519,7 @@ A refresh skips a page whose connection is still sending the previous one; the n
 | `clients` | none | `{ clients: ClientRow[], total, adminPages }`, at most 1000 rows |
 | `models` | `{ app?, channel?, filter?, offset?, limit? }` | `{ query, channels, channelsTotal, models: ModelRow[], total, deleted, deletedTotal, tombstoneSeconds }` |
 | `model` | `{ app, channel, id }` | `{ app, channel, id, found, deletedAt?, fields?, bytes?, updatedAt?, json?, truncated? }` |
+| `latency` | none | `{ clients: { id, samples }[], total, medians }`, at most 1000 clients |
 
 - **`server`:** `settings` maps the configuration variables in effect to their values: ports and hosts,
   `BASE_URL`, `VOICE_SAMPLING_RATE`, `VOICE_RECORDING`, `TCP_IDLE_TIMEOUT_SECONDS`, the load limits,
@@ -533,7 +536,11 @@ A refresh skips a page whose connection is still sending the previous one; the n
   `latency` the median round trip of the last second in ms, `in` and `out` the messages it sent and
   was sent per second (heartbeats and latency pings not counted, `null` in its first second),
   `limit` the load limit holding its updates back now (`rate`, `backlog` or `null`) and `held` the
-  number of objects with updates held back ([Inbound limits](#inbound-limits)).
+  number of objects with updates held back ([Inbound limits](#inbound-limits)). In the answer to a
+  `request` and the first answer to a `subscribe`, each row also has `history`: `[in, out]` for each of
+  the 122 s before `at`, oldest first, the rates a subscribed page would have been sent then. It is
+  shorter for a client connected for less, and empty for a TCP client if the TCP worker was slow to
+  answer.
 - **`models`:** the synchronized models of every app, in store order (app, channel, creation).
   `app` and `channel` match exactly, `filter` is part of an id or channel name in any case. `limit` is
   1 to 200 (default 50), `total` counts all matches. A `ModelRow` is
@@ -547,6 +554,13 @@ A refresh skips a page whose connection is still sending the previous one; the n
 - **`model`:** one model's value as JSON indented by two spaces, cut to 512 KiB with `truncated: true`.
   `bytes` is as in a `ModelRow`. A model the server does not hold has `found: false`, and `deletedAt`
   if it was deleted within `MODEL_TOMBSTONE_SECONDS`.
+- **`latency`:** request only. Each client's round trips of the 122 s before `at`, as in the
+  `colibri::latency` updates: `samples` is `[time, ms]` pairs, oldest first, `time` the server's
+  `Date.now()` and `ms` rounded to 0.01. Samples taken at `at` itself are left out. They come with the
+  next `colibri::latency` update, like all newer ones, so a page drops an update's samples from before
+  `at` and has each sample once. Clients and order as in `clients`, the first 1000 of `total`. Over
+  200,000 samples in all, `medians` is `true`: a client has one pair per second instead, the median of
+  that second's samples at their mean time, at most 123.
 
 Names longer than 512 characters are cut, and their row has `truncated: true`; such a model cannot be
 looked up with `model`. The `app`, `channel` and `id` of a query are cut to 513 characters, so a
