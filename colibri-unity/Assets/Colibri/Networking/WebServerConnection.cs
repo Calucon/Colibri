@@ -94,20 +94,20 @@ namespace HCIKonstanz.Colibri.Networking
 
         /// <summary>
         /// The least time an attempt on one of several addresses gets. A server name can resolve to
-        /// several addresses, typically an IPv6 and an IPv4 one, and they are tried one after the
-        /// other, each with an equal share of the time left, so that one nothing answers on (an IPv6
-        /// address on a network that does not route IPv6, say) holds up the attempt only for its
-        /// share. A path that works answers a connection well within a second, so a name with many
-        /// addresses gets this much per address rather than shares too short to answer in.
+        /// several addresses, typically an IPv4 and an IPv6 one, and they are tried one after the
+        /// other, each with an equal share of the time left, so that one nothing answers on (behind
+        /// a firewall that drops the connection, say) holds up the attempt only for its share. A
+        /// path that works answers a connection well within a second, so a name with many addresses
+        /// gets this much per address rather than shares too short to answer in.
         /// </summary>
         private const int MIN_ADDRESS_ATTEMPT_MS = 1000;
 
         /// <summary>
         /// The most time an attempt on a loopback address gets while other addresses are still to
         /// be tried. Loopback accepts or refuses a connection at once, except that Windows takes a
-        /// second or more to report a refusal. Windows resolves "localhost" to ::1 before 127.0.0.1,
-        /// and colibri-server listens on IPv4 only by default (TCP_HOST 0.0.0.0), so without this a
-        /// connection to localhost would wait out that refusal every time before it tried 127.0.0.1.
+        /// second or more to report a refusal. "localhost" resolves to 127.0.0.1 and ::1, which is
+        /// tried second (see <see cref="AddressesToTry"/>), so without this a connection to localhost
+        /// would wait out that refusal every time against a server on ::1 only (TCP_HOST ::1).
         /// </summary>
         private const int LOOPBACK_ATTEMPT_MS = 250;
 
@@ -1595,9 +1595,9 @@ namespace HCIKonstanz.Colibri.Networking
 
         /// <summary>
         /// The addresses to try for <paramref name="host"/>, in the order to try them. An IP address
-        /// is taken as it is. A name is looked up, and its addresses are kept in the order the
-        /// platform's resolver gives them (RFC 6724), which on a device with IPv6 usually puts the
-        /// IPv6 addresses first.
+        /// is taken as it is. A name is looked up, and its IPv4 addresses come first, then its IPv6
+        /// addresses, each family in the order the platform's resolver gives it (RFC 6724). See
+        /// <see cref="AddressesToTry"/> for why.
         /// </summary>
         /// <exception cref="SocketException">The name does not resolve, or resolves to no address.</exception>
         /// <exception cref="TimeoutException">The lookup did not finish within <paramref name="timeoutMs"/>.</exception>
@@ -1673,24 +1673,37 @@ namespace HCIKonstanz.Colibri.Networking
         }
 
         /// <summary>
-        /// What a lookup found, ready to be tried in order: each address once, in the order found,
-        /// and an IPv4-mapped IPv6 address as the IPv4 address it stands for, which an IPv4 socket
-        /// reaches on every platform.
+        /// What a lookup found, ready to be tried in order: each address once, the IPv4 addresses
+        /// first and then the IPv6 addresses, each family in the order found, and an IPv4-mapped
+        /// IPv6 address as the IPv4 address it stands for, which an IPv4 socket reaches on every
+        /// platform.
         /// </summary>
-        /// <remarks>Internal for the EditMode tests.</remarks>
+        /// <remarks>
+        /// IPv4 first because voice goes to an IPv4 address whenever the name has one
+        /// (VoiceServerConnection.SelectServerAddress), and colibri-server relays voice only from
+        /// the source address of a TCP connection of the same app (voice-server.ts, admit). In the
+        /// resolver's order, usually IPv6 first, a name with both an A and an AAAA record had TCP
+        /// arrive over IPv6 and voice over IPv4, from another address, and every voice packet was
+        /// dropped: "localhost" on Windows against a server on TCP_HOST ::, or a Docker host whose
+        /// docker-proxy forwards IPv6 TCP from the bridge gateway's address. A name with only IPv6
+        /// addresses still connects over IPv6, and voice follows. Internal for the EditMode tests.
+        /// </remarks>
         internal static IReadOnlyList<IPAddress> AddressesToTry(IPAddress[] found)
         {
             var addresses = new List<IPAddress>();
             if (found == null)
                 return addresses;
 
+            var ipv6 = new List<IPAddress>();
             foreach (var candidate in found)
             {
                 var address = candidate.IsIPv4MappedToIPv6 ? candidate.MapToIPv4() : candidate;
-                if (!addresses.Contains(address))
-                    addresses.Add(address);
+                var family = address.AddressFamily == AddressFamily.InterNetwork ? addresses : ipv6;
+                if (!family.Contains(address))
+                    family.Add(address);
             }
 
+            addresses.AddRange(ipv6);
             return addresses;
         }
 
@@ -1788,8 +1801,8 @@ namespace HCIKonstanz.Colibri.Networking
 
             token.ThrowIfCancellationRequested();
 
-            // The last address's error: the one tried last is the platform's fallback, IPv4 after
-            // IPv6, and whether it refused or did not answer is what tells what is wrong.
+            // The last address's error: the one tried last is the fallback, IPv6 after IPv4, and
+            // whether it refused or did not answer is what tells what is wrong.
             if (failure != null && !(failure is TimeoutException))
                 ExceptionDispatchInfo.Capture(failure).Throw();
 

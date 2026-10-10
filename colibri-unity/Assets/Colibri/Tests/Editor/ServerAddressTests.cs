@@ -76,7 +76,7 @@ namespace HCIKonstanz.Colibri.Tests
             Assert.That(resolving.Result, Is.EqualTo(new[] { IPAddress.IPv6Loopback }));
         }
 
-        /// <summary>The real resolver on this machine, which is where a name's order comes from.</summary>
+        /// <summary>The real resolver on this machine, which is where the order within each family comes from.</summary>
         [Test]
         public void LocalhostResolvesToLoopbackAddresses()
         {
@@ -91,14 +91,41 @@ namespace HCIKonstanz.Colibri.Tests
          *  The order the addresses are tried in
          */
 
+        /// <summary>
+        /// Voice goes to IPv4 whenever the name has an IPv4 address, and the server relays voice only
+        /// from the address of a TCP connection, so TCP has to use IPv4 then too. In the resolver's
+        /// order, usually IPv6 first, it connected over IPv6 and all voice was dropped.
+        /// </summary>
         [Test]
-        public void TheAddressesAreTriedInTheOrderTheResolverGaveThem()
+        public void IPv4AddressesAreTriedBeforeIPv6Addresses()
         {
             var v6 = IPAddress.Parse("2001:db8::1");
             var v4 = IPAddress.Parse("192.0.2.1");
 
-            Assert.That(WebServerConnection.AddressesToTry(new[] { v6, v4 }), Is.EqualTo(new[] { v6, v4 }));
+            Assert.That(WebServerConnection.AddressesToTry(new[] { v6, v4 }), Is.EqualTo(new[] { v4, v6 }));
             Assert.That(WebServerConnection.AddressesToTry(new[] { v4, v6 }), Is.EqualTo(new[] { v4, v6 }));
+        }
+
+        [Test]
+        public void EachFamilyKeepsTheOrderTheResolverGaveIt()
+        {
+            var v6a = IPAddress.Parse("2001:db8::1");
+            var v6b = IPAddress.Parse("2001:db8::2");
+            var v4a = IPAddress.Parse("192.0.2.1");
+            var v4b = IPAddress.Parse("192.0.2.2");
+
+            Assert.That(WebServerConnection.AddressesToTry(new[] { v6a, v4a, v6b, v4b }), Is.EqualTo(new[] { v4a, v4b, v6a, v6b }));
+            Assert.That(WebServerConnection.AddressesToTry(new[] { v4b, v6b, v4a, v6a }), Is.EqualTo(new[] { v4b, v4a, v6b, v6a }));
+        }
+
+        /// <summary>A name with only IPv6 addresses still connects over IPv6, as voice then goes to IPv6 too.</summary>
+        [Test]
+        public void OnlyIPv6AddressesAreTriedInTheResolversOrder()
+        {
+            var v6a = IPAddress.Parse("2001:db8::1");
+            var v6b = IPAddress.Parse("2001:db8::2");
+
+            Assert.That(WebServerConnection.AddressesToTry(new[] { v6b, v6a }), Is.EqualTo(new[] { v6b, v6a }));
         }
 
         /// <summary>A resolver may hand out an address once per socket type; trying it again gains nothing.</summary>
@@ -108,7 +135,7 @@ namespace HCIKonstanz.Colibri.Tests
             var v6 = IPAddress.Parse("2001:db8::1");
             var v4 = IPAddress.Parse("192.0.2.1");
 
-            Assert.That(WebServerConnection.AddressesToTry(new[] { v6, v6, v4, v6, v4 }), Is.EqualTo(new[] { v6, v4 }));
+            Assert.That(WebServerConnection.AddressesToTry(new[] { v6, v6, v4, v6, v4 }), Is.EqualTo(new[] { v4, v6 }));
         }
 
         [Test]
@@ -120,6 +147,22 @@ namespace HCIKonstanz.Colibri.Tests
 
             Assert.That(addresses, Is.EqualTo(new[] { v4 }));
             Assert.That(addresses[0].AddressFamily, Is.EqualTo(AddressFamily.InterNetwork));
+        }
+
+        /// <summary>
+        /// An IPv4-mapped address counts as IPv4 for the order as well, and as the same address as
+        /// the IPv4 address it stands for.
+        /// </summary>
+        [Test]
+        public void AnIPv4MappedAddressIsTriedWithTheIPv4Addresses()
+        {
+            var v6a = IPAddress.Parse("2001:db8::1");
+            var v6b = IPAddress.Parse("2001:db8::2");
+            var v4a = IPAddress.Parse("192.0.2.1");
+            var v4b = IPAddress.Parse("192.0.2.2");
+
+            Assert.That(WebServerConnection.AddressesToTry(new[] { v6a, v4a.MapToIPv6(), v6b, v4b }), Is.EqualTo(new[] { v4a, v4b, v6a, v6b }));
+            Assert.That(WebServerConnection.AddressesToTry(new[] { v6a, v4a.MapToIPv6(), v4a }), Is.EqualTo(new[] { v4a, v6a }));
         }
 
 
@@ -192,8 +235,8 @@ namespace HCIKonstanz.Colibri.Tests
         }
 
         /// <summary>
-        /// Windows takes a second or more to report a refused loopback connection, and resolves
-        /// localhost to ::1 first, where colibri-server does not listen by default.
+        /// Windows takes a second or more to report a refused loopback connection, as on 127.0.0.1
+        /// when localhost is tried against a server on ::1 only.
         /// </summary>
         [Test]
         public void ALoopbackAddressWithOthersAfterItGetsAQuarterOfASecond()
@@ -207,27 +250,26 @@ namespace HCIKonstanz.Colibri.Tests
          */
 
         /// <summary>
-        /// A name with an IPv6 and an IPv4 address for a server that listens on IPv4 only, as
-        /// colibri-server does by default: IPv6 is refused, and IPv4 is tried at once, each with a
-        /// socket of its own family.
+        /// A name with an IPv4 and an IPv6 address for a server that listens on IPv6 only: IPv4 is
+        /// refused, and IPv6 is tried at once, each with a socket of its own family.
         /// </summary>
         [Test]
         public void ARefusedAddressIsFollowedByTheNextAtOnce()
         {
             RequireIPv6();
-            var port = Port(Listen(IPAddress.Loopback));
+            var port = Port(Listen(IPAddress.IPv6Loopback));
 
             LogAssert.Expect(LogType.Log, new Regex(
-                $@"^Colibri: no (connection to \[::1\]:{port} \(ConnectionRefused\)|answer from \[::1\]:{port} within [0-9.]+ s), trying 127\.0\.0\.1:{port}$"));
+                $@"^Colibri: no (connection to 127\.0\.0\.1:{port} \(ConnectionRefused\)|answer from 127\.0\.0\.1:{port} within [0-9.]+ s), trying \[::1\]:{port}$"));
 
             var clock = Stopwatch.StartNew();
-            var (socket, address) = Wait(WebServerConnection.ConnectAnyAsync(new[] { IPAddress.IPv6Loopback, IPAddress.Loopback },
+            var (socket, address) = Wait(WebServerConnection.ConnectAnyAsync(new[] { IPAddress.Loopback, IPAddress.IPv6Loopback },
                 "localhost", port, 5000, 5000, Attempting, CancellationToken.None));
 
             Assert.That(clock.ElapsedMilliseconds, Is.LessThan(2000), "The refused address held up the attempt");
-            Assert.That(address, Is.EqualTo(IPAddress.Loopback));
+            Assert.That(address, Is.EqualTo(IPAddress.IPv6Loopback));
             Assert.That(socket.Connected, Is.True);
-            Assert.That(_attempted.Select(s => s.AddressFamily), Is.EqualTo(new[] { AddressFamily.InterNetworkV6, AddressFamily.InterNetwork }));
+            Assert.That(_attempted.Select(s => s.AddressFamily), Is.EqualTo(new[] { AddressFamily.InterNetwork, AddressFamily.InterNetworkV6 }));
             Assert.That(socket, Is.SameAs(_attempted[1]));
             Assert.That(socket.NoDelay, Is.True);
             Assert.Throws<ObjectDisposedException>(() => _ = _attempted[0].Available, "The refused attempt's socket was left open");
@@ -241,7 +283,7 @@ namespace HCIKonstanz.Colibri.Tests
             var port = ClosedPort();
 
             var e = Assert.Throws<SocketException>(() => Wait(WebServerConnection.ConnectAnyAsync(
-                new[] { IPAddress.IPv6Loopback, IPAddress.Loopback }, "localhost", port, 5000, 5000, Attempting, CancellationToken.None)));
+                new[] { IPAddress.Loopback, IPAddress.IPv6Loopback }, "localhost", port, 5000, 5000, Attempting, CancellationToken.None)));
 
             Assert.That(e.SocketErrorCode, Is.EqualTo(SocketError.ConnectionRefused));
             Assert.That(_attempted, Has.Count.EqualTo(2));
@@ -327,8 +369,8 @@ namespace HCIKonstanz.Colibri.Tests
         }
 
         /// <summary>
-        /// localhost against a server on IPv4 only, as colibri-server listens by default, wherever
-        /// localhost resolves to ::1 first: here, and on Windows.
+        /// localhost against a server on IPv4 only, as colibri-server listens by default: 127.0.0.1
+        /// is tried first, also where localhost resolves to ::1 first, here and on Windows.
         /// </summary>
         [Test]
         public void LocalhostReachesAServerOnTheIPv4LoopbackOnly()
@@ -340,6 +382,27 @@ namespace HCIKonstanz.Colibri.Tests
 
             Assert.That(session.Address, Is.EqualTo(IPAddress.Loopback));
             Assert.That(session.Socket.Connected, Is.True);
+            Assert.That(_attempted.Select(s => s.AddressFamily), Is.EqualTo(new[] { AddressFamily.InterNetwork }));
+        }
+
+        /// <summary>
+        /// localhost against a server on both loopbacks, as with TCP_HOST :: on Windows: TCP goes to
+        /// 127.0.0.1, where voice goes as well, so the server lets the voice in. Over ::1 it dropped
+        /// every voice packet, which came from 127.0.0.1.
+        /// </summary>
+        [Test]
+        public void LocalhostConnectsOverIPv4ToAServerOnBothLoopbacks()
+        {
+            RequireIPv6();
+            var port = Port(Listen(IPAddress.IPv6Loopback));
+            Listen(IPAddress.Loopback, port);
+
+            var session = Wait(WebServerConnection.OpenSessionAsync("localhost", port, null, 5000, Attempting, CancellationToken.None));
+            _disposables.Add(session.Stream);
+
+            Assert.That(session.Address, Is.EqualTo(IPAddress.Loopback));
+            Assert.That(session.Socket.AddressFamily, Is.EqualTo(AddressFamily.InterNetwork));
+            Assert.That(_attempted, Has.Count.EqualTo(1));
         }
 
 
