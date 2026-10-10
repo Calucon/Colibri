@@ -64,6 +64,10 @@ rationale, migration steps, and what the Editor verification did and did not cov
   enqueueing, and nothing in Colibri uses it any more. Use
   `System.Collections.Concurrent.ConcurrentQueue<T>`, which is safe with any number of producers
   and consumers.
+- **`OpusDecoder.Decode` returns only the samples it decoded**, for every channel, at most 120 ms
+  per call. It returned *frameSize* samples of one channel, padded with silence. Code that copies a
+  fixed length out of it has to use the length of the array it returns. See
+  [Correctness](#correctness).
 - **Synced objects send at most 30 updates a second** by default, where 1.3.1 sent one in every
   frame in which something changed. The values in between are skipped, so a `[Sync]` setter on
   another client that counts or reacts to every value now sees gaps. A *Max Send Rate* of `0`
@@ -428,6 +432,8 @@ rationale, migration steps, and what the Editor verification did and did not cov
   call. It returned *frameSize* samples of one channel, padded with silence, and a stereo decoder
   wrote past that buffer. A decoder that was not created or is destroyed logs an error and returns
   null instead of calling Opus, and a second `Destroy` does nothing; it freed the decoder twice.
+  `OpusEncoder` does the same: `Encode` on an encoder that was not created or is destroyed logs an
+  error and returns null, and a second `Destroy` does nothing.
 - **`Store`** serializes with Newtonsoft instead of `JsonUtility`, which cannot handle dictionaries,
   properties, or top-level arrays and so silently disagreed with what `Sync` can carry. What that
   costs a 1.x project is under Breaking changes. A value that cannot be converted, or a saved
