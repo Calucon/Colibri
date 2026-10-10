@@ -1,4 +1,4 @@
-import { AfterViewInit, ChangeDetectionStrategy, Component, ElementRef, Injector, OnDestroy, computed, effect, inject, input, viewChild } from '@angular/core';
+import { AfterViewInit, ChangeDetectionStrategy, Component, ElementRef, Injector, OnDestroy, computed, effect, inject, input, signal, viewChild } from '@angular/core';
 import { ClientService, ColibriClient } from '../../services';
 import * as d3 from 'd3';
 import { BoxplotStats, boxplot, boxplotStats, boxplotSymbolDot } from './boxplot';
@@ -11,6 +11,9 @@ const timeRange = 110 * 1000;
 const minTimeRange = 10 * 1000;
 const barWidth = 24;
 const boxplotPadding = 5;
+// A box narrower than this is not readable; fewer than this many pixels of chart get no boxes.
+const minBand = 14;
+const minBoxplotChartWidth = 600;
 
 // Nord hues (https://www.nordtheme.com/docs/colors-and-palettes), made lighter or stronger: each at
 // 3:1 or more on the card. No red or yellow, which mean errors and warnings. In this order, each
@@ -55,6 +58,19 @@ export const perSecond = function (samples: ReadonlyArray<[number, number]>): [n
     return medians;
 };
 
+/**
+ * How wide each client's box is, or why there are none. The boxes take at most 40% of the plot.
+ * They used to shrink with every client, to 4px, and on a phone left the lines a third of the
+ * screen: below 600px there are none, and where a box each does not fit, none either. The table
+ * lists each client's latency.
+ */
+export const boxLayout = function (chartWidth: number, plotWidth: number, clients: number): { band: number; hidden: 'narrow' | 'count' | null } {
+    if (chartWidth < minBoxplotChartWidth) return { band: 0, hidden: 'narrow' };
+    const band = Math.min(barWidth + boxplotPadding, (plotWidth * 0.4) / Math.max(1, clients));
+    if (band < minBand) return { band: 0, hidden: 'count' };
+    return { band, hidden: null };
+};
+
 interface Line {
     client: ColibriClient;
     color: string;
@@ -80,6 +96,9 @@ export class LatencyChartComponent implements AfterViewInit, OnDestroy {
         const clients = this.clientService.clients();
         return app ? clients.filter(client => client.app === app) : clients;
     });
+
+    /** Why the boxes are missing, when there are clients that would have one. */
+    boxesHidden = signal<'narrow' | 'count' | null>(null);
 
     /** What the chart says instead of an empty plot. */
     message = computed(() => {
@@ -168,8 +187,8 @@ export class LatencyChartComponent implements AfterViewInit, OnDestroy {
     // The boxplots on the right take at most 40% of the plot, the line chart the rest.
     private layout(): { plotWidth: number; band: number } {
         const plotWidth = Math.max(0, this.width - margin.left - margin.right);
-        const count = Math.max(1, this.clients().length);
-        const band = Math.min(barWidth + boxplotPadding, (plotWidth * 0.4) / count);
+        const { band, hidden } = boxLayout(this.width, plotWidth, this.clients().length);
+        this.boxesHidden.set(hidden);
         return { plotWidth, band };
     }
 
@@ -245,7 +264,9 @@ export class LatencyChartComponent implements AfterViewInit, OnDestroy {
             .range([0, plotHeight])
             .nice();
 
-        if (this.boxplotSvg) {
+        if (this.boxplotSvg && band === 0) {
+            this.boxplotSvg.selectAll('g.plot').remove();
+        } else if (this.boxplotSvg) {
             const boxplotData = lines.map(line => ({
                 ...boxplotStats(line.client.latency.map(l => l[1])),
                 id: line.client.id,

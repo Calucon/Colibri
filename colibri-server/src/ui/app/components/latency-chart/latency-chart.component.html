@@ -1,4 +1,6 @@
 <div #latencyChart class="chart" role="img" aria-label="Latency of each connected client over the last 110 seconds"></div>
 @if (message(); as message) {
   <p class="message">{{ message }}</p>
+} @else if (boxesHidden() === 'count') {
+  <p class="note">Boxes hidden: too many clients for this width</p>
 }
