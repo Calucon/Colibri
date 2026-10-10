@@ -370,12 +370,16 @@ rationale, migration steps, and what the Editor verification did and did not cov
   (`voice-server.ts`), so the fixed port bought nothing and capped a machine at one Unity client.
   Voice now goes to an IPv4 address of the server when it has one, since the server's voice socket
   is IPv4 by default: on Windows `localhost` resolved to `::1` first and every send failed. A server
-  address with only IPv6 addresses gets voice over IPv6, from an IPv6 socket, and the log says once
-  that the server needs `VOICE_HOST=::` for it. An IP address is no longer reverse-resolved
-  (`Dns.GetHostEntry` threw for a LAN address without a DNS name), and an address that cannot be
-  resolved, or has no address voice can be sent to, turns voice off with a clear error instead of
-  throwing from `OnEnable`. Received packets now reach the main thread through a per-instance
-  `ConcurrentQueue`. They went through a static `LockFreeQueue`, which is only safe with one thread
+  address with only IPv6 addresses gets voice over IPv6, from an IPv6 socket, if the device has an
+  IPv6 route to it, and the log says once that the server needs `VOICE_HOST=::` for it. An IP
+  address is no longer reverse-resolved (`Dns.GetHostEntry` threw for a LAN address without a DNS
+  name), and an address that cannot be resolved, or has no address voice can be sent to (an IPv6
+  address without a route included, as on Wi-Fi with IPv4 only), turns voice off with a clear error
+  instead of throwing from `OnEnable`. A send the device refuses, e.g. after a network change, drops
+  the packet with one warning until a send works again. It used to throw out of `VoiceBroadcast`
+  on every frame, before the frame was taken off the recording buffer, which grew without end.
+  Received packets now reach the main thread through a per-instance `ConcurrentQueue`. They went
+  through a static `LockFreeQueue`, which is only safe with one thread
   enqueueing (and after a quick disable and enable the old receive thread may still be handing over
   a packet while the new one starts), and which, being static, could hand one connection's packets
   to the next. `VoicePacketCodec` encodes and decodes the packets, and a received one is played only
@@ -735,12 +739,12 @@ otherwise spend on their prototype, so:
   1000-line bound; `SyncAccessorTests` the IL2CPP accessor path, run in the Editor;
   `SyncStrippingTests` that `[Sync]` is a `PreserveAttribute` and carries `[RequireAttributeUsages]`; `WireNameTests` the wire names under
   a Turkish culture; `AndroidSettingsCheckTests` the Android build check;
-  `VoiceServerAddressTests` the choice of the server's address, IPv4 first, and voice over IPv6 on
-  the loopback; `VoicePacketCodecTests` the voice header and the app id, with
-  `VoicePacketQueueTests` which received packets are played; and `VoiceFramerTests` with
-  `StreamingResamplerTests` how recorded audio becomes voice frames: only 960-sample frames and no
-  lost audio from a 44.1 kHz microphone, an encoder that always fails, and resampling without drift
-  however the stream is cut.
+  `VoiceServerAddressTests` the choice of the server's address, IPv4 first, an IPv6 address
+  without a route, a refused send, and voice over IPv6 on the loopback; `VoicePacketCodecTests` the
+  voice header and the app id, with `VoicePacketQueueTests` which received packets are played; and
+  `VoiceFramerTests` with `StreamingResamplerTests` how recorded audio becomes voice frames: only
+  960-sample frames and no lost audio from a 44.1 kHz microphone, an encoder that always fails, and
+  resampling without drift however the stream is cut.
   `FrameCodecTests` also covers the colon at either end of a handshake field.
 - New PlayMode assembly `HCIKonstanz.Colibri.E2E` (`Assets/Tests/`, in the development project
   rather than the shipped package). A real Unity client, a real colibri-server and a raw v3 peer as

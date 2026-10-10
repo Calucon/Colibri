@@ -254,6 +254,7 @@ Show [`LastConnectFailure`](#connection-and-outages) in your app.
 | `… failed (HostUnreachable) …`, `(NetworkUnreachable)` or another socket error | Wrong address or network | Fix the address or the network |
 | `Colibri: no answer from [2001:db8::1]:9012 within 2.5 s, trying 192.0.2.10:9012` or `Colibri: no connection to [2001:db8::1]:9012 (…), trying …` | The server name has several addresses and this one does not work from here: no IPv6 route, or the server does not listen on IPv6. The next address is tried. | None if the next one connects. To avoid the delay, set `TCP_HOST=::` on the server or remove the address from DNS ([Server addresses](#server-addresses)) |
 | `Colibri: colibri.example.org could not be resolved within 5 s. …` | The device's DNS server does not answer | Check the network, or use the server's IP address |
+| `Colibri voice: the server address '…' has only IPv6 addresses (…), and this device has no route to them, …` or `Colibri voice: sending to … failed (NetworkUnreachable), dropping voice until a send works again` | No route to the server's voice address: a server name with only IPv6 addresses on a network without IPv6, or a network change | Use a network with IPv6, or give the server name an IPv4 address. After a network change, voice resumes with the first send that works |
 | `Colibri: invalid frame from server, dropping connection: …` if the server sends anything, then `Colibri: 3 connections in a row were accepted but ended before a single frame could be read. …` | A 1.x server, an address that is not a colibri-server, or [TLS](#tls) on the server only. With *Server supports SSL/TLS?* off, also a proxy or port forwarding whose backend is not running. | Use a 2.x server, correct the address, tick *Server supports SSL/TLS?*, or start the server behind the proxy |
 | `Colibri: 192.168.0.10:9012 accepted the connection but has not sent anything in 2 s, dropping it` (with TLS also `Colibri: server closed the connection`), then `Colibri: 3 connections in a row to 192.168.0.10:9012 were accepted, but nothing was received on any of them: …` | A proxy or port forwarding whose backend is down, a captive portal or a firewall accepts connections, then closes them or forwards nothing. Or the server does not answer or is not a colibri-server. | Check that colibri-server runs and is reachable at that address and port |
 | `… did not answer the TLS handshake …` or `rejected the certificate of …` | TLS settings do not match the server | See [TLS errors](#tls-errors) |
@@ -816,9 +817,12 @@ and instantiates `VoiceReceiver` prefabs.
   work.
 - The voice server listens on IPv4 unless `VOICE_HOST` is an IPv6 address. Colibri sends voice to an
   IPv4 address of the server when it has one, so `localhost` also works on Windows, which resolves
-  it to `::1` first. A server address with only IPv6 addresses gets voice over IPv6, and the log
-  says so once: the server then needs `VOICE_HOST=::` or a proxy listening on IPv6. If the server
-  address cannot be resolved, Colibri logs an error and turns voice chat off.
+  it to `::1` first. A server address with only IPv6 addresses gets voice over IPv6 if the device
+  has an IPv6 route to it, and the log says so once: the server then needs `VOICE_HOST=::` or a
+  proxy listening on IPv6. If the server address cannot be resolved, or the device has no route to
+  its IPv6 addresses (Wi-Fi with IPv4 only), Colibri logs an error and turns voice chat off. A send
+  that fails later, e.g. after a network change, drops the voice with one warning until a send
+  works again.
 - The server forwards voice only to clients with the same App Name, so voice ids must be unique only
   within an app. Each voice packet carries an app id, a hash of the App Name ([Voice
   packets](../../colibri-server/docs/protocol.md#voice-packets-udp)). Without an App Name, no voice
