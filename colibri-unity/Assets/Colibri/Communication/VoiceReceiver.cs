@@ -1,4 +1,5 @@
-﻿using System.Collections;
+﻿using System;
+using System.Collections;
 using System.Collections.Generic;
 using HCIKonstanz.Colibri.Networking;
 using HCIKonstanz.Colibri.Networking.Protocol;
@@ -25,15 +26,23 @@ namespace HCIKonstanz.Colibri.Communication
 
         // Playback audio
         private int serverSamplingRate = 48000;
-        private int frameSize = 960;
         private AudioSource playbackAudioSource;
-        private List<float> playbackBuffer;
+        // Mono at the output rate, from the main thread to the audio thread
+        private VoicePlaybackBuffer playbackBuffer;
         private VoiceServerConnection voiceServerConnection;
         private short remoteUserId;
-        private bool playback = false;
+        // Read on the audio thread
+        private volatile bool playback = false;
         // private bool isInitialized = false;
         private Resampler resampler;
-        private int fastForwardSamplesThreshold = 4800;
+        // Samples at the output rate, read on the audio thread: past the threshold, fast-forward
+        // drops all but the last packet's samples.
+        private volatile int fastForwardSamplesThreshold = 4800;
+        private volatile int lastPacketSamples = 960;
+        // Audio thread only
+        private bool hasReportedPlaybackError;
+        // Debug
+        private long reportedFastForwarded;
 
         // Decodes each packet by its codec, creating opusDecoder with the first Opus packet
         private VoiceDecoder voiceDecoder;
@@ -43,6 +52,9 @@ namespace HCIKonstanz.Colibri.Communication
         private void Awake()
         {
             voiceDecoder = new VoiceDecoder(CreateOpusDecoder, ReportOpusFailure);
+            // A second, as VoiceServerConnection queues at most a second of each sender's voice.
+            // Here rather than in StartPlayback, so that the audio thread never finds none.
+            playbackBuffer = new VoicePlaybackBuffer(Math.Max(AudioSettings.outputSampleRate, 48000));
             voiceServerConnection = VoiceServerConnection.Instance;
             playbackAudioSource = GetComponent<AudioSource>();
             playbackAudioSource.bypassEffects = false;
@@ -63,7 +75,9 @@ namespace HCIKonstanz.Colibri.Communication
             }
             serverSamplingRate = ColibriConfig.Load().VoiceServerSamplingRate;
             resampler = new Resampler(serverSamplingRate, AudioSettings.outputSampleRate);
-            fastForwardSamplesThreshold = serverSamplingRate / 1000 * FastForwardLatencyMilliseconds;
+            // At the output rate, which the buffer holds. It was at the server rate, compared with a
+            // buffer that held two channels, and so half the latency set at 48 kHz.
+            fastForwardSamplesThreshold = (int)Math.Min(int.MaxValue, Math.Max(0L, (long)AudioSettings.outputSampleRate * FastForwardLatencyMilliseconds / 1000));
             // isInitialized = true;
         }
 
@@ -72,6 +86,14 @@ namespace HCIKonstanz.Colibri.Communication
             // Debug: Check if data in playback buffer is constant
             if (Debugging && playback)
             {
+                // Said here rather than on the audio thread
+                long fastForwarded = playbackBuffer.FastForwarded;
+                if (fastForwarded != reportedFastForwarded)
+                {
+                    Debug.Log(DEBUG_HEADER + "Fast forward latency reached. Dropped " + (fastForwarded - reportedFastForwarded) + " samples.");
+                    reportedFastForwarded = fastForwarded;
+                }
+
                 timer += Time.deltaTime;
                 if (timer > 5f)
                 {
@@ -95,23 +117,28 @@ namespace HCIKonstanz.Colibri.Communication
             opusDecoder?.Destroy();
         }
 
-        // Use the MonoBehaviour.OnAudioFilterRead callback to playback voice data as fast as possible
+        // Use the MonoBehaviour.OnAudioFilterRead callback to playback voice data as fast as possible.
+        // On the audio thread: nothing here allocates or waits for the main thread.
         private void OnAudioFilterRead(float[] data, int channels)
         {
             if (playback)
             {
-                // Fast forward to latest samples to reduce latency
-                if (FastForwardPlayback) FastForwardPlaybackBuffer();
-                // Check if the playback buffer has enough data to fill up the data array or otherwise use only the available data
-                int dataBufferSize = Mathf.Min(data.Length, playbackBuffer.Count);
-                // Get the data from the playback buffer, override the data array with it and remove it from the buffer
-                float[] dataBuffer = playbackBuffer.GetRange(0, dataBufferSize).ToArray();
-                dataBuffer.CopyTo(data, 0);
-                playbackBuffer.RemoveRange(0, dataBufferSize);
-                // Clear not already overwritten data
-                for (int i = dataBufferSize; i < data.Length; i++)
+                try
                 {
-                    data[i] = 0;
+                    // Fast forward to latest samples to reduce latency. Each sample goes to every
+                    // channel, and what the buffer cannot fill is silence.
+                    int fastForwardAbove = FastForwardPlayback ? fastForwardSamplesThreshold : int.MaxValue;
+                    playbackBuffer.Read(data, channels, fastForwardAbove, lastPacketSamples);
+                }
+                catch (Exception e)
+                {
+                    // Thrown, it is logged for every callback, about 50 a second.
+                    Array.Clear(data, 0, data.Length);
+                    if (!hasReportedPlaybackError)
+                    {
+                        hasReportedPlaybackError = true;
+                        Debug.LogError(DEBUG_HEADER + "Playing voice failed, playing silence instead. Reported once per receiver.\n" + e);
+                    }
                 }
             }
         }
@@ -122,7 +149,7 @@ namespace HCIKonstanz.Colibri.Communication
             voiceServerConnection.AddVoicePacketListener(remoteUserId, OnSamplesDataReceived);
             playbackAudioSource.Play();
             playback = true;
-            playbackBuffer = new List<float>();
+            playbackBuffer.Clear();
             Debug.Log(DEBUG_HEADER + "Start voice playback with ID: " + remoteUserId);
         }
 
@@ -145,7 +172,6 @@ namespace HCIKonstanz.Colibri.Communication
             // cannot be played, such as Opus where it cannot be decoded.
             byte[] shortBytes = voiceDecoder.Decode(voicePacket);
             if (shortBytes == null) return;
-            frameSize = voicePacket.FrameSize;
 
             // Convert bytes to float samples
             float[] samples = SamplingUtility.ConvertShortBytesToFloat(shortBytes);
@@ -156,11 +182,10 @@ namespace HCIKonstanz.Colibri.Communication
             // Convert to output sample rate if necessary
             if (AudioSettings.outputSampleRate != serverSamplingRate) samples = resampler.ResampleStream(samples);
 
-            // Convert mono samples to stereo
-            samples = SamplingUtility.ConvertToStereo(samples);
-
-            // Add samples to playback buffer
-            playbackBuffer.AddRange(samples); // Sometimes ArgumentOutOfRangeException
+            // Add samples to playback buffer. Mono: the audio thread puts each sample on every
+            // channel. What fast-forward keeps is this packet's samples.
+            lastPacketSamples = samples.Length;
+            playbackBuffer.Write(samples, samples.Length);
         }
 
         private bool CreateOpusDecoder(out VoiceFrameDecoder decoder, out string error)
@@ -182,14 +207,6 @@ namespace HCIKonstanz.Colibri.Communication
         private void ReportOpusFailure(string reason)
         {
             Debug.LogWarning(DEBUG_HEADER + "Opus packets of voice id " + remoteUserId + " that cannot be decoded are dropped (" + reason + "). PCM packets still play. Reported once per receiver.");
-        }
-
-        private void FastForwardPlaybackBuffer()
-        {
-            if (playbackBuffer.Count < fastForwardSamplesThreshold) return;
-            // Debug.Log(playbackBuffer.Count + " | " + fastForwardSamplesThreshold);
-            playbackBuffer.RemoveRange(0, playbackBuffer.Count - frameSize);
-            if (Debugging) Debug.Log(DEBUG_HEADER + "Fast forward latency reached. Empty playback buffer.");
         }
     }
 }
