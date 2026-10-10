@@ -43,7 +43,7 @@ class FakeSocketIOServer {
     public connect(id: string, app = 'colibri'): SocketIoClient {
         const client: SocketIoClient = {
             id, app, name: '127.0.0.1', version: '2', metadata: {},
-            socket: { handshake: { secure: false, issued: 0 } } as never,
+            socket: { handshake: { secure: false, issued: 0 }, conn: { transport: { writable: true } } } as never,
         };
         this.clients.push(client);
         return client;
@@ -202,6 +202,33 @@ describe('AdminData', () => {
             adminPages: 2,
             clients: [ { id: 't1', transport: 'tcp', address: '10.0.0.5', in: 10, out: 20, limit: 'backlog', held: 4 } ],
         });
+    });
+
+    it('skips a refresh for a page that has not taken the previous one, but answers its requests', async () => {
+        const slow = socketio.connect('slow');
+        const page = socketio.connect('page');
+        send(slow, 'subscribe', { topic: 'models', request: 1 });
+        send(page, 'subscribe', { topic: 'clients', request: 2 });
+        await settle();
+        socketio.sent = [];
+
+        // a page that stopped reading: its connection is still sending
+        const transport = (slow.socket.conn as unknown as { transport: { writable: boolean } }).transport;
+        transport.writable = false;
+        const channels = vi.spyOn(store, 'channels');
+        await vi.advanceTimersByTimeAsync(3 * ADMIN_REFRESH_MILLIS);
+        expect(sentTo(slow)).toEqual([]);
+        expect(sentTo(page)).toHaveLength(3);
+        // nobody else asked for the models, so they were not read
+        expect(channels).not.toHaveBeenCalled();
+
+        send(slow, 'request', { topic: 'server', request: 3 });
+        await settle();
+        expect(sentTo(slow).map(s => s.payload.request)).toEqual([ 3 ]);
+
+        transport.writable = true;
+        await vi.advanceTimersByTimeAsync(ADMIN_REFRESH_MILLIS);
+        expect(sentTo(slow).map(s => s.payload.request)).toEqual([ 3, 1 ]);
     });
 
     it('builds one snapshot for every page asking the same', async () => {

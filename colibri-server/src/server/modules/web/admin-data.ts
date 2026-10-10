@@ -90,6 +90,12 @@ interface AdminPage {
     subscriptions: Map<AdminTopic, Subscription>;
 }
 
+// Whether the page's connection is still sending what it was sent before, as it is for a page that
+// stopped reading: engine.io keeps whatever else it is given meanwhile in memory, until it can send.
+const isBackedUp = function (page: AdminPage): boolean {
+    return !page.client.socket.conn.transport.writable;
+};
+
 /**
  * Answers the admin UI's pages with read-only snapshots of the server: its settings and counts, the
  * connected clients and their traffic, and the synchronized models. A page asks for a topic once
@@ -223,16 +229,21 @@ export class AdminData extends Service {
 
         this.refreshing = true;
         try {
-            await this.send(due);
+            await this.send(due, true);
         } finally {
             this.refreshing = false;
         }
     }
 
     // Builds each snapshot once for all the pages that asked for the same thing, and sends it to
-    // those still connected. Never rejects: its callers do not wait for it.
-    private async send(due: Due[]): Promise<void> {
+    // those still connected. A refresh skips the pages that have not taken the previous one yet:
+    // they would only pile up, and the next refresh replaces it anyway. Never rejects: its callers
+    // do not wait for it.
+    private async send(due: Due[], refresh = false): Promise<void> {
         try {
+            if (refresh) due = due.filter(item => !isBackedUp(item.page));
+            if (due.length === 0) return;
+
             const tcpActivity = due.some(item => item.subscription.query.topic === 'clients')
                 ? await this.sources.tcp.clientActivity()
                 : undefined;
