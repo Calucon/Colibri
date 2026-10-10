@@ -590,6 +590,10 @@ export interface ServerSnapshot {
     settings: ServerSettings;
     // The certificate's names (its subject alternative names, or its subject), issuer and validity.
     tls: { names: string; issuer: string; selfSigned: boolean; validFrom: number; validTo: number; fingerprint256: string } | null;
+    // TLS that ends at a trusted proxy in front of this server, which sees only the proxy's own
+    // connections and knows of it only from the proxy. `web`: a web client or admin page connected
+    // now, the one asking included, reached the proxy over TLS (see ClientRow.tlsAtProxy).
+    tlsAtProxy: { web: boolean };
     voice: VoiceStatus | null;
     counts: {
         tcpClients: number;
@@ -631,7 +635,9 @@ export const serverSnapshot = function (sources: ServerSources): ServerSnapshot 
     const apps = new Set<string>(sources.tcpClients.map(client => client.app));
     let webClients = 0;
     let adminPages = 0;
+    let webTlsAtProxy = false;
     for (const client of sources.webClients) {
+        if (client.tlsAtProxy) webTlsAtProxy = true;
         if (client.app === ADMIN_APP) {
             adminPages += 1;
         } else {
@@ -660,6 +666,7 @@ export const serverSnapshot = function (sources: ServerSources): ServerSnapshot 
                 fingerprint256: tls.fingerprint256,
             }
             : null,
+        tlsAtProxy: { web: webTlsAtProxy },
         voice: sources.voice ?? null,
         counts: {
             tcpClients: sources.tcpClients.length,
