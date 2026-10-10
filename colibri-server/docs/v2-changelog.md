@@ -531,7 +531,8 @@ The endpoints are documented under [REST store](./protocol.md#rest-store).
   latency, messages per second in and out, and whether a load limit holds its updates back. It sorts
   by any column and shows one app (`/clients?app=MyApp`). The latency chart is dark like the rest and
   fits its card; a client keeps its colour while others connect and leave, and the chart shows each
-  client's median per second, across the whole width from the first sample.
+  client's median per second, across the whole width from the first sample. Below it, a throughput
+  chart: the messages per second the clients sent (*In*) or were sent (*Out*), stacked per client.
 - New Models page: the synchronized models of each app and channel, 50 to a page and filtered by id or
   channel, with their size, number of fields and last update; a model's value as JSON, to read or
   download (over 512 KiB, its start, as text); and the ids deleted lately. It reads once, on

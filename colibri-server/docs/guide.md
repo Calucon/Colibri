@@ -424,19 +424,24 @@ it while no page is open.
   *Download* saves the loaded lines that match the filters and the search, as text or as JSON; unlike
   the clipboard, it works over plain HTTP. The filters are in the address, so a reload or a copied
   link keeps them: `/log?levels=error,warn&q=timeout&sync=1&connections=0#MyApp`.
+
 - **Clients:** every connected Unity (TCP) and web client with its app, name, address (behind a
   [trusted proxy](#behind-a-reverse-proxy), the one the proxy names), transport and TLS, protocol
   version, time connected, latency, messages per second in and out over the last second, and whether
   a [load limit](#load-limits) holds its updates back: *Rate limit* or *Backlog*, with the number of
   objects held. Sort by a column, show one app (`/clients?app=MyApp`), and open a client's lines in
-  the log. While the mouse is over the rows, they keep their order. Below, a chart of each client's
-  latency over the last 110 s. The former *Statistics* page, `/statistics`, leads here.
+  the log. While the mouse is over the rows, they keep their order. Below, each client's latency over
+  the last 110 s, and its messages per second over the same time, stacked: *In* what the clients
+  sent, *Out* what they were sent (`/clients?throughput=out`). The throughput chart starts when the
+  page opens. The former *Statistics* page, `/statistics`, leads here.
+
 - **Models:** the synchronized models of each app and channel, 50 to a page, with their id, number
   of top-level fields, size as compact JSON and time since the last update, filtered by part of the
   id or channel. A size can be up to 10 s old, from 1 MiB up to a minute. Click one for its value as
   JSON, to read or download; a value over 512 KiB is cut, and its start downloads as text. Below,
   the newest ids deleted within `MODEL_TOMBSTONE_SECONDS`. *Refresh* reads the list again; *Live*
   updates the list and the open model every second.
+
 - **Server:** version, protocol version, Node.js version and uptime; the settings in effect, with the
   variables that set them: ports, `BASE_URL`, TLS, `TRUSTED_PROXIES`, `TCP_PROXY_PROTOCOL`, load
   limits, idle timeout, tombstones, voice and recording; the TLS certificate's names, issuer, validity
