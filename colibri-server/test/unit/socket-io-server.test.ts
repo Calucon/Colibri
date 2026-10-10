@@ -464,7 +464,7 @@ describe('SocketIOServer behind a reverse proxy', () => {
             await connect('6.6.6.6, 198.51.100.7', transport);
 
             expect(connected.map(c => c.name)).toEqual(['198.51.100.7']);
-            expect(logged(LogLevel.Debug)).toContainEqual(expect.stringMatching(/^New client \(.+\) connected from 198\.51\.100\.7 through 127\.0\.0\.1, waiting/));
+            expect(logged(LogLevel.Debug)).toContainEqual(expect.stringMatching(/^New client '.+' \(.+\) connected to app ".+" from 198\.51\.100\.7 through 127\.0\.0\.1$/));
         });
     });
 
@@ -474,7 +474,7 @@ describe('SocketIOServer behind a reverse proxy', () => {
         await connect('198.51.100.7');
 
         expect(connected.map(c => c.name)).toEqual(['127.0.0.1']);
-        expect(logged(LogLevel.Debug)).toContainEqual(expect.stringMatching(/connected from 127\.0\.0\.1, waiting/));
+        expect(logged(LogLevel.Debug)).toContainEqual(expect.stringMatching(/connected to app ".+" from 127\.0\.0\.1$/));
     });
 
     it('trusts no proxy unless told to', async () => {
