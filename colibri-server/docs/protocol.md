@@ -481,14 +481,15 @@ names, or the app name `colibri`.
 | `colibri` | `protocol::accepted` | to a Socket.IO client, once it is accepted | `{ serverVersion }` |
 | `colibri` | `protocol::rejected` | to a refused client, before it is disconnected | `{ reason, serverVersion, clientVersion }` |
 | `colibri` | `latency` | to every Socket.IO client every 100 ms. The client sends it back unchanged. | a number to echo |
+| `colibri::latency` | `update` | to every Socket.IO client, of every app, every second | `{ [clientId]: [time, ms][] }`, the round trips measured in that second |
 | `colibri::clients` | `client::connected`, `client::disconnected` | to every client of the app, and the admin UI, when a client joins or leaves | `{ id, name, app }` |
 | `colibri::clients` | `client::request` | by a client, to ask who is connected | the server answers with one `client::connected` per client of the requester's app, with `version` added |
 | `log` | `debug`, `info`, `warn` / `warning`, `error` | by a client, to write to the server log at that level (any other command: debug) | text |
 
 `name` is the handshake name for a TCP client and the IP address for a Socket.IO client, taken from
 `X-Forwarded-For` behind a trusted proxy ([Behind a reverse proxy](guide.md#behind-a-reverse-proxy)).
-The admin UI also uses `colibri::log`, `colibri::latency` and `colibri::admin`
-([Admin UI channel](#admin-ui-channel)).
+The admin UI also uses `colibri::log` and `colibri::admin` ([Admin UI channel](#admin-ui-channel)),
+and draws its latency chart from `colibri::latency`.
 
 ## Admin UI channel
 
@@ -537,9 +538,11 @@ sending the previous one; the next replaces it.
   `transport` is `tcp` or `web`, `address` the client's own address (from the PROXY protocol header or
   `X-Forwarded-For` behind a trusted proxy), `tls` whether its connection to this server is encrypted,
   `latency` the median round trip of the last second in ms, `in` and `out` the messages it sent and
-  was sent per second (heartbeats and latency pings not counted, `null` in its first second),
-  `limit` the load limit holding its updates back now (`rate`, `backlog` or `null`) and `held` the
-  number of objects with updates held back ([Inbound limits](#inbound-limits)). In the answer to a
+  was sent per second (heartbeats and `colibri` latency pings not counted; `colibri::latency` is, so
+  an idle web client shows about 1 out), `null` in its first second, and for every TCP client when
+  the TCP worker did not answer within 1 s, `limit` the load limit holding its updates back now
+  (`rate`, `backlog` or `null`) and `held` the number of objects with updates held back
+  ([Inbound limits](#inbound-limits)). In the answer to a
   `request` and the first answer to a `subscribe`, each row also has `history`: `[in, out]` for each of
   the 122 s before `at`, oldest first, the rates a subscribed page would have been sent then. It is
   shorter for a client connected for less, and empty for a TCP client if the TCP worker was slow to
