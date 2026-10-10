@@ -949,6 +949,7 @@ Background* themselves. For the TLS tests, start the TLS server with
 also set `COLIBRI_E2E_TLS=1` in the Editor's environment.
 
 Voice chat has no end-to-end tests, because they need a microphone. Unit tests cover only the server
-address choice, the packet format with its app id, the queue that hands received packets to the
-main thread, how recorded audio is resampled and cut into frames, with the fallback to PCM, and how
-received packets are decoded and handed to the audio thread.
+address choice, failed sends, the socket and its receive thread over the IPv6 loopback, the packet
+format with its app id, the queue that hands received packets to the main thread, how recorded audio
+is resampled and cut into frames, with the fallback to PCM, and how received packets are decoded and
+handed to the audio thread.

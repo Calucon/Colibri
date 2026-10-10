@@ -865,9 +865,10 @@ otherwise spend on their prototype, so:
   `colibri-unity/Assets/Colibri/Networking/`.
 - Still no GameCI workflow: the Unity suites run locally, since a Unity container in CI needs a
   licence secret. Voice chat has no end-to-end coverage (it needs a microphone); only the choice of
-  the server's address, the packet format, the queue that hands received packets to the main
-  thread, how recorded audio is resampled and cut into frames, and how received packets are
-  decoded and handed to the audio thread are unit-tested.
+  the server's address, failed sends, the socket and its receive thread over the IPv6 loopback, the
+  packet format, the queue that hands received packets to the main thread, how recorded audio is
+  resampled and cut into frames, and how received packets are decoded and handed to the audio
+  thread are unit-tested.
 - `run-tests.mjs --stripping` builds a Release IL2CPP player with *Managed Stripping Level* High and
   checks inside it that every `[Sync]` member survived with its `[Sync]` and still syncs. Off by
   default; skipped with a notice without the platform's IL2CPP module.
