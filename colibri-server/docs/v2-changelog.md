@@ -531,8 +531,9 @@ The endpoints are documented under [REST store](./protocol.md#rest-store).
   latency, messages per second in and out, and whether a load limit holds its updates back. It sorts
   by any column and shows one app (`/clients?app=MyApp`). The latency chart is dark like the rest and
   fits its card; a client keeps its colour while others connect and leave, and the chart shows each
-  client's median per second, across the whole width from the first sample. Below it, a throughput
-  chart: the messages per second the clients sent (*In*) or were sent (*Out*), stacked per client.
+  client's median per second over the last 2 minutes. Below it, a throughput chart: the messages per
+  second the clients sent (*In*) or were sent (*Out*), stacked per client. Both charts are full as soon
+  as the page opens, and after a lost connection, from what the server kept of the last 2 minutes.
 - New Models page: the synchronized models of each app and channel, 50 to a page and filtered by id or
   channel, with their size, number of fields and last update; a model's value as JSON, to read or
   download (over 512 KiB, its start, as text); and the ids deleted lately. It reads once, on
@@ -554,7 +555,10 @@ The endpoints are documented under [REST store](./protocol.md#rest-store).
   model's value. A page asks once or subscribes while it is open; subscriptions are sent again once a
   second and end with the page. Sizes are bounded. Without a subscription the server computes nothing
   for it and the TCP worker reports nothing. A page that stops reading is skipped until it catches
-  up. See [Admin UI channel](./protocol.md#admin-ui-channel).
+  up. A page's first client list carries each client's message rates of the last 122 s, and the
+  request-only topic `latency` its latency samples of that time, as per-second medians past 200,000
+  samples. The server keeps both per client whether or not a page is open: 125 s of latency samples
+  (1000 samples before) and the last 125 rates. See [Admin UI channel](./protocol.md#admin-ui-channel).
 - The model store records each model's last update time and counts its updates. Sizes are measured
   only when the admin UI asks, at most 2 MiB a second; a model that changes keeps its last size for
   up to 10 s, from 1 MiB up to a minute. A model's JSON is formatted only as far as the 512 KiB cut,
@@ -619,8 +623,8 @@ The endpoints are documented under [REST store](./protocol.md#rest-store).
 - Unit tests for the admin UI channel: snapshot sizes bounded for large stores and long query names,
   the store left unchanged, nothing sent or asked of the TCP worker without a subscription,
   subscriptions ending with the page, refreshes skipped for a page that stopped reading, the request
-  limit, the measuring budget, the JSON formatter's cut, and the message counts and load limits on
-  both transports.
+  limit, the measuring budget, the JSON formatter's cut, the message counts and load limits on both
+  transports, the rate history of a page's first client list and the latency history's bounds.
 
 ### Documentation
 

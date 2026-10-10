@@ -412,8 +412,9 @@ Server messages, and lines clients send through colibri-unity's `RemoteLogging` 
 
 Four pages, all read only: nothing on them changes, deletes or disconnects anything. They read from
 the server over the Socket.IO channel `colibri::admin` ([Admin UI channel](protocol.md#admin-ui-channel)).
-The server sends a page its data at most once a second, with bounded sizes, and computes nothing for
-it while no page is open.
+The server sends a page its data at most once a second, with bounded sizes. While no page is open, it
+only keeps each client's latency samples and message rates of the last 2 minutes, which a page shows as
+soon as it opens.
 
 - **Log:** the [log](#logs), filtered by app and level, with a search over the loaded lines. *Sync
   traffic* shows the `broadcast::` messages between clients; *Connections* off leaves out the routine
@@ -433,9 +434,9 @@ it while no page is open.
   a [load limit](#load-limits) holds its updates back: *Rate limit* or *Backlog*, with the number of
   objects held. Sort by a column, show one app (`/clients?app=MyApp`), and open a client's lines in
   the log. While the mouse is over the rows, they keep their order. Below, each client's latency over
-  the last 110 s, and its messages per second over the same time, stacked: *In* what the clients
-  sent, *Out* what they were sent (`/clients?throughput=out`). The throughput chart starts when the
-  page opens. The former *Statistics* page, `/statistics`, leads here.
+  the last 2 minutes, and its messages per second over the same time, stacked: *In* what the clients
+  sent, *Out* what they were sent (`/clients?throughput=out`). Both charts show the whole 2 minutes as
+  soon as the page opens. The former *Statistics* page, `/statistics`, leads here.
 
   ![Clients page](../img/admin-clients.png)
 
