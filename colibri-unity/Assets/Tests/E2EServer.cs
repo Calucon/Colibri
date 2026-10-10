@@ -170,15 +170,34 @@ namespace HCIKonstanz.Colibri.E2E
 
         private static bool IsReachable(int port)
         {
+            // Each address the host resolves to, with a socket of its family: `new TcpClient()` is an
+            // IPv4 socket on Mono, so a server on "::1" was never found and the suites skipped.
+            System.Net.IPAddress[] addresses;
             try
             {
-                using (var probe = new TcpClient())
-                    return probe.ConnectAsync(Host, port).Wait(TimeSpan.FromSeconds(2));
+                var host = Host.Length > 2 && Host[0] == '[' && Host[Host.Length - 1] == ']' ? Host.Substring(1, Host.Length - 2) : Host;
+                addresses = System.Net.Dns.GetHostAddresses(host);
             }
             catch (Exception)
             {
                 return false;
             }
+
+            foreach (var address in addresses)
+            {
+                try
+                {
+                    using (var probe = new TcpClient(address.AddressFamily))
+                        if (probe.ConnectAsync(address, port).Wait(TimeSpan.FromSeconds(2)))
+                            return true;
+                }
+                catch (Exception)
+                {
+                    // Refused or unreachable on this address: the next one.
+                }
+            }
+
+            return false;
         }
 
         /// <summary>
