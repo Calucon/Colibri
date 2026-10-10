@@ -338,6 +338,10 @@ export interface ClientRow {
     // Whether its connection to this server is encrypted. Behind a proxy that ends TLS, that is
     // the proxy's connection.
     tls: boolean;
+    // Whether it reached a trusted proxy over TLS, as the proxy reported: a web client's
+    // X-Forwarded-Proto (see forwardedTls). Always false for a TCP client: a PROXY protocol header
+    // does not say.
+    tlsAtProxy: boolean;
     // Its own address, behind a trusted proxy the one the proxy named.
     address: string;
     // Date.now() of its connection.
@@ -434,6 +438,7 @@ export const clientsSnapshot = function (sources: ClientSources, history = false
         add(client, {
             transport: 'tcp',
             tls: client.tls,
+            tlsAtProxy: false,
             address: client.address,
             connectedAt: client.connectedAt,
             ...activityRow(sources.tcpActivity.get(client.id) ?? NO_ACTIVITY),
@@ -447,6 +452,7 @@ export const clientsSnapshot = function (sources: ClientSources, history = false
         add(client, {
             transport: 'web',
             tls: client.socket.handshake.secure,
+            tlsAtProxy: client.tlsAtProxy,
             address: client.name,
             connectedAt: client.socket.handshake.issued,
             ...activityRow(sources.webActivity(client)),
