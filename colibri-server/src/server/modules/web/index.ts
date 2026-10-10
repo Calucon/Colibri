@@ -5,3 +5,4 @@ export * from './web-server.js';
 export * from './rest-api.js';
 export * from './voice-server.js';
 export * from './voice-packet.js';
+export * from './unity-client-addresses.js';

@@ -45,9 +45,11 @@ const webServer = new colibri.WebServer(
     tlsCertificate,
     trustProxy
 );
-const voiceServer = new colibri.VoiceServer(Config.VOICE_SAMPLING_RATE, Config.DATA_ROOT, Config.VOICE_RECORDING);
 
 const tcpServer = new colibri.TCPServerProxy();
+// Relays voice only from the address of a Unity client of the packet's app, or unchecked from a
+// trusted proxy.
+const voiceServer = new colibri.VoiceServer(Config.VOICE_SAMPLING_RATE, Config.DATA_ROOT, Config.VOICE_RECORDING, tcpServer, trustProxy);
 const socketioServer = new colibri.SocketIOServer();
 const connectionPool = new colibri.ConnectionPool(tcpServer, socketioServer);
 connectionPool.appClientWarningThreshold = Config.APP_CLIENT_WARNING_THRESHOLD;

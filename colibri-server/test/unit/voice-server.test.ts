@@ -6,15 +6,51 @@ import { mkdir, mkdtemp, readdir, readFile, rm } from 'fs/promises';
 import { AddressInfo } from 'net';
 import { networkInterfaces, tmpdir } from 'os';
 import * as path from 'path';
-import { Subscription } from 'rxjs';
+import { Subject, Subscription } from 'rxjs';
 import wavefile from 'wavefile';
 import { VoiceServer, voiceSocketOptions, wavHeader } from '../../src/server/modules/web/voice-server.js';
 import { VoiceCodec, encodeVoicePacket, voiceAppId } from '../../src/server/modules/web/voice-packet.js';
+import { UnityClient, UnityClientSource } from '../../src/server/modules/web/unity-client-addresses.js';
 import { ConsoleLog, LogLevel, LogMessage, Service } from '../../src/server/modules/core/index.js';
+import { compileTrustedProxies } from '../../src/server/modules/networking/trusted-proxies.js';
 
 const { WaveFile } = wavefile;
 
 const APP = voiceAppId('voice-test');
+
+// The Unity (TCP) clients, as TCPServerProxy reports them.
+class FakeUnityClients implements UnityClientSource {
+    public readonly currentClients: UnityClient[] = [];
+    private readonly connected = new Subject<UnityClient>();
+    private readonly disconnected = new Subject<UnityClient>();
+
+    public get clientConnected$() {
+        return this.connected.asObservable();
+    }
+    public get clientDisconnected$() {
+        return this.disconnected.asObservable();
+    }
+
+    public connect(app: string, address: string): UnityClient {
+        const client = { app, address };
+        this.currentClients.push(client);
+        this.connected.next(client);
+        return client;
+    }
+
+    public disconnect(client: UnityClient): void {
+        this.currentClients.splice(this.currentClients.indexOf(client), 1);
+        this.disconnected.next(client);
+    }
+}
+
+// Voice is relayed only from the address of a Unity client of the packet's app. The tests that are
+// not about that send from 127.0.0.1, in these apps.
+const unityClientsOnLoopback = function (): FakeUnityClients {
+    const unity = new FakeUnityClients();
+    for (const app of [ 'voice-test', 'app-a', 'app-b' ]) unity.connect(app, '127.0.0.1');
+    return unity;
+};
 
 // An app id as the server writes it in logs and recording names.
 const appHex = (appId: number): string => `0x${appId.toString(16).padStart(8, '0')}`;
@@ -41,6 +77,7 @@ interface VoiceServerInternals {
 }
 
 describe('VoiceServer', () => {
+    let unity: FakeUnityClients;
     let server: VoiceServer;
     let internals: VoiceServerInternals;
     let port: number;
@@ -84,7 +121,8 @@ describe('VoiceServer', () => {
         logs = [];
         logSubscription = Service.output$.subscribe(log => logs.push(log));
 
-        server = new VoiceServer(48000, '/nonexistent-voice-recordings');
+        unity = unityClientsOnLoopback();
+        server = new VoiceServer(48000, '/nonexistent-voice-recordings', false, unity);
         internals = server as unknown as VoiceServerInternals;
         server.start(0, '127.0.0.1');
         await once(internals.udpSocket, 'listening');
@@ -106,7 +144,7 @@ describe('VoiceServer', () => {
         await roundTrip(b, a, 2);
         expect(server.status.clients).toBe(2);
 
-        expect(new VoiceServer(16000, '/nonexistent-voice-recordings', true).status)
+        expect(new VoiceServer(16000, '/nonexistent-voice-recordings', true, new FakeUnityClients()).status)
             .toEqual({ listening: false, recording: true, samplingRate: 16000, clients: 0 });
     });
 
@@ -447,6 +485,173 @@ describe('VoiceServer', () => {
             expect(v1Reports()).toHaveLength(0);
         });
     });
+
+    // Voice is relayed only from the address of a Unity client of the packet's app. The addresses
+    // here are documentation ones (RFC 5737): the packets are handed to the socket's listener as if
+    // they came from there, and what the server sends is recorded, not sent.
+    describe('Unity clients', () => {
+        const LAB = voiceAppId('lab');
+        const OTHER = voiceAppId('other');
+
+        // Where `socket` relays each packet from now on, as address:port.
+        const relays = (socket: dgram.Socket): string[] => {
+            const sent: string[] = [];
+            vi.spyOn(socket, 'send').mockImplementation(((...args: unknown[]) => void sent.push(`${args[4]}:${args[3]}`)) as never);
+            return sent;
+        };
+
+        // Handled before this returns.
+        const deliver = (socket: dgram.Socket, address: string, port: number, packet: Buffer): void => {
+            socket.emit('message', packet, { address, port, family: address.includes(':') ? 'IPv6' : 'IPv4', size: packet.length });
+        };
+
+        // The server hears of a Unity client leaving in a microtask (see UnityClientAddresses).
+        const settled = () => new Promise<void>(resolve => setImmediate(resolve));
+
+        const ignoredReports = () => logs.filter(l => l.origin === 'VoiceServer' && l.level === LogLevel.Warn && /no Unity client/.test(l.message));
+
+        it('relays voice from the address of a Unity client of the same app', () => {
+            const sent = relays(internals.udpSocket);
+            unity.connect('lab', '192.0.2.1');
+            unity.connect('lab', '192.0.2.2');
+
+            deliver(internals.udpSocket, '192.0.2.1', 5001, voicePacket(1, 0, [], LAB));
+            deliver(internals.udpSocket, '192.0.2.2', 5002, voicePacket(2, 0, [], LAB));
+            deliver(internals.udpSocket, '192.0.2.1', 5001, voicePacket(1, 1, [ 1, 0 ], LAB));
+
+            expect(sent).toEqual([ '192.0.2.1:5001', '192.0.2.2:5002' ]);
+            expect(server.status.clients).toBe(2);
+            expect(ignoredReports()).toHaveLength(0);
+        });
+
+        // Every sender used to be registered and relayed to: one packet with a forged source
+        // address every 2 s had the server stream an app's voice to that address.
+        it('ignores voice from an address without a Unity client, and relays nothing to it', () => {
+            const sent = relays(internals.udpSocket);
+            unity.connect('lab', '192.0.2.1');
+            deliver(internals.udpSocket, '192.0.2.1', 5001, voicePacket(1, 0, [], LAB));
+
+            for (let i = 0; i < 5; i++) deliver(internals.udpSocket, '198.51.100.7', 4000, voicePacket(9, i, [ 9, 0 ], LAB));
+            deliver(internals.udpSocket, '192.0.2.1', 5001, voicePacket(1, 1, [ 1, 0 ], LAB));
+
+            expect(sent).toEqual([]);
+            expect([ ...internals.clients.keys() ]).toEqual([ '192.0.2.1:5001' ]);
+            expect(ignoredReports().map(l => l.message)).toEqual([
+                `Ignoring voice packet from 198.51.100.7:4000 for app ${appHex(LAB)}: no Unity client of that app is connected from 198.51.100.7`
+                    + ' (further ones from this source are not reported for 10s)',
+            ]);
+        });
+
+        it('ignores voice for an app no Unity client at its address is in', () => {
+            const sent = relays(internals.udpSocket);
+            unity.connect('lab', '192.0.2.1');
+            unity.connect('other', '192.0.2.2');
+            deliver(internals.udpSocket, '192.0.2.2', 5002, voicePacket(2, 0, [], OTHER));
+
+            // Neither from a new sender, nor from one of lab changing app: that one stays in lab.
+            deliver(internals.udpSocket, '192.0.2.1', 5001, voicePacket(1, 0, [], OTHER));
+            deliver(internals.udpSocket, '192.0.2.1', 5003, voicePacket(3, 0, [], LAB));
+            deliver(internals.udpSocket, '192.0.2.1', 5003, voicePacket(3, 1, [ 3, 0 ], OTHER));
+            deliver(internals.udpSocket, '192.0.2.2', 5002, voicePacket(2, 1, [ 2, 0 ], OTHER));
+
+            expect(sent).toEqual([]);
+            expect([ ...internals.clients.keys() ].sort()).toEqual([ '192.0.2.1:5003', '192.0.2.2:5002' ]);
+            expect((internals.clients.get('192.0.2.1:5003') as { appId: number }).appId).toBe(LAB);
+            expect(ignoredReports().map(l => l.message.replace(/ \(further .*$/, ''))).toEqual([
+                `Ignoring voice packet from 192.0.2.1:5001 for app ${appHex(OTHER)}: no Unity client of that app is connected from 192.0.2.1`,
+                `Ignoring voice packet from 192.0.2.1:5003 for app ${appHex(OTHER)}: no Unity client of that app is connected from 192.0.2.1`,
+            ]);
+        });
+
+        // Behind a proxy every voice packet comes from the proxy's address, which no Unity client has.
+        it('relays voice from a trusted proxy unchecked, and says so once', async () => {
+            const proxied = new VoiceServer(48000, '/nonexistent-voice-recordings', false, unity, compileTrustedProxies([ '192.0.2.100' ]));
+            proxied.start(0, '127.0.0.1');
+            const socket = (proxied as unknown as VoiceServerInternals).udpSocket;
+            await once(socket, 'listening');
+            try {
+                const sent = relays(socket);
+                deliver(socket, '192.0.2.100', 6001, voicePacket(1, 0, [], LAB));
+                deliver(socket, '192.0.2.100', 6002, voicePacket(2, 0, [], LAB));
+                deliver(socket, '192.0.2.100', 6001, voicePacket(1, 1, [ 1, 0 ], LAB));
+                // Anyone else still needs a Unity client.
+                deliver(socket, '198.51.100.7', 4000, voicePacket(9, 0, [], LAB));
+                // Nor are the proxy's voice clients dropped when a Unity client of lab leaves its address.
+                unity.disconnect(unity.connect('lab', '192.0.2.100'));
+                await settled();
+
+                expect(sent).toEqual([ '192.0.2.100:6001', '192.0.2.100:6002' ]);
+                expect(proxied.status.clients).toBe(2);
+                expect(logs.filter(l => l.origin === 'VoiceServer' && l.level === LogLevel.Info && /unchecked/.test(l.message)).map(l => l.message)).toEqual([
+                    'Relaying voice from 192.0.2.100 unchecked: it is in TRUSTED_PROXIES, and voice through a proxy cannot be matched to a Unity client\'s address. '
+                        + 'Logged once per address.',
+                ]);
+                expect(ignoredReports()).toHaveLength(1);
+            } finally {
+                await proxied.stop();
+            }
+        });
+
+        it('drops the voice clients at an address once the last Unity client of their app there leaves', async () => {
+            const sent = relays(internals.udpSocket);
+            const first = unity.connect('lab', '192.0.2.1');
+            const second = unity.connect('lab', '192.0.2.1');
+            unity.connect('lab', '192.0.2.2');
+            unity.connect('other', '192.0.2.1');
+            deliver(internals.udpSocket, '192.0.2.1', 5001, voicePacket(1, 0, [], LAB));
+            deliver(internals.udpSocket, '192.0.2.2', 5002, voicePacket(2, 0, [], LAB));
+            deliver(internals.udpSocket, '192.0.2.1', 5003, voicePacket(3, 0, [], OTHER));
+            expect(sent).toEqual([ '192.0.2.1:5001' ]);
+
+            // Another Unity client of lab is still connected from there.
+            unity.disconnect(first);
+            await settled();
+            expect(server.status.clients).toBe(3);
+
+            unity.disconnect(second);
+            await settled();
+            expect(server.status.clients).toBe(2);
+            expect([ ...internals.clients.keys() ].sort()).toEqual([ '192.0.2.1:5003', '192.0.2.2:5002' ]);
+            const dropped = logs.filter(l => l.origin === 'VoiceServer' && /no Unity client of app/.test(l.message));
+            expect(dropped.map(l => [ l.level, l.message, l.metadata ])).toEqual([
+                [ LogLevel.Debug, `Voice client 192.0.2.1:5001 disconnected ID: 1: no Unity client of app ${appHex(LAB)} is connected from 192.0.2.1 any more`, { connection: true } ],
+            ]);
+
+            // It hears nothing more, and is not let in again.
+            deliver(internals.udpSocket, '192.0.2.2', 5002, voicePacket(2, 1, [ 2, 0 ], LAB));
+            deliver(internals.udpSocket, '192.0.2.1', 5001, voicePacket(1, 1, [ 1, 0 ], LAB));
+            expect(sent).toEqual([ '192.0.2.1:5001' ]);
+            expect(server.status.clients).toBe(2);
+            expect(ignoredReports()).toHaveLength(1);
+        });
+
+        // TCPServerProxy reports a second handshake as the client leaving and connecting again.
+        it('keeps the voice clients of a Unity client that handshakes again into the same app', async () => {
+            const client = unity.connect('lab', '192.0.2.1');
+            deliver(internals.udpSocket, '192.0.2.1', 5001, voicePacket(1, 0, [], LAB));
+
+            unity.disconnect(client);
+            unity.connect('lab', '192.0.2.1');
+            await settled();
+
+            expect([ ...internals.clients.keys() ]).toEqual([ '192.0.2.1:5001' ]);
+        });
+
+        // A dual-stack TCP socket reports an IPv4 client as ::ffff:192.0.2.1.
+        it('matches an IPv4-mapped IPv6 address as the IPv4 address it maps, on either side', async () => {
+            const sent = relays(internals.udpSocket);
+            const mapped = unity.connect('lab', '::ffff:192.0.2.1');
+            unity.connect('lab', '192.0.2.2');
+
+            deliver(internals.udpSocket, '192.0.2.1', 5001, voicePacket(1, 0, [], LAB));
+            deliver(internals.udpSocket, '::ffff:192.0.2.2', 5002, voicePacket(2, 0, [], LAB));
+            expect(sent).toEqual([ '192.0.2.1:5001' ]);
+
+            unity.disconnect(mapped);
+            await settled();
+            expect([ ...internals.clients.keys() ]).toEqual([ '::ffff:192.0.2.2:5002' ]);
+        });
+    });
 });
 
 describe('VoiceServer startup', () => {
@@ -466,7 +671,7 @@ describe('VoiceServer startup', () => {
         });
         const subscription = sink.attach(Service.output$);
 
-        const server = new VoiceServer(48000, '/nonexistent-voice-recordings');
+        const server = new VoiceServer(48000, '/nonexistent-voice-recordings', false, new FakeUnityClients());
         try {
             server.start(0, '127.0.0.1');
             await once((server as unknown as VoiceServerInternals).udpSocket, 'listening');
@@ -502,7 +707,7 @@ describe('VoiceServer startup', () => {
                 err: line => stderr.push(line),
             });
             subscriptions = [ Service.output$.subscribe(log => logs.push(log)), sink.attach(Service.output$) ];
-            server = new VoiceServer(48000, '/nonexistent-voice-recordings');
+            server = new VoiceServer(48000, '/nonexistent-voice-recordings', false, new FakeUnityClients());
         });
 
         afterEach(async () => {
@@ -647,6 +852,7 @@ describe.skipIf(!hasIPv6Loopback)('VoiceServer on an IPv6 VOICE_HOST', () => {
 describe('VoiceServer recordings', () => {
     const SAMPLING_RATE = 48000;
 
+    let unity: FakeUnityClients;
     let dir: string;
     let server: VoiceServer;
     let internals: VoiceServerInternals;
@@ -661,7 +867,8 @@ describe('VoiceServer recordings', () => {
         logSubscription = Service.output$.subscribe(log => logs.push(log));
         dir = await mkdtemp(path.join(tmpdir(), 'colibri-voice-recordings-'));
 
-        server = new VoiceServer(SAMPLING_RATE, dir, true);
+        unity = unityClientsOnLoopback();
+        server = new VoiceServer(SAMPLING_RATE, dir, true, unity);
         internals = server as unknown as VoiceServerInternals;
         server.start(0, '127.0.0.1');
         await once(internals.udpSocket, 'listening');
@@ -826,6 +1033,36 @@ describe('VoiceServer recordings', () => {
         await server.stop();
         expect(await recordings()).toEqual(files);
         expect(savedLogs()).toHaveLength(1);
+    });
+
+    it('saves the recording of a voice client dropped because its Unity client left, once', async () => {
+        const samples = someSamples(960, 9);
+        await talk(9, samples);
+        unity.disconnect(unity.currentClients.find(client => client.app === 'voice-test')!);
+        await new Promise(resolve => setImmediate(resolve));
+        expect(internals.clients.size).toBe(0);
+
+        await internals.checkClientsDisconnected();
+        const files = await recordings();
+        expect(files).toHaveLength(1);
+        expect(await readSamples(files[0]!)).toEqual(samples);
+
+        await server.stop();
+        expect(await recordings()).toEqual(files);
+        expect(savedLogs()).toHaveLength(1);
+    });
+
+    it('saves the recording of a voice client dropped because its Unity client left when it stops first', async () => {
+        const samples = someSamples(480, 10);
+        await talk(10, samples);
+        unity.disconnect(unity.currentClients.find(client => client.app === 'voice-test')!);
+        await new Promise(resolve => setImmediate(resolve));
+
+        await server.stop();
+
+        const files = await recordings();
+        expect(files).toHaveLength(1);
+        expect(await readSamples(files[0]!)).toEqual(samples);
     });
 
     it('logs a recording it cannot save, and saves the others', async () => {

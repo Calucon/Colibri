@@ -11,6 +11,8 @@ import {
     VOICE_VERSION_AND_CODEC_OFFSET,
     VoiceCodec,
 } from './voice-packet.js';
+import { TrustProxy, trustNoProxy } from '../networking/trusted-proxies.js';
+import { UnityClientAddresses, UnityClientSource, normalizeAddress } from './unity-client-addresses.js';
 
 // Recordings can run for minutes at 48kHz, so a plain number[] would mean millions of
 // boxed-double pushes. This keeps samples in a flat Int16Array, growing (doubling) only
@@ -53,7 +55,14 @@ interface VoiceClient {
     codec: VoiceCodec;
     recordingStartDate: Date;
     recordingData: GrowableInt16Buffer;
+    // Let in because its address is in TRUSTED_PROXIES, not because a Unity client of its app is
+    // connected from it (see admit), so it is dropped only once it goes quiet.
+    throughProxy: boolean;
 }
+
+// Why a voice packet may be relayed: a Unity client of its app is connected from its address, or
+// its address is a trusted proxy's.
+type Admission = 'unity' | 'proxy';
 
 // What getAppClients hands back for an app with no voice clients.
 const NO_CLIENTS: readonly VoiceClient[] = [];
@@ -142,8 +151,26 @@ export class VoiceServer extends Service {
     // Whether the UDP socket is listening: false before start(), and for good if it could not bind.
     private listening = false;
 
-    public constructor(private samplingRate: number, private voiceRecordingPath: string, private recordingVoiceData: boolean = false) {
+    // Where the Unity clients of each app are connected from: voice is relayed only from there.
+    private readonly unityClients: UnityClientAddresses;
+    // The trusted proxies whose voice has been said to be relayed unchecked, so it is said once for
+    // each. Bounded by REPORT_MAX_KEYS, as TRUSTED_PROXIES may name whole ranges.
+    private readonly uncheckedProxies = new Set<string>();
+    // The recordings of voice clients dropped because their Unity client left (see
+    // dropVoiceClients), for the next disconnect check, or stop(), to save.
+    private droppedRecordings: VoiceClient[] = [];
+
+    // `unityClients`: TCPServerProxy. `trustProxy`: TRUSTED_PROXIES, whose voice is relayed unchecked.
+    public constructor(
+        private samplingRate: number,
+        private voiceRecordingPath: string,
+        private recordingVoiceData: boolean,
+        unityClients: UnityClientSource,
+        private trustProxy: TrustProxy = trustNoProxy
+    ) {
         super();
+        this.unityClients = new UnityClientAddresses(unityClients);
+        this.unityClients.left$.subscribe(({ address, appId }) => this.dropVoiceClients(address, appId));
     }
 
     // For the admin UI's server info.
@@ -210,6 +237,15 @@ export class VoiceServer extends Service {
             // Current voice client
             let voiceClient = this.clients.get(clientKey);
 
+            // Checked for a sender that is new or changes app. One already let in needs no check:
+            // it is dropped as soon as the Unity client it was let in for leaves (dropVoiceClients).
+            let throughProxy = voiceClient?.throughProxy ?? false;
+            if (!voiceClient || voiceClient.appId !== appId) {
+                const admission = this.admit(remote.address, appId, clientKey, nowMillis);
+                if (!admission) return;
+                throughProxy = admission === 'proxy';
+            }
+
             // Add to clients if new client
             if (!voiceClient) {
                 voiceClient = {
@@ -224,11 +260,13 @@ export class VoiceServer extends Service {
                     codec,
                     recordingStartDate: now,
                     recordingData: new GrowableInt16Buffer(),
+                    throughProxy,
                 };
                 this.clients.set(clientKey, voiceClient);
                 this.appClients = undefined;
                 this.logDebug(
-                    `New voice client connected from ${remote.address}:${remote.port} ID: ${userId} App: ${formatAppId(appId)} Codec: ${codec === VoiceCodec.OPUS ? 'Opus' : 'PCM'}`,
+                    `New voice client connected from ${remote.address}:${remote.port} ID: ${userId} App: ${formatAppId(appId)} Codec: ${codec === VoiceCodec.OPUS ? 'Opus' : 'PCM'}`
+                        + (throughProxy ? ' (through a trusted proxy, unchecked)' : ''),
                     CONNECTION_LINE
                 );
                 if (this.recordingVoiceData) {
@@ -239,6 +277,7 @@ export class VoiceServer extends Service {
                 // Its app name changed: from now on it hears, and is heard by, the new app.
                 this.logDebug(`Voice client ${remote.address}:${remote.port} ID: ${voiceClient.userId} moved from app ${formatAppId(voiceClient.appId)} to app ${formatAppId(appId)}`);
                 voiceClient.appId = appId;
+                voiceClient.throughProxy = throughProxy;
                 this.appClients = undefined;
             }
 
@@ -319,7 +358,8 @@ export class VoiceServer extends Service {
         // the two from writing at once; the clients it is saving are no longer in the map.
         await this.savingRecordings;
 
-        const pendingRecordings = Array.from(this.clients.values()).filter(client => client.recordingData.length > 0);
+        const pendingRecordings = this.droppedRecordings.concat(Array.from(this.clients.values()).filter(client => client.recordingData.length > 0));
+        this.droppedRecordings = [];
         this.clients.clear();
         this.appClients = undefined;
         if (pendingRecordings.length === 0) return;
@@ -328,6 +368,55 @@ export class VoiceServer extends Service {
         for (const client of pendingRecordings) {
             await this.saveRecording(client);
         }
+    }
+
+    // Whether a packet from `address` for the app `appId` may be relayed, and its sender be relayed
+    // to. Anyone can compute an app's id from its name, and forge a packet's source address. While
+    // every sender was let in, one forged packet every 2 s had this server stream an app's voice to
+    // whatever address it named. Now a sender has to be at the address of a Unity client of the
+    // app, which takes a TCP connection from there.
+    private admit(address: string, appId: number, source: string, nowMillis: number): Admission | undefined {
+        if (this.unityClients.has(normalizeAddress(address), appId)) return 'unity';
+
+        // Behind a proxy every voice packet comes from the proxy's address, which matches no Unity
+        // client: nothing can be checked there.
+        if (this.trustProxy(address, 0)) {
+            this.reportUncheckedProxy(address);
+            return 'proxy';
+        }
+
+        this.reportNoUnityClient(source, address, appId, nowMillis);
+        return undefined;
+    }
+
+    // The last Unity client of the app `appId` at `address` has left. The voice clients it let in
+    // stop receiving now rather than once they go quiet: one that kept sending, forged packets
+    // included, would otherwise keep receiving the app's voice for as long as it liked.
+    private dropVoiceClients(address: string, appId: number): void {
+        for (const [key, client] of this.clients) {
+            if (client.throughProxy || client.appId !== appId || normalizeAddress(client.ip) !== address) continue;
+
+            this.clients.delete(key);
+            this.appClients = undefined;
+            this.logDebug(`Voice client ${client.ip}:${client.port} disconnected ID: ${client.userId}: `
+                + `no Unity client of app ${formatAppId(appId)} is connected from ${address} any more`, CONNECTION_LINE);
+            if (client.recordingData.length > 0) this.droppedRecordings.push(client);
+        }
+    }
+
+    private reportNoUnityClient(source: string, address: string, appId: number, nowMillis: number): void {
+        if (!this.claimReport(source, nowMillis)) return;
+
+        this.logWarning(`Ignoring voice packet from ${source} for app ${formatAppId(appId)}: no Unity client of that app is connected from ${address}`
+            + ` (further ones from this source are not reported for ${REPORT_INTERVAL_MILLIS / 1000}s)`);
+    }
+
+    private reportUncheckedProxy(address: string): void {
+        if (this.uncheckedProxies.has(address) || this.uncheckedProxies.size >= REPORT_MAX_KEYS) return;
+        this.uncheckedProxies.add(address);
+
+        this.logInfo(`Relaying voice from ${address} unchecked: it is in TRUSTED_PROXIES, and voice through a proxy cannot be matched `
+            + 'to a Unity client\'s address. Logged once per address.');
     }
 
     private reportMalformedPacket(source: string, reason: string, nowMillis: number): void {
@@ -393,7 +482,9 @@ export class VoiceServer extends Service {
         if (this.savingRecordings) return;
 
         const now = Date.now();
-        const pendingRecordings: VoiceClient[] = [];
+        // Starting with those dropped since the last check because their Unity client left.
+        const pendingRecordings = this.droppedRecordings;
+        this.droppedRecordings = [];
 
         for (const [key, value] of this.clients) {
             // Remove inactive clients
