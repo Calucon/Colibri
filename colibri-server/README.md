@@ -96,6 +96,7 @@ data, and read the log, the connected clients and the server settings. Run the s
 ```sh
 npm ci && npm run watch   # development server, recompiles and reloads on changes
 npm test                  # unit tests
+npm run demo              # synthetic clients against a running server, for the admin UI
 ```
 
 [All scripts](docs/guide.md#development). Wire protocol: [docs/protocol.md](docs/protocol.md).

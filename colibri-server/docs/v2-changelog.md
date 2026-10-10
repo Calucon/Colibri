@@ -234,6 +234,8 @@ this is the server's full detail.
   landed) and `lodash` (also from the admin UI, see [Admin UI](#admin-ui)).
 - Version bumped `1.3.1` → `2.0.0`; dropped the blanket `eslint-disable no-unused-vars` in `main.ts`
   and cleaned up its unused imports.
+- `npm run demo` runs synthetic Unity and web clients in two apps against a server, so the admin UI has
+  data to show without headsets ([Development](guide.md#development)).
 
 ### Hot-path performance
 

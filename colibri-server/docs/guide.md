@@ -429,7 +429,7 @@ Four pages, all read only: nothing on them changes, deletes or disconnects anyth
 the server over the Socket.IO channel `colibri::admin` ([Admin UI channel](protocol.md#admin-ui-channel)).
 The server sends a page its data at most once a second, with bounded sizes. While no page is open, it
 only keeps each client's latency samples and message rates of the last 2 minutes, which a page shows as
-soon as it opens.
+soon as it opens. `npm run demo` fills the pages with synthetic clients ([Development](#development)).
 
 - **Log:** the [log](#logs), filtered by app and level, with a search over the loaded lines. *Sync
   traffic* shows the `broadcast::` messages between clients; *Connections* off leaves out the routine
@@ -615,6 +615,17 @@ package to upgrade, at most once a minute per address ([Version checking](protoc
     the same TLS options.
 - `npm run test:stressecho`: raw TCP client that answers the probes of colibri-unity's Network Stress
   sample, so one Unity editor can measure round trips (`npm run test:stressecho -- [app] [seconds]`).
+- `npm run demo`: synthetic clients against a running server, so the admin UI has data to show without
+  headsets. Two apps: `ArchViz` (a Unity editor, Quest 3, Quest 2 and a web dashboard) and `MuseumGuide`
+  (Quest Pro and a web kiosk), with avatars synced at 30 Hz, log lines of every level including an
+  exception, annotations added and deleted, and a headset that leaves and rejoins. The scene repeats
+  every 3 minutes, and clients reconnect after a server restart, so it can run for hours. The server
+  receives up to about 250 messages a second from them and sends up to about 550.
+  - `-- --minutes <n>`: stop after n minutes. Default: run until Ctrl+C.
+  - `-- --apps <n>`: n copies of both apps, the others named `ArchViz-2`, `MuseumGuide-2` and so on,
+    each with the same load.
+  - `--web-port <port>`, `--tcp-port <port>`: default `WEBSERVER_PORT` and `TCP_PORT`. `--host`, `--tls`
+    and `--insecure` as for `test:tcpclient`.
 - `npm run test:docker`: requires Docker. Builds the image, or uses `COLIBRI_DOCKER_IMAGE`, and runs
   it in each deployment in the table. Pass deployment names to run only those.
 
