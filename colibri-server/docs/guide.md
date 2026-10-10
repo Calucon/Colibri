@@ -207,7 +207,9 @@ used HTTPS:
   PROXY protocol header, version 1 or 2, which names the Unity client
   ([PROXY protocol](protocol.md#proxy-protocol)). Other peers connect as before. nginx's header,
   version 1, does not say whether the proxy ended TLS, and the server skips the TLS details a
-  version 2 header can carry, so the admin UI shows these connections as unencrypted either way.
+  version 2 header can carry. Without a certificate, the Clients page shows these connections
+  without TLS either way, and the Server page's TCP row says *unencrypted here, proxy TLS not
+  reported*.
 - **Voice (UDP):** nginx's PROXY protocol covers TCP only, so voice sent through a proxy shows the
   proxy's address, and is relayed without the [voice check](#voice-relay). To keep the check,
   publish the voice port directly, as below, and keep the clients' addresses out of
@@ -514,9 +516,11 @@ soon as it opens. `npm run demo` fills the pages with synthetic clients ([Develo
   them: ports, `BASE_URL`, TLS, `TRUSTED_PROXIES`, `TCP_PROXY_PROTOCOL`, load limits, idle timeout,
   tombstones, voice and recording; without a certificate, and while a web client or admin page is
   connected through a [trusted proxy](#behind-a-reverse-proxy) that reports HTTPS, the web port as
-  *HTTP here, HTTPS at the proxy* and TLS as *Not on this server*; the TLS certificate's names,
-  issuer, validity and SHA-256 fingerprint, with a warning 30 days before it expires; and counts of
-  clients, apps, synchronized models and REST store values. Never certificate or key paths, key material or file contents.
+  *HTTP here, HTTPS at the proxy* and TLS as *Not on this server*; without a certificate and with
+  `TCP_PROXY_PROTOCOL` on, the TCP port as *unencrypted here, proxy TLS not reported*; the TLS
+  certificate's names, issuer, validity and SHA-256 fingerprint, with a warning 30 days before it
+  expires; and counts of clients, apps, synchronized models and REST store values. Never
+  certificate or key paths, key material or file contents.
 
   ![Server page](../img/admin-server.png)
 
