@@ -889,7 +889,7 @@ node colibri-unity/run-tests.mjs --tls        # plus the PlayMode suite again, o
 
 | Suite | Location | Description |
 |---|---|---|
-| EditMode | `Assets/Colibri/Tests/Editor/` | NUnit tests of the framing, JSON conversions, diagnostics, outage queue, message dispatch, `[Sync]` accessors (including the IL2CPP path), send-rate limit, connect timeout, build settings check, app-name warning, and the voice server address, packet format, packet queue, resampling, framing, decoding and playback buffer. Needs no server and runs wherever Unity runs. |
+| EditMode | `Assets/Colibri/Tests/Editor/` | NUnit tests of the framing, JSON conversions, diagnostics, outage queue, message dispatch, `[Sync]` accessors (including the IL2CPP path), send-rate limit, connect timeout, server address lookup with IPv6, Store URLs, build settings check, app-name warning, and the voice server address, sends, socket, packet format, packet queue, resampling, framing, decoding and playback buffer. Needs no server and runs wherever Unity runs. |
 | PlayMode | `Assets/Tests/` | A Unity client and a raw v3 peer against a running `colibri-server`. Reconnects go through a proxy the test can cut. Mismatch detection runs against a scripted stand-in server. |
 
 For PlayMode, the script starts colibri-server with `docker compose` and stops it afterwards. A

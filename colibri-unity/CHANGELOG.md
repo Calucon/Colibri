@@ -837,7 +837,8 @@ otherwise spend on their prototype, so:
   answers, cancelling one, and a refusal reported at once; `ServerAddressTests` IP addresses with
   and without brackets, the order a name's addresses are tried in, their shares of the connect
   timeout, and moving on from an address that refuses or does not answer, IPv6 then IPv4 on the
-  loopback; `VoicePacketQueueTests` voice packets from several receive threads at once, a listener
+  loopback; `StorePathTests` the escaping of the app name and the key in Store URLs, and the
+  brackets around an IPv6 server address there; `VoicePacketQueueTests` voice packets from several receive threads at once, a listener
   that throws, and the app id of an App Name the handshake changes; `OutboxTests` the 10 000-message
   cap, connected and not; `RemoteLoggingTests` the missing-lines note. In PlayMode, `SyncModelTests`
   and `SyncTransformTests` run the limit end to end (a burst, a limit of `0`, what is held going out
