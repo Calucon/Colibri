@@ -144,11 +144,15 @@ namespace HCIKonstanz.Colibri.Communication
 
         public void StartPlayback(short id)
         {
-            // Nothing for the id that plays already: each start added a listener, and started
+            // No second listener for the id that plays already: each start added one, and started
             // twice, the receiver played every packet twice. Another id replaces the one playing.
-            if (!playback.Start(id)) return;
-            playbackAudioSource.Play();
-            Debug.Log(DEBUG_HEADER + "Start voice playback with ID: " + id);
+            bool started = playback.Start(id);
+            // Also for the id that plays: Unity stops the AudioSource when its GameObject is
+            // deactivated, and with playOnAwake off it stays stopped when activated again.
+            if (!playbackAudioSource.isPlaying)
+                playbackAudioSource.Play();
+            if (started)
+                Debug.Log(DEBUG_HEADER + "Start voice playback with ID: " + id);
         }
 
         public void StopPlayback()

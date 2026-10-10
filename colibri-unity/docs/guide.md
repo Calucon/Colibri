@@ -812,8 +812,9 @@ and instantiates `VoiceReceiver` prefabs.
   it cannot decode Opus (macOS, iOS, the macOS Editor with Android as the build target), it drops
   Opus packets with one warning per receiver and still plays PCM.
 - With *Fast Forward Playback* on, `VoiceReceiver` drops the oldest audio once more than *Fast
-  Forward Latency Milliseconds* (default 100) waits, and keeps the last packet. `StartPlayback` with
-  the id that plays changes nothing. Another id replaces it.
+  Forward Latency Milliseconds* (default 100) waits, and keeps the last packet.
+- `StartPlayback` with the id that plays only restarts the `AudioSource` if Unity stopped it, as it
+  does when the GameObject is deactivated. Another id replaces the one playing.
 - `VoiceBroadcast` resamples the microphone to the *Voice Sampling Rate* and sends frames of *Frame
   Size Milliseconds* at that rate: 960 samples for the default 20 ms at 48 kHz.
 - The voice plays at the `VoiceReceiver`'s position. For spatial audio, enable *Spatialize* on the

@@ -421,8 +421,9 @@ rationale, migration steps, and what the Editor verification did and did not cov
   now and then threw; it is a lock-free ring now, and the audio thread no longer allocates.
   Fast-forward threw on a frame longer than its latency, and at 48 kHz acted at half the *Fast
   Forward Latency Milliseconds* set; the latency now counts at the output rate. `StartPlayback`
-  twice with one voice id played every packet twice. It now changes nothing, another id replaces
-  the one playing, and `StopPlayback` when nothing plays does nothing.
+  twice with one voice id played every packet twice. The second call now only restarts the
+  `AudioSource` if Unity stopped it, as it does when the GameObject is deactivated. Another id
+  replaces the one playing, and `StopPlayback` when nothing plays does nothing.
 - **`Store`** serializes with Newtonsoft instead of `JsonUtility`, which cannot handle dictionaries,
   properties, or top-level arrays and so silently disagreed with what `Sync` can carry. What that
   costs a 1.x project is under Breaking changes. A value that cannot be converted, or a saved
