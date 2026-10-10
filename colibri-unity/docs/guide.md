@@ -638,8 +638,8 @@ An IPv6 address works with or without brackets. `Store` URLs get the brackets ei
 the certificate is checked against the server address as entered.
 
 colibri-server listens on IPv4 only by default. For a server name with only IPv6 addresses, such as
-a server whose IPv4 address is behind carrier-grade NAT, the server needs `TCP_HOST=::` and
-`VOICE_HOST=::`, or a proxy listening on IPv6 ([server
+a server whose IPv4 address is behind carrier-grade NAT, the server needs `TCP_HOST=::`,
+`VOICE_HOST=::` and, for `Store`, `WEBSERVER_HOST=::`, or a proxy listening on IPv6 ([server
 guide](../../colibri-server/docs/guide.md#configuration)). Voice prefers IPv4 ([Voice
 chat](#voice-chat)).
 
