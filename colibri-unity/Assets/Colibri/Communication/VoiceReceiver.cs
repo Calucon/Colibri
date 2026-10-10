@@ -82,9 +82,17 @@ namespace HCIKonstanz.Colibri.Communication
             }
         }
 
-        private void OnApplicationQuit()
+        private void OnDestroy()
         {
-            // Null unless an Opus packet has come in and Opus runs here
+            // Destroyed while playing, as VoiceManager destroys the receiver of a client it has not
+            // heard from: the connection kept delivering to it, and its buffer, which nothing
+            // played any more, grew with every packet.
+            if (playback && voiceServerConnection != null)
+                voiceServerConnection.RemoveVoicePacketListener(remoteUserId, OnSamplesDataReceived);
+            playback = false;
+
+            // Here rather than in OnApplicationQuit, so that a receiver destroyed before then frees
+            // it too. Null unless an Opus packet has come in and Opus runs here.
             opusDecoder?.Destroy();
         }
 
