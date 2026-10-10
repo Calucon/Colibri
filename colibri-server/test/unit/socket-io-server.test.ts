@@ -3,7 +3,7 @@ import { createServer, Server as HttpServer } from 'http';
 import { AddressInfo } from 'net';
 import { Subscription, filter, firstValueFrom, tap } from 'rxjs';
 import { io as connectClient, Socket as ClientSocket } from 'socket.io-client';
-import { SocketIOServer } from '../../src/server/modules/networking/socket-io-server.js';
+import { SocketIoClient, SocketIOServer } from '../../src/server/modules/networking/socket-io-server.js';
 import { MAX_FRAME_LENGTH, PROTOCOL_VERSION, encodeMessageFrame } from '../../src/server/modules/networking/protocol.js';
 import { MAX_HELD_OBJECTS } from '../../src/server/modules/networking/inbound-limits.js';
 import { Service } from '../../src/server/modules/core/service.js';
@@ -523,12 +523,13 @@ describe('SocketIOServer behind a reverse proxy', () => {
     const connect = function (
         forwardedFor: string | undefined,
         transport: 'websocket' | 'polling' = 'websocket',
-        version = PROTOCOL_VERSION
+        version = PROTOCOL_VERSION,
+        headers: Record<string, string> = {}
     ): Promise<ColibriEvent> {
         const socket = connectClient(`http://127.0.0.1:${port}`, {
             query: { app: 'appA', version },
             transports: [transport],
-            extraHeaders: forwardedFor === undefined ? {} : { 'X-Forwarded-For': forwardedFor },
+            extraHeaders: { ...(forwardedFor === undefined ? {} : { 'X-Forwarded-For': forwardedFor }), ...headers },
             reconnection: false,
             forceNew: true,
         });
@@ -547,6 +548,43 @@ describe('SocketIOServer behind a reverse proxy', () => {
             expect(connected.map(c => c.name)).toEqual(['198.51.100.7']);
             expect(logged(LogLevel.Debug)).toContainEqual(expect.stringMatching(/^New client '.+' \(.+\) connected to app ".+" from 198\.51\.100\.7 through 127\.0\.0\.1$/));
         });
+
+        it('counts a client as TLS at the proxy when a trusted proxy\'s X-Forwarded-Proto says https', async () => {
+            await start(compileTrustedProxies(['loopback']));
+
+            await connect('198.51.100.7', transport, PROTOCOL_VERSION, { 'X-Forwarded-Proto': 'https' });
+            await connect('198.51.100.8', transport, PROTOCOL_VERSION, { 'X-Forwarded-Proto': 'http' });
+
+            expect(tlsAtProxy()).toEqual({ '198.51.100.7': true, '198.51.100.8': false });
+        });
+    });
+
+    const tlsAtProxy = (): Record<string, boolean> =>
+        Object.fromEntries((connected as SocketIoClient[]).map(c => [c.name, c.tlsAtProxy]));
+
+    it('ignores X-Forwarded-Proto from a peer it does not trust', async () => {
+        await start(compileTrustedProxies(['10.0.0.1']));
+
+        await connect(undefined, 'websocket', PROTOCOL_VERSION, { 'X-Forwarded-Proto': 'https' });
+
+        expect(tlsAtProxy()).toEqual({ '127.0.0.1': false });
+    });
+
+    it('takes the scheme the proxy appended, not one the client sent ahead of it', async () => {
+        await start(compileTrustedProxies(['loopback']));
+
+        await connect('198.51.100.7', 'websocket', PROTOCOL_VERSION, { 'X-Forwarded-Proto': 'https, http' });
+        await connect('198.51.100.8', 'websocket', PROTOCOL_VERSION, { 'X-Forwarded-Proto': 'http, HTTPS' });
+
+        expect(tlsAtProxy()).toEqual({ '198.51.100.7': false, '198.51.100.8': true });
+    });
+
+    it('does not count a client as TLS at the proxy without X-Forwarded-Proto', async () => {
+        await start(compileTrustedProxies(['loopback']));
+
+        await connect('198.51.100.7');
+
+        expect(tlsAtProxy()).toEqual({ '198.51.100.7': false });
     });
 
     it('ignores X-Forwarded-For from a peer it does not trust', async () => {
