@@ -17,6 +17,8 @@ describe('formatJson', () => {
         ['toJSON and boxed values', { when: new Date(0), n: new Number(3), s: new String('x'), b: new Boolean(false) }],
         ['integer keys first', { b: 1, 2: 'two', a: 3, 1: 'one' }],
         ['a bare array', [1, 'two', null]],
+        ['runs of scalars between other values', [1, 2.5, -0, NaN, true, null, 'x', { y: [3, 4] }, [5, [6]], undefined, 7, false, () => 1, Infinity]],
+        ['a long array of numbers', Array.from({ length: 2000 }, (_, i) => Math.sin(i) * 1e3)],
         ['a bare string', 'text'],
         ['a bare number', 42],
     ];

@@ -92,6 +92,14 @@ export class ModelMeasures {
     }
 }
 
+// Numbers, booleans and null: what a long array of samples or vertices holds.
+const isScalar = function (value: unknown): boolean {
+    return typeof value === 'number' || typeof value === 'boolean' || value === null;
+};
+
+// How many scalars in a row one JSON.stringify call writes at most: a few KiB.
+const SCALAR_RUN = 512;
+
 // What JSON.stringify leaves out of an object and writes as null in an array.
 const isSkipped = function (value: unknown): boolean {
     return value === undefined || typeof value === 'function' || typeof value === 'symbol';
@@ -134,15 +142,28 @@ export const formatJson = function (value: unknown, maxLength: number): Formatte
 
     const writeValue = (item: unknown, depth: number): boolean => {
         if (typeof item === 'string') return writeString(item);
+        // as JSON.stringify writes a number, without the call
+        if (typeof item === 'number') return write(Number.isFinite(item) ? String(item) : 'null');
         if (item === null || typeof item !== 'object') return write(JSON.stringify(item) ?? 'null');
 
         if (Array.isArray(item)) {
             if (item.length === 0) return write('[]');
             if (write('[')) return true;
-            for (let i = 0; i < item.length; i++) {
+            const separator = ',' + newline(depth + 1);
+            for (let i = 0; i < item.length;) {
+                const before = i > 0 ? separator : newline(depth + 1);
+                // A run of scalars is written by JSON.stringify, several times faster at it, and
+                // then put one to a line: none of them holds a comma.
+                let end = i;
+                while (end < item.length && end - i < SCALAR_RUN && isScalar(item[end])) end++;
+                if (end > i) {
+                    if (write(before + JSON.stringify(item.slice(i, end)).slice(1, -1).replace(/,/g, separator))) return true;
+                    i = end;
+                    continue;
+                }
                 const element = prepare(item[i], i);
-                if (write((i > 0 ? ',' : '') + newline(depth + 1))) return true;
-                if (isSkipped(element) ? write('null') : writeValue(element, depth + 1)) return true;
+                if (write(before) || (isSkipped(element) ? write('null') : writeValue(element, depth + 1))) return true;
+                i += 1;
             }
             return write(newline(depth) + ']');
         }
