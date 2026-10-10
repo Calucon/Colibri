@@ -30,6 +30,11 @@ namespace HCIKonstanz.Colibri.Networking.Protocol
         /// </summary>
         internal const int MaxFrameSamples = (65507 - VoicePacketCodec.HeaderSize) / 2;
 
+        // What Opus encodes (RFC 6716): these sampling rates, and frames of 2.5, 5, 10, 20, 40 or
+        // 60 ms, here in half milliseconds. It refuses every other frame.
+        private static readonly int[] OpusSamplingRates = { 8000, 12000, 16000, 24000, 48000 };
+        private static readonly int[] OpusFrameHalfMilliseconds = { 5, 10, 20, 40, 80, 120 };
+
         // Null when the audio is recorded at the server's rate already.
         private readonly StreamingResampler resampler;
 
@@ -79,6 +84,20 @@ namespace HCIKonstanz.Colibri.Networking.Protocol
         /// <summary>The samples in a frame of <paramref name="frameMilliseconds"/> at <paramref name="samplingRate"/>, rounded down.</summary>
         internal static int FrameSampleCount(int samplingRate, int frameMilliseconds)
             => (int)Math.Max(0, Math.Min(int.MaxValue, (long)samplingRate * frameMilliseconds / 1000));
+
+        /// <summary>Whether Opus encodes frames of <paramref name="frameSamples"/> samples at <paramref name="samplingRate"/>.</summary>
+        internal static bool IsOpusFrame(int samplingRate, int frameSamples)
+        {
+            if (Array.IndexOf(OpusSamplingRates, samplingRate) < 0)
+                return false;
+
+            foreach (var halfMilliseconds in OpusFrameHalfMilliseconds)
+            {
+                if ((long)frameSamples * 2000 == (long)samplingRate * halfMilliseconds)
+                    return true;
+            }
+            return false;
+        }
 
         /// <summary>Adds the next recorded samples, and sends every frame they fill.</summary>
         internal void Add(float[] samples)

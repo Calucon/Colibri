@@ -219,5 +219,21 @@ namespace HCIKonstanz.Colibri.Tests
         {
             Assert.That(VoiceFramer.FrameSampleCount(samplingRate, frameMilliseconds), Is.EqualTo(expected));
         }
+
+        [TestCase(48000, 960, true)]
+        [TestCase(48000, 120, true, Description = "2.5 ms")]
+        [TestCase(48000, 2880, true, Description = "60 ms")]
+        [TestCase(8000, 160, true)]
+        [TestCase(12000, 240, true)]
+        [TestCase(16000, 320, true)]
+        [TestCase(24000, 480, true)]
+        [TestCase(48000, 958, false, Description = "what 20 ms at 44.1 kHz resampled to")]
+        [TestCase(48000, 1440, false, Description = "30 ms")]
+        [TestCase(44100, 882, false, Description = "a rate Opus does not encode")]
+        [TestCase(32000, 640, false)]
+        public void OpusTakesItsSamplingRatesAndFrameDurationsOnly(int samplingRate, int frameSamples, bool expected)
+        {
+            Assert.That(VoiceFramer.IsOpusFrame(samplingRate, frameSamples), Is.EqualTo(expected));
+        }
     }
 }

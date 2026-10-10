@@ -137,10 +137,7 @@ namespace HCIKonstanz.Colibri.Communication
             voiceServerConnection = VoiceServerConnection.Instance;
 
             // Init opus
-            if (UseOpusCodec)
-            {
-                opusEncoder = new OpusEncoder(serverSamplingRate, 1, OpusApplication.VOIP);
-            }
+            opusEncoder = UseOpusCodec ? CreateOpusEncoder() : null;
 
             isInitialized = true;
             Debug.Log(DEBUG_HEADER + "Ready for Voice Broadcast");
@@ -191,6 +188,27 @@ namespace HCIKonstanz.Colibri.Communication
                 Microphone.End(Microphone.devices[MicrophoneID]);
 #endif
             }
+        }
+
+        /// <summary>
+        /// The Opus encoder, or null, having said why, when Opus cannot encode this configuration or
+        /// does not run here. Voice then goes out as PCM.
+        /// </summary>
+        private OpusEncoder CreateOpusEncoder()
+        {
+            if (!VoiceFramer.IsOpusFrame(serverSamplingRate, frameSize))
+            {
+                Debug.LogWarning(DEBUG_HEADER + "Use Opus Codec is on, but Opus encodes only 8, 12, 16, 24 or 48 kHz in frames of 2.5, 5, 10, 20, 40 or 60 ms, not frames of " + frameSize + " samples at " + serverSamplingRate + " Hz. Sending voice as PCM.");
+                return null;
+            }
+
+            if (!OpusEncoder.TryCreate(serverSamplingRate, 1, OpusApplication.VOIP, out OpusEncoder encoder, out string error))
+            {
+                Debug.LogWarning(DEBUG_HEADER + "Use Opus Codec is on, but " + error + ". Sending voice as PCM.");
+                return null;
+            }
+
+            return encoder;
         }
 
         private void SendRecordedSamples()
