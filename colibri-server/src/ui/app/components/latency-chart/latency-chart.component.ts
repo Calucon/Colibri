@@ -4,11 +4,8 @@ import * as d3 from 'd3';
 import { BoxplotStats, boxplot, boxplotStats, boxplotSymbolDot } from './boxplot';
 
 const margin = { top: 12, right: 12, bottom: 28, left: 44 };
-// we ping every 100ms and store the last 1000 values (and query every 1s = 1000ms)
-const timeRange = 110 * 1000;
-// Until the samples cover timeRange, the time axis spans what they cover, but at least this: the
-// first two minutes were a sliver at the right edge.
-const minTimeRange = 10 * 1000;
+/** What the Clients page's charts show: the server sends this much of the past when the page opens. */
+export const TIME_RANGE_MILLIS = 120 * 1000;
 const barWidth = 24;
 const boxplotPadding = 5;
 // A box narrower than this is not readable; fewer than this many pixels of chart get no boxes.
@@ -32,6 +29,15 @@ const colors = [
 /** The colour of a client's slot (ColibriClient.slot), in the chart and its table. */
 export const clientColor = function (slot: number): string {
     return colors[slot % colors.length];
+};
+
+/**
+ * The time axis at `now`: always the whole TIME_RANGE_MILLIS, and the second it slides left by until
+ * the next update. It used to grow with the samples, from 10 s; the server now sends the window's
+ * samples when the page opens.
+ */
+export const timeDomain = function (now: number): [number, number] {
+    return [ now - TIME_RANGE_MILLIS - 1000, now ];
 };
 
 const timeLabel = function (value: Date | d3.NumberValue): string {
@@ -124,8 +130,6 @@ export class LatencyChartComponent implements AfterViewInit, OnDestroy {
     private intervalTimer: number | null = null;
 
     private lineX: d3.ScaleTime<number, number, never> = d3.scaleTime();
-    /** The time of the first sample shown, while there are any. */
-    private since: number | undefined;
 
     ngAfterViewInit(): void {
         this.initChart();
@@ -216,27 +220,14 @@ export class LatencyChartComponent implements AfterViewInit, OnDestroy {
                 .attr('transform', `translate(${margin.left + linechartWidth}, ${margin.top})`);
         }
 
-        // Not the oldest sample still kept: a client keeps 100 s of them, less than timeRange.
-        const first = d3.min(this.clients(), client => client.latency[0]?.[0]);
-        this.since = first === undefined ? undefined : Math.min(this.since ?? first, first);
-        const start = Math.max(now - timeRange, Math.min(this.since ?? now, now - minTimeRange));
-        const filling = start > now - timeRange;
-
         const axis = d3.axisBottom(this.lineX)
             .ticks(Math.max(2, Math.floor(linechartWidth / 80)))
             .tickFormat(timeLabel);
         this.lineChartSvg?.interrupt().attr('transform', 'translate(0, 0)');
         this.axisBottom?.interrupt();
 
-        // While the samples do not cover timeRange yet, the scale grows with them each second.
-        if (filling) {
-            this.lineX = d3.scaleTime().domain([ start, now ]).range([0, linechartWidth]);
-            this.axisBottom?.call(axis.scale(this.lineX));
-            return;
-        }
-
         this.lineX = d3.scaleTime()
-            .domain([ now - timeRange - 1000, now ])
+            .domain(timeDomain(now))
             .range([0, linechartWidth]);
 
         // slides left until the next (expected) update
@@ -244,7 +235,7 @@ export class LatencyChartComponent implements AfterViewInit, OnDestroy {
             ?.transition()
             .ease(d3.easeLinear)
             .duration(1000)
-            .attr('transform', `translate(${-this.lineX(now - timeRange)}, 0)`);
+            .attr('transform', `translate(${-this.lineX(now - TIME_RANGE_MILLIS)}, 0)`);
 
         this.axisBottom
             ?.transition()

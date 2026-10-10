@@ -174,9 +174,9 @@ describe('ClientsComponent', () => {
         expect(chart().direction()).toBe('in');
         expect(chart().app()).toBe('demo');
         expect(button('In').getAttribute('aria-pressed')).toBe('true');
-        expect(component.throughputHint()).toBe('Messages per second each client sent, stacked, over the last 110 s');
+        expect(component.throughputHint()).toBe('Messages per second each client sent, stacked, over the last 120 s');
         chart().total.set(42.25);
-        expect(component.throughputHint()).toBe('Messages per second each client sent, stacked, over the last 110 s; total now 42.3');
+        expect(component.throughputHint()).toBe('Messages per second each client sent, stacked, over the last 120 s; total now 42.3');
 
         // setDirection, as the button's click: a DOM click in this harness ticks recursively (NG0101)
         await component.setDirection('out');
@@ -186,7 +186,7 @@ describe('ClientsComponent', () => {
         expect(chart().direction()).toBe('out');
         expect(button('Out').getAttribute('aria-pressed')).toBe('true');
         expect(button('In').getAttribute('aria-pressed')).toBe('false');
-        expect(component.throughputHint()).toBe('Messages per second sent to each client, stacked, over the last 110 s; total now 42.3');
+        expect(component.throughputHint()).toBe('Messages per second sent to each client, stacked, over the last 120 s; total now 42.3');
 
         await component.setDirection('in');
         expect(TestBed.inject(Router).url).toBe('/clients?app=demo');

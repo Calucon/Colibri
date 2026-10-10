@@ -232,7 +232,7 @@ export class ClientsComponent {
     throughputHint = computed(() => {
         const what = this.direction() === 'in' ? 'Messages per second each client sent' : 'Messages per second sent to each client';
         const total = this.throughputChart()?.total() ?? null;
-        return `${what}, stacked, over the last 110 s${total === null ? '' : `; total now ${decimal(total)}`}`;
+        return `${what}, stacked, over the last 120 s${total === null ? '' : `; total now ${decimal(total)}`}`;
     });
 
     empty = computed(() => {

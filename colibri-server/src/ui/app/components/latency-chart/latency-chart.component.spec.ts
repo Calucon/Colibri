@@ -1,4 +1,11 @@
-import { boxLayout, perSecond } from './latency-chart.component';
+import { TIME_RANGE_MILLIS, boxLayout, perSecond, timeDomain } from './latency-chart.component';
+
+describe('timeDomain', () => {
+    it('spans the whole 120 s window, and the second it slides, however few samples there are', () => {
+        expect(TIME_RANGE_MILLIS).toBe(120_000);
+        expect(timeDomain(1_700_000_000_000)).toEqual([ 1_700_000_000_000 - 121_000, 1_700_000_000_000 ]);
+    });
+});
 
 describe('perSecond', () => {
     it('draws a client as the median of each second, at the samples\' mean time', () => {

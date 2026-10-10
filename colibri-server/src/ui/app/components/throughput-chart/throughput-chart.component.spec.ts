@@ -7,9 +7,9 @@ const sample = (at: number, clients: Record<string, { app?: string; in: number |
 });
 
 describe('addSample', () => {
-    it('keeps the samples of the last 112 s', () => {
+    it('keeps the samples of the last 122 s', () => {
         const samples = [ sample(0, {}), sample(5_000, {}), sample(100_000, {}) ];
-        expect(addSample(samples, sample(115_000, {})).map(s => s.at)).toEqual([ 5_000, 100_000, 115_000 ]);
+        expect(addSample(samples, sample(125_000, {})).map(s => s.at)).toEqual([ 5_000, 100_000, 125_000 ]);
     });
 });
 

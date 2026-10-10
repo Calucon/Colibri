@@ -1,14 +1,11 @@
 import { AfterViewInit, ChangeDetectionStrategy, Component, ElementRef, Injector, OnDestroy, computed, effect, inject, input, signal, untracked, viewChild } from '@angular/core';
 import * as d3 from 'd3';
 import { ClientService, ClientsSnapshot } from '../../services';
-import { clientColor } from '../latency-chart/latency-chart.component';
+import { TIME_RANGE_MILLIS, clientColor, timeDomain } from '../latency-chart/latency-chart.component';
 
 const margin = { top: 12, right: 12, bottom: 28, left: 44 };
-// the span of the latency chart above it
-const timeRange = 110 * 1000;
-const minTimeRange = 10 * 1000;
 // A second more than the chart shows, so the oldest area reaches its left edge.
-const keepFor = timeRange + 2000;
+const keepFor = TIME_RANGE_MILLIS + 2000;
 // Snapshots come every second; a longer pause (a reconnect, a hidden tab) breaks the areas.
 const maxGap = 2500;
 
@@ -145,8 +142,8 @@ export class ThroughputChartComponent implements AfterViewInit, OnDestroy {
     });
 
     label = computed(() => this.direction() === 'in'
-        ? 'Messages per second each connected client sent, stacked, over the last 110 seconds'
-        : 'Messages per second sent to each connected client, stacked, over the last 110 seconds');
+        ? 'Messages per second each connected client sent, stacked, over the last 120 seconds'
+        : 'Messages per second sent to each connected client, stacked, over the last 120 seconds');
 
     private svg: d3.Selection<SVGSVGElement, unknown, null, undefined> | null = null;
     private clipRect: d3.Selection<SVGRectElement, unknown, null, undefined> | null = null;
@@ -250,12 +247,10 @@ export class ThroughputChartComponent implements AfterViewInit, OnDestroy {
         this.axisBottom?.attr('transform', `translate(${margin.left}, ${this.height - margin.bottom})`);
     }
 
-    // The time axis as in the latency chart: it grows with the samples, then slides left each second.
+    // The time axis as in the latency chart: the whole window, sliding left each second.
     private animateChart(): void {
         const plotWidth = Math.max(0, this.width - margin.left - margin.right);
         const now = Date.now();
-        const first = this.stack().rows[0]?.at;
-        const start = Math.max(now - timeRange, Math.min(first ?? now, now - minTimeRange));
 
         const axis = d3.axisBottom(this.x)
             .ticks(Math.max(2, Math.floor(plotWidth / 80)))
@@ -263,14 +258,8 @@ export class ThroughputChartComponent implements AfterViewInit, OnDestroy {
         this.areaSvg?.interrupt().attr('transform', 'translate(0, 0)');
         this.axisBottom?.interrupt();
 
-        if (start > now - timeRange) {
-            this.x = d3.scaleTime().domain([ start, now ]).range([0, plotWidth]);
-            this.axisBottom?.call(axis.scale(this.x));
-            return;
-        }
-
         this.x = d3.scaleTime()
-            .domain([ now - timeRange - 1000, now ])
+            .domain(timeDomain(now))
             .range([0, plotWidth]);
 
         // slides left until the next (expected) update
@@ -278,7 +267,7 @@ export class ThroughputChartComponent implements AfterViewInit, OnDestroy {
             ?.transition()
             .ease(d3.easeLinear)
             .duration(1000)
-            .attr('transform', `translate(${-this.x(now - timeRange)}, 0)`);
+            .attr('transform', `translate(${-this.x(now - TIME_RANGE_MILLIS)}, 0)`);
 
         this.axisBottom
             ?.transition()
