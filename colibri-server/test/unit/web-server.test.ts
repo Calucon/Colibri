@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile } from 'fs/promises';
 import * as http from 'http';
 import * as https from 'https';
 import { AddressInfo } from 'net';
-import { tmpdir } from 'os';
+import { networkInterfaces, tmpdir } from 'os';
 import * as path from 'path';
 import * as tls from 'tls';
 import { Subject, Subscription, filter, firstValueFrom } from 'rxjs';
@@ -426,6 +426,35 @@ describe('WebServer with a BASE_URL', () => {
             const page = await fetch(`${url}/colibri/log`);
             expect(page.status).toBe(200);
             expect(await page.text()).toContain('<title>Colibri</title>');
+        } finally {
+            const closed = once(httpServer, 'close');
+            webServer.stop();
+            httpServer.closeAllConnections();
+            await closed;
+            await rm(webRoot, { recursive: true, force: true });
+        }
+    });
+});
+
+const hasIPv6Loopback = Object.values(networkInterfaces()).some(addresses => addresses?.some(a => a.address === '::1'));
+
+// WEBSERVER_HOST=:: for a server reached over IPv6, where clients on IPv4 still connect.
+describe.skipIf(!hasIPv6Loopback)('WebServer on an IPv6 WEBSERVER_HOST', () => {
+    it('serves the admin UI over IPv6, and over IPv4 too on ::', async () => {
+        const webRoot = await mkdtemp(path.join(tmpdir(), 'colibri-web-server-ipv6-'));
+        await writeFile(path.join(webRoot, 'index.html'), '<!doctype html><title>Colibri</title>', 'utf8');
+        const webServer = new WebServer('::', 0, webRoot, '');
+        const httpServer = webServer.start();
+        try {
+            await once(httpServer, 'listening');
+            const { port, family } = httpServer.address() as AddressInfo;
+            expect(family).toBe('IPv6');
+
+            for (const host of [ '[::1]', '127.0.0.1' ]) {
+                const page = await fetch(`http://${host}:${port}/`);
+                expect(page.status, host).toBe(200);
+                expect(await page.text(), host).toContain('<title>Colibri</title>');
+            }
         } finally {
             const closed = once(httpServer, 'close');
             webServer.stop();

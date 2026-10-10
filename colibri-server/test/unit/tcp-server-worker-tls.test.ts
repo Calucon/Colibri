@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } 
 import { once } from 'events';
 import { mkdtemp, rm } from 'fs/promises';
 import * as net from 'net';
-import { tmpdir } from 'os';
+import { networkInterfaces, tmpdir } from 'os';
 import * as path from 'path';
 import * as tls from 'tls';
 import { TCPServerWorker, TcpServerOptions } from '../../src/server/modules/networking/tcp-server-worker.js';
@@ -61,6 +61,8 @@ class Peer {
     }
 }
 
+const hasIPv6Loopback = Object.values(networkInterfaces()).some(addresses => addresses?.some(a => a.address === '::1'));
+
 const eventually = async function (condition: () => boolean, timeoutMillis = 3000): Promise<void> {
     const deadline = Date.now() + timeoutMillis;
     while (!condition()) {
@@ -83,9 +85,9 @@ describe('TCPServerWorker with TLS', () => {
     const logs = (level: LogLevel): string[] =>
         posted.filter(p => p.channel === 'log' && p.content.level === level).map(p => String(p.content.msg));
 
-    const start = async function (options: TcpServerOptions): Promise<void> {
+    const start = async function (options: TcpServerOptions, host = '127.0.0.1'): Promise<void> {
         worker.configure({ idleTimeoutMillis: 0, ...options });
-        worker.start(0, '127.0.0.1');
+        worker.start(0, host);
         await once(internals.server!, 'listening');
         port = (internals.server!.address() as net.AddressInfo).port;
     };
@@ -99,8 +101,8 @@ describe('TCPServerWorker with TLS', () => {
         return peer;
     };
 
-    const connectPlain = async function (): Promise<Peer> {
-        const socket = net.connect(port, '127.0.0.1');
+    const connectPlain = async function (host = '127.0.0.1'): Promise<Peer> {
+        const socket = net.connect(port, host);
         const peer = new Peer(socket);
         peers.push(peer);
         await once(socket, 'connect');
@@ -437,6 +439,21 @@ describe('TCPServerWorker with TLS', () => {
 
             await eventually(() => peer.count(FrameType.Heartbeat) > 0);
             expect(logs(LogLevel.Info)).toContain('Starting Colibri TCP server on 127.0.0.1:0');
+        });
+
+        // TCP_HOST=:: for a server reached over IPv6, where Unity clients on IPv4 still connect.
+        it.skipIf(!hasIPv6Loopback)('serves clients over IPv6 on an IPv6 TCP_HOST, and IPv4 clients too on ::', async () => {
+            await start({}, '::');
+            expect((internals.server!.address() as net.AddressInfo).family).toBe('IPv6');
+
+            for (const [ host, name ] of [ [ '::1', 'over-ipv6' ], [ '127.0.0.1', 'over-ipv4' ] ]) {
+                const peer = await connectPlain(host);
+                peer.handshake('ipv6-app', name);
+                await eventually(() => peer.count(FrameType.Heartbeat) > 0);
+            }
+
+            expect(posted.filter(p => p.channel === 'clientConnected$').map(p => p.content.name))
+                .toEqual([ 'over-ipv6', 'over-ipv4' ]);
         });
 
         it('refuses a TLS client cleanly, saying what to change on either side', async () => {
