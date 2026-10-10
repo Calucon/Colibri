@@ -61,7 +61,7 @@ Server setup: [colibri-server](../../colibri-server/). Create the client once:
 ```ts
 import { Colibri } from '@hcikn/colibri';
 
-// the admin UI's address as the browser shows it, without '/log' at the end
+// the admin UI's address without its page path ('/log', '/clients', ...)
 new Colibri('app_name', 'http://<your-server>:9011');
 
 // or the host, with an optional port
