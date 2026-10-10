@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -20,12 +21,16 @@ namespace HCIKonstanz.Colibri.Tests
     {
         private readonly List<IDisposable> _disposables = new List<IDisposable>();
 
+        // The socket of every address an attempt tried, in order.
+        private readonly List<Socket> _attempted = new List<Socket>();
+
         [TearDown]
         public void CloseSockets()
         {
             foreach (var disposable in _disposables)
                 disposable.Dispose();
             _disposables.Clear();
+            _attempted.Clear();
         }
 
         /// <summary>Without TLS the frames go through the socket's own stream, byte for byte.</summary>
@@ -33,9 +38,8 @@ namespace HCIKonstanz.Colibri.Tests
         public void WithoutTlsTheStreamIsTheSocketsOwn()
         {
             var listener = Listen();
-            var socket = NewSocket();
 
-            var stream = Wait(WebServerConnection.OpenStreamAsync(socket, "127.0.0.1", Port(listener), null, 5000, CancellationToken.None));
+            var stream = Wait(Opening("127.0.0.1", Port(listener), null, 5000, CancellationToken.None)).Stream;
             var server = Accept(listener);
 
             Assert.That(stream, Is.InstanceOf<NetworkStream>());
@@ -55,10 +59,9 @@ namespace HCIKonstanz.Colibri.Tests
         public void AServerThatHangsUpOnTheHandshakeDidNotAnswerIt()
         {
             var listener = Listen();
-            var socket = NewSocket();
             var check = new ServerCertificateCheck("127.0.0.1", false, "");
 
-            var opening = WebServerConnection.OpenStreamAsync(socket, "127.0.0.1", Port(listener), check, 5000, CancellationToken.None);
+            var opening = Opening("127.0.0.1", Port(listener), check, 5000, CancellationToken.None);
             var server = Accept(listener);
             server.Receive(new byte[1024]);
             server.Close();
@@ -76,10 +79,8 @@ namespace HCIKonstanz.Colibri.Tests
         public void AServerThatAnswersWithoutTlsDidNotAnswerTheHandshake()
         {
             var listener = Listen();
-            var socket = NewSocket();
 
-            var opening = WebServerConnection.OpenStreamAsync(socket, "127.0.0.1", Port(listener),
-                new ServerCertificateCheck("127.0.0.1", true, ""), 5000, CancellationToken.None);
+            var opening = Opening("127.0.0.1", Port(listener), new ServerCertificateCheck("127.0.0.1", true, ""), 5000, CancellationToken.None);
             var server = Accept(listener);
             server.Receive(new byte[1024]);
             server.Send(Encoding.ASCII.GetBytes("this is not TLS, and it goes on long enough to be read as a record\n"));
@@ -98,11 +99,9 @@ namespace HCIKonstanz.Colibri.Tests
         public void AServerThatNeverAnswersTheHandshakeIsGivenUpWithinTheConnectTimeout()
         {
             var listener = Listen();
-            var socket = NewSocket();
 
             var clock = Stopwatch.StartNew();
-            var opening = WebServerConnection.OpenStreamAsync(socket, "127.0.0.1", Port(listener),
-                new ServerCertificateCheck("127.0.0.1", false, ""), 600, CancellationToken.None);
+            var opening = Opening("127.0.0.1", Port(listener), new ServerCertificateCheck("127.0.0.1", false, ""), 600, CancellationToken.None);
             Accept(listener);
 
             var e = Assert.Throws<TlsHandshakeException>(() => Wait(opening));
@@ -112,20 +111,18 @@ namespace HCIKonstanz.Colibri.Tests
             Assert.That(e.Message, Is.EqualTo($"127.0.0.1:{Port(listener)} accepted the connection but did not answer the TLS handshake within 0.6 s"));
             Assert.That(clock.ElapsedMilliseconds, Is.GreaterThanOrEqualTo(500).And.LessThan(5000),
                 "The handshake was not given up when the connection's time was up");
-            Assert.Throws<ObjectDisposedException>(() => _ = socket.Available, "The abandoned socket was left open");
+            Assert.Throws<ObjectDisposedException>(() => _ = _attempted.Single().Available, "The abandoned socket was left open");
         }
 
         [Test]
         public void CancellingGivesUpTheHandshakeAtOnce()
         {
             var listener = Listen();
-            var socket = NewSocket();
 
             using (var cancel = new CancellationTokenSource())
             {
                 var clock = Stopwatch.StartNew();
-                var opening = WebServerConnection.OpenStreamAsync(socket, "127.0.0.1", Port(listener),
-                    new ServerCertificateCheck("127.0.0.1", false, ""), 60000, cancel.Token);
+                var opening = Opening("127.0.0.1", Port(listener), new ServerCertificateCheck("127.0.0.1", false, ""), 60000, cancel.Token);
                 Accept(listener);
                 cancel.CancelAfter(100);
 
@@ -231,7 +228,17 @@ namespace HCIKonstanz.Colibri.Tests
         }
 
         private void Open(string host, TlsTestServer server, ServerCertificateCheck check)
-            => _disposables.Add(Wait(WebServerConnection.OpenStreamAsync(NewSocket(), host, server.Port, check, 5000, CancellationToken.None)));
+            => _disposables.Add(Wait(Opening(host, server.Port, check, 5000, CancellationToken.None)).Stream);
+
+        /// <summary>Opens a session, keeping every socket it tries to close it afterwards.</summary>
+        private Task<WebServerConnection.Session> Opening(string host, int port, ServerCertificateCheck check, int timeoutMs, CancellationToken token)
+            => WebServerConnection.OpenSessionAsync(host, port, check, timeoutMs, Attempting, token);
+
+        private void Attempting(Socket socket)
+        {
+            _attempted.Add(socket);
+            _disposables.Add(socket);
+        }
 
         private TcpListener Listen()
         {
@@ -252,13 +259,6 @@ namespace HCIKonstanz.Colibri.Tests
             server.ReceiveTimeout = 5000;
             _disposables.Add(server);
             return server;
-        }
-
-        private Socket NewSocket()
-        {
-            var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-            _disposables.Add(socket);
-            return socket;
         }
 
         /// <summary>Rethrows what the task failed with, rather than an AggregateException around it.</summary>

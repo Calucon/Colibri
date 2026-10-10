@@ -8,8 +8,10 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
+using System.Runtime.ExceptionServices;
 using System.Security.Authentication;
 using System.Text;
 using System.Threading;
@@ -84,10 +86,30 @@ namespace HCIKonstanz.Colibri.Networking
         /// Android, without a retry or a word in the log. On a local network a connection opens in
         /// milliseconds; 5 s still leaves room for two lost SYNs on bad Wi-Fi. With TLS the
         /// handshake has to finish within the same time: a server without TLS may never answer it.
-        /// A placed body waits as long for a server before it is simulated without the server's
-        /// state (see Sync.StopsWaitingForServer).
+        /// So do looking up the server's name and trying each of its addresses (see
+        /// <see cref="ConnectAnyAsync"/>). A placed body waits as long for a server before it is
+        /// simulated without the server's state (see Sync.StopsWaitingForServer).
         /// </summary>
         internal const int CONNECT_TIMEOUT_MS = 5000;
+
+        /// <summary>
+        /// The least time an attempt on one of several addresses gets. A server name can resolve to
+        /// several addresses, typically an IPv6 and an IPv4 one, and they are tried one after the
+        /// other, each with an equal share of the time left, so that one nothing answers on (an IPv6
+        /// address on a network that does not route IPv6, say) holds up the attempt only for its
+        /// share. A path that works answers a connection well within a second, so a name with many
+        /// addresses gets this much per address rather than shares too short to answer in.
+        /// </summary>
+        private const int MIN_ADDRESS_ATTEMPT_MS = 1000;
+
+        /// <summary>
+        /// The most time an attempt on a loopback address gets while other addresses are still to
+        /// be tried. Loopback accepts or refuses a connection at once, except that Windows takes a
+        /// second or more to report a refusal. Windows resolves "localhost" to ::1 before 127.0.0.1,
+        /// and colibri-server listens on IPv4 only by default (TCP_HOST 0.0.0.0), so without this a
+        /// connection to localhost would wait out that refusal every time before it tried 127.0.0.1.
+        /// </summary>
+        private const int LOOPBACK_ATTEMPT_MS = 250;
 
         /// <summary>
         /// How often a connect in progress looks whether its socket has been closed, which on Mono
@@ -317,10 +339,14 @@ namespace HCIKonstanz.Colibri.Networking
             public readonly Socket Socket;
             public readonly Stream Stream;
 
-            public Session(Socket socket, Stream stream)
+            // The server address the socket is connected to, for the log; null in the tests' sessions.
+            public readonly IPAddress Address;
+
+            public Session(Socket socket, Stream stream, IPAddress address = null)
             {
                 Socket = socket;
                 Stream = stream;
+                Address = address;
             }
 
             /// <summary>A session without TLS on a connected socket. For the EditMode tests.</summary>
@@ -1290,38 +1316,39 @@ namespace HCIKonstanz.Colibri.Networking
 
             Debug.Log($"Colibri: connecting to {host}:{port}{(useTls ? " (TLS)" : "")}");
 
-            var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
-            loop.Socket = socket;
-
             var certificateCheck = useTls
                 ? new ServerCertificateCheck(host, _allowSelfSignedCertificate, _serverCertificateSha256)
                 : null;
 
-            // Closing the socket is what unblocks an in-flight read or write, plain or TLS; there
-            // is no cancellation token overload for either on this API surface.
-            using (token.Register(() => CloseSocket(socket)))
+            Session session;
+            try
             {
-                Stream stream;
-                try
-                {
-                    stream = await OpenStreamAsync(socket, host, port, certificateCheck, CONNECT_TIMEOUT_MS, token).ConfigureAwait(false);
-                }
-                catch (TimeoutException e) when (!token.IsCancellationRequested)
-                {
-                    _lastConnectFailure = e.Message;
-                    throw;
-                }
-                catch (TlsHandshakeException e) when (!token.IsCancellationRequested)
-                {
-                    _lastConnectFailure = e.Message;
-                    throw;
-                }
-                catch (SocketException e) when (!token.IsCancellationRequested)
-                {
-                    _lastConnectFailure = $"connecting to {host}:{port} failed ({e.SocketErrorCode})";
-                    throw;
-                }
+                // Every address tried gets a socket of its own. The loop holds the one being tried,
+                // so that OnDisable, and the cleanup after this session, close it.
+                session = await OpenSessionAsync(host, port, certificateCheck, CONNECT_TIMEOUT_MS, socket => loop.Socket = socket, token)
+                    .ConfigureAwait(false);
+            }
+            catch (TimeoutException e) when (!token.IsCancellationRequested)
+            {
+                _lastConnectFailure = e.Message;
+                throw;
+            }
+            catch (TlsHandshakeException e) when (!token.IsCancellationRequested)
+            {
+                _lastConnectFailure = e.Message;
+                throw;
+            }
+            catch (SocketException e) when (!token.IsCancellationRequested)
+            {
+                _lastConnectFailure = $"connecting to {host}:{port} failed ({e.SocketErrorCode})";
+                throw;
+            }
 
+            // Closing the socket is what unblocks an in-flight read or write, plain or TLS; there
+            // is no cancellation token overload for either on this API surface. Registered on a
+            // token that is cancelled already, it closes the socket at once.
+            using (token.Register(session.Close))
+            {
                 try
                 {
                     token.ThrowIfCancellationRequested();
@@ -1329,8 +1356,6 @@ namespace HCIKonstanz.Colibri.Networking
 
                     if (certificateCheck != null)
                         NoteCertificate(certificateCheck, host, port);
-
-                    var session = new Session(socket, stream);
 
                     // Accepted, but nothing is known about what accepted it yet. The watchdog gives
                     // it as long to say something as a connected server gets between heartbeats.
@@ -1347,36 +1372,61 @@ namespace HCIKonstanz.Colibri.Networking
                 }
                 finally
                 {
-                    ReleaseStream(stream);
+                    ReleaseStream(session.Stream);
                 }
             }
         }
 
         /// <summary>
-        /// Opens the TCP connection and, with <paramref name="tls"/>, a TLS session over it, both
-        /// within <paramref name="timeoutMs"/>: a stream on which the v3 frames are read and
-        /// written, encrypted or not. Without TLS it is the socket's own stream.
+        /// Opens the TCP connection to <paramref name="host"/> and, with <paramref name="tls"/>, a
+        /// TLS session over it, all within <paramref name="timeoutMs"/>: the name lookup, every
+        /// address tried and the handshake. The session's stream is the one the v3 frames are read
+        /// from and written to, encrypted or not; without TLS it is the socket's own stream.
         /// </summary>
+        /// <param name="host">
+        /// The configured server address: a name, an IPv4 address, or an IPv6 address with or
+        /// without brackets. TLS uses it as it is, for SNI and the certificate check.
+        /// </param>
         /// <param name="tls">The certificate check of the handshake, or null for no TLS.</param>
-        /// <exception cref="TimeoutException">Nothing answered the connection in time.</exception>
+        /// <param name="attempting">
+        /// Called with the socket for each address, before it is tried. The sockets stay this
+        /// method's: it closes every one but the one it returns, and that one too if it throws.
+        /// </param>
+        /// <exception cref="TimeoutException">The name did not resolve, or nothing answered the connection, in time.</exception>
         /// <exception cref="TlsHandshakeException">The TLS handshake failed or did not finish in time.</exception>
         /// <exception cref="OperationCanceledException"><paramref name="token"/> was cancelled first.</exception>
-        /// <exception cref="ObjectDisposedException">The socket was closed while connecting.</exception>
-        /// <exception cref="SocketException">The connection failed before the time was up - refused, say.</exception>
+        /// <exception cref="ObjectDisposedException">A socket was closed while connecting.</exception>
+        /// <exception cref="SocketException">
+        /// The name does not resolve, or every address failed before the time was up, refused, say.
+        /// </exception>
         /// <remarks>Internal for the EditMode tests.</remarks>
-        internal static async Task<Stream> OpenStreamAsync(Socket socket, string host, int port, ServerCertificateCheck tls, int timeoutMs, CancellationToken token)
+        internal static async Task<Session> OpenSessionAsync(string host, int port, ServerCertificateCheck tls, int timeoutMs,
+            Action<Socket> attempting, CancellationToken token)
         {
             var clock = System.Diagnostics.Stopwatch.StartNew();
-            await ConnectAsync(socket, host, port, timeoutMs, token).ConfigureAwait(false);
-
-            // Not owning the socket: closing the socket stays the one way to end a session, and
-            // it is closed by whoever ends it.
-            var plain = new NetworkStream(socket, false);
-            if (tls == null)
-                return plain;
+            var addresses = await ResolveAsync(host, timeoutMs, token).ConfigureAwait(false);
 
             var remaining = (int)Math.Max(0, timeoutMs - clock.ElapsedMilliseconds);
-            return await AuthenticateAsync(socket, plain, host, port, tls, remaining, timeoutMs, token).ConfigureAwait(false);
+            var (socket, address) = await ConnectAnyAsync(addresses, host, port, remaining, timeoutMs, attempting, token)
+                .ConfigureAwait(false);
+
+            try
+            {
+                // Not owning the socket: closing the socket stays the one way to end a session, and
+                // it is closed by whoever ends it.
+                var plain = new NetworkStream(socket, false);
+                if (tls == null)
+                    return new Session(socket, plain, address);
+
+                remaining = (int)Math.Max(0, timeoutMs - clock.ElapsedMilliseconds);
+                var encrypted = await AuthenticateAsync(socket, plain, host, port, tls, remaining, timeoutMs, token).ConfigureAwait(false);
+                return new Session(socket, encrypted, address);
+            }
+            catch (Exception)
+            {
+                CloseSocket(socket);
+                throw;
+            }
         }
 
         /// <summary>
@@ -1535,20 +1585,237 @@ namespace HCIKonstanz.Colibri.Networking
             return null;
         }
 
+        /*
+         *  Finding the server
+         *
+         *  The socket used to be IPv4 and to connect by name, so a server name with only IPv6
+         *  addresses (AAAA records), or an IPv6 address, could not be reached at all. Now the name
+         *  is looked up here, and each of its addresses is tried with a socket of its own family.
+         */
+
         /// <summary>
-        /// Opens the TCP connection, or gives up after <paramref name="timeoutMs"/>. Closing the
-        /// socket is the only way to abandon a pending connect on this API surface, so that is
-        /// what giving up does; the socket cannot be used again afterwards.
+        /// The addresses to try for <paramref name="host"/>, in the order to try them. An IP address
+        /// is taken as it is. A name is looked up, and its addresses are kept in the order the
+        /// platform's resolver gives them (RFC 6724), which on a device with IPv6 usually puts the
+        /// IPv6 addresses first.
+        /// </summary>
+        /// <exception cref="SocketException">The name does not resolve, or resolves to no address.</exception>
+        /// <exception cref="TimeoutException">The lookup did not finish within <paramref name="timeoutMs"/>.</exception>
+        /// <exception cref="OperationCanceledException"><paramref name="token"/> was cancelled first.</exception>
+        internal static Task<IReadOnlyList<IPAddress>> ResolveAsync(string host, int timeoutMs, CancellationToken token)
+        {
+            if (TryParseAddress(host, out var address))
+                return Task.FromResult(AddressesToTry(new[] { address }));
+
+            // The blocking lookup on the thread pool rather than GetHostAddressesAsync: neither can
+            // be cancelled on Unity's .NET profile, and this one works the same on Mono and IL2CPP.
+            // A lookup that is given up holds its pool thread until the resolver gives up as well.
+            return WaitForLookupAsync(Task.Run(() => Dns.GetHostAddresses(host)), host, timeoutMs, token);
+        }
+
+        /// <summary>
+        /// The rest of <see cref="ResolveAsync"/> for a name: waits for <paramref name="lookup"/>
+        /// until it completes, the time is up or <paramref name="token"/> is cancelled.
+        /// </summary>
+        /// <remarks>Internal for the EditMode tests, which stand in for a slow resolver with a lookup that never completes.</remarks>
+        internal static async Task<IReadOnlyList<IPAddress>> WaitForLookupAsync(Task<IPAddress[]> lookup, string host, int timeoutMs, CancellationToken token)
+        {
+            using (var timer = CancellationTokenSource.CreateLinkedTokenSource(token))
+            {
+                if (await Task.WhenAny(lookup, Task.Delay(Math.Max(0, timeoutMs), timer.Token)).ConfigureAwait(false) == lookup)
+                {
+                    timer.Cancel();
+
+                    // Rethrows a lookup that failed by itself: HostNotFound, say.
+                    var addresses = AddressesToTry(await lookup.ConfigureAwait(false));
+                    if (addresses.Count == 0)
+                        throw new SocketException((int)SocketError.HostNotFound);
+
+                    return addresses;
+                }
+            }
+
+            // Nothing waits for the abandoned lookup any more, so its exception is observed here
+            // rather than surfacing as unobserved later.
+            _ = lookup.ContinueWith(attempt => { _ = attempt.Exception; }, CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+
+            token.ThrowIfCancellationRequested();
+            throw new TimeoutException(
+                $"{host} could not be resolved within {(timeoutMs / 1000f).ToString("0.#", CultureInfo.InvariantCulture)} s");
+        }
+
+        /// <summary>
+        /// Whether <paramref name="host"/> is an IP address rather than a name: an IPv4 address, or
+        /// an IPv6 address with or without the brackets a URL puts around one ("[2001:db8::1]").
+        /// </summary>
+        /// <remarks>Internal for VoiceServerConnection and the EditMode tests.</remarks>
+        internal static bool TryParseAddress(string host, out IPAddress address)
+        {
+            address = null;
+            if (string.IsNullOrEmpty(host))
+                return false;
+
+            if (host.Length > 2 && host[0] == '[' && host[host.Length - 1] == ']')
+            {
+                // As in a URL, brackets hold an IPv6 address and nothing else.
+                if (IPAddress.TryParse(host.Substring(1, host.Length - 2), out var bracketed)
+                    && bracketed.AddressFamily == AddressFamily.InterNetworkV6)
+                {
+                    address = bracketed;
+                    return true;
+                }
+
+                return false;
+            }
+
+            return IPAddress.TryParse(host, out address);
+        }
+
+        /// <summary>
+        /// What a lookup found, ready to be tried in order: each address once, in the order found,
+        /// and an IPv4-mapped IPv6 address as the IPv4 address it stands for, which an IPv4 socket
+        /// reaches on every platform.
+        /// </summary>
+        /// <remarks>Internal for the EditMode tests.</remarks>
+        internal static IReadOnlyList<IPAddress> AddressesToTry(IPAddress[] found)
+        {
+            var addresses = new List<IPAddress>();
+            if (found == null)
+                return addresses;
+
+            foreach (var candidate in found)
+            {
+                var address = candidate.IsIPv4MappedToIPv6 ? candidate.MapToIPv4() : candidate;
+                if (!addresses.Contains(address))
+                    addresses.Add(address);
+            }
+
+            return addresses;
+        }
+
+        /// <summary>
+        /// How long the attempt on one of several addresses may take: an equal share of
+        /// <paramref name="remainingMs"/> among the <paramref name="attemptsLeft"/> addresses still
+        /// to be tried, this one included, but at least <see cref="MIN_ADDRESS_ATTEMPT_MS"/>, and for
+        /// a loopback address at most <see cref="LOOPBACK_ATTEMPT_MS"/>. The last address gets all
+        /// the time left, and no attempt more than that.
+        /// </summary>
+        /// <remarks>Internal for the EditMode tests.</remarks>
+        internal static int AttemptTimeoutMs(int remainingMs, int attemptsLeft, bool isLoopback)
+        {
+            if (attemptsLeft <= 1)
+                return remainingMs;
+
+            var share = Math.Max(remainingMs / attemptsLeft, MIN_ADDRESS_ATTEMPT_MS);
+            if (isLoopback)
+                share = Math.Min(share, LOOPBACK_ATTEMPT_MS);
+
+            return Math.Min(share, remainingMs);
+        }
+
+        /// <summary>
+        /// Connects to the first of <paramref name="addresses"/> that answers. They are tried in
+        /// order, each with a socket of its own family and the time <see cref="AttemptTimeoutMs"/>
+        /// gives it, and the next is tried at once when one is refused or unreachable.
+        /// </summary>
+        /// <param name="host">The server address as configured, for the messages.</param>
+        /// <param name="timeoutMs">The time all attempts together may take.</param>
+        /// <param name="totalTimeoutMs">The time the whole connection had, lookup included, which a timeout names.</param>
+        /// <param name="attempting">See <see cref="OpenSessionAsync"/>.</param>
+        /// <returns>The connected socket, and the address it is connected to.</returns>
+        /// <exception cref="TimeoutException">The time was up before an address answered.</exception>
+        /// <exception cref="SocketException">Every address failed: the last one's error.</exception>
+        /// <exception cref="OperationCanceledException"><paramref name="token"/> was cancelled first.</exception>
+        /// <exception cref="ObjectDisposedException">A socket was closed while connecting.</exception>
+        /// <remarks>Internal for the EditMode tests.</remarks>
+        internal static async Task<(Socket Socket, IPAddress Address)> ConnectAnyAsync(IReadOnlyList<IPAddress> addresses, string host,
+            int port, int timeoutMs, int totalTimeoutMs, Action<Socket> attempting, CancellationToken token)
+        {
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            Exception failure = null;
+
+            for (var i = 0; i < addresses.Count; i++)
+            {
+                token.ThrowIfCancellationRequested();
+
+                var remaining = timeoutMs - clock.ElapsedMilliseconds;
+                if (remaining <= 0)
+                    break;
+
+                var address = addresses[i];
+                var attemptMs = AttemptTimeoutMs((int)remaining, addresses.Count - i, IPAddress.IsLoopback(address));
+
+                Socket socket = null;
+                var connected = false;
+                try
+                {
+                    // The address's own family: an IPv4 socket cannot reach an IPv6 address.
+                    socket = new Socket(address.AddressFamily, SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
+                    attempting?.Invoke(socket);
+
+                    // Registered on a token that is cancelled already, it closes the socket at once.
+                    using (token.Register(() => CloseSocket(socket)))
+                        await ConnectAsync(socket, address, port, attemptMs, token).ConfigureAwait(false);
+
+                    connected = true;
+                    return (socket, address);
+                }
+                catch (Exception e) when ((e is SocketException || e is TimeoutException) && !token.IsCancellationRequested)
+                {
+                    // Refused, unreachable, an address family this device has no sockets for, or no
+                    // answer within this address's share: the next address may still answer.
+                    failure = e;
+
+                    if (i + 1 < addresses.Count && clock.ElapsedMilliseconds < timeoutMs)
+                    {
+                        var next = Endpoint(addresses[i + 1], port);
+                        Debug.Log(e is SocketException refused
+                            ? $"Colibri: no connection to {Endpoint(address, port)} ({refused.SocketErrorCode}), trying {next}"
+                            : $"Colibri: no answer from {Endpoint(address, port)} within "
+                                + $"{(attemptMs / 1000f).ToString("0.#", CultureInfo.InvariantCulture)} s, trying {next}");
+                    }
+                }
+                finally
+                {
+                    if (!connected)
+                        CloseSocket(socket);
+                }
+            }
+
+            token.ThrowIfCancellationRequested();
+
+            // The last address's error: the one tried last is the platform's fallback, IPv4 after
+            // IPv6, and whether it refused or did not answer is what tells what is wrong.
+            if (failure is SocketException)
+                ExceptionDispatchInfo.Capture(failure).Throw();
+
+            // Invariant: this ends up in the log and on screen, and "0,5 s" in one locale and
+            // "0.5 s" in another is one more thing to puzzle over.
+            throw new TimeoutException(
+                $"{host}:{port} did not answer within {(totalTimeoutMs / 1000f).ToString("0.#", CultureInfo.InvariantCulture)} s", failure);
+        }
+
+        /// <summary>An address as a URL writes it: IPv6 in brackets.</summary>
+        private static string HostOf(IPAddress address)
+            => address.AddressFamily == AddressFamily.InterNetworkV6 ? $"[{address}]" : address.ToString();
+
+        private static string Endpoint(IPAddress address, int port) => $"{HostOf(address)}:{port}";
+
+        /// <summary>
+        /// Opens the TCP connection to one address, or gives up after <paramref name="timeoutMs"/>.
+        /// Closing the socket is the only way to abandon a pending connect on this API surface, so
+        /// that is what giving up does; the socket cannot be used again afterwards.
         /// </summary>
         /// <exception cref="TimeoutException">Nothing answered in time.</exception>
         /// <exception cref="OperationCanceledException"><paramref name="token"/> was cancelled first.</exception>
         /// <exception cref="ObjectDisposedException">The socket was closed first.</exception>
-        /// <exception cref="SocketException">The attempt failed before the time was up - refused, say.</exception>
+        /// <exception cref="SocketException">The attempt failed before the time was up, refused, say.</exception>
         /// <remarks>Internal for the EditMode tests, which time it against a port that never answers.</remarks>
-        internal static async Task ConnectAsync(Socket socket, string host, int port, int timeoutMs, CancellationToken token)
+        internal static async Task ConnectAsync(Socket socket, IPAddress address, int port, int timeoutMs, CancellationToken token)
         {
-            var connecting = socket.ConnectAsync(host, port);
-            await WaitForConnectAsync(socket, connecting, host, port, timeoutMs, token).ConfigureAwait(false);
+            var connecting = socket.ConnectAsync(address, port);
+            await WaitForConnectAsync(socket, connecting, HostOf(address), port, timeoutMs, token).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -1641,9 +1908,13 @@ namespace HCIKonstanz.Colibri.Networking
             // A TLS failure after this one is news again.
             _reportedTlsFailure = null;
 
+            // The address too when the server address is a name, which may have several: an IPv6
+            // and an IPv4 one can lead to different places, a proxy that listens on only one, say.
+            var via = session.Address != null && !TryParseAddress(host, out _) ? $" ({session.Address})" : "";
+
             // The app name is named explicitly: a typo in it produces a perfectly healthy
             // connection on which no other client is ever seen.
-            Debug.Log($"Colibri: connected to {host}:{port} as app '{app}'. Only clients using the same App Name can see each other.");
+            Debug.Log($"Colibri: connected to {host}:{port}{via} as app '{app}'. Only clients using the same App Name can see each other.");
 
             // Starts sending whatever queued up during the outage, in order. Opened before Status
             // says Connected, so anything sent by code that reacts to Connected lines up behind it.
