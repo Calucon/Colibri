@@ -15,15 +15,15 @@
 
   <div class="nav" role="group" aria-label="Errors and warnings">
     <button type="button" class="step" [disabled]="nav().problems === 0" title="Previous error or warning (p)" aria-label="Previous error or warning"
-      (click)="navigate.emit('previous')">
+      (click)="step('previous')">
       <i class="pi pi-chevron-up" aria-hidden="true"></i>
     </button>
     <span class="position" aria-hidden="true" [title]="nav().problems + ' errors and warnings in the lines shown'">{{ positionLabel() }}</span>
     <button type="button" class="step" [disabled]="nav().problems === 0" title="Next error or warning (n)" aria-label="Next error or warning"
-      (click)="navigate.emit('next')">
+      (click)="step('next')">
       <i class="pi pi-chevron-down" aria-hidden="true"></i>
     </button>
-    <button type="button" class="first" [disabled]="nav().newErrors === 0" [title]="firstErrorTitle()" (click)="navigate.emit('first-error')">
+    <button type="button" class="first" [disabled]="nav().newErrors === 0" [title]="firstErrorTitle()" (click)="step('first-error')">
       New errors <span class="n">{{ nav().newErrors }}</span>
     </button>
   </div>

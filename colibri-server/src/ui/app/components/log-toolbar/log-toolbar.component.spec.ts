@@ -1,7 +1,7 @@
 import { TestBed } from '@angular/core/testing';
 import { signal } from '@angular/core';
 import { ClientService, ColibriClient, LogService } from '../../services';
-import { LogNav, LogToolbarComponent, NavStep, SEARCH_DELAY } from './log-toolbar.component';
+import { LogNav, LogToolbarComponent, NavStep, PHONE, SEARCH_DELAY } from './log-toolbar.component';
 
 describe('LogToolbarComponent', () => {
     let log: {
@@ -192,6 +192,24 @@ describe('LogToolbarComponent', () => {
         expect(root.querySelector('.nav .first')?.textContent).toContain('2');
         buttons().forEach(b => b.click());
         expect(steps).toEqual([ 'previous', 'next', 'first-error' ]);
+    });
+
+    it('closes the folded filters on a phone after a step, so that the log has room to show the line', () => {
+        const fixture = TestBed.createComponent(LogToolbarComponent);
+        fixture.componentRef.setInput('nav', { problems: 3, position: null, newErrors: 0, openedAt: 0 });
+        fixture.detectChanges();
+        const next = fixture.nativeElement.querySelectorAll('.nav button')[1] as HTMLButtonElement;
+        const phone = (matches: boolean) => vi.stubGlobal('matchMedia', (query: string) => ({ matches: matches && query === PHONE }));
+
+        phone(false);
+        fixture.componentInstance.open.set(true);
+        next.click();
+        expect(fixture.componentInstance.open()).toBe(true);
+
+        phone(true);
+        next.click();
+        expect(fixture.componentInstance.open()).toBe(false);
+        vi.unstubAllGlobals();
     });
 
     it('offers the lines as text or JSON', () => {

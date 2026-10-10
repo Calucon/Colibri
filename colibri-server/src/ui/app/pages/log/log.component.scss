@@ -110,13 +110,51 @@
     }
 }
 
-.jump {
+// "Jump to latest", and on a phone, while going through the errors and warnings, Previous and
+// Next beside it: the toolbar's are folded away there.
+.jump-bar {
     position: absolute;
     left: 50%;
     bottom: calc(16px + env(safe-area-inset-bottom));
     transform: translateX(-50%);
     z-index: 2;
 
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.jump-step {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+
+    color: var(--text-strong);
+    background: var(--surface-2);
+    border: 0;
+    border-radius: 50%;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+    cursor: pointer;
+
+    &:hover {
+        background: var(--surface-3);
+    }
+
+    .pi {
+        font-size: 13px;
+    }
+}
+
+@media (max-width: 699.98px), (max-height: 499.98px) {
+    .jump-step {
+        display: flex;
+    }
+}
+
+.jump {
     display: flex;
     align-items: center;
     gap: 8px;

@@ -30,13 +30,25 @@
   </div>
 
   @if (!following()) {
-    <button type="button" class="jump" (click)="follow()" [attr.aria-label]="'Jump to the latest lines' + (newLines() > 0 ? ', ' + newLines() + ' new' : '')">
-      <i class="pi pi-arrow-down" aria-hidden="true"></i>
-      @if (newLines() > 0) {
-        {{ newLines() }} new {{ newLines() === 1 ? 'line' : 'lines' }}
-      } @else {
-        Jump to latest
+    <div class="jump-bar">
+      @if (current() !== null) {
+        <button type="button" class="jump-step" aria-label="Previous error or warning" title="Previous error or warning (p)" (click)="navigate('previous')">
+          <i class="pi pi-chevron-up" aria-hidden="true"></i>
+        </button>
       }
-    </button>
+      <button type="button" class="jump" (click)="follow()" [attr.aria-label]="'Jump to the latest lines' + (newLines() > 0 ? ', ' + newLines() + ' new' : '')">
+        <i class="pi pi-arrow-down" aria-hidden="true"></i>
+        @if (newLines() > 0) {
+          {{ newLines() }} new {{ newLines() === 1 ? 'line' : 'lines' }}
+        } @else {
+          Jump to latest
+        }
+      </button>
+      @if (current() !== null) {
+        <button type="button" class="jump-step" aria-label="Next error or warning" title="Next error or warning (n)" (click)="navigate('next')">
+          <i class="pi pi-chevron-down" aria-hidden="true"></i>
+        </button>
+      }
+    </div>
   }
 </div>

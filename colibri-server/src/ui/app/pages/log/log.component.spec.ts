@@ -198,11 +198,23 @@ describe('LogComponent', () => {
             fixture.detectChanges();
             expect(component.nav()).toEqual(expect.objectContaining({ problems: 2, position: null }));
 
+            // the log 300px high, 100px from the top; the warning 20px high, 900px from it
+            const scroller: HTMLElement = fixture.nativeElement.querySelector('.scroller');
+            let scrollTop = 0;
+            Object.defineProperty(scroller, 'scrollTop', { get: () => scrollTop, set: (value: number) => { scrollTop = value; } });
+            Object.defineProperty(scroller, 'clientHeight', { value: 300 });
+            scroller.getBoundingClientRect = () => ({ top: 100 }) as DOMRect;
+            const warning: HTMLElement = fixture.nativeElement.querySelector('app-log-message[data-id="w"]');
+            Object.defineProperty(warning, 'offsetHeight', { value: 20 });
+            warning.getBoundingClientRect = () => ({ top: 900 }) as DOMRect;
+
             key('p');
             expect([ component.current(), component.following(), component.nav().position ]).toEqual([ 'w', false, 2 ]);
-            // the scroll to it waits for the render
+            // The scroll to it waits for the render, and moves the log only: scrollIntoView would
+            // move the page around it too.
             TestBed.tick();
-            expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ block: 'center' });
+            expect(scrollTop).toBe(800 - (300 - 20) / 2);
+            expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
             key('p');
             expect(component.current()).toBe('e');
             key('p');
@@ -213,8 +225,17 @@ describe('LogComponent', () => {
             fixture.detectChanges();
             expect(fixture.nativeElement.querySelector('.row.current .message').textContent).toBe('m');
 
+            // Previous and Next by "Jump to latest", for a phone, where the toolbar's are folded away
+            const [ previous, next ] = fixture.nativeElement.querySelectorAll('.jump-bar .jump-step') as NodeListOf<HTMLButtonElement>;
+            next.click();
+            expect(component.current()).toBe('w');
+            previous.click();
+            expect(component.current()).toBe('e');
+
             component.follow();
             expect(component.current()).toBeNull();
+            fixture.detectChanges();
+            expect(fixture.nativeElement.querySelector('.jump-bar')).toBeNull();
         });
 
         it('ignores the keys while typing, and with the focus outside the log', () => {

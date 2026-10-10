@@ -2,7 +2,7 @@ import { AfterViewInit, ChangeDetectionStrategy, Component, ElementRef, HostList
 import { DatePipe } from '@angular/common';
 import { LOG_LEVELS, LogMessage, LogService, SocketIOService } from '../../services';
 import { LogMessageComponent } from '../../components/log-message/log-message.component';
-import { LogNav, LogToolbarComponent, NavStep } from '../../components/log-toolbar/log-toolbar.component';
+import { LogNav, LogToolbarComponent, NavStep, PHONE } from '../../components/log-toolbar/log-toolbar.component';
 import { OfflineBannerComponent } from '../../components/offline-banner/offline-banner.component';
 import { LEVEL_TAGS, matchesSearch, messageText, sourceOf } from '../../components/log-message/log-format';
 import { download, fileNamePart } from '../../format';
@@ -13,8 +13,7 @@ import { download, fileNamePart } from '../../format';
  * are not virtualized, and a page of 10,000 rows would take seconds to build on a phone.
  */
 export const PAGE_SIZE = 1000;
-const screenPageSize = (): number =>
-    window.matchMedia?.('(max-width: 699.98px), (max-height: 499.98px)').matches ? PAGE_SIZE / 2 : PAGE_SIZE;
+const screenPageSize = (): number => window.matchMedia?.(PHONE).matches ? PAGE_SIZE / 2 : PAGE_SIZE;
 
 /** How close to the end, in px, still counts as at the end. */
 const END_SLACK = 24;
@@ -243,9 +242,18 @@ export class LogComponent implements AfterViewInit, OnDestroy {
         afterNextRender(() => {
             const row = Array.from(this.scroller().nativeElement.querySelectorAll<HTMLElement>('app-log-message[data-id]'))
                 .find(element => element.dataset['id'] === id);
-            row?.scrollIntoView({ block: 'center' });
-            row?.querySelector<HTMLElement>('.time')?.focus({ preventScroll: true });
+            if (!row) return;
+            this.center(row);
+            row.querySelector<HTMLElement>('.time')?.focus({ preventScroll: true });
         }, { injector: this.injector });
+    }
+
+    // Scrolls the log, and only the log, to have the row in its middle. scrollIntoView() scrolled
+    // the page around it as well, which on a phone held sideways pushed the toolbar out of view.
+    private center(row: HTMLElement): void {
+        const el = this.scroller().nativeElement;
+        const top = row.getBoundingClientRect().top - el.getBoundingClientRect().top;
+        el.scrollTop += top - (el.clientHeight - row.offsetHeight) / 2;
     }
 
     // The first and last line at least partly in view, by their place in matches().

@@ -11,6 +11,9 @@ import { LEVEL_TAGS } from '../log-message/log-format';
 /** How long typing pauses before the search runs, in ms. */
 export const SEARCH_DELAY = 150;
 
+/** A phone, upright or sideways, where the filters fold away behind a button. */
+export const PHONE = '(max-width: 699.98px), (max-height: 499.98px)';
+
 interface AppOption {
     name: string;
     /** How many of its clients are connected. */
@@ -168,6 +171,15 @@ export class LogToolbarComponent implements OnDestroy {
         this.log.search.set('');
         if (stay) input.focus();
         else input.blur();
+    }
+
+    /**
+     * Previous, Next or New errors. On a phone they are in the folded filters, which close, so
+     * that the log has the room to show the line; the buttons by "Jump to latest" go on from there.
+     */
+    step(step: NavStep): void {
+        this.navigate.emit(step);
+        if (window.matchMedia?.(PHONE).matches) this.open.set(false);
     }
 
     /** To the search field, for the log page's '/' key; on a phone, the filters open for it. */
