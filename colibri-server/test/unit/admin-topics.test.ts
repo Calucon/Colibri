@@ -62,6 +62,22 @@ describe('admin UI topics', () => {
             expect(parseModelsQuery({ filter: 'f'.repeat(MAX_FILTER_LENGTH + 10) }).filter).toHaveLength(MAX_FILTER_LENGTH);
             expect(parseModelQuery({ app: 'a', channel: 'c', id: 7 })).toEqual({ app: 'a', channel: 'c', id: '' });
         });
+
+        it('cuts a name longer than any row can name, which then matches nothing', () => {
+            const store = new DataStore();
+            const long = 'a'.repeat(MAX_NAME_LENGTH + 1);
+            store.updateModel(long + 'more', long, { id: long });
+
+            const huge = 'A'.repeat(1_000_000);
+            const snapshot = modelsSnapshot(store, parseModelsQuery({ app: huge, channel: huge }));
+            expect(snapshot.query).toMatchObject({ app: 'A'.repeat(MAX_NAME_LENGTH + 1), channel: 'A'.repeat(MAX_NAME_LENGTH + 1) });
+            expect(JSON.stringify(snapshot).length).toBeLessThan(4 * 1024);
+
+            // the cut name of a longer one is not that name
+            expect(modelsSnapshot(store, parseModelsQuery({ app: long + 'more' })).total).toBe(0);
+            expect(parseModelQuery({ app: huge, channel: huge, id: huge })).toEqual({ app: huge.slice(0, MAX_NAME_LENGTH + 1), channel: huge.slice(0, MAX_NAME_LENGTH + 1), id: huge.slice(0, MAX_NAME_LENGTH + 1) });
+            expect(modelSnapshot(store, parseModelQuery({ app: long + 'more', channel: long, id: long }))).toMatchObject({ found: false });
+        });
     });
 
     describe('the model list', () => {

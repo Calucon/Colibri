@@ -43,6 +43,13 @@ const isLong = function (text: string): boolean {
     return text.length > MAX_NAME_LENGTH;
 };
 
+// A name a query asks for, cut to one character more than MAX_NAME_LENGTH, so that what a snapshot
+// sends back of the query stays small. No row shows a name that long in full, so a page cannot have
+// taken one from a row, and a longer name cut to it matches nothing.
+const queryName = function (fields: Record<string, unknown>, name: string): string {
+    return stringField(fields, name).slice(0, MAX_NAME_LENGTH + 1);
+};
+
 const fieldsOf = function (body: unknown): Record<string, unknown> {
     return (body !== null && typeof body === 'object' && !Array.isArray(body) ? body : {}) as Record<string, unknown>;
 };
@@ -85,8 +92,8 @@ export interface ModelsQuery {
 export const parseModelsQuery = function (body: unknown): ModelsQuery {
     const fields = fieldsOf(body);
     return {
-        app: stringField(fields, 'app'),
-        channel: stringField(fields, 'channel'),
+        app: queryName(fields, 'app'),
+        channel: queryName(fields, 'channel'),
         filter: stringField(fields, 'filter').slice(0, MAX_FILTER_LENGTH),
         offset: integerField(fields, 'offset', 0, 0, Number.MAX_SAFE_INTEGER),
         limit: integerField(fields, 'limit', DEFAULT_MODELS_LIMIT, 1, MAX_MODELS_LIMIT),
@@ -250,7 +257,7 @@ export interface ModelQuery {
 
 export const parseModelQuery = function (body: unknown): ModelQuery {
     const fields = fieldsOf(body);
-    return { app: stringField(fields, 'app'), channel: stringField(fields, 'channel'), id: stringField(fields, 'id') };
+    return { app: queryName(fields, 'app'), channel: queryName(fields, 'channel'), id: queryName(fields, 'id') };
 };
 
 export interface ModelSnapshot {
