@@ -144,11 +144,20 @@ default `0.0.0.0` listens on IPv4 only. `::` listens on IPv6 and IPv4: set `TCP_
 `VOICE_HOST=::` and `WEBSERVER_HOST=::` for clients that reach the server over IPv6, e.g. a server
 whose DNS name has only an AAAA record because its IPv4 address is behind carrier-grade NAT.
 Another IPv6 address listens on that address only, without IPv4. Voice on `::` takes IPv4 too unless
-the system makes IPv6 sockets IPv6-only (Linux: `net.ipv6.bindv6only=1`). Unity clients send voice
-over IPv4 when the server name has an IPv4 address, and over IPv6 only when it has none. Behind a
-reverse proxy or Docker's published ports, it is the proxy or the published port that has to listen
-on IPv6, e.g. nginx with `listen [::]:9012;` and `listen [::]:9013 udp;` in its `stream` servers.
-The server's own settings can then stay at the default.
+the system makes IPv6 sockets IPv6-only (Linux: `net.ipv6.bindv6only=1`). Behind a reverse proxy or
+Docker's published ports, it is the proxy or the published port that has to listen on IPv6, e.g.
+nginx with `listen [::]:9012;` and `listen [::]:9013 udp;` in its `stream` servers. The server's own
+settings can then stay at the default.
+
+Unity clients send voice over IPv4 when the server name has an IPv4 address, and over IPv6 only when
+it has none. Their TCP connection tries the name's addresses in the device's order, usually IPv6
+first. The server relays voice only from the address of a Unity client's TCP connection
+([Voice relay](#voice-relay)), so with a name that has both an A and an AAAA record, the voice of a
+device whose TCP connection gets through over IPv6 is dropped. For voice, give the name only one of
+the two records, enter the IPv4 address as the Unity client's server address, or keep the TCP port
+off IPv6: the default `TCP_HOST`, and with Docker `"0.0.0.0:9012:9012"`, since Docker also publishes
+a port on IPv6. The same happens with `localhost` and `TCP_HOST=::` on Windows, which resolves
+`localhost` to `::1` first: TCP comes from `::1`, voice from `127.0.0.1`.
 
 `DATA_ROOT` and `WEBSERVER_ROOT` may be absolute, e.g. `DATA_ROOT=/var/lib/colibri`. Relative paths
 resolve from `dist/server`, so the defaults are `dist/ui` and `data` next to `dist`. In Docker, leave
@@ -553,7 +562,7 @@ Other packets are dropped with a warning, at most once per source every 10 s:
 
 | Warning | Cause |
 | --- | --- |
-| `Ignoring voice packet from <address>:<port> for app <app id>: no Unity client of that app is connected from <address> ...` | Expected for a moment while a Unity client connects or reconnects. If it persists, the client's voice and its TCP connection reach the server from different addresses, e.g. through a proxy. |
+| `Ignoring voice packet from <address>:<port> for app <app id>: no Unity client of that app is connected from <address> ...` | Expected for a moment while a Unity client connects or reconnects. If it persists, the client's voice and its TCP connection reach the server from different addresses, e.g. through a proxy, or TCP over IPv6 and voice over IPv4 ([Configuration](#configuration)). |
 | `Ignoring voice packet from <address>:<port> for app <app id>: <address> has <n> Unity client(s) of that app, and as many voice clients already ...` | Expected for up to 0.5 s after a Unity client's voice socket is opened again. If it persists, more voice sockets than TCP connections of that app send from the address, or someone forges packets from it. |
 
 Voice from an address in `TRUSTED_PROXIES` is relayed without the check and the limit, since through
