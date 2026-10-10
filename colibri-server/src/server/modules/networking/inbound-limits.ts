@@ -324,8 +324,8 @@ export class InboundRateLimiter<K> {
 
 // What a client over a limit is told happens to its messages, in both limits' warnings.
 export const LIMITED_TRAFFIC =
-    'its model updates are held back and merged per object - intermediate states are skipped, but the latest ' +
-    'value of every field still arrives - and its broadcast::* messages are dropped';
+    'its model updates are held back and merged per object (intermediate states are skipped, the latest ' +
+    'value of every field still arrives) and its broadcast::* messages are dropped';
 
 export const rateLimitStartWarning = function (who: string, limit: RateLimit): string {
     return (
