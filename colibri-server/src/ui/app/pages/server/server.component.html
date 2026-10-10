@@ -8,7 +8,7 @@
           <div class="card-head">
             <h2 [id]="'server-' + section.id">{{ section.title }}</h2>
             @if (section.id === 'server') {
-              <span class="live" title="Updated every second">Live</span>
+              <app-live-status></app-live-status>
             }
           </div>
           <dl class="facts">

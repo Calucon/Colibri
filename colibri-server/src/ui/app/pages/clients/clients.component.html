@@ -16,7 +16,7 @@
     @if (adminPages() > 0) {
       <span class="muted pages">{{ adminPages() }} admin {{ adminPages() === 1 ? 'page' : 'pages' }} open</span>
     }
-    <span class="live" title="Updated every second">Live</span>
+    <app-live-status></app-live-status>
   </div>
 </div>
 

@@ -6,6 +6,7 @@ import { toSignal } from '@angular/core/rxjs-interop';
 import { SelectModule } from 'primeng/select';
 import { AdminService, ClientRow, ClientService, ClientsSnapshot } from '../../services';
 import { LatencyChartComponent, clientColor } from '../../components/latency-chart/latency-chart.component';
+import { LiveStatusComponent } from '../../components/live-status/live-status.component';
 import { OfflineBannerComponent } from '../../components/offline-banner/offline-banner.component';
 import { appColor, isAddress, shortId } from '../../components/log-message/log-format';
 import { count, decimal, duration } from '../../format';
@@ -111,7 +112,7 @@ export const sortClients = function (rows: ReadonlyArray<ClientRow>, sort: Sort 
     selector: 'app-clients',
     templateUrl: './clients.component.html',
     styleUrl: './clients.component.scss',
-    imports: [DatePipe, FormsModule, RouterLink, SelectModule, LatencyChartComponent, OfflineBannerComponent],
+    imports: [DatePipe, FormsModule, RouterLink, SelectModule, LatencyChartComponent, LiveStatusComponent, OfflineBannerComponent],
     changeDetection: ChangeDetectionStrategy.OnPush
 })
 export class ClientsComponent {

@@ -2,6 +2,7 @@ import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/c
 import { DatePipe } from '@angular/common';
 import { RouterLink } from '@angular/router';
 import { AdminService, ServerSnapshot, SettingValue } from '../../services';
+import { LiveStatusComponent } from '../../components/live-status/live-status.component';
 import { OfflineBannerComponent } from '../../components/offline-banner/offline-banner.component';
 import { count, duration } from '../../format';
 
@@ -168,7 +169,7 @@ export const serverSections = function (s: ServerSnapshot, format: (time: number
     selector: 'app-server',
     templateUrl: './server.component.html',
     styleUrl: './server.component.scss',
-    imports: [RouterLink, OfflineBannerComponent],
+    imports: [RouterLink, LiveStatusComponent, OfflineBannerComponent],
     providers: [DatePipe],
     changeDetection: ChangeDetectionStrategy.OnPush
 })
