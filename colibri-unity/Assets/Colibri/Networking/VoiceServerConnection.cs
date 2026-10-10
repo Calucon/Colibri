@@ -199,7 +199,7 @@ namespace HCIKonstanz.Colibri.Networking
         {
             var config = ColibriConfig.Load();
             var host = config.ServerAddress;
-            var address = ResolveServerAddress(host);
+            var address = ResolveServerAddress(host, config.VoiceServerPort);
             udpClient = address != null ? OpenSocket(address) : null;
 
             if (udpClient != null)
@@ -248,7 +248,7 @@ namespace HCIKonstanz.Colibri.Networking
         /// a LAN address with no DNS name and threw out of OnEnable. An IPv6 address in brackets
         /// is taken apart first, as for the TCP connection.
         /// </remarks>
-        private static IPAddress ResolveServerAddress(string host)
+        private static IPAddress ResolveServerAddress(string host, int port)
         {
             IPAddress[] candidates;
             if (WebServerConnection.TryParseAddress(host, out var literal))
@@ -268,11 +268,14 @@ namespace HCIKonstanz.Colibri.Networking
                 }
             }
 
-            var address = SelectServerAddress(candidates);
+            var address = SelectServerAddress(candidates, candidate => HasRoute(candidate, port));
             if (address == null)
             {
                 var found = candidates.Length == 0 ? "no addresses at all" : string.Join<IPAddress>(", ", candidates);
-                Debug.LogError($"Colibri voice: the server address '{host}' resolved to {found}, none of which voice can be sent to. Voice chat is off. Check the address in Window -> Colibri Configuration.");
+                if (Array.Exists(candidates, IsSendableIPv6))
+                    Debug.LogError($"Colibri voice: the server address '{host}' has only IPv6 addresses ({found}), and this device has no route to them, as on a network with IPv4 only. Voice chat is off.");
+                else
+                    Debug.LogError($"Colibri voice: the server address '{host}' resolved to {found}, none of which voice can be sent to. Voice chat is off. Check the address in Window -> Colibri Configuration.");
             }
 
             return address;
@@ -280,7 +283,8 @@ namespace HCIKonstanz.Colibri.Networking
 
         /// <summary>
         /// Picks the address voice goes to, out of everything a name resolved to: IPv4 when the
-        /// name has an IPv4 address, otherwise IPv6.
+        /// name has an IPv4 address, otherwise IPv6 that <paramref name="hasRoute"/> says the
+        /// device has a route to.
         /// </summary>
         /// <remarks>
         /// IPv4 first because the server's voice socket is IPv4 unless VOICE_HOST is an IPv6
@@ -290,10 +294,14 @@ namespace HCIKonstanz.Colibri.Networking
         /// IPv6 address is as good as the IPv4 address inside it. IPv6 is for a name with no IPv4
         /// address at all, such as a server whose IPv4 address is behind carrier-grade NAT. A
         /// link-local IPv6 address without a scope (an interface) cannot be sent to, and is
-        /// skipped.
+        /// skipped. So is an IPv6 address without a route: on Wi-Fi with IPv4 only, which gives
+        /// a device a link-local IPv6 address and nothing more, every send to it failed at once.
+        /// IPv4 is taken without asking, as before IPv6 was an option: a device still joining
+        /// Wi-Fi has no route yet, and starts sending once it has one.
         /// </remarks>
+        /// <param name="hasRoute">Whether the device has a route to an IPv6 address; see <see cref="HasRoute"/>.</param>
         /// <returns>An IPv4 or IPv6 address, or null when there is none voice can be sent to.</returns>
-        internal static IPAddress SelectServerAddress(IPAddress[] candidates)
+        internal static IPAddress SelectServerAddress(IPAddress[] candidates, Func<IPAddress, bool> hasRoute)
         {
             if (candidates == null)
                 return null;
@@ -312,11 +320,37 @@ namespace HCIKonstanz.Colibri.Networking
 
             foreach (var candidate in candidates)
             {
-                if (candidate.AddressFamily == AddressFamily.InterNetworkV6 && !(candidate.IsIPv6LinkLocal && candidate.ScopeId == 0))
+                if (IsSendableIPv6(candidate) && hasRoute(candidate))
                     return candidate;
             }
 
             return null;
+        }
+
+        private static bool IsSendableIPv6(IPAddress address)
+            => address.AddressFamily == AddressFamily.InterNetworkV6 && !(address.IsIPv6LinkLocal && address.ScopeId == 0);
+
+        /// <summary>
+        /// Whether the device has a route to <paramref name="address"/>. Connecting a UDP socket
+        /// sends nothing: it only looks the route up, and fails at once without one.
+        /// </summary>
+        /// <remarks>Internal for the EditMode tests.</remarks>
+        internal static bool HasRoute(IPAddress address, int port)
+        {
+            try
+            {
+                using (var probe = new Socket(address.AddressFamily, SocketType.Dgram, ProtocolType.Udp))
+                {
+                    probe.Connect(new IPEndPoint(address, port));
+                    return true;
+                }
+            }
+            catch (Exception)
+            {
+                // NetworkUnreachable, or no sockets of that family on this device or runtime, which
+                // OpenSocket would fail on as well.
+                return false;
+            }
         }
 
         /// <summary>
