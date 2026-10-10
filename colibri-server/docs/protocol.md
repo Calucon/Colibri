@@ -516,7 +516,7 @@ sending the previous one; the next replaces it.
 
 | Topic | Query | Snapshot |
 | --- | --- | --- |
-| `server` | none | `{ version, build, protocolVersion, node, startedAt, uptime, settings, tls, voice, counts }` |
+| `server` | none | `{ version, build, protocolVersion, node, startedAt, uptime, settings, tls, tlsAtProxy, voice, counts }` |
 | `clients` | none | `{ clients: ClientRow[], total, adminPages }`, at most 1000 rows |
 | `models` | `{ app?, channel?, filter?, offset?, limit? }` | `{ query, channels, channelsTotal, models: ModelRow[], total, deleted, deletedTotal, tombstoneSeconds }` |
 | `model` | `{ app, channel, id }` | `{ app, channel, id, found, deletedAt?, fields?, bytes?, updatedAt?, json?, truncated? }` |
@@ -527,17 +527,21 @@ sending the previous one; the next replaces it.
   `APP_CLIENT_WARNING_THRESHOLD`, `MODEL_TOMBSTONE_SECONDS`, `TRUSTED_PROXIES` and
   `TCP_PROXY_PROTOCOL`. `tls` is `null` without TLS, otherwise
   `{ names, issuer, selfSigned, validFrom, validTo, fingerprint256 }` of the certificate served now;
-  never paths, key material or file contents. `voice` is `{ listening, recording, samplingRate, clients }`.
+  never paths, key material or file contents. `tlsAtProxy` is `{ web }`: `web` is `true` while a web
+  client or admin page connected now, the asking page included, reached a trusted proxy over TLS, as
+  `tlsAtProxy` in `clients`. `voice` is `{ listening, recording, samplingRate, clients }`.
   `counts` is `{ tcpClients, webClients, adminPages, apps, models, modelApps, modelChannels,
   deletedModels, storeApps, storeKeys }`. `uptime` is in seconds. `build` is `{ commit, dirty, builtAt }`:
   the full hash of the git commit the server was built from, whether `colibri-server` had uncommitted
   changes then, and the build time. `commit` is `null` for a build without git information, `builtAt`
   for a build that did not record it (`tsc` alone).
 - **`clients`:** every client except admin UI pages. A row is
-  `{ id, app, name, transport, version, tls, address, connectedAt, latency, in, out, limit, held }`:
+  `{ id, app, name, transport, version, tls, tlsAtProxy, address, connectedAt, latency, in, out, limit, held }`:
   `transport` is `tcp` or `web`, `address` the client's own address (from the PROXY protocol header or
   `X-Forwarded-For` behind a trusted proxy), `tls` whether its connection to this server is encrypted,
-  `latency` the median round trip of the last second in ms, `in` and `out` the messages it sent and
+  `tlsAtProxy` whether it reached a trusted proxy over TLS: the proxy's right-most `X-Forwarded-Proto`
+  entry is `https` or `wss`, in any case (always `false` for `tcp`: a PROXY protocol header does not
+  say), `latency` the median round trip of the last second in ms, `in` and `out` the messages it sent and
   was sent per second (heartbeats and `colibri` latency pings not counted; `colibri::latency` is, so
   an idle web client shows about 1 out), `null` in its first second, and for every TCP client when
   the TCP worker did not answer within 1 s, `limit` the load limit holding its updates back now
