@@ -121,7 +121,7 @@ with its default.
 | --- | --- | --- |
 | `WEBSERVER_HOST`, `WEBSERVER_PORT` | `0.0.0.0`, `9011` | Admin UI, web clients (Socket.IO), REST store |
 | `TCP_HOST`, `TCP_PORT` | `0.0.0.0`, `9012` | Unity clients |
-| `VOICE_HOST`, `VOICE_PORT` | `0.0.0.0`, `9013` | Voice relay (UDP, IPv4) |
+| `VOICE_HOST`, `VOICE_PORT` | `0.0.0.0`, `9013` | Voice relay (UDP). IPv4, or IPv6 and IPv4 with an IPv6 address such as `::` |
 | `VOICE_SAMPLING_RATE` | `48000` | Sampling rate of voice recordings, in Hz |
 | `VOICE_RECORDING` | `false` | `true` saves each voice client's PCM audio as a `.wav` file in the data directory, named as in [Voice packets](protocol.md#voice-packets-udp) |
 | `DATA_ROOT` | `../../data` | Data directory: `store.json` and voice recordings |
@@ -138,6 +138,17 @@ with its default.
 | `TLS_CERT`, `TLS_KEY` | empty | PEM files of the certificate with its chain, and of its private key. With both set, the TCP and web ports serve [TLS](#tls) only. |
 | `TRUSTED_PROXIES` | empty | Reverse proxies trusted to report the client's address: IP addresses, CIDR ranges and `loopback`, `linklocal`, `uniquelocal`, separated by commas, as in Express's `trust proxy`. Empty: none. See [Behind a reverse proxy](#behind-a-reverse-proxy). |
 | `TCP_PROXY_PROTOCOL` | `false` | `true`: a connection to the TCP port from a `TRUSTED_PROXIES` address must start with a PROXY protocol header, which names the Unity client. Requires `TRUSTED_PROXIES`. |
+
+The `*_HOST` settings take an IPv4 address, an IPv6 address without brackets, or a host name. The
+default `0.0.0.0` listens on IPv4 only. `::` listens on IPv6 and IPv4: set `TCP_HOST=::`,
+`VOICE_HOST=::` and `WEBSERVER_HOST=::` for clients that reach the server over IPv6, e.g. a server
+whose DNS name has only an AAAA record because its IPv4 address is behind carrier-grade NAT. Voice
+on `::` takes IPv4 too unless the system makes IPv6 sockets IPv6-only (Linux:
+`net.ipv6.bindv6only=1`). Unity clients send voice over IPv4 when the server name has an IPv4
+address, and over IPv6 only when it has none. Behind a reverse proxy or Docker's published ports, it
+is the proxy or the published port that has to listen on IPv6, e.g. nginx with `listen [::]:9012;`
+and `listen [::]:9013 udp;` in its `stream` servers. The server's own settings can then stay at the
+default.
 
 `DATA_ROOT` and `WEBSERVER_ROOT` may be absolute, e.g. `DATA_ROOT=/var/lib/colibri`. Relative paths
 resolve from `dist/server`, so the defaults are `dist/ui` and `data` next to `dist`. In Docker, leave

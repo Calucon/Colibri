@@ -804,6 +804,10 @@ saved yet, and leaves `store.json` untouched if that is nothing.
 colibri-unity's voice chat sends each audio frame to the voice port (`VOICE_PORT`, UDP 9013) as one
 datagram: an 11-byte header, then the audio. All integers are little-endian.
 
+The voice port takes IPv4, and with an IPv6 `VOICE_HOST` such as `::` IPv6 as well; there an IPv4
+client's address appears as `::ffff:<IPv4 address>` in the log. colibri-unity sends to an IPv4
+address of the server when the server address has one, and to an IPv6 address only when it has none.
+
 ```
 [i16 userId][i16 sequence][i16 frameSize][u8 version and codec][u32 appId][data]
 ```

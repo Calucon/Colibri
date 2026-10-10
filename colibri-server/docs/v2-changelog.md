@@ -342,6 +342,13 @@ EditMode tests, which `npm run test:vectors` checks in CI.
   replaced the first.
 - The app id keeps apps apart but is not access control: anyone who knows an app's name can send
   and receive its voice. Voice is not encrypted.
+- **Voice on IPv6.** A `VOICE_HOST` that is an IPv6 address, `::` included, gets an IPv6 socket
+  that takes IPv4 clients as well and relays between the two kinds. The voice socket was always
+  IPv4, which cannot bind an IPv6 address: `VOICE_HOST=::` failed with `bind EINVAL` and voice
+  stayed off. Any other `VOICE_HOST` keeps the IPv4 socket. `TCP_HOST` and `WEBSERVER_HOST` already
+  took an IPv6 address, so `::` on all three serves clients that reach the server over IPv6, such
+  as colibri-unity 2.0.0 with a server name that has only an AAAA record. See
+  [Configuration](./guide.md#configuration).
 
 ### Load and lost connections
 
@@ -627,6 +634,9 @@ The endpoints are documented under [REST store](./protocol.md#rest-store).
 - Unit tests for `TRUSTED_PROXIES` matching, `X-Forwarded-For` on Socket.IO and `req.ip`, the
   PROXY protocol reader (both versions, split, malformed and oversized headers), and the TCP worker
   behind a proxy, with and without TLS.
+- Unit tests for the voice socket's type for each kind of `VOICE_HOST`, voice relayed over the
+  IPv6 loopback and between IPv4 and IPv6 clients on `::`, and the TCP and web listeners on `::`
+  taking clients over both. They are skipped on a machine without an IPv6 loopback.
 - Unit tests for the admin UI channel: snapshot sizes bounded for large stores and long query names,
   the store left unchanged, nothing sent or asked of the TCP worker without a subscription,
   subscriptions ending with the page, refreshes skipped for a page that stopped reading, the request
