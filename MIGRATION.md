@@ -129,7 +129,10 @@ own voice code to
 address. Voice that reaches it through a UDP proxy, or from another address than the client's TCP
 connection, is now dropped with `Ignoring voice packet from <address>:<port> for app <app id>: no
 Unity client of that app is connected from <address>`. Add the proxy to `TRUSTED_PROXIES`, or
-publish 9013/udp directly ([Voice relay](colibri-server/docs/guide.md#voice-relay)).
+publish 9013/udp directly ([Voice relay](colibri-server/docs/guide.md#voice-relay)). colibri-unity
+2.0 connects over IPv4 when the server name has an IPv4 address, as 1.x did, and sends voice there
+too. If that address does not answer on the TCP port while the name's IPv6 address does, TCP falls
+back to IPv6 and the voice is dropped.
 
 **Removed dependencies:** `flatbuffers`, `body-parser`, `uuid` and `source-map-support`.
 
