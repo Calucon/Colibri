@@ -7,11 +7,12 @@ import { matchesSearch } from '../../components/log-message/log-format';
 
 /**
  * How many lines are on the page at first, and how many more each "Show older lines" adds: half
- * as many on a phone. The rows have the height their text needs, so they are not virtualized,
- * and a page of 10,000 rows would take seconds to build on a phone.
+ * as many on a phone, upright or sideways. The rows have the height their text needs, so they
+ * are not virtualized, and a page of 10,000 rows would take seconds to build on a phone.
  */
 export const PAGE_SIZE = 1000;
-const screenPageSize = (): number => window.matchMedia?.('(max-width: 699.98px)').matches ? PAGE_SIZE / 2 : PAGE_SIZE;
+const screenPageSize = (): number =>
+    window.matchMedia?.('(max-width: 699.98px), (max-height: 499.98px)').matches ? PAGE_SIZE / 2 : PAGE_SIZE;
 
 /** How close to the end, in px, still counts as at the end. */
 const END_SLACK = 24;

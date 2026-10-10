@@ -5,7 +5,8 @@
 }
 
 // Wide screens: one row. Below 1100px the search, app and sync controls take a second row, and
-// on a phone they fold away behind the Filters button.
+// on a phone, or a screen as short as a phone held sideways, they fold away behind the Filters
+// button.
 .bar {
     display: flex;
     flex-wrap: wrap;
@@ -253,7 +254,7 @@
     }
 }
 
-@media (max-width: 699.98px) {
+@media (max-width: 699.98px), (max-height: 499.98px) {
     .bar {
         gap: 6px;
         padding: 6px max(12px, env(safe-area-inset-right)) 6px max(12px, env(safe-area-inset-left));
@@ -318,17 +319,6 @@
         max-width: none;
     }
 
-    .search input,
-    .chip,
-    .more-toggle {
-        height: 40px;
-    }
-
-    .apps ::ng-deep .p-select-label {
-        padding-top: 11px;
-        padding-bottom: 11px;
-    }
-
     .sync {
         min-height: 44px;
 
@@ -364,6 +354,21 @@
         background: var(--surface-2);
         border-color: var(--surface-2);
         font-weight: 400;
+    }
+}
+
+// Targets a finger can hit: on a touch screen, and on any phone-sized one.
+@media (pointer: coarse), (max-width: 699.98px) {
+    .search input,
+    .chip,
+    .follow,
+    .more-toggle {
+        height: 40px;
+    }
+
+    .apps ::ng-deep .p-select-label {
+        padding-top: 11px;
+        padding-bottom: 11px;
     }
 }
 

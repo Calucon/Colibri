@@ -65,6 +65,14 @@
     }
 }
 
+// a phone held sideways has few lines to spare for it
+@media (max-height: 499.98px) {
+    .day {
+        position: static;
+        box-shadow: none;
+    }
+}
+
 .older {
     display: block;
     margin: 8px auto;
