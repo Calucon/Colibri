@@ -831,6 +831,9 @@ and instantiates `VoiceReceiver` prefabs.
   voice needs `WebServerConnection` connected too, from the same address. Voice sent through a
   reverse proxy comes from the proxy's address instead
   ([Voice relay](../../colibri-server/docs/guide.md#voice-relay)).
+- The server takes one voice sender per connected client. Disabling and re-enabling
+  `VoiceServerConnection` sends from a new port, which the server lets in once the old one has been
+  quiet for 0.5 s.
 - After an App Name change at runtime, voice stops until `WebServerConnection` reconnects with the
   new App Name. Synced objects and `Sync` messages, such as voice ids sent with `Sync.Send`, stay in
   the old app until then. Disable and re-enable that component to move them.
