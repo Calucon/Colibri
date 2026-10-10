@@ -42,13 +42,21 @@ class FakeUnityClients implements UnityClientSource {
         this.currentClients.splice(this.currentClients.indexOf(client), 1);
         this.disconnected.next(client);
     }
+
+    public disconnectApp(app: string): void {
+        for (const client of this.currentClients.filter(client => client.app === app)) this.disconnect(client);
+    }
 }
 
-// Voice is relayed only from the address of a Unity client of the packet's app. The tests that are
-// not about that send from 127.0.0.1, in these apps.
+// Voice is relayed only from the address of a Unity client of the packet's app, one voice client
+// per Unity client. The tests that are not about that send from 127.0.0.1, in these apps, from up
+// to this many sockets per app.
+const LOOPBACK_UNITY_CLIENTS = 8;
 const unityClientsOnLoopback = function (): FakeUnityClients {
     const unity = new FakeUnityClients();
-    for (const app of [ 'voice-test', 'app-a', 'app-b' ]) unity.connect(app, '127.0.0.1');
+    for (const app of [ 'voice-test', 'app-a', 'app-b' ]) {
+        for (let i = 0; i < LOOPBACK_UNITY_CLIENTS; i++) unity.connect(app, '127.0.0.1');
+    }
     return unity;
 };
 
@@ -509,6 +517,8 @@ describe('VoiceServer', () => {
         const settled = () => new Promise<void>(resolve => setImmediate(resolve));
 
         const ignoredReports = () => logs.filter(l => l.origin === 'VoiceServer' && l.level === LogLevel.Warn && /no Unity client/.test(l.message));
+        const noRoomReports = () => logs.filter(l => l.origin === 'VoiceServer' && l.level === LogLevel.Warn && /as many voice clients already/.test(l.message));
+        const appOf = (key: string) => (internals.clients.get(key) as { appId: number } | undefined)?.appId;
 
         it('relays voice from the address of a Unity client of the same app', () => {
             const sent = relays(internals.udpSocket);
@@ -560,6 +570,87 @@ describe('VoiceServer', () => {
             expect(ignoredReports().map(l => l.message.replace(/ \(further .*$/, ''))).toEqual([
                 `Ignoring voice packet from 192.0.2.1:5001 for app ${appHex(OTHER)}: no Unity client of that app is connected from 192.0.2.1`,
                 `Ignoring voice packet from 192.0.2.1:5003 for app ${appHex(OTHER)}: no Unity client of that app is connected from 192.0.2.1`,
+            ]);
+        });
+
+        // Each voice client at an address has the app's voice sent there once more, and each source
+        // port was one: forged packets from a thousand ports at a participant's address had every
+        // packet of the app sent there a thousand times.
+        it('lets in no more voice clients from an address than Unity clients of their app are connected from it', () => {
+            const sent = relays(internals.udpSocket);
+            unity.connect('lab', '192.0.2.1');
+            unity.connect('lab', '192.0.2.2');
+            deliver(internals.udpSocket, '192.0.2.1', 5001, voicePacket(1, 0, [], LAB));
+
+            for (let port = 10000; port < 11000; port++) deliver(internals.udpSocket, '192.0.2.1', port, voicePacket(9, 0, [], LAB));
+            deliver(internals.udpSocket, '192.0.2.2', 5002, voicePacket(2, 0, [ 2, 0 ], LAB));
+
+            expect(sent).toEqual([ '192.0.2.1:5001' ]);
+            expect([ ...internals.clients.keys() ].sort()).toEqual([ '192.0.2.1:5001', '192.0.2.2:5002' ]);
+            // Once per source, for as many sources as are remembered at a time.
+            expect(noRoomReports()).toHaveLength(100);
+            expect(noRoomReports()[0]!.message).toBe(`Ignoring voice packet from 192.0.2.1:10000 for app ${appHex(LAB)}: `
+                + '192.0.2.1 has 1 Unity client(s) of that app, and as many voice clients already (further ones from this source are not reported for 10s)');
+            expect(ignoredReports()).toHaveLength(0);
+        });
+
+        // Headsets behind one NAT address, or the Unity Editor and a build on one machine.
+        it('lets in one voice client per Unity client of its app at an address', () => {
+            unity.connect('lab', '192.0.2.1');
+            unity.connect('lab', '::ffff:192.0.2.1');
+            unity.connect('other', '192.0.2.1');
+            unity.connect('other', '192.0.2.1');
+
+            deliver(internals.udpSocket, '192.0.2.1', 5001, voicePacket(1, 0, [], LAB));
+            deliver(internals.udpSocket, '192.0.2.1', 5003, voicePacket(3, 0, [], LAB));
+            deliver(internals.udpSocket, '192.0.2.1', 5005, voicePacket(5, 0, [], LAB));
+            deliver(internals.udpSocket, '192.0.2.1', 5007, voicePacket(7, 0, [], OTHER));
+            // Nor can one move into an app without room for it. It stays where it was.
+            deliver(internals.udpSocket, '192.0.2.1', 5007, voicePacket(7, 1, [], LAB));
+            expect([ ...internals.clients.keys() ].sort()).toEqual([ '192.0.2.1:5001', '192.0.2.1:5003', '192.0.2.1:5007' ]);
+            expect(appOf('192.0.2.1:5007')).toBe(OTHER);
+
+            // One that moves out makes room.
+            deliver(internals.udpSocket, '192.0.2.1', 5003, voicePacket(3, 1, [], OTHER));
+            deliver(internals.udpSocket, '192.0.2.1', 5005, voicePacket(5, 1, [], LAB));
+
+            expect([ '192.0.2.1:5001', '192.0.2.1:5003', '192.0.2.1:5005', '192.0.2.1:5007' ].map(appOf)).toEqual([ LAB, OTHER, LAB, OTHER ]);
+            expect(noRoomReports().map(l => l.message.replace(/ \(further .*$/, ''))).toEqual([
+                `Ignoring voice packet from 192.0.2.1:5005 for app ${appHex(LAB)}: 192.0.2.1 has 2 Unity client(s) of that app, and as many voice clients already`,
+                `Ignoring voice packet from 192.0.2.1:5007 for app ${appHex(LAB)}: 192.0.2.1 has 2 Unity client(s) of that app, and as many voice clients already`,
+            ]);
+        });
+
+        // VoiceServerConnection disabled and enabled again sends from a new port, while the voice
+        // client of the old one has not timed out yet.
+        it('lets a new sender take the place of a voice client that has sent nothing for 500 ms', () => {
+            const sent = relays(internals.udpSocket);
+            unity.connect('lab', '192.0.2.1');
+            unity.connect('lab', '192.0.2.2');
+
+            vi.useFakeTimers({ toFake: [ 'Date' ] });
+            try {
+                const start = Date.now();
+                deliver(internals.udpSocket, '192.0.2.1', 5001, voicePacket(1, 0, [], LAB));
+                deliver(internals.udpSocket, '192.0.2.2', 5002, voicePacket(2, 0, [], LAB));
+
+                vi.setSystemTime(start + 499);
+                deliver(internals.udpSocket, '192.0.2.1', 5003, voicePacket(1, 0, [], LAB));
+                expect([ ...internals.clients.keys() ].sort()).toEqual([ '192.0.2.1:5001', '192.0.2.2:5002' ]);
+
+                vi.setSystemTime(start + 500);
+                deliver(internals.udpSocket, '192.0.2.1', 5003, voicePacket(1, 1, [], LAB));
+                deliver(internals.udpSocket, '192.0.2.2', 5002, voicePacket(2, 1, [ 2, 0 ], LAB));
+            } finally {
+                vi.useRealTimers();
+            }
+
+            expect(sent).toEqual([ '192.0.2.1:5001', '192.0.2.2:5002', '192.0.2.1:5003' ]);
+            expect([ ...internals.clients.keys() ].sort()).toEqual([ '192.0.2.1:5003', '192.0.2.2:5002' ]);
+            expect(noRoomReports()).toHaveLength(1);
+            const replaced = logs.filter(l => l.origin === 'VoiceServer' && /takes its place/.test(l.message));
+            expect(replaced.map(l => [ l.level, l.message, l.metadata ])).toEqual([
+                [ LogLevel.Debug, 'Voice client 192.0.2.1:5001 disconnected ID: 1: no packet for 500 ms, and 192.0.2.1:5003 takes its place', { connection: true } ],
             ]);
         });
 
@@ -1043,7 +1134,7 @@ describe('VoiceServer recordings', () => {
     it('saves the recording of a voice client dropped because its Unity client left, once', async () => {
         const samples = someSamples(960, 9);
         await talk(9, samples);
-        unity.disconnect(unity.currentClients.find(client => client.app === 'voice-test')!);
+        unity.disconnectApp('voice-test');
         await new Promise(resolve => setImmediate(resolve));
         expect(internals.clients.size).toBe(0);
 
@@ -1060,7 +1151,7 @@ describe('VoiceServer recordings', () => {
     it('saves the recording of a voice client dropped because its Unity client left when it stops first', async () => {
         const samples = someSamples(480, 10);
         await talk(10, samples);
-        unity.disconnect(unity.currentClients.find(client => client.app === 'voice-test')!);
+        unity.disconnectApp('voice-test');
         await new Promise(resolve => setImmediate(resolve));
 
         await server.stop();

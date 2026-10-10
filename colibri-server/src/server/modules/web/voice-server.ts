@@ -55,14 +55,36 @@ interface VoiceClient {
     codec: VoiceCodec;
     recordingStartDate: Date;
     recordingData: GrowableInt16Buffer;
-    // Let in because its address is in TRUSTED_PROXIES, not because a Unity client of its app is
-    // connected from it (see admit), so it is dropped only once it goes quiet.
-    throughProxy: boolean;
+    // The voice clients of its app let in from its address, itself included (see admit).
+    // Undefined for one let in because its address is in TRUSTED_PROXIES: that is neither checked
+    // nor limited, so it is dropped only once it goes quiet.
+    group: VoiceClientGroup | undefined;
 }
 
-// Why a voice packet may be relayed: a Unity client of its app is connected from its address, or
-// its address is a trusted proxy's.
+// The voice clients of one app let in from one address (normalized). Each has the app's voice sent
+// to that address once more, and anyone can add one by forging a source port there, so there are
+// never more of them than Unity clients of the app connected from there (see admit).
+interface VoiceClientGroup {
+    readonly key: string;
+    readonly address: string;
+    readonly appId: number;
+    readonly clients: Set<VoiceClient>;
+}
+
+// Why a voice packet may be relayed: there is room for its sender among the voice clients of its
+// app at its address, or its address is a trusted proxy's.
 type Admission = 'unity' | 'proxy';
+
+const voiceClientKey = (address: string, port: number): string => `${address}:${port}`;
+const groupKey = (address: string, appId: number): string => `${address} ${appId}`;
+
+// A voice client sends a packet every 20 ms while it broadcasts (VoiceBroadcast's default frame).
+// One that has sent nothing for this long is taken to be gone when a new sender of its app at its
+// address needs its place, as when a Unity client's voice socket is opened again, on a new port.
+// Waiting for the 2 s disconnect timeout would cut that client's voice for 2 to 3 s. Taking the
+// place of one still sending would let any forged packet take it, and two clients that both send
+// would take it from each other at packet rate, cutting their recordings into 20 ms pieces.
+const VOICE_CLIENT_GONE_MILLIS = 500;
 
 // What getAppClients hands back for an app with no voice clients.
 const NO_CLIENTS: readonly VoiceClient[] = [];
@@ -156,8 +178,10 @@ export class VoiceServer extends Service {
     // The trusted proxies whose voice has been said to be relayed unchecked, so it is said once for
     // each. Bounded by REPORT_MAX_KEYS, as TRUSTED_PROXIES may name whole ranges.
     private readonly uncheckedProxies = new Set<string>();
-    // The recordings of voice clients dropped because their Unity client left (see
-    // dropVoiceClients), for the next disconnect check, or stop(), to save.
+    // The voice clients let in for the Unity clients of each app at each address, by groupKey.
+    private readonly groups = new Map<string, VoiceClientGroup>();
+    // The recordings of voice clients dropped (see dropVoiceClient), for the next disconnect check,
+    // or stop(), to save.
     private droppedRecordings: VoiceClient[] = [];
 
     // `unityClients`: TCPServerProxy. `trustProxy`: TRUSTED_PROXIES, whose voice is relayed unchecked.
@@ -170,7 +194,7 @@ export class VoiceServer extends Service {
     ) {
         super();
         this.unityClients = new UnityClientAddresses(unityClients);
-        this.unityClients.left$.subscribe(({ address, appId }) => this.dropVoiceClients(address, appId));
+        this.unityClients.left$.subscribe(({ address, appId }) => this.onUnityClientsLeft(address, appId));
     }
 
     // For the admin UI's server info.
@@ -190,7 +214,7 @@ export class VoiceServer extends Service {
         this.udpSocket.on('message', (message, remote) => {
             const now = new Date();
             const nowMillis = now.getTime();
-            const clientKey = `${remote.address}:${remote.port}`;
+            const clientKey = voiceClientKey(remote.address, remote.port);
 
             // A Colibri 1.x client's header has no appId, so there is no app to relay its
             // packets to. Its codec byte (0 or 1) is where the header version is now, which
@@ -238,12 +262,11 @@ export class VoiceServer extends Service {
             let voiceClient = this.clients.get(clientKey);
 
             // Checked for a sender that is new or changes app. One already let in needs no check:
-            // it is dropped as soon as the Unity client it was let in for leaves (dropVoiceClients).
-            let throughProxy = voiceClient?.throughProxy ?? false;
+            // it is dropped as soon as the Unity clients it was let in for leave (onUnityClientsLeft).
+            let admission: Admission | undefined;
             if (!voiceClient || voiceClient.appId !== appId) {
-                const admission = this.admit(remote.address, appId, clientKey, nowMillis);
+                admission = this.admit(remote.address, appId, clientKey, nowMillis);
                 if (!admission) return;
-                throughProxy = admission === 'proxy';
             }
 
             // Add to clients if new client
@@ -260,13 +283,14 @@ export class VoiceServer extends Service {
                     codec,
                     recordingStartDate: now,
                     recordingData: new GrowableInt16Buffer(),
-                    throughProxy,
+                    group: undefined,
                 };
                 this.clients.set(clientKey, voiceClient);
+                if (admission === 'unity') this.joinGroup(voiceClient, remote.address);
                 this.appClients = undefined;
                 this.logDebug(
                     `New voice client connected from ${remote.address}:${remote.port} ID: ${userId} App: ${formatAppId(appId)} Codec: ${codec === VoiceCodec.OPUS ? 'Opus' : 'PCM'}`
-                        + (throughProxy ? ' (through a trusted proxy, unchecked)' : ''),
+                        + (admission === 'proxy' ? ' (through a trusted proxy, unchecked)' : ''),
                     CONNECTION_LINE
                 );
                 if (this.recordingVoiceData) {
@@ -276,8 +300,9 @@ export class VoiceServer extends Service {
             } else if (voiceClient.appId !== appId) {
                 // Its app name changed: from now on it hears, and is heard by, the new app.
                 this.logDebug(`Voice client ${remote.address}:${remote.port} ID: ${voiceClient.userId} moved from app ${formatAppId(voiceClient.appId)} to app ${formatAppId(appId)}`);
+                this.leaveGroup(voiceClient);
                 voiceClient.appId = appId;
-                voiceClient.throughProxy = throughProxy;
+                if (admission === 'unity') this.joinGroup(voiceClient, remote.address);
                 this.appClients = undefined;
             }
 
@@ -361,6 +386,7 @@ export class VoiceServer extends Service {
         const pendingRecordings = this.droppedRecordings.concat(Array.from(this.clients.values()).filter(client => client.recordingData.length > 0));
         this.droppedRecordings = [];
         this.clients.clear();
+        this.groups.clear();
         this.appClients = undefined;
         if (pendingRecordings.length === 0) return;
 
@@ -371,39 +397,93 @@ export class VoiceServer extends Service {
     }
 
     // Whether a packet from `address` for the app `appId` may be relayed, and its sender be relayed
-    // to. Anyone can compute an app's id from its name, and forge a packet's source address. While
-    // every sender was let in, one forged packet every 2 s had this server stream an app's voice to
-    // whatever address it named. Now a sender has to be at the address of a Unity client of the
-    // app, which takes a TCP connection from there.
+    // to. Anyone can compute an app's id from its name, and forge a packet's source address and
+    // port. While every sender was let in, one forged packet every 2 s had this server stream an
+    // app's voice to whatever address it named. Now a sender has to be at the address of a Unity
+    // client of the app, which takes a TCP connection from there, and each such Unity client lets
+    // in one voice client. Otherwise forged source ports at a participant's address would each have
+    // the app's voice sent there once more: a thousand of them, a thousand copies of every packet.
     private admit(address: string, appId: number, source: string, nowMillis: number): Admission | undefined {
         // Behind a proxy every voice packet comes from the proxy's address, which says nothing
-        // about who sent it: nothing can be checked there. Asked first, so that a Unity client on
-        // the proxy's machine does not have the voice of everyone behind the proxy taken for its
-        // own, and dropped when it leaves.
+        // about who sent it: nothing can be checked, or counted, there. Asked first, so that a
+        // Unity client on the proxy's machine does not have the voice of everyone behind the proxy
+        // taken for its own, and dropped when it leaves.
         if (this.trustProxy(address, 0)) {
             this.reportUncheckedProxy(address);
             return 'proxy';
         }
 
-        if (this.unityClients.has(normalizeAddress(address), appId)) return 'unity';
+        const normalized = normalizeAddress(address);
+        const unityClients = this.unityClients.count(normalized, appId);
+        if (unityClients === 0) {
+            this.reportNoUnityClient(source, address, appId, nowMillis);
+            return undefined;
+        }
 
-        this.reportNoUnityClient(source, address, appId, nowMillis);
-        return undefined;
+        const group = this.groups.get(groupKey(normalized, appId));
+        if (group && group.clients.size >= unityClients && !this.dropGoneVoiceClient(group, source, nowMillis)) {
+            this.reportNoRoom(source, address, appId, unityClients, nowMillis);
+            return undefined;
+        }
+        return 'unity';
+    }
+
+    // Makes room in `group` for `source` by dropping the voice client that has gone the longest
+    // without a packet, if that is VOICE_CLIENT_GONE_MILLIS or more.
+    private dropGoneVoiceClient(group: VoiceClientGroup, source: string, nowMillis: number): boolean {
+        let stalest: VoiceClient | undefined;
+        for (const client of group.clients) {
+            if (!stalest || client.lastHeartbeat < stalest.lastHeartbeat) stalest = client;
+        }
+        if (!stalest || nowMillis - stalest.lastHeartbeat < VOICE_CLIENT_GONE_MILLIS) return false;
+
+        this.dropVoiceClient(stalest, `no packet for ${nowMillis - stalest.lastHeartbeat} ms, and ${source} takes its place`);
+        return true;
     }
 
     // The last Unity client of the app `appId` at `address` has left. The voice clients it let in
     // stop receiving now rather than once they go quiet: one that kept sending, forged packets
     // included, would otherwise keep receiving the app's voice for as long as it liked.
-    private dropVoiceClients(address: string, appId: number): void {
-        for (const [key, client] of this.clients) {
-            if (client.throughProxy || client.appId !== appId || normalizeAddress(client.ip) !== address) continue;
+    private onUnityClientsLeft(address: string, appId: number): void {
+        const group = this.groups.get(groupKey(address, appId));
+        if (!group) return;
 
-            this.clients.delete(key);
-            this.appClients = undefined;
-            this.logDebug(`Voice client ${client.ip}:${client.port} disconnected ID: ${client.userId}: `
-                + `no Unity client of app ${formatAppId(appId)} is connected from ${address} any more`, CONNECTION_LINE);
-            if (client.recordingData.length > 0) this.droppedRecordings.push(client);
+        // dropVoiceClient takes each out of the set: deleting the entry being visited is safe.
+        for (const client of group.clients) {
+            this.dropVoiceClient(client, `no Unity client of app ${formatAppId(appId)} is connected from ${address} any more`);
         }
+    }
+
+    // Takes `client` out of the clients relayed to and from, and says why in a connection line. Its
+    // recording is saved by the next disconnect check, or stop().
+    private dropVoiceClient(client: VoiceClient, why?: string): void {
+        this.clients.delete(voiceClientKey(client.ip, client.port));
+        this.leaveGroup(client);
+        this.appClients = undefined;
+        this.logDebug(`Voice client ${client.ip}:${client.port} disconnected ID: ${client.userId}` + (why ? `: ${why}` : ''), CONNECTION_LINE);
+        if (client.recordingData.length > 0) this.droppedRecordings.push(client);
+    }
+
+    // Counts `client` against the Unity clients of its app at `address` (see admit).
+    private joinGroup(client: VoiceClient, address: string): void {
+        const normalized = normalizeAddress(address);
+        const key = groupKey(normalized, client.appId);
+        let group = this.groups.get(key);
+        if (!group) {
+            group = { key, address: normalized, appId: client.appId, clients: new Set() };
+            this.groups.set(key, group);
+        }
+        group.clients.add(client);
+        client.group = group;
+    }
+
+    private leaveGroup(client: VoiceClient): void {
+        const group = client.group;
+        if (!group) return;
+
+        client.group = undefined;
+        group.clients.delete(client);
+        if (group.clients.size === 0) this.groups.delete(group.key);
     }
 
     private reportNoUnityClient(source: string, address: string, appId: number, nowMillis: number): void {
@@ -411,6 +491,13 @@ export class VoiceServer extends Service {
 
         this.logWarning(`Ignoring voice packet from ${source} for app ${formatAppId(appId)}: no Unity client of that app is connected from ${address}`
             + ` (further ones from this source are not reported for ${REPORT_INTERVAL_MILLIS / 1000}s)`);
+    }
+
+    private reportNoRoom(source: string, address: string, appId: number, unityClients: number, nowMillis: number): void {
+        if (!this.claimReport(source, nowMillis)) return;
+
+        this.logWarning(`Ignoring voice packet from ${source} for app ${formatAppId(appId)}: ${address} has ${unityClients} Unity client(s) `
+            + `of that app, and as many voice clients already (further ones from this source are not reported for ${REPORT_INTERVAL_MILLIS / 1000}s)`);
     }
 
     private reportUncheckedProxy(address: string): void {
@@ -484,24 +571,15 @@ export class VoiceServer extends Service {
         if (this.savingRecordings) return;
 
         const now = Date.now();
-        // Starting with those dropped since the last check because their Unity client left.
-        const pendingRecordings = this.droppedRecordings;
-        this.droppedRecordings = [];
-
-        for (const [key, value] of this.clients) {
+        for (const client of this.clients.values()) {
             // Remove inactive clients
-            if (now - value.lastHeartbeat > this.disconnectTimeoutMillis) {
-                this.clients.delete(key);
-                this.appClients = undefined;
-                this.logDebug(`Voice client ${value.ip}:${value.port} disconnected ID: ${value.userId}`, CONNECTION_LINE);
-
-                // Check if recording data is available
-                if (value.recordingData.length > 0) {
-                    pendingRecordings.push(value);
-                }
-            }
+            if (now - client.lastHeartbeat > this.disconnectTimeoutMillis) this.dropVoiceClient(client);
         }
 
+        // Those just timed out, and those dropped since the last check for another reason (see
+        // dropVoiceClient's callers).
+        const pendingRecordings = this.droppedRecordings;
+        this.droppedRecordings = [];
         if (pendingRecordings.length === 0) return;
 
         const saving = (async () => {
