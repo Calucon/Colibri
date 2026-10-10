@@ -180,8 +180,10 @@ describe('forwardedTls', () => {
         expect(forwardedTls('172.20.0.1', 'https,', trust)).toBe(false);
     });
 
-    // A proxy that appends, as X-Forwarded-For is appended to, puts its own value last.
-    it('takes the right-most entry, so a client cannot claim TLS by sending the header itself', () => {
+    // A proxy that appends, as X-Forwarded-For is appended to, puts its own value last. A client's
+    // own value is kept out only by a proxy that appends or replaces the header, not one that passes
+    // it on unchanged.
+    it('takes the right-most entry, the one a proxy that appends added itself', () => {
         expect(forwardedTls('172.20.0.1', 'https, http', trust)).toBe(false);
         expect(forwardedTls('172.20.0.1', 'http,https', trust)).toBe(true);
         expect(forwardedTls('172.20.0.1', 'http, http , HTTPS', trust)).toBe(true);
