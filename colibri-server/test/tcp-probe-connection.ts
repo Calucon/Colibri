@@ -19,8 +19,9 @@ export interface ProbeOptions {
     args: string[];
 }
 
-export const parseProbeArgs = function (argv: readonly string[]): ProbeOptions {
-    const options: ProbeOptions = { host: '127.0.0.1', tls: false, insecure: false, args: [] };
+// defaultHost is --host's value when it is not on the command line.
+export const parseProbeArgs = function (argv: readonly string[], defaultHost = '127.0.0.1'): ProbeOptions {
+    const options: ProbeOptions = { host: defaultHost, tls: false, insecure: false, args: [] };
     for (let i = 0; i < argv.length; i++) {
         const arg = argv[i]!;
         if (arg === '--tls') {

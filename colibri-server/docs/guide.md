@@ -624,8 +624,9 @@ package to upgrade, at most once a minute per address ([Version checking](protoc
   - `-- --minutes <n>`: stop after n minutes. Default: run until Ctrl+C.
   - `-- --apps <n>`: n copies of both apps, the others named `ArchViz-2`, `MuseumGuide-2` and so on,
     each with the same load.
-  - `--web-port <port>`, `--tcp-port <port>`: default `WEBSERVER_PORT` and `TCP_PORT`. `--host`, `--tls`
-    and `--insecure` as for `test:tcpclient`.
+  - `--web-port <port>`, `--tcp-port <port>`: default `WEBSERVER_PORT` and `TCP_PORT`. `--host <name>`:
+    default `localhost`, which reaches a server on `127.0.0.1` or `::1`. `--tls` and `--insecure` as for
+    `test:tcpclient`.
 - `npm run test:docker`: requires Docker. Builds the image, or uses `COLIBRI_DOCKER_IMAGE`, and runs
   it in each deployment in the table. Pass deployment names to run only those.
 

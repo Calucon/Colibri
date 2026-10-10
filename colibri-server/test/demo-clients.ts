@@ -16,8 +16,10 @@
 // server up to about 250 messages a second and is sent up to about 550.
 //
 // --web-port and --tcp-port default to WEBSERVER_PORT and TCP_PORT from the environment or a .env, as
-// the server reads them. --host, --tls and --insecure as in tcp-probe-connection.ts. --minutes stops it
-// after that long; without it, it runs until Ctrl+C.
+// the server reads them. --host defaults to localhost, not 127.0.0.1: a server with WEBSERVER_HOST or
+// TCP_HOST set to localhost can listen on ::1 only, and Node tries both addresses for the name. --tls
+// and --insecure as in tcp-probe-connection.ts. --minutes stops it after that long; without it, it runs
+// until Ctrl+C.
 import { randomUUID } from 'crypto';
 import * as net from 'net';
 import * as tls from 'tls';
@@ -54,7 +56,7 @@ interface DemoOptions extends ProbeOptions {
 }
 
 const parseDemoArgs = function (argv: readonly string[]): DemoOptions {
-    const probe = parseProbeArgs(argv);
+    const probe = parseProbeArgs(argv, 'localhost');
     const options: DemoOptions = {
         ...probe,
         args: [],
