@@ -24,6 +24,7 @@ export class RootComponent {
     tabs = [
         { label: 'Log', path: '/log' },
         { label: 'Clients', path: '/clients' },
+        { label: 'Models', path: '/models' },
         { label: 'Server', path: '/server' },
     ];
 
