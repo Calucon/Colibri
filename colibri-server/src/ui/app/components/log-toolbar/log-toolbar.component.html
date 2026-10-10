@@ -16,7 +16,7 @@
   <button type="button" class="follow" [class.paused]="!following()" (click)="followChange.emit(!following())"
     [title]="following() ? 'Stop scrolling to new lines' : 'Scroll to new lines as they arrive'">
     <i class="pi" [class.pi-pause]="following()" [class.pi-play]="!following()" aria-hidden="true"></i>
-    <span>{{ following() ? 'Pause' : 'Follow' }}</span>
+    <span>{{ following() ? 'Pause' : 'Resume' }}</span>
   </button>
 
   <button type="button" class="more-toggle" [attr.aria-expanded]="open()" aria-controls="log-filters"

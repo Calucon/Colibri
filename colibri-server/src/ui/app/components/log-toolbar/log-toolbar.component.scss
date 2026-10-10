@@ -112,10 +112,15 @@
     order: 2;
     margin-left: auto;
 
+    // as the "Jump to latest" button, which does the same: not the warning yellow
     &.paused {
         color: var(--bg);
-        background: var(--warn);
-        border-color: var(--warn);
+        background: var(--accent);
+        border-color: var(--accent);
+
+        &:hover {
+            background: #9fd0de;
+        }
     }
 }
 
