@@ -433,10 +433,10 @@ it while no page is open.
   latency over the last 110 s. The former *Statistics* page, `/statistics`, leads here.
 - **Models:** the synchronized models of each app and channel, 50 to a page, with their id, number
   of top-level fields, size as compact JSON and time since the last update, filtered by part of the
-  id or channel. A size can be up to 10 s old. Click one for its value as JSON, to read or download;
-  a value over 512 KiB is cut, and its start downloads as text. Below, the newest ids deleted within
-  `MODEL_TOMBSTONE_SECONDS`. *Refresh* reads the list again; *Live* updates the list and the open
-  model every second.
+  id or channel. A size can be up to 10 s old, from 1 MiB up to a minute. Click one for its value as
+  JSON, to read or download; a value over 512 KiB is cut, and its start downloads as text. Below,
+  the newest ids deleted within `MODEL_TOMBSTONE_SECONDS`. *Refresh* reads the list again; *Live*
+  updates the list and the open model every second.
 - **Server:** version, protocol version, Node.js version and uptime; the settings in effect, with the
   variables that set them: ports, `BASE_URL`, TLS, `TRUSTED_PROXIES`, `TCP_PROXY_PROTOCOL`, load
   limits, idle timeout, tombstones, voice and recording; the TLS certificate's names, issuer, validity

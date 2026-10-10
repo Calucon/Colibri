@@ -556,7 +556,8 @@ The endpoints are documented under [REST store](./protocol.md#rest-store).
   up. See [Admin UI channel](./protocol.md#admin-ui-channel).
 - The model store records each model's last update time and counts its updates. Sizes are measured
   only when the admin UI asks, at most 2 MiB a second; a model that changes keeps its last size for
-  up to 10 s. A model's JSON is formatted only as far as the 512 KiB cut, once per change.
+  up to 10 s, from 1 MiB up to a minute. A model's JSON is formatted only as far as the 512 KiB cut,
+  once per change.
 - The admin log's history carries the server's time, so "New errors" counts by the server's clock.
 - Routine connect and disconnect log lines carry `metadata.connection: true`, and `requestLog` takes
   `showConnections` to leave them out.

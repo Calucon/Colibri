@@ -539,8 +539,8 @@ A refresh skips a page whose connection is still sending the previous one; the n
   1 to 200 (default 50), `total` counts all matches. A `ModelRow` is
   `{ app, channel, id, fields, bytes, updatedAt }`: `fields` is the number of top-level fields besides
   `id`, `bytes` the compact JSON size. The server measures at most 2 MiB of models a second, for all
-  pages together, and a model that changed keeps its last size for up to 10 s. `bytes` is `null`
-  until a model is first measured.
+  pages together, and a model that changed keeps its last size for up to 10 s, one of 1 MiB or more
+  for up to a minute. `bytes` is `null` until a model is first measured.
   `channels` lists `{ app, channel, models, deleted }` for every app and channel, at most 500.
   `deleted` lists the newest 100 matching ids deleted within `MODEL_TOMBSTONE_SECONDS`, as
   `{ app, channel, id, deletedAt }`.
