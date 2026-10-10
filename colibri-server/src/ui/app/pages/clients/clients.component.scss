@@ -154,10 +154,23 @@ td.c-log a {
             grid-template-areas:
                 'swatch name  name  name  name  log'
                 '.      app   trans ver   conn  conn'
-                '.      lat   in    out   limit limit';
+                '.      lat   in    out   .     .';
             column-gap: 12px;
             row-gap: 4px;
             padding: 10px 0;
+        }
+
+        // a load limit on a line of its own: next to four-digit rates it was cut off
+        tr.held {
+            grid-template-areas:
+                'swatch name  name  name  name  log'
+                '.      app   trans ver   conn  conn'
+                '.      lat   in    out   .     .'
+                '.      limit limit limit limit limit';
+        }
+
+        tr:not(.held) td.c-limit {
+            display: none;
         }
 
         tbody tr + tr {
