@@ -200,17 +200,22 @@ namespace HCIKonstanz.Colibri.Networking
             var config = ColibriConfig.Load();
             var host = config.ServerAddress;
             var address = ResolveServerAddress(host);
-            if (address != null)
+            udpClient = address != null ? OpenSocket(address) : null;
+
+            if (udpClient != null)
             {
                 sendIPEndPoint = new IPEndPoint(address, config.VoiceServerPort);
                 samplingRate = config.VoiceServerSamplingRate > 0 ? config.VoiceServerSamplingRate : DEFAULT_SAMPLING_RATE;
                 UseAppName(config.AppName);
 
-                udpClient = new UdpClient();
-                // Port 0 lets the OS pick an ephemeral port. The server replies to whatever
-                // source port the datagram came from (voice-server.ts), so the hardcoded 9014
-                // this used to bind bought nothing and capped a machine at one Unity client.
-                udpClient.Client.Bind(new IPEndPoint(IPAddress.Any, 0));
+                // The server's voice socket is IPv4 unless VOICE_HOST is an IPv6 address, and
+                // nothing comes back from a server that does not listen on IPv6. Said so that a
+                // silent voice chat over IPv6 has an explanation in the log.
+                if (address.AddressFamily == AddressFamily.InterNetworkV6)
+                {
+                    Debug.Log($"Colibri voice: '{host}' has no IPv4 address, sending voice over IPv6 to [{address}]:{config.VoiceServerPort}. "
+                        + "The server has to listen for voice on IPv6: VOICE_HOST=:: or a proxy in front of it.");
+                }
 
                 shutdown = new CancellationTokenSource();
 
@@ -235,48 +240,59 @@ namespace HCIKonstanz.Colibri.Networking
         }
 
         /// <summary>
-        /// The address to send voice to, or null - having said why - when there is none.
+        /// The address to send voice to, or null, having said why, when there is none.
         /// </summary>
         /// <remarks>
         /// GetHostAddresses rather than GetHostEntry: for an IP address it hands the address
         /// straight back, where GetHostEntry first attempts a reverse lookup, which can fail for
-        /// a LAN address with no DNS name and threw out of OnEnable.
+        /// a LAN address with no DNS name and threw out of OnEnable. An IPv6 address in brackets
+        /// is taken apart first, as for the TCP connection.
         /// </remarks>
         private static IPAddress ResolveServerAddress(string host)
         {
             IPAddress[] candidates;
-            try
+            if (WebServerConnection.TryParseAddress(host, out var literal))
             {
-                candidates = Dns.GetHostAddresses(host);
+                candidates = new[] { literal };
             }
-            catch (Exception e) when (e is SocketException || e is ArgumentException)
+            else
             {
-                Debug.LogError($"Colibri voice: could not resolve the server address '{host}' ({e.Message}). Voice chat is off. Check the address in Window -> Colibri Configuration.");
-                return null;
+                try
+                {
+                    candidates = Dns.GetHostAddresses(host);
+                }
+                catch (Exception e) when (e is SocketException || e is ArgumentException)
+                {
+                    Debug.LogError($"Colibri voice: could not resolve the server address '{host}' ({e.Message}). Voice chat is off. Check the address in Window -> Colibri Configuration.");
+                    return null;
+                }
             }
 
             var address = SelectServerAddress(candidates);
             if (address == null)
             {
                 var found = candidates.Length == 0 ? "no addresses at all" : string.Join<IPAddress>(", ", candidates);
-                Debug.LogError($"Colibri voice: the server address '{host}' resolved to {found}, but the voice server only listens on IPv4. Voice chat is off. Enter the server's IPv4 address in Window -> Colibri Configuration.");
+                Debug.LogError($"Colibri voice: the server address '{host}' resolved to {found}, none of which voice can be sent to. Voice chat is off. Check the address in Window -> Colibri Configuration.");
             }
 
             return address;
         }
 
         /// <summary>
-        /// Picks the address the voice socket can actually reach, out of everything a name
-        /// resolved to.
+        /// Picks the address voice goes to, out of everything a name resolved to: IPv4 when the
+        /// name has an IPv4 address, otherwise IPv6.
         /// </summary>
         /// <remarks>
-        /// The socket is IPv4 (bound to <see cref="IPAddress.Any"/>), and so is the server's
-        /// (voice-server.ts creates a udp4 socket). Taking the first address regardless broke on
-        /// Windows, where "localhost" commonly resolves to ::1 before 127.0.0.1: every send from
-        /// the IPv4 socket to the IPv6 address threw, and no voice ever reached the server. An
-        /// IPv4-mapped IPv6 address is as good as the IPv4 address inside it.
+        /// IPv4 first because the server's voice socket is IPv4 unless VOICE_HOST is an IPv6
+        /// address (voice-server.ts). Taking the first address regardless broke on Windows, where
+        /// "localhost" commonly resolves to ::1 before 127.0.0.1: every packet went to an IPv6
+        /// address that nothing listened on, and no voice ever reached the server. An IPv4-mapped
+        /// IPv6 address is as good as the IPv4 address inside it. IPv6 is for a name with no IPv4
+        /// address at all, such as a server whose IPv4 address is behind carrier-grade NAT. A
+        /// link-local IPv6 address without a scope (an interface) cannot be sent to, and is
+        /// skipped.
         /// </remarks>
-        /// <returns>An IPv4 address, or null when there is none.</returns>
+        /// <returns>An IPv4 or IPv6 address, or null when there is none voice can be sent to.</returns>
         internal static IPAddress SelectServerAddress(IPAddress[] candidates)
         {
             if (candidates == null)
@@ -294,13 +310,53 @@ namespace HCIKonstanz.Colibri.Networking
                     return candidate.MapToIPv4();
             }
 
+            foreach (var candidate in candidates)
+            {
+                if (candidate.AddressFamily == AddressFamily.InterNetworkV6 && !(candidate.IsIPv6LinkLocal && candidate.ScopeId == 0))
+                    return candidate;
+            }
+
             return null;
         }
 
-        private void Receive(UdpClient client, CancellationToken token)
+        /// <summary>
+        /// The voice socket for <paramref name="address"/>: of its family, on a port of the
+        /// operating system's choosing. Null, having said why, when the device cannot open one,
+        /// such as an IPv6 socket on a device without IPv6.
+        /// </summary>
+        /// <remarks>Internal for the EditMode tests.</remarks>
+        internal static UdpClient OpenSocket(IPAddress address)
+        {
+            var family = address.AddressFamily;
+            UdpClient client = null;
+            try
+            {
+                client = new UdpClient(family);
+                // Port 0 lets the OS pick an ephemeral port. The server replies to whatever
+                // source port the datagram came from (voice-server.ts), so the hardcoded 9014
+                // this used to bind bought nothing and capped a machine at one Unity client.
+                client.Client.Bind(new IPEndPoint(AnyAddress(family), 0));
+                return client;
+            }
+            catch (SocketException e)
+            {
+                client?.Close();
+                Debug.LogError($"Colibri voice: could not open a socket to send voice to {address} ({e.SocketErrorCode}). Voice chat is off.");
+                return null;
+            }
+        }
+
+        private static IPAddress AnyAddress(AddressFamily family)
+            => family == AddressFamily.InterNetworkV6 ? IPAddress.IPv6Any : IPAddress.Any;
+
+        /// <summary>The receive thread: hands each datagram to <see cref="HandleReceived"/> until <paramref name="token"/> is cancelled or the client closed.</summary>
+        /// <remarks>Internal for the EditMode tests, which run it on a socket of their own.</remarks>
+        internal void Receive(UdpClient client, CancellationToken token)
         {
             // Per thread: an old receive thread may still be winding down while a new one starts.
-            var from = new IPEndPoint(IPAddress.Any, 0);
+            // Of the socket's family: the sender's address is read into it, and an endpoint of the
+            // other family is not accepted for that on every runtime.
+            var from = new IPEndPoint(AnyAddress(client.Client.AddressFamily), 0);
 
             while (!token.IsCancellationRequested)
             {
