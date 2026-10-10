@@ -114,6 +114,24 @@ describe('serverSections', () => {
             expect(fact(snapshot(), 'network', 'Web')?.title).toBeUndefined();
             expect(fact(snapshot({ tls: certificate, tlsAtProxy: { web: true } }), 'network', 'Web')?.title).toBeUndefined();
         });
+
+        it('with Unity clients through a proxy, says the TCP port is unencrypted only here', () => {
+            const throughProxy = (tls: ServerSnapshot['tls'], web: boolean) => snapshot({
+                tls, tlsAtProxy: { web }, settings: { ...snapshot().settings, TRUSTED_PROXIES: [ 'loopback' ], TCP_PROXY_PROTOCOL: true }
+            });
+
+            expect(rows(throughProxy(null, true))).toEqual({
+                web: 'HTTP here, HTTPS at the proxy',
+                tcp: 'unencrypted here, proxy TLS not reported',
+                tls: [ 'Not on this server', 'HTTPS at the proxy', undefined ]
+            });
+            expect(rows(throughProxy(null, false)).tcp).toBe('unencrypted here, proxy TLS not reported');
+            expect(fact(throughProxy(null, false), 'network', 'TCP')?.title).toContain('Server supports SSL/TLS?');
+            // a direct connection uses the server's own
+            expect(rows(throughProxy(certificate, false)).tcp).toBe('TLS');
+            expect(fact(throughProxy(certificate, false), 'network', 'TCP')?.title).toBeUndefined();
+            expect(fact(snapshot(), 'network', 'TCP')?.title).toBeUndefined();
+        });
     });
 
     it('lists settings it does not know under Other settings', () => {
@@ -174,6 +192,12 @@ describe('ServerComponent', () => {
         expect(value.classList.contains('off')).toBe(false);
         expect(value.getAttribute('title')).toContain('X-Forwarded-Proto');
         expect(note).toBe('HTTPS at the proxy');
+    });
+
+    it('shows the TCP port behind a proxy as unencrypted here, saying why on hover', () => {
+        const { value, note } = row({ settings: { ...snapshot().settings, TRUSTED_PROXIES: [ 'loopback' ], TCP_PROXY_PROTOCOL: true } }, 'TCP');
+        expect(note).toBe('unencrypted here, proxy TLS not reported');
+        expect(value.getAttribute('title')).toContain('PROXY protocol header');
     });
 
     it('shows an unknown commit muted, saying why on hover', () => {
