@@ -25,7 +25,9 @@ rationale, migration steps, and what the Editor verification did and did not cov
 - **Voice packets carry an app id.** The voice header has a header version and an app id, the
   32-bit FNV-1a hash of the App Name, and colibri-server 2.0.0 passes a packet on only to the
   clients with the same app id. Voice ids only have to be unique within an app now, and 1.x and
-  2.0.0 clients do not hear each other. See
+  2.0.0 clients do not hear each other. The server relays voice only from the address of a client
+  connected with the same App Name, so voice needs `WebServerConnection` connected too, and after
+  an App Name change it resumes only once that reconnects. See
   [Voice packets](../colibri-server/docs/protocol.md#voice-packets-udp).
 - **Minimum Unity is 2022.3 LTS** (the package manifest previously claimed 2019.4 while using APIs
   that were never available there).

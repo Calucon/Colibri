@@ -827,9 +827,13 @@ and instantiates `VoiceReceiver` prefabs.
   within an app. Each voice packet carries an app id, a hash of the App Name ([Voice
   packets](../../colibri-server/docs/protocol.md#voice-packets-udp)). Without an App Name, no voice
   is sent, and Colibri logs an error once.
-- After an App Name change at runtime, voice moves to the new app from the next frame. Synced
-  objects and `Sync` messages, such as voice ids sent with `Sync.Send`, stay in the old app until
-  `WebServerConnection` reconnects. Disable and re-enable that component to move them too.
+- The server relays voice only from the address of a client connected with the same App Name, so
+  voice needs `WebServerConnection` connected too, from the same address. Voice sent through a
+  reverse proxy comes from the proxy's address instead
+  ([Voice relay](../../colibri-server/docs/guide.md#voice-relay)).
+- After an App Name change at runtime, voice stops until `WebServerConnection` reconnects with the
+  new App Name. Synced objects and `Sync` messages, such as voice ids sent with `Sync.Send`, stay in
+  the old app until then. Disable and re-enable that component to move them.
 - Colibri 1.x clients are not heard. Their voice packets have no app id, and the server drops them.
 - A client receives voice only while its own `VoiceBroadcast` is broadcasting. The server registers
   voice clients by the packets they send.
