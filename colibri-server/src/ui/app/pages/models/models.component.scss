@@ -192,6 +192,11 @@
     .c-id a.id {
         color: var(--accent);
     }
+
+    // the accent is under 4.5:1 on the open row's background, which marks the row anyway
+    tr.open .c-id a.id {
+        color: var(--text-strong);
+    }
 }
 
 .deleted-table .c-id {
