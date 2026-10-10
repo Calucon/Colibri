@@ -324,8 +324,8 @@ namespace HCIKonstanz.Colibri.Tests
         /// An IPv6 address the device has no route to, tried after a refused IPv4 address, does not
         /// hide the refusal: on a network without IPv6, a server that is down reads as down, not as
         /// a network without a route. The IPv6 address here is link-local without a scope, which no
-        /// socket connects to. Windows reports the loopback refusal only after the 0.25 s a
-        /// loopback address gets here, as no answer.
+        /// socket connects to. Where the route check does not see that, the loopback address gets
+        /// 0.25 s, and Windows reports the refusal only after that, as no answer.
         /// </summary>
         [Test]
         public void AnUnreachableAddressAfterARefusedOneDoesNotHideTheRefusal()
@@ -364,6 +364,33 @@ namespace HCIKonstanz.Colibri.Tests
 
             Assert.That(address, Is.EqualTo(other));
             Assert.That(clock.ElapsedMilliseconds, Is.LessThan(1500), "The address that does not answer used up the time of the next");
+        }
+
+        /// <summary>
+        /// An address the device has no route to fails at once, so it takes no share of the time
+        /// from the addresses before it. On Wi-Fi without IPv6, a name with an AAAA record left its
+        /// IPv4 address half of the 5 s, too little for a connection that needs a third SYN. Here
+        /// the IPv4 address is a loopback port that never answers, which with a routed address
+        /// after it would get 0.25 s.
+        /// </summary>
+        [Test]
+        public void AnAddressWithoutARouteLeavesTheTimeToTheOneBeforeIt()
+        {
+            var unanswered = UnansweredPort();
+            var unrouted = IPAddress.Parse("fe80::1");
+            var asked = new List<IPAddress>();
+            Func<IPAddress, bool> hasRoute = address =>
+            {
+                asked.Add(address);
+                return !address.Equals(unrouted);
+            };
+
+            var clock = Stopwatch.StartNew();
+            Assert.Throws<TimeoutException>(() => Wait(WebServerConnection.ConnectAnyAsync(new[] { IPAddress.Loopback, unrouted },
+                "colibri.example.org", unanswered, 1500, 5000, hasRoute, Attempting, CancellationToken.None)));
+
+            Assert.That(clock.ElapsedMilliseconds, Is.GreaterThanOrEqualTo(1400), "The address before the one without a route did not get the whole time");
+            Assert.That(asked, Is.EqualTo(new[] { unrouted }), "The route check was not asked once about the address after the first");
         }
 
         /// <summary>The timeout names the server address as configured and the time the whole connection had.</summary>

@@ -1733,10 +1733,11 @@ namespace HCIKonstanz.Colibri.Networking
 
         /// <summary>
         /// How long the attempt on one of several addresses may take: an equal share of
-        /// <paramref name="remainingMs"/> among the <paramref name="attemptsLeft"/> addresses still
-        /// to be tried, this one included, but at least <see cref="MIN_ADDRESS_ATTEMPT_MS"/>, and for
-        /// a loopback address at most <see cref="LOOPBACK_ATTEMPT_MS"/>. The last address gets all
-        /// the time left, and no attempt more than that.
+        /// <paramref name="remainingMs"/> among <paramref name="attemptsLeft"/> addresses, this one
+        /// and those after it that the device has a route to, but at least
+        /// <see cref="MIN_ADDRESS_ATTEMPT_MS"/>, and for a loopback address at most
+        /// <see cref="LOOPBACK_ATTEMPT_MS"/>. The last address gets all the time left, and no
+        /// attempt more than that.
         /// </summary>
         /// <remarks>Internal for the EditMode tests.</remarks>
         internal static int AttemptTimeoutMs(int remainingMs, int attemptsLeft, bool isLoopback)
@@ -1767,11 +1768,21 @@ namespace HCIKonstanz.Colibri.Networking
         /// <exception cref="SocketException">Every address failed, and one refused or none went unanswered: the first refusal, or else the first address's error.</exception>
         /// <exception cref="OperationCanceledException"><paramref name="token"/> was cancelled first.</exception>
         /// <exception cref="ObjectDisposedException">A socket was closed while connecting.</exception>
-        /// <remarks>Internal for the EditMode tests.</remarks>
-        internal static async Task<(Socket Socket, IPAddress Address)> ConnectAnyAsync(IReadOnlyList<IPAddress> addresses, string host,
+        /// <remarks>Asks <see cref="HasRoute"/> which addresses the device has a route to. Internal for the EditMode tests.</remarks>
+        internal static Task<(Socket Socket, IPAddress Address)> ConnectAnyAsync(IReadOnlyList<IPAddress> addresses, string host,
             int port, int timeoutMs, int totalTimeoutMs, Action<Socket> attempting, CancellationToken token)
+            => ConnectAnyAsync(addresses, host, port, timeoutMs, totalTimeoutMs, address => HasRoute(address, port), attempting, token);
+
+        /// <summary>
+        /// <see cref="ConnectAnyAsync(IReadOnlyList{IPAddress}, string, int, int, int, Action{Socket}, CancellationToken)"/>,
+        /// asking <paramref name="hasRoute"/> whether the device has a route to an address.
+        /// </summary>
+        /// <remarks>Internal for the EditMode tests, which decide which addresses have a route.</remarks>
+        internal static async Task<(Socket Socket, IPAddress Address)> ConnectAnyAsync(IReadOnlyList<IPAddress> addresses, string host,
+            int port, int timeoutMs, int totalTimeoutMs, Func<IPAddress, bool> hasRoute, Action<Socket> attempting, CancellationToken token)
         {
             var clock = System.Diagnostics.Stopwatch.StartNew();
+            var routedAfter = CountRoutedAfter(addresses, hasRoute);
             Exception failure = null;
 
             for (var i = 0; i < addresses.Count; i++)
@@ -1782,8 +1793,12 @@ namespace HCIKonstanz.Colibri.Networking
                 if (remaining <= 0)
                     break;
 
+                // Shared only with the addresses after this one that the device has a route to. One
+                // without fails at once, as an IPv6 address does on Wi-Fi without IPv6, and counted,
+                // it left the IPv4 address before it half of the 5 s, too short for a connection
+                // that needs a third SYN.
                 var address = addresses[i];
-                var attemptMs = AttemptTimeoutMs((int)remaining, addresses.Count - i, IPAddress.IsLoopback(address));
+                var attemptMs = AttemptTimeoutMs((int)remaining, 1 + routedAfter[i], IPAddress.IsLoopback(address));
 
                 Socket socket = null;
                 var connected = false;
@@ -1838,6 +1853,21 @@ namespace HCIKonstanz.Colibri.Networking
             // "0.5 s" in another is one more thing to puzzle over.
             throw new TimeoutException(
                 $"{host}:{port} did not answer within {(totalTimeoutMs / 1000f).ToString("0.#", CultureInfo.InvariantCulture)} s", failure);
+        }
+
+        /// <summary>
+        /// For each of <paramref name="addresses"/>, how many of those after it the device has a
+        /// route to. Asks <paramref name="hasRoute"/> once about each address but the first, which
+        /// comes after none, before any is tried: an address without a route stays in the list, so
+        /// that it is still tried and its error can be reported.
+        /// </summary>
+        private static int[] CountRoutedAfter(IReadOnlyList<IPAddress> addresses, Func<IPAddress, bool> hasRoute)
+        {
+            var counts = new int[addresses.Count];
+            for (var i = addresses.Count - 1; i > 0; i--)
+                counts[i - 1] = counts[i] + (hasRoute(addresses[i]) ? 1 : 0);
+
+            return counts;
         }
 
         /// <summary>
