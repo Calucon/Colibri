@@ -16,7 +16,7 @@
     "gui:build": "ng build --configuration production",
     "gui:watch": "ng serve",
     "server:start": "node --enable-source-maps dist/server/main.js",
-    "server:build": "tsc --p src/server",
+    "server:build": "tsc --p src/server && node dist/server/write-build-info.js",
     "server:watch:ts": "tsc --p src/server -w",
     "server:watch:node": "nodemon --watch dist/server/* --exec \"npm run server:start\"",
     "test:tcpclient": "tsx test/tcp-client-test.ts",
