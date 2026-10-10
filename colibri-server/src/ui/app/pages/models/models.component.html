@@ -84,19 +84,21 @@
               @for (row of rows(); track row.key) {
                 <tr [class.open]="row.open" [class.cut]="row.truncated" (click)="openModel(row)">
                   <td class="c-id">
-                    @if (row.truncated) {
-                      <span class="id mono" title="Longer than 512 characters: cut, and the server cannot look it up">{{ row.id }}</span>
-                      <span class="tag">cut</span>
-                    } @else {
-                      <a class="id mono" [routerLink]="[]" [queryParams]="modelParams(row)" queryParamsHandling="merge"
-                        [attr.aria-current]="row.open ? 'true' : null" (click)="$event.stopPropagation()">{{ row.id }}</a>
-                    }
+                    <span class="id-line">
+                      @if (row.truncated) {
+                        <span class="id mono" [title]="row.id">{{ row.id }}</span>
+                        <span class="tag" title="Longer than 512 characters: cut, and the server cannot look it up">cut</span>
+                      } @else {
+                        <a class="id mono" [routerLink]="[]" [queryParams]="modelParams(row)" queryParamsHandling="merge" [title]="row.id"
+                          [attr.aria-current]="row.open ? 'true' : null" (click)="$event.stopPropagation()">{{ row.id }}</a>
+                      }
+                    </span>
                     @if (!oneChannel()) {
-                      <span class="where">{{ row.app }} / {{ row.channel }}</span>
+                      <span class="where" [title]="row.app + ' / ' + row.channel">{{ row.app }} / {{ row.channel }}</span>
                     }
                   </td>
                   @if (!oneChannel()) {
-                    <td class="c-channel"><span class="muted">{{ row.app }} /</span> {{ row.channel }}</td>
+                    <td class="c-channel" [title]="row.app + ' / ' + row.channel"><span class="muted">{{ row.app }} /</span> {{ row.channel }}</td>
                   }
                   <td class="c-fields num">{{ row.fields }}</td>
                   <td class="c-size num">
@@ -156,16 +158,18 @@
                 @for (row of deleted(); track row.key) {
                   <tr>
                     <td class="c-id">
-                      <span class="id mono">{{ row.id }}</span>
-                      @if (row.truncated) {
-                        <span class="tag" title="Longer than 512 characters: cut">cut</span>
-                      }
+                      <span class="id-line">
+                        <span class="id mono" [title]="row.id">{{ row.id }}</span>
+                        @if (row.truncated) {
+                          <span class="tag" title="Longer than 512 characters: cut">cut</span>
+                        }
+                      </span>
                       @if (!oneChannel()) {
-                        <span class="where">{{ row.app }} / {{ row.channel }}</span>
+                        <span class="where" [title]="row.app + ' / ' + row.channel">{{ row.app }} / {{ row.channel }}</span>
                       }
                     </td>
                     @if (!oneChannel()) {
-                      <td class="c-channel"><span class="muted">{{ row.app }} /</span> {{ row.channel }}</td>
+                      <td class="c-channel" [title]="row.app + ' / ' + row.channel"><span class="muted">{{ row.app }} /</span> {{ row.channel }}</td>
                     }
                     <td class="c-updated num" [title]="row.deletedAt | date:'yyyy-MM-dd HH:mm:ss'">{{ row.age }} ago</td>
                   </tr>

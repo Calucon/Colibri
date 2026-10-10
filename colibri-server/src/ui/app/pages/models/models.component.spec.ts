@@ -82,6 +82,11 @@ describe('ModelsComponent', () => {
         // a cut id cannot be looked up: no link
         expect([ ...root.querySelectorAll('.models-table td.c-id') ].map(td => td.querySelector('a') !== null)).toEqual([ true, false ]);
         expect(root.querySelector('.models-table a.id')?.getAttribute('href')).toBe('/models?model=a&modelApp=demo&modelChannel=scene');
+        // the whole id and channel on hover, where the column cuts them short; the cut tag in the
+        // same line as the id, which keeps it in view
+        expect([ ...root.querySelectorAll('.models-table .id') ].map(id => id.getAttribute('title'))).toEqual([ 'a', 'b' ]);
+        expect(root.querySelector('.models-table td.c-channel')?.getAttribute('title')).toBe('demo / scene');
+        expect(root.querySelector('.models-table .id-line .tag')?.textContent).toBe('cut');
     });
 
     it('shows the open model\'s value, and what became of one deleted', async () => {
