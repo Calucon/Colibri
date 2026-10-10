@@ -37,7 +37,7 @@ export const RATE_HISTORY_LENGTH = 125;
 // transports sample every client each second anyway, and keeping a sample is three numbers in a
 // ring. Sampling only while a page is open would leave the chart empty again for the first page
 // after a quiet spell, and asking the TCP worker for its rates each second would cost a message
-// both ways.
+// both ways. The worker sends them only when asked, for a page's first snapshot.
 export class TrafficMeter {
     public received = 0;
     public sent = 0;

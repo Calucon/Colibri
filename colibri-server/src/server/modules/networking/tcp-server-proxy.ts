@@ -39,6 +39,13 @@ export interface TcpNetworkClient extends NetworkClient {
 
 const NO_ACTIVITY: ReadonlyMap<string, ClientActivity> = new Map();
 
+// A clientActivity() request waiting for the worker's answer.
+interface ActivityRequest {
+    id: number;
+    resolve: (activity: ReadonlyMap<string, ClientActivity>) => void;
+    promise: Promise<ReadonlyMap<string, ClientActivity>>;
+}
+
 export class TCPServerProxy
     extends WorkerServiceProxy
     implements NetworkServer {
@@ -71,8 +78,9 @@ export class TCPServerProxy
     private restartTimer: NodeJS.Timeout | undefined;
     private tlsChanges: Subscription | undefined;
 
-    // The clientActivity() request waiting for the worker's answer, if one is.
-    private activityRequest: { id: number; resolve: (activity: ReadonlyMap<string, ClientActivity>) => void; promise: Promise<ReadonlyMap<string, ClientActivity>> } | undefined;
+    // The clientActivity() requests waiting for the worker's answer, by whether they ask for the
+    // rate history.
+    private readonly activityRequests = new Map<boolean, ActivityRequest>();
     private lastActivityRequest = 0;
 
     public get clients$(): Observable<ReadonlyArray<NetworkClient>> {
@@ -178,7 +186,7 @@ export class TCPServerProxy
             clearTimeout(this.restartTimer);
             this.restartTimer = undefined;
         }
-        if (this.activityRequest) this.finishActivityRequest(this.activityRequest.id, NO_ACTIVITY);
+        for (const { id } of Array.from(this.activityRequests.values())) this.finishActivityRequest(id, NO_ACTIVITY);
 
         this.postMessage('m:stop');
         await this.terminateWorker();
@@ -186,27 +194,29 @@ export class TCPServerProxy
 
     // What the admin UI's client view shows of each TCP client's traffic, by client id, from the
     // worker, which counts it. Asked for, and answered, only while an admin UI page shows it: one
-    // round trip a second. Requests made while one is waiting share its answer. Resolves with
+    // round trip a second. With `history`, each client's rate history too, for a page's first
+    // snapshot. Requests made while one of the same kind is waiting share its answer. Resolves with
     // nothing for a client the worker did not report, and with nothing at all if the worker has not
     // answered within CLIENT_ACTIVITY_TIMEOUT_MILLIS.
-    public clientActivity(timeoutMillis = CLIENT_ACTIVITY_TIMEOUT_MILLIS): Promise<ReadonlyMap<string, ClientActivity>> {
+    public clientActivity(timeoutMillis = CLIENT_ACTIVITY_TIMEOUT_MILLIS, history = false): Promise<ReadonlyMap<string, ClientActivity>> {
         if (this.clients.size === 0) return Promise.resolve(NO_ACTIVITY);
-        if (this.activityRequest) return this.activityRequest.promise;
+        const waiting = this.activityRequests.get(history);
+        if (waiting) return waiting.promise;
 
         const id = ++this.lastActivityRequest;
         let resolve!: (activity: ReadonlyMap<string, ClientActivity>) => void;
         const promise = new Promise<ReadonlyMap<string, ClientActivity>>(r => (resolve = r));
         const timeout = setTimeout(() => this.finishActivityRequest(id, NO_ACTIVITY), timeoutMillis);
         timeout.unref();
-        this.activityRequest = {
+        this.activityRequests.set(history, {
             id,
             promise,
             resolve: (activity) => {
                 clearTimeout(timeout);
                 resolve(activity);
             },
-        };
-        this.postMessage('m:clientActivity', { request: id });
+        });
+        this.postMessage('m:clientActivity', history ? { request: id, history } : { request: id });
         return promise;
     }
 
@@ -219,10 +229,12 @@ export class TCPServerProxy
     // An answer that comes after its request timed out is dropped: a later request is waiting for
     // its own.
     private finishActivityRequest(id: number, activity: ReadonlyMap<string, ClientActivity>): void {
-        if (this.activityRequest?.id !== id) return;
-        const { resolve } = this.activityRequest;
-        this.activityRequest = undefined;
-        resolve(activity);
+        for (const [ history, request ] of this.activityRequests) {
+            if (request.id !== id) continue;
+            this.activityRequests.delete(history);
+            request.resolve(activity);
+            return;
+        }
     }
 
     // The TCP transport is the whole reason this process exists for Unity clients, so a

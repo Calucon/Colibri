@@ -102,8 +102,9 @@ export interface TcpClientConnected {
 }
 
 // What the worker posts as 'clientActivity$', answering an 'm:clientActivity' from TCPServerProxy:
-// the activity of every client whose handshake was accepted. Only ever posted when asked, which the
-// proxy does only while an admin UI page shows it.
+// the activity of every client whose handshake was accepted, with each one's rate history if the
+// request asks for it. Only ever posted when asked, which the proxy does only while an admin UI page
+// shows it, and asks for the history only for a page's first snapshot.
 export interface TcpClientActivityReport {
     request: number;
     clients: (ClientActivity & { id: string })[];
@@ -446,7 +447,7 @@ export class TCPServerWorker extends WorkerService {
                 break;
 
             case 'm:clientActivity':
-                this.postClientActivity(typeof msg.content.request === 'number' ? msg.content.request : 0);
+                this.postClientActivity(typeof msg.content.request === 'number' ? msg.content.request : 0, msg.content.history === true);
                 break;
 
             case 'm:broadcast': {
@@ -813,8 +814,9 @@ export class TCPServerWorker extends WorkerService {
     // Answers TCPServerProxy.clientActivity(): one compact report on every handshaked client. Never
     // posted unasked, so a server without an admin UI page open pays nothing for it beyond the
     // counting itself.
-    private postClientActivity(request: number): void {
+    private postClientActivity(request: number, history: boolean): void {
         const now = performance.now();
+        const wallNow = Date.now();
         const clients: TcpClientActivityReport['clients'] = [];
         for (const client of this.clients.values()) {
             clients.push({
@@ -823,6 +825,7 @@ export class TCPServerWorker extends WorkerService {
                 out: client.traffic.sentPerSecond,
                 limit: this.limitOf(client, now),
                 held: client.held.size,
+                ...(history ? { history: client.traffic.history(now, wallNow) } : {}),
             });
         }
         const report: TcpClientActivityReport = { request, clients };

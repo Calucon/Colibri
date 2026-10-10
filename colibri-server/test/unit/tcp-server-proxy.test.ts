@@ -443,6 +443,20 @@ describe('TCPServerProxy', () => {
             expect(asked()).toEqual([ 1, 2 ]);
         });
 
+        it('asks for the rate history in a request of its own', async () => {
+            handshake('c1', 'appA');
+            const plain = proxy.clientActivity();
+            const withHistory = proxy.clientActivity(1000, true);
+            expect(proxy.clientActivity(1000, true)).toBe(withHistory);
+            expect(sent.filter(m => m.channel === 'm:clientActivity').map(m => m.content)).toEqual([ { request: 1 }, { request: 2, history: true } ]);
+
+            const history = [ [ 1_700_000_000_000, 5, 7 ] ];
+            fromWorker('clientActivity$', { request: 2, clients: [ { id: 'c1', in: 5, out: 7, limit: null, held: 0, history } ] });
+            fromWorker('clientActivity$', { request: 1, clients: [ { id: 'c1', in: 5, out: 7, limit: null, held: 0 } ] });
+            expect((await withHistory).get('c1')?.history).toEqual(history);
+            expect((await plain).get('c1')).not.toHaveProperty('history');
+        });
+
         it('asks nothing while there is no TCP client', async () => {
             expect((await proxy.clientActivity()).size).toBe(0);
             expect(asked()).toEqual([]);

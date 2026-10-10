@@ -1955,9 +1955,12 @@ describe('TCPServerWorker', () => {
             return Buffer.concat(Array.from({ length: count }, (_, i) => encodeMessageFrame(wireMessage('objects', 'model::update', `{"id":"${from + i}"}`))));
         };
 
-        const ask = function (request = 1): { request: number; clients: { id: string; in: number | null; out: number | null; limit: string | null; held: number }[] } {
+        const ask = function (request = 1, history = false): {
+            request: number;
+            clients: { id: string; in: number | null; out: number | null; limit: string | null; held: number; history?: number[][] }[];
+        } {
             posted = [];
-            internals.handleParentMessage({ channel: 'm:clientActivity', content: { request } });
+            internals.handleParentMessage({ channel: 'm:clientActivity', content: history ? { request, history } : { request } });
             const answers = posted.filter(p => p.channel === 'clientActivity$');
             expect(answers).toHaveLength(1);
             return answers[0]!.content as never;
@@ -2016,6 +2019,19 @@ describe('TCPServerWorker', () => {
                 { id: sender.id, in: 30, out: 0, limit: null, held: 0 },
                 { id: receiver.id, in: 0, out: 20, limit: null, held: 0 },
             ]);
+        });
+
+        it('adds each client\'s rates of the last seconds only when asked, each at its Date.now()', () => {
+            const quest = handshaked('quest');
+            for (let i = 1; i <= 3; i++) {
+                quest.socket.emit('data', updates(10 * i, 100 * i));
+                aSecond();
+            }
+
+            expect(ask().clients[0]).not.toHaveProperty('history');
+            const history = ask(2, true).clients[0]!.history!;
+            expect(history.map(([ , received, sent ]) => [ received, sent ])).toEqual([ [ 10, 0 ], [ 20, 0 ], [ 30, 0 ] ]);
+            expect(history.map(([ at ]) => Date.now() - at!)).toEqual([ 2000, 1000, 0 ]);
         });
 
         it('has no rates for a client connected less than a second ago, and leaves out clients without a handshake', () => {
