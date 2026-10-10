@@ -153,6 +153,13 @@ export class ClientsComponent {
         { value: '-limit', label: 'Held back first' }
     ];
 
+    /**
+     * The order of the rows while the mouse is over them. Sorted by latency or rate, they trade
+     * places with nearly every refresh, and the row under the pointer, about to have its Log link
+     * clicked, would move away.
+     */
+    private heldOrder = signal<ReadonlyArray<string> | null>(null);
+
     rows = computed<ClientView[]>(() => {
         const snapshot = this.feed.data();
         if (!snapshot) return [];
@@ -160,7 +167,15 @@ export class ClientsComponent {
         const slots = new Map(this.clientService.clients().map(client => [ client.id, client.slot ]));
         const shown = app ? snapshot.clients.filter(client => client.app === app) : snapshot.clients;
 
-        return sortClients(shown, this.sort()).map(client => {
+        const sorted = sortClients(shown, this.sort());
+        const held = this.heldOrder();
+        if (held) {
+            // new clients after the others, in their sorted order
+            const at = new Map(held.map((id, i) => [ id, i ]));
+            sorted.sort((a, b) => (at.get(a.id) ?? held.length) - (at.get(b.id) ?? held.length));
+        }
+
+        return sorted.map(client => {
             const byId = client.transport === 'web' && isAddress(client.name);
             const slot = slots.get(client.id);
             return {
@@ -225,6 +240,15 @@ export class ClientsComponent {
             Array.from(this.host.nativeElement.querySelectorAll<HTMLElement>('tr[data-id]'))
                 .find(row => row.dataset['id'] === id)?.scrollIntoView({ block: 'center' });
         });
+    }
+
+    /** Keeps the rows where they are while the mouse is over them; see heldOrder. */
+    holdOrder(event: PointerEvent): void {
+        if (event.pointerType === 'mouse') this.heldOrder.set(this.rows().map(row => row.id));
+    }
+
+    releaseOrder(): void {
+        this.heldOrder.set(null);
     }
 
     setApp(app: string): Promise<boolean> {

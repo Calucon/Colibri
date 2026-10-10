@@ -123,6 +123,25 @@ describe('ClientsComponent', () => {
         expect(component.rows().map(row => row.id)).toEqual([ 'a', 'c', 'b' ]);
     });
 
+    it('keeps the rows in place while the mouse is over them', async () => {
+        const { harness, component } = await open('/clients?sort=-latency');
+        snapshot([ client({ id: 'a', latency: 5 }), client({ id: 'b', latency: 4 }) ]);
+        harness.detectChanges();
+
+        component.holdOrder({ pointerType: 'mouse' } as PointerEvent);
+        snapshot([ client({ id: 'a', latency: 3 }), client({ id: 'b', latency: 4 }), client({ id: 'c', latency: 9 }) ]);
+        // the new one after the others
+        expect(component.rows().map(row => row.id)).toEqual([ 'a', 'b', 'c' ]);
+
+        component.releaseOrder();
+        expect(component.rows().map(row => row.id)).toEqual([ 'c', 'b', 'a' ]);
+
+        // a finger does not hold them: it leaves no pointer over the rows
+        component.holdOrder({ pointerType: 'touch' } as PointerEvent);
+        snapshot([ client({ id: 'a', latency: 10 }), client({ id: 'b', latency: 4 }), client({ id: 'c', latency: 9 }) ]);
+        expect(component.rows().map(row => row.id)).toEqual([ 'a', 'c', 'b' ]);
+    });
+
     it('says why the list is empty', async () => {
         const { component } = await open('/clients?app=gone');
         expect(component.empty()).toBe('Loading the clients…');

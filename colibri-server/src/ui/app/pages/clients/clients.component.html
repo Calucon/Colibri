@@ -47,7 +47,7 @@
             <th class="c-log"><span class="visually-hidden">Log</span></th>
           </tr>
         </thead>
-        <tbody>
+        <tbody (pointerenter)="holdOrder($event)" (pointerleave)="releaseOrder()">
           @for (row of rows(); track row.id) {
             <tr [attr.data-id]="row.id" [class.marked]="row.id === marked()" [class.held]="row.limit !== null">
               <td class="c-swatch">
