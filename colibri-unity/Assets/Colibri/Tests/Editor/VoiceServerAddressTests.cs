@@ -3,10 +3,12 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
+using System.Text.RegularExpressions;
 using System.Threading;
 using HCIKonstanz.Colibri.Networking;
 using NUnit.Framework;
 using UnityEngine;
+using UnityEngine.TestTools;
 using Object = UnityEngine.Object;
 
 namespace HCIKonstanz.Colibri.Tests
@@ -168,6 +170,68 @@ namespace HCIKonstanz.Colibri.Tests
             }
 
             Assert.That(VoiceServerConnection.HasRoute(to.Address, to.Port), Is.EqualTo(sent));
+        }
+
+        /// <summary>
+        /// A send the device refuses is dropped with one warning until a send works again, and not
+        /// thrown: thrown, it left VoiceBroadcast before the frame was taken off the recording
+        /// buffer, which then grew without end. A datagram over UDP's size limit stands in for a
+        /// lost route, being refused at once on every machine.
+        /// </summary>
+        [Test]
+        public void AFailedSendIsReportedOnceAndNotThrown()
+        {
+            var gameObject = new GameObject("voice-under-test");
+            try
+            {
+                var voice = gameObject.AddComponent<VoiceServerConnection>();
+                using (var server = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0)))
+                using (var client = VoiceServerConnection.OpenSocket(IPAddress.Loopback))
+                {
+                    var to = (IPEndPoint)server.Client.LocalEndPoint;
+                    var tooLarge = new byte[70000];
+                    var failed = new Regex($@"^Colibri voice: sending to 127\.0\.0\.1:{to.Port} failed \(MessageSize\), dropping voice until a send works again$");
+
+                    LogAssert.Expect(LogType.Warning, failed);
+                    Assert.DoesNotThrow(() => voice.SendPacket(client, to, tooLarge));
+                    Assert.DoesNotThrow(() => voice.SendPacket(client, to, tooLarge));
+                    LogAssert.NoUnexpectedReceived();
+
+                    voice.SendPacket(client, to, new byte[] { 1 });
+                    LogAssert.Expect(LogType.Warning, failed);
+                    voice.SendPacket(client, to, tooLarge);
+                    LogAssert.NoUnexpectedReceived();
+                }
+            }
+            finally
+            {
+                Object.DestroyImmediate(gameObject);
+            }
+        }
+
+        /// <summary>The setup the route check is for, where this machine has it: no route to a global IPv6 address.</summary>
+        [Test]
+        public void ASendWithoutARouteIsNotThrown()
+        {
+            if (!Socket.OSSupportsIPv6)
+                Assert.Ignore("This machine has no IPv6.");
+            if (VoiceServerConnection.HasRoute(GlobalV6, 9))
+                Assert.Ignore("This machine has an IPv6 route to a global address.");
+
+            var gameObject = new GameObject("voice-under-test");
+            try
+            {
+                var voice = gameObject.AddComponent<VoiceServerConnection>();
+                using (var client = VoiceServerConnection.OpenSocket(IPAddress.IPv6Loopback))
+                {
+                    LogAssert.Expect(LogType.Warning, new Regex(@"^Colibri voice: sending to \[2001:db8::1\]:9 failed \(NetworkUnreachable\)"));
+                    Assert.DoesNotThrow(() => voice.SendPacket(client, new IPEndPoint(GlobalV6, 9), new byte[] { 1 }));
+                }
+            }
+            finally
+            {
+                Object.DestroyImmediate(gameObject);
+            }
         }
 
         /// <summary>

@@ -51,6 +51,9 @@ namespace HCIKonstanz.Colibri.Networking
         private bool hasAppName;
         private bool hasReportedMissingAppName;
 
+        // Main thread only: whether a failed send has been reported since a send last worked.
+        private bool hasReportedSendFailure;
+
         // Receive thread in, main thread out - and there can be two receive threads at once:
         // OnDisable waits only 500 ms for the old one, so after a quick disable and enable it may
         // still be handing over a packet while the new one starts. Everything in the queues is
@@ -427,7 +430,34 @@ namespace HCIKonstanz.Colibri.Networking
             if (client == null || !TryEncodeToSend(id, sequence, frameSize, codec, data, out var bytes))
                 return;
 
-            client.Send(bytes, bytes.Length, sendIPEndPoint);
+            SendPacket(client, sendIPEndPoint, bytes);
+        }
+
+        /// <summary>
+        /// Sends one voice packet. A send the device refuses, such as one without a route to the
+        /// server after moving to another network, drops the packet with a warning, said once
+        /// until a send works again.
+        /// </summary>
+        /// <remarks>
+        /// Main thread only; internal for the EditMode tests. Thrown, the error left
+        /// VoiceBroadcast.SendSamples before the frame was taken off the recording buffer, so the
+        /// same frame failed on every Update and the buffer grew by the microphone's rate.
+        /// </remarks>
+        internal void SendPacket(UdpClient client, IPEndPoint to, byte[] packet)
+        {
+            try
+            {
+                client.Send(packet, packet.Length, to);
+                hasReportedSendFailure = false;
+            }
+            catch (SocketException e)
+            {
+                if (!hasReportedSendFailure)
+                {
+                    hasReportedSendFailure = true;
+                    Debug.LogWarning($"Colibri voice: sending to {to} failed ({e.SocketErrorCode}), dropping voice until a send works again");
+                }
+            }
         }
 
         /// <summary>
