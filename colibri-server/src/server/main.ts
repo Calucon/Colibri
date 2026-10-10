@@ -80,6 +80,7 @@ const adminData = new colibri.AdminData({
     socketio: socketioServer,
     tcp: tcpServer,
     version,
+    build,
     startedAt: Date.now(),
     settings: {
         WEBSERVER_HOST: Config.WEBSERVER_HOST,

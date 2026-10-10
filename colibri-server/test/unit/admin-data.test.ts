@@ -97,6 +97,7 @@ describe('AdminData', () => {
             socketio: socketio as unknown as SocketIOServer,
             tcp: tcp as unknown as TCPServerProxy,
             version: '2.0.0',
+            build: { commit: '3e2855e0c1d2b3a4f5e6d7c8b9a0f1e2d3c4b5a6', dirty: false, builtAt: 1_699_990_000_000 },
             startedAt: Date.now(),
             settings: { TCP_PORT: 9012 },
         });
@@ -122,7 +123,9 @@ describe('AdminData', () => {
         await settle();
 
         expect(sentTo(page).map(s => s.command)).toEqual([ 'server' ]);
-        expect(sentTo(page)[0]!.payload).toMatchObject({ request: 7, version: '2.0.0', settings: { TCP_PORT: 9012 } });
+        expect(sentTo(page)[0]!.payload).toMatchObject({
+            request: 7, version: '2.0.0', build: { commit: '3e2855e0c1d2b3a4f5e6d7c8b9a0f1e2d3c4b5a6', dirty: false }, settings: { TCP_PORT: 9012 },
+        });
 
         await vi.advanceTimersByTimeAsync(5 * ADMIN_REFRESH_MILLIS);
         expect(sentTo(page)).toHaveLength(1);

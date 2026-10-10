@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { fileURLToPath } from 'url';
 import { DataStore } from '../../src/server/modules/command-hooks/data-store.js';
 import { RingBuffer } from '../../src/server/modules/core/ring-buffer.js';
+import { UNKNOWN_BUILD } from '../../src/server/modules/core/build-info.js';
 import { CertificateInfo } from '../../src/server/modules/core/tls-files.js';
 import { readServerVersion } from '../../src/server/modules/core/server-version.js';
 import { ClientActivity } from '../../src/server/modules/networking/client-activity.js';
@@ -469,6 +470,7 @@ describe('admin UI topics', () => {
 
         const sources = (overrides: Partial<ServerSources> = {}): ServerSources => ({
             version: '2.0.0',
+            build: { commit: '3e2855e0c1d2b3a4f5e6d7c8b9a0f1e2d3c4b5a6', dirty: true, builtAt: 1_699_990_000_000 },
             startedAt: Date.now() - 90_500,
             settings: { TCP_PORT: 9012, TRUSTED_PROXIES: [ 'loopback' ], TCP_PROXY_PROTOCOL: true },
             tls: undefined,
@@ -480,6 +482,10 @@ describe('admin UI topics', () => {
             ...overrides,
         });
 
+        it('says which commit it was built from, or that the build did not say', () => {
+            expect(serverSnapshot(sources({ build: UNKNOWN_BUILD })).build).toEqual({ commit: null, dirty: false, builtAt: null });
+        });
+
         it('says which version runs, since when, and with which settings', () => {
             const snapshot = serverSnapshot(sources());
             expect(snapshot).toMatchObject({
@@ -487,6 +493,7 @@ describe('admin UI topics', () => {
                 version: '2.0.0',
                 protocolVersion: PROTOCOL_VERSION,
                 node: process.version,
+                build: { commit: '3e2855e0c1d2b3a4f5e6d7c8b9a0f1e2d3c4b5a6', dirty: true, builtAt: 1_699_990_000_000 },
                 startedAt: Date.now() - 90_500,
                 uptime: 91,
                 settings: { TCP_PORT: 9012, TRUSTED_PROXIES: [ 'loopback' ], TCP_PROXY_PROTOCOL: true },
