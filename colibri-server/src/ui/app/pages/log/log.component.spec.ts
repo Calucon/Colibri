@@ -173,4 +173,76 @@ describe('LogComponent', () => {
 
         expect(fixture.nativeElement.querySelector('.banner').textContent).toContain('Connection to the server lost at 12:30:05.');
     });
+
+    describe('errors and warnings', () => {
+        const key = (key: string, target: EventTarget = document) =>
+            target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+
+        beforeEach(() => {
+            Element.prototype.scrollIntoView = vi.fn();
+        });
+
+        afterEach(() => {
+            delete (Element.prototype as Partial<Element>).scrollIntoView;
+        });
+
+        it('goes through them with p and n, from the end and round, and pauses there', () => {
+            const { fixture, component } = create();
+            history([ message({ id: 'e', level: 0 }), message({ id: 'i' }), message({ id: 'w', level: 1 }), message({ id: 'd', level: 3 }) ]);
+            fixture.detectChanges();
+            expect(component.nav()).toEqual(expect.objectContaining({ problems: 2, position: null }));
+
+            key('p');
+            expect([ component.current(), component.following(), component.nav().position ]).toEqual([ 'w', false, 2 ]);
+            // the scroll to it waits for the render
+            TestBed.tick();
+            expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ block: 'center' });
+            key('p');
+            expect(component.current()).toBe('e');
+            key('p');
+            expect(component.current()).toBe('w');
+            key('n');
+            expect(component.current()).toBe('e');
+
+            fixture.detectChanges();
+            expect(fixture.nativeElement.querySelector('.row.current .message').textContent).toBe('m');
+
+            component.follow();
+            expect(component.current()).toBeNull();
+        });
+
+        it('ignores the keys while typing', () => {
+            const { component } = create();
+            history([ message({ id: 'e', level: 0 }) ]);
+            const input = document.createElement('input');
+            document.body.appendChild(input);
+
+            key('n', input);
+            expect(component.current()).toBeNull();
+            input.remove();
+        });
+
+        it('goes to the first error since the page was opened with e', () => {
+            const { component, log } = create();
+            history([
+                message({ id: 'old', level: 0, created: log.openedAt - 1 }),
+                message({ id: 'new', level: 0, created: log.openedAt + 5 }),
+                message({ id: 'newer', level: 0, created: log.openedAt + 9 })
+            ]);
+            expect(component.nav().newErrors).toBe(2);
+
+            key('e');
+            expect(component.current()).toBe('new');
+        });
+
+        it('shows the older lines it takes to get to one', () => {
+            const { component } = create();
+            history([ message({ id: 'first', level: 1 }), ...Array.from({ length: PAGE_SIZE + 5 }, (_, i) => message({ id: `${i}` })) ]);
+            expect(component.rows().some(row => row.id === 'first')).toBe(false);
+
+            component.navigate('next');
+
+            expect(component.rows()[0].id).toBe('first');
+        });
+    });
 });

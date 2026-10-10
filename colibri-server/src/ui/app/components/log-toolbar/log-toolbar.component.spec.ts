@@ -1,7 +1,7 @@
 import { TestBed } from '@angular/core/testing';
 import { signal } from '@angular/core';
 import { ClientService, ColibriClient, LogService } from '../../services';
-import { LogToolbarComponent, SEARCH_DELAY } from './log-toolbar.component';
+import { LogNav, LogToolbarComponent, NavStep, SEARCH_DELAY } from './log-toolbar.component';
 
 describe('LogToolbarComponent', () => {
     let log: {
@@ -171,6 +171,27 @@ describe('LogToolbarComponent', () => {
 
         expect(log.showConnections()).toBe(false);
         expect(log.showBroadcastTraffic()).toBe(false);
+    });
+
+    it('goes through the errors and warnings, and to the first new error', () => {
+        const fixture = TestBed.createComponent(LogToolbarComponent);
+        const steps: NavStep[] = [];
+        fixture.componentInstance.navigate.subscribe(step => steps.push(step));
+        const nav = (value: LogNav) => {
+            fixture.componentRef.setInput('nav', value);
+            fixture.detectChanges();
+        };
+        const root: HTMLElement = fixture.nativeElement;
+        const buttons = () => root.querySelectorAll<HTMLButtonElement>('.nav button');
+
+        nav({ problems: 0, position: null, newErrors: 0, openedAt: 0 });
+        expect([ ...buttons() ].map(b => b.disabled)).toEqual([ true, true, true ]);
+
+        nav({ problems: 14, position: 3, newErrors: 2, openedAt: 0 });
+        expect(root.querySelector('.nav .position')?.textContent).toBe('3/14');
+        expect(root.querySelector('.nav .first')?.textContent).toContain('2');
+        buttons().forEach(b => b.click());
+        expect(steps).toEqual([ 'previous', 'next', 'first-error' ]);
     });
 
     it('counts in thousands past 999', () => {

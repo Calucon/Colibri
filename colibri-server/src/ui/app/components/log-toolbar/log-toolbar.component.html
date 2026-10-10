@@ -1,4 +1,4 @@
-<div class="bar">
+<div class="bar" [class.open]="open()">
   <div class="levels" role="group" aria-label="Levels">
     @for (level of levelOptions; track level.value) {
       <button type="button" class="chip level-{{ level.value }}" [class.on]="isOn(level.value)" [attr.aria-pressed]="isOn(level.value)"
@@ -13,6 +13,21 @@
     }
   </div>
 
+  <div class="nav" role="group" aria-label="Errors and warnings">
+    <button type="button" class="step" [disabled]="nav().problems === 0" title="Previous error or warning (p)" aria-label="Previous error or warning"
+      (click)="navigate.emit('previous')">
+      <i class="pi pi-chevron-up" aria-hidden="true"></i>
+    </button>
+    <span class="position" aria-hidden="true" [title]="nav().problems + ' errors and warnings in the lines shown'">{{ positionLabel() }}</span>
+    <button type="button" class="step" [disabled]="nav().problems === 0" title="Next error or warning (n)" aria-label="Next error or warning"
+      (click)="navigate.emit('next')">
+      <i class="pi pi-chevron-down" aria-hidden="true"></i>
+    </button>
+    <button type="button" class="first" [disabled]="nav().newErrors === 0" [title]="firstErrorTitle()" (click)="navigate.emit('first-error')">
+      New errors <span class="n">{{ nav().newErrors }}</span>
+    </button>
+  </div>
+
   <button type="button" class="follow" [class.paused]="!following()" (click)="followChange.emit(!following())"
     [title]="following() ? 'Stop scrolling to new lines' : 'Scroll to new lines as they arrive'">
     <i class="pi" [class.pi-pause]="following()" [class.pi-play]="!following()" aria-hidden="true"></i>
@@ -20,7 +35,7 @@
   </button>
 
   <button type="button" class="more-toggle" [attr.aria-expanded]="open()" aria-controls="log-filters"
-    [attr.aria-label]="'Filters' + (activeFilters().length > 0 ? ', ' + activeFilters().length + ' active' : '')" title="Search, app, sync traffic and connections"
+    [attr.aria-label]="'Filters' + (activeFilters().length > 0 ? ', ' + activeFilters().length + ' active' : '')" title="Search, app, sync traffic, connections and error navigation"
     (click)="open.set(!open())">
     <i class="pi pi-sliders-h" aria-hidden="true"></i>
     <span>Filters</span>

@@ -5,7 +5,7 @@
     <span class="rule"></span>
   </div>
 } @else {
-  <div class="row level-{{ log().level }}" [class.open]="expanded()" (click)="onRowClick()">
+  <div class="row level-{{ log().level }}" [class.open]="expanded()" [class.current]="current()" (click)="onRowClick()">
     <!-- opens the row by the row's click handler, and is what makes that reachable by keyboard -->
     <button type="button" class="time" [attr.aria-expanded]="expanded()" [title]="utc()">{{ log().created | date:'HH:mm:ss.SSS' }}</button>
     <!-- a label on a plain span is not read out: screen readers said "DBG" -->

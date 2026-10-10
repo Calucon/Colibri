@@ -5,7 +5,8 @@
 }
 
 // Wide screens: one row. Below 1500px the search, app and switches take a second row, and on a
-// phone, or a screen as short as a phone held sideways, they fold away behind the Filters button.
+// phone, or a screen as short as a phone held sideways, they fold away behind the Filters button,
+// with the error navigation.
 .bar {
     display: flex;
     flex-wrap: wrap;
@@ -107,9 +108,21 @@
     }
 }
 
-.follow {
+.levels {
+    order: 0;
+}
+
+.more {
+    order: 1;
+}
+
+.nav {
     order: 2;
     margin-left: auto;
+}
+
+.follow {
+    order: 4;
 
     // as the "Jump to latest" button, which does the same: not the warning yellow
     &.paused {
@@ -119,6 +132,90 @@
 
         &:hover {
             background: #9fd0de;
+        }
+    }
+}
+
+// Previous, the position, Next and New errors in one bordered group
+.nav {
+    display: inline-flex;
+    align-items: stretch;
+    height: 32px;
+    box-sizing: border-box;
+
+    border: 1px solid var(--surface-3);
+    border-radius: 6px;
+    overflow: hidden;
+
+    button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+
+        color: var(--text);
+        background: transparent;
+        border: 0;
+        font: 500 13px var(--sans);
+        white-space: nowrap;
+        cursor: pointer;
+
+        &:hover:not(:disabled) {
+            background: var(--surface-2);
+        }
+
+        &:disabled {
+            color: var(--text-muted);
+            opacity: 0.6;
+            cursor: default;
+        }
+
+        &:focus-visible {
+            outline-offset: -2px;
+        }
+    }
+
+    .step {
+        width: 30px;
+
+        .pi {
+            font-size: 12px;
+        }
+    }
+
+    .position {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 3.5ch;
+        padding: 0 4px;
+
+        color: var(--text-muted);
+        font-size: 12px;
+        font-variant-numeric: tabular-nums;
+    }
+
+    .first {
+        gap: 6px;
+        padding: 0 10px;
+        border-left: 1px solid var(--surface-3);
+
+        .n {
+            min-width: 18px;
+            padding: 0 5px;
+            box-sizing: border-box;
+
+            color: var(--bg);
+            background: var(--err);
+            border-radius: 9px;
+            font-size: 11px;
+            line-height: 18px;
+            text-align: center;
+        }
+
+        &:disabled .n {
+            color: var(--text-muted);
+            background: var(--surface-2);
         }
     }
 }
@@ -280,13 +377,9 @@
 }
 
 @media (max-width: 1499.98px) {
-    .follow {
-        order: 0;
-    }
-
     .more {
         flex-basis: 100%;
-        order: 3;
+        order: 5;
     }
 
     .search {
@@ -340,8 +433,29 @@
 
     .more-toggle {
         display: inline-flex;
+        order: 1;
         margin-left: auto;
         padding: 0 9px;
+    }
+
+    // in the folded panel, on a line of its own above the filters
+    .nav {
+        display: none;
+        order: 4;
+        margin-left: 0;
+    }
+
+    .bar.open {
+        .nav {
+            display: inline-flex;
+        }
+
+        // the end of the first line: the levels keep their room
+        &::after {
+            content: '';
+            flex-basis: 100%;
+            order: 3;
+        }
     }
 
     .more {
@@ -404,8 +518,13 @@
     .search input,
     .chip,
     .follow,
+    .nav,
     .more-toggle {
         height: 40px;
+    }
+
+    .nav .step {
+        width: 40px;
     }
 
     .apps ::ng-deep .p-select-label {

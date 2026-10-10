@@ -86,6 +86,16 @@ describe('LogMessageComponent', () => {
         expect(fixture.nativeElement.querySelector('.details')).toBeNull();
     });
 
+    it('marks the line Previous and Next went to', () => {
+        const fixture = render(message({}));
+        expect(fixture.nativeElement.querySelector('.row.current')).toBeNull();
+
+        fixture.componentRef.setInput('current', true);
+        fixture.detectChanges();
+
+        expect(fixture.nativeElement.querySelector('.row.current')).not.toBeNull();
+    });
+
     it('marks the search text in the message', () => {
         const root: HTMLElement = render(message({}), 'asset').nativeElement;
         expect([ ...root.querySelectorAll('mark') ].map(m => m.textContent)).toEqual([ 'asset' ]);

@@ -18,6 +18,8 @@ export class LogMessageComponent {
     public log = input.required<LogMessage>();
     /** Lower-case text to highlight in the message. */
     public search = input('');
+    /** Whether it is the error or warning Previous and Next went to last. */
+    public current = input(false);
 
     public expanded = signal(false);
 

@@ -132,6 +132,9 @@ export class LogService {
     /** Text to look for in the loaded lines. Unlike the filters above, the page applies it itself. */
     public readonly search = signal(this.initial.search);
 
+    /** When the page was opened: "First error" goes to the first error since. */
+    public readonly openedAt = Date.now();
+
     /** How many of the loaded lines there are of each level. */
     public readonly levelCounts = computed(() => {
         const counts = LOG_LEVELS.map(() => 0);

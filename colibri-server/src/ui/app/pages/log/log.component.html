@@ -1,4 +1,5 @@
-<app-log-toolbar [following]="following()" (followChange)="$event ? follow() : pause()" [matches]="search() ? matches().length : null"></app-log-toolbar>
+<app-log-toolbar [following]="following()" (followChange)="$event ? follow() : pause()" [matches]="search() ? matches().length : null"
+  [nav]="nav()" (navigate)="navigate($event)"></app-log-toolbar>
 
 <app-offline-banner></app-offline-banner>
 
@@ -15,7 +16,7 @@
       @if (dayStarts().has(row.id)) {
         <div class="day">{{ row.created | date:'EEEE, yyyy-MM-dd' }}</div>
       }
-      <app-log-message [log]="row" [search]="search()"></app-log-message>
+      <app-log-message [attr.data-id]="row.id" [log]="row" [search]="search()" [current]="row.id === current()"></app-log-message>
     }
 
     @if (empty(); as empty) {

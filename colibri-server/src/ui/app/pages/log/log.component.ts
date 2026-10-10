@@ -1,8 +1,8 @@
-import { AfterViewInit, ChangeDetectionStrategy, Component, ElementRef, Injector, OnDestroy, afterNextRender, afterRenderEffect, computed, effect, inject, signal, untracked, viewChild } from '@angular/core';
+import { AfterViewInit, ChangeDetectionStrategy, Component, ElementRef, HostListener, Injector, OnDestroy, afterNextRender, afterRenderEffect, computed, effect, inject, signal, untracked, viewChild } from '@angular/core';
 import { DatePipe } from '@angular/common';
 import { LogMessage, LogService, SocketIOService } from '../../services';
 import { LogMessageComponent } from '../../components/log-message/log-message.component';
-import { LogToolbarComponent } from '../../components/log-toolbar/log-toolbar.component';
+import { LogNav, LogToolbarComponent, NavStep } from '../../components/log-toolbar/log-toolbar.component';
 import { OfflineBannerComponent } from '../../components/offline-banner/offline-banner.component';
 import { matchesSearch } from '../../components/log-message/log-format';
 
@@ -17,6 +17,13 @@ const screenPageSize = (): number =>
 
 /** How close to the end, in px, still counts as at the end. */
 const END_SLACK = 24;
+
+/** Whether a line is an error or a warning, which Previous and Next go through. */
+const isProblem = (line: LogMessage): boolean => !line.reconnect && (line.level === 0 || line.level === 1);
+
+/** Whether a key press is meant for a field or a list, not for the page. */
+const typing = (event: KeyboardEvent): boolean =>
+    event.target instanceof Element && event.target.closest('input, textarea, select, [contenteditable="true"], [role="combobox"], [role="listbox"], [role="menu"]') !== null;
 
 /** Whether an event is on a line, or on "Show older lines" above them. */
 const onLine = (event: Event): boolean =>
@@ -77,6 +84,28 @@ export class LogComponent implements AfterViewInit, OnDestroy {
             if (!shown.has(line.id) && !line.reconnect) count++;
         }
         return count;
+    });
+
+    /** The error or warning Previous and Next went to last. */
+    current = signal<string | null>(null);
+
+    /** The errors and warnings among the lines, oldest first. */
+    private problems = computed(() => this.matches().filter(isProblem).map(line => line.id));
+
+    /** The errors since the page was opened, oldest first. */
+    private newErrors = computed(() =>
+        this.matches().filter(line => !line.reconnect && line.level === 0 && line.created >= this.log.openedAt).map(line => line.id));
+
+    nav = computed<LogNav>(() => {
+        const problems = this.problems();
+        const current = this.current();
+        const position = current === null ? -1 : problems.indexOf(current);
+        return {
+            problems: problems.length,
+            position: position < 0 ? null : position + 1,
+            newErrors: this.newErrors().length,
+            openedAt: this.log.openedAt
+        };
     });
 
     /** The rows that start a new day, which get the date above them. */
@@ -158,7 +187,81 @@ export class LogComponent implements AfterViewInit, OnDestroy {
     follow(): void {
         this.frozen.set(null);
         this.limit.set(this.pageSize);
+        this.current.set(null);
         this.following.set(true);
+    }
+
+    /**
+     * To the next or previous error or warning, round from the last to the first. The first goes
+     * from what is in view: Next to the first at or below its top, Previous to the last at or
+     * above its end, which, at the end of the log, is the latest.
+     */
+    navigate(step: NavStep): void {
+        if (step === 'first-error') {
+            const [ id ] = this.newErrors();
+            if (id !== undefined) this.goTo(id);
+            return;
+        }
+
+        const problems = this.problems();
+        if (problems.length === 0) return;
+        const direction = step === 'next' ? 1 : -1;
+        const at = this.current() === null ? -1 : problems.indexOf(this.current()!);
+        if (at >= 0) {
+            this.goTo(problems[(at + direction + problems.length) % problems.length]);
+            return;
+        }
+
+        const index = new Map(this.matches().map((line, i) => [ line.id, i ]));
+        const [ top, bottom ] = this.inView(index);
+        const before = problems.filter(id => index.get(id)! <= bottom);
+        const target = direction > 0
+            ? problems.find(id => index.get(id)! >= top) ?? problems[0]
+            : before[before.length - 1] ?? problems[problems.length - 1];
+        this.goTo(target);
+    }
+
+    // Pauses, so that the line stays where it is, and shows as many older lines as it takes.
+    private goTo(id: string): void {
+        this.pause();
+        const matches = this.matches();
+        const fromEnd = matches.length - matches.findIndex(line => line.id === id);
+        if (fromEnd > this.limit()) this.limit.set(Math.ceil(fromEnd / this.pageSize) * this.pageSize);
+        this.current.set(id);
+
+        afterNextRender(() => {
+            const row = Array.from(this.scroller().nativeElement.querySelectorAll<HTMLElement>('app-log-message[data-id]'))
+                .find(element => element.dataset['id'] === id);
+            row?.scrollIntoView({ block: 'center' });
+            row?.querySelector<HTMLElement>('.time')?.focus({ preventScroll: true });
+        }, { injector: this.injector });
+    }
+
+    // The first and last line at least partly in view, by their place in matches().
+    private inView(index: ReadonlyMap<string, number>): [ number, number ] {
+        const el = this.scroller().nativeElement;
+        const box = el.getBoundingClientRect();
+        let top = Infinity;
+        let bottom = -Infinity;
+        for (const row of Array.from(el.querySelectorAll<HTMLElement>('app-log-message[data-id]'))) {
+            const rect = row.getBoundingClientRect();
+            if (rect.bottom <= box.top || rect.top >= box.bottom) continue;
+            const at = index.get(row.dataset['id']!);
+            if (at === undefined) continue;
+            top = Math.min(top, at);
+            bottom = Math.max(bottom, at);
+        }
+        return top === Infinity ? [ 0, index.size - 1 ] : [ top, bottom ];
+    }
+
+    // n and p, as next and previous in many tools, and e for the first error.
+    @HostListener('document:keydown', [ '$event' ])
+    onKey(event: KeyboardEvent): void {
+        if (event.ctrlKey || event.metaKey || event.altKey || typing(event)) return;
+        const step = ({ n: 'next', p: 'previous', e: 'first-error' } as const)[event.key as 'n' | 'p' | 'e'];
+        if (!step) return;
+        event.preventDefault();
+        this.navigate(step);
     }
 
     showOlder(): void {

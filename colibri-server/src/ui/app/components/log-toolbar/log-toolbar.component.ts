@@ -1,4 +1,5 @@
 import { ChangeDetectionStrategy, Component, ElementRef, HostListener, OnDestroy, computed, effect, inject, input, output, signal, untracked, viewChild } from '@angular/core';
+import { DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { SelectModule } from 'primeng/select';
 import { ToggleSwitchModule } from 'primeng/toggleswitch';
@@ -19,22 +20,52 @@ interface ActiveFilter {
     clear: () => void;
 }
 
+/** Where the log is among its errors and warnings. */
+export interface LogNav {
+    /** How many errors and warnings the lines shown have. */
+    problems: number;
+    /** The one Previous and Next went to last, counted from 1, or null. */
+    position: number | null;
+    /** How many errors there are since the page was opened. */
+    newErrors: number;
+    openedAt: number;
+}
+
+export type NavStep = 'previous' | 'next' | 'first-error';
+
 @Component({
     selector: 'app-log-toolbar',
     templateUrl: './log-toolbar.component.html',
     styleUrls: ['./log-toolbar.component.scss'],
     imports: [FormsModule, SelectModule, ToggleSwitchModule],
+    providers: [DatePipe],
     changeDetection: ChangeDetectionStrategy.OnPush
 })
 export class LogToolbarComponent implements OnDestroy {
     log = inject(LogService);
     private clients = inject(ClientService);
+    private datePipe = inject(DatePipe);
 
     /** Whether the log scrolls to new lines. */
     following = input(true);
     followChange = output<boolean>();
     /** How many lines match the search, or null without one. */
     matches = input<number | null>(null);
+    nav = input<LogNav>({ problems: 0, position: null, newErrors: 0, openedAt: 0 });
+    navigate = output<NavStep>();
+
+    positionLabel = computed(() => {
+        const { problems, position } = this.nav();
+        return position === null ? `${problems}` : `${position}/${problems}`;
+    });
+
+    firstErrorTitle = computed(() => {
+        const since = this.datePipe.transform(this.nav().openedAt, 'HH:mm:ss');
+        const errors = this.nav().newErrors;
+        return errors > 0
+            ? `${errors} ${errors === 1 ? 'error' : 'errors'} since the page was opened at ${since}: go to the first (e)`
+            : `No errors since the page was opened at ${since}`;
+    });
 
     levelOptions = LOG_LEVELS;
     tags = LEVEL_TAGS;
