@@ -194,6 +194,17 @@ describe('LogToolbarComponent', () => {
         expect(steps).toEqual([ 'previous', 'next', 'first-error' ]);
     });
 
+    it('offers the lines as text or JSON', () => {
+        const component = TestBed.createComponent(LogToolbarComponent).componentInstance;
+        const formats: string[] = [];
+        component.download.subscribe(format => formats.push(format));
+
+        for (const item of component.downloadItems) item.command!({});
+
+        expect(component.downloadItems.map(item => item.label)).toEqual([ 'Text', 'JSON' ]);
+        expect(formats).toEqual([ 'text', 'json' ]);
+    });
+
     it('counts in thousands past 999', () => {
         const component = TestBed.createComponent(LogToolbarComponent).componentInstance;
 

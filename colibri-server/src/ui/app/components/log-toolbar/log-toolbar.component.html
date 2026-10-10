@@ -35,7 +35,7 @@
   </button>
 
   <button type="button" class="more-toggle" [attr.aria-expanded]="open()" aria-controls="log-filters"
-    [attr.aria-label]="'Filters' + (activeFilters().length > 0 ? ', ' + activeFilters().length + ' active' : '')" title="Search, app, sync traffic, connections and error navigation"
+    [attr.aria-label]="'Filters' + (activeFilters().length > 0 ? ', ' + activeFilters().length + ' active' : '')" title="Search, app, sync traffic, connections, error navigation and download"
     (click)="open.set(!open())">
     <i class="pi pi-sliders-h" aria-hidden="true"></i>
     <span>Filters</span>
@@ -90,6 +90,12 @@
     @if (activeFilters().length > 0 || !allLevels()) {
       <button type="button" class="clear" (click)="log.clearFilters()">Clear filters</button>
     }
+
+    <button type="button" class="save" aria-haspopup="menu" aria-label="Download" title="Download the lines that match the filters and the search, as text or JSON" (click)="saveMenu.toggle($event)">
+      <i class="pi pi-download" aria-hidden="true"></i>
+      <span>Download</span>
+    </button>
+    <p-menu #saveMenu [model]="downloadItems" [popup]="true" appendTo="body" styleClass="small-menu" ariaLabel="Download as"></p-menu>
   </div>
 </div>
 

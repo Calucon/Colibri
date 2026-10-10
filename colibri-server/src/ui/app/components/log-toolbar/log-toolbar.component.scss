@@ -6,7 +6,7 @@
 
 // Wide screens: one row. Below 1500px the search, app and switches take a second row, and on a
 // phone, or a screen as short as a phone held sideways, they fold away behind the Filters button,
-// with the error navigation.
+// with the error navigation and the download.
 .bar {
     display: flex;
     flex-wrap: wrap;
@@ -81,6 +81,7 @@
 }
 
 .follow,
+.save,
 .more-toggle,
 .clear,
 .active-chip {
@@ -218,6 +219,11 @@
             background: var(--surface-2);
         }
     }
+}
+
+// last of the filters: it saves what they leave
+.save {
+    margin-left: auto;
 }
 
 .more-toggle {
@@ -388,6 +394,17 @@
     }
 }
 
+// the download's icon only, so that the filters fit on their row with Clear filters
+@media (min-width: 700px) and (max-width: 1099.98px) {
+    .save {
+        padding: 0 9px;
+
+        span {
+            display: none;
+        }
+    }
+}
+
 @media (max-width: 699.98px), (max-height: 499.98px) {
     .bar {
         gap: 6px;
@@ -458,6 +475,11 @@
         }
     }
 
+    .save {
+        align-self: flex-start;
+        margin-left: 0;
+    }
+
     .more {
         display: none;
         flex-direction: column;
@@ -518,6 +540,7 @@
     .search input,
     .chip,
     .follow,
+    .save,
     .nav,
     .more-toggle {
         height: 40px;

@@ -3,7 +3,7 @@ import { signal } from '@angular/core';
 import { Subject } from 'rxjs';
 import { ConnectionState, LogMessage, LogService, Reconnect, SocketIOService } from '../../services';
 import { FLUSH_INTERVAL } from '../../services/log.service';
-import { LogComponent, PAGE_SIZE } from './log.component';
+import { LogComponent, PAGE_SIZE, textLine } from './log.component';
 
 const message = (overrides: Partial<LogMessage>): LogMessage => ({
     id: '1',
@@ -243,6 +243,61 @@ describe('LogComponent', () => {
             component.navigate('next');
 
             expect(component.rows()[0].id).toBe('first');
+        });
+    });
+
+    describe('download', () => {
+        // what the page offers for download: its name and its text
+        let files: { name: string; text: string }[];
+        let blobs: string[];
+
+        beforeEach(() => {
+            files = [];
+            blobs = [];
+            // jsdom's Blob cannot be read back
+            vi.stubGlobal('Blob', class {
+                constructor(public parts: string[]) {}
+            });
+            URL.createObjectURL = vi.fn((blob: { parts: string[] }) => {
+                blobs.push(blob.parts.join(''));
+                return `blob:${blobs.length}`;
+            }) as unknown as typeof URL.createObjectURL;
+            URL.revokeObjectURL = vi.fn();
+            vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+                files.push({ name: this.download, text: blobs[Number(this.href.split(':').at(-1)) - 1] });
+            });
+        });
+
+        afterEach(() => {
+            vi.restoreAllMocks();
+        });
+
+        it('saves the lines that match the filters and the search, as text and as JSON', () => {
+            const { component, log } = create();
+            history([
+                message({ id: 'a', message: '[Quest] Scene loaded', metadata: { clientApp: 'demo', clientName: 'Quest', clientId: 'q1' } }),
+                message({ id: 'b', level: 0, message: 'Asset missing\nat Load()', count: 2, first: 500 })
+            ]);
+            log.search.set('asset');
+
+            component.download('text');
+            component.download('json');
+
+            expect(files.map(file => file.name)).toEqual([ expect.stringMatching(/^colibri-log-\d{8}-\d{6}\.txt$/), expect.stringMatching(/\.json$/) ]);
+            const text = files[0].text;
+            expect(text).toContain('# App: all. Levels: error, warn, info, debug. Search: asset. Sync traffic hidden. Connections shown.');
+            expect(text).toContain('# 1 line\n');
+            expect(text).toContain('ERR g/test: Asset missing\n    at Load() [3 times since ');
+            expect(text).not.toContain('Scene loaded');
+
+            const json = JSON.parse(files[1].text);
+            expect(json.filters).toEqual({ app: '', levels: [ 'error', 'warn', 'info', 'debug' ], search: 'asset', syncTraffic: false, connections: true });
+            expect(json.lines.map((line: LogMessage) => line.id)).toEqual([ 'b' ]);
+        });
+
+        it('writes a client\'s line with its app, name and id', () => {
+            const line = textLine(message({ message: '[Quest] Scene loaded', metadata: { clientApp: 'demo', clientName: 'Quest', clientId: 'q1' } }));
+            expect(line).toMatch(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{3} INF demo Quest \(q1\): Scene loaded$/);
         });
     });
 });

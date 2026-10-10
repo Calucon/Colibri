@@ -1,6 +1,8 @@
 import { ChangeDetectionStrategy, Component, ElementRef, HostListener, OnDestroy, computed, effect, inject, input, output, signal, untracked, viewChild } from '@angular/core';
 import { DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { MenuItem } from 'primeng/api';
+import { MenuModule } from 'primeng/menu';
 import { SelectModule } from 'primeng/select';
 import { ToggleSwitchModule } from 'primeng/toggleswitch';
 import { ClientService, LOG_LEVELS, LogService } from '../../services';
@@ -37,7 +39,7 @@ export type NavStep = 'previous' | 'next' | 'first-error';
     selector: 'app-log-toolbar',
     templateUrl: './log-toolbar.component.html',
     styleUrls: ['./log-toolbar.component.scss'],
-    imports: [FormsModule, SelectModule, ToggleSwitchModule],
+    imports: [FormsModule, MenuModule, SelectModule, ToggleSwitchModule],
     providers: [DatePipe],
     changeDetection: ChangeDetectionStrategy.OnPush
 })
@@ -53,6 +55,12 @@ export class LogToolbarComponent implements OnDestroy {
     matches = input<number | null>(null);
     nav = input<LogNav>({ problems: 0, position: null, newErrors: 0, openedAt: 0 });
     navigate = output<NavStep>();
+    download = output<'text' | 'json'>();
+
+    downloadItems: MenuItem[] = [
+        { label: 'Text', icon: 'pi pi-file', command: () => this.download.emit('text') },
+        { label: 'JSON', icon: 'pi pi-code', command: () => this.download.emit('json') }
+    ];
 
     positionLabel = computed(() => {
         const { problems, position } = this.nav();

@@ -1,5 +1,5 @@
 <app-log-toolbar [following]="following()" (followChange)="$event ? follow() : pause()" [matches]="search() ? matches().length : null"
-  [nav]="nav()" (navigate)="navigate($event)"></app-log-toolbar>
+  [nav]="nav()" (navigate)="navigate($event)" (download)="download($event)"></app-log-toolbar>
 
 <app-offline-banner></app-offline-banner>
 

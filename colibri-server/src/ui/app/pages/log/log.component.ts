@@ -1,10 +1,11 @@
 import { AfterViewInit, ChangeDetectionStrategy, Component, ElementRef, HostListener, Injector, OnDestroy, afterNextRender, afterRenderEffect, computed, effect, inject, signal, untracked, viewChild } from '@angular/core';
 import { DatePipe } from '@angular/common';
-import { LogMessage, LogService, SocketIOService } from '../../services';
+import { LOG_LEVELS, LogMessage, LogService, SocketIOService } from '../../services';
 import { LogMessageComponent } from '../../components/log-message/log-message.component';
 import { LogNav, LogToolbarComponent, NavStep } from '../../components/log-toolbar/log-toolbar.component';
 import { OfflineBannerComponent } from '../../components/offline-banner/offline-banner.component';
-import { matchesSearch } from '../../components/log-message/log-format';
+import { LEVEL_TAGS, matchesSearch, messageText, sourceOf } from '../../components/log-message/log-format';
+import { download, fileNamePart } from '../../format';
 
 /**
  * How many lines are on the page at first, and how many more each "Show older lines" adds: half
@@ -264,6 +265,36 @@ export class LogComponent implements AfterViewInit, OnDestroy {
         this.navigate(step);
     }
 
+    /** The loaded lines that match the filters and the search, as a file. */
+    download(format: 'text' | 'json'): void {
+        const search = this.search();
+        const lines = this.log.messages().filter(line => !line.reconnect && (!search || matchesSearch(line, search)));
+        const stamp = new Date();
+        const name = `colibri-log${this.log.filter() ? '-' + fileNamePart(this.log.filter()) : ''}-${fileStamp(stamp)}`;
+        const filters = {
+            app: this.log.filter(),
+            levels: [ ...this.log.levels() ].sort().map(level => LOG_LEVELS[level].label.toLowerCase()),
+            search: this.log.search(),
+            syncTraffic: this.log.showBroadcastTraffic(),
+            connections: this.log.showConnections()
+        };
+
+        if (format === 'json') {
+            const body = { server: location.host, exported: stamp.toISOString(), filters, lines };
+            download(`${name}.json`, JSON.stringify(body, null, 2), 'application/json');
+            return;
+        }
+
+        const header = [
+            `# Colibri log from ${location.host}, saved ${localTime(stamp.getTime())}`,
+            `# App: ${filters.app || 'all'}. Levels: ${filters.levels.join(', ') || 'none'}.` +
+                (filters.search ? ` Search: ${filters.search}.` : '') +
+                ` Sync traffic ${filters.syncTraffic ? 'shown' : 'hidden'}. Connections ${filters.connections ? 'shown' : 'hidden'}.`,
+            `# ${lines.length} ${lines.length === 1 ? 'line' : 'lines'}`
+        ];
+        download(`${name}.txt`, [ ...header, ...lines.map(textLine) ].join('\n') + '\n', 'text/plain');
+    }
+
     showOlder(): void {
         this.limit.update(limit => limit + this.pageSize);
     }
@@ -329,3 +360,26 @@ export class LogComponent implements AfterViewInit, OnDestroy {
         this.lastHeight = el.scrollHeight;
     }
 }
+
+const pad = (value: number, length = 2): string => `${value}`.padStart(length, '0');
+
+/** A time as the browser's local yyyy-MM-dd HH:mm:ss.SSS, as the page shows it. */
+const localTime = function (time: number): string {
+    const d = new Date(time);
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`;
+};
+
+const fileStamp = function (date: Date): string {
+    return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
+};
+
+/** One line of the text download: time, level, source and message, continued lines indented. */
+export const textLine = function (line: LogMessage): string {
+    const source = sourceOf(line);
+    const id = line.metadata?.['clientId'];
+    const who = source.app || source.client
+        ? [ source.app, source.client, typeof id === 'string' && id !== 'UNKNOWN' ? `(${id})` : undefined ].filter(Boolean).join(' ')
+        : source.server;
+    const repeated = line.count > 0 ? ` [${line.count + 1} times since ${localTime(line.first)}]` : '';
+    return `${localTime(line.created)} ${LEVEL_TAGS[line.level] ?? 'LOG'} ${who}: ${messageText(line).replace(/\n/g, '\n    ')}${repeated}`;
+};

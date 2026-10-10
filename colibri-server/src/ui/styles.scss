@@ -99,6 +99,20 @@ button {
     white-space: nowrap;
 }
 
+// PrimeNG's popup menu at the size of the toolbars it opens from
+.p-menu.small-menu {
+    min-width: 9rem;
+    font-size: 13px;
+
+    .p-menu-item-link {
+        padding: 8px 12px;
+    }
+
+    .p-menu-item-icon {
+        font-size: 13px;
+    }
+}
+
 button.app-chip {
     cursor: pointer;
 
