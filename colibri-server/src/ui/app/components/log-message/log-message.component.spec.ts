@@ -1,5 +1,6 @@
 import { TestBed } from '@angular/core/testing';
 import { signal } from '@angular/core';
+import { provideRouter } from '@angular/router';
 import { LogMessage, LogService } from '../../services';
 import { LogMessageComponent } from './log-message.component';
 
@@ -30,7 +31,7 @@ describe('LogMessageComponent', () => {
 
     beforeEach(() => {
         filter = signal('');
-        TestBed.configureTestingModule({ providers: [ { provide: LogService, useValue: { filter } } ] });
+        TestBed.configureTestingModule({ providers: [ provideRouter([]), { provide: LogService, useValue: { filter } } ] });
     });
 
     it('shows time, level, app, client and the message without the client prefix', () => {
@@ -84,6 +85,16 @@ describe('LogMessageComponent', () => {
 
         expect(filter()).toBe('demo-app');
         expect(fixture.nativeElement.querySelector('.details')).toBeNull();
+    });
+
+    it('links an opened line to the clients of its app, with its client marked', () => {
+        const fixture = render(message({}));
+        (fixture.nativeElement.querySelector('.time') as HTMLElement).click();
+        fixture.detectChanges();
+
+        const link: HTMLAnchorElement = fixture.nativeElement.querySelector('.details a.link');
+        expect(link.textContent).toBe('Show clients');
+        expect(link.getAttribute('href')).toBe('/clients?app=demo-app&client=abc');
     });
 
     it('marks the line Previous and Next went to', () => {

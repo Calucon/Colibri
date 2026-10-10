@@ -1,5 +1,6 @@
 import { TestBed } from '@angular/core/testing';
 import { signal } from '@angular/core';
+import { provideRouter } from '@angular/router';
 import { Subject } from 'rxjs';
 import { ConnectionState, LogMessage, LogService, Reconnect, SocketIOService } from '../../services';
 import { FLUSH_INTERVAL } from '../../services/log.service';
@@ -56,7 +57,7 @@ describe('LogComponent', () => {
         lostAt = signal<number | null>(null);
 
         TestBed.configureTestingModule({
-            providers: [{
+            providers: [provideRouter([]), {
                 provide: SocketIOService,
                 useValue: {
                     listen: (name: string) => channel(name).asObservable(),

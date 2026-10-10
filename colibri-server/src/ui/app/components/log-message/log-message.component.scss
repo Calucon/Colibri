@@ -197,6 +197,13 @@
         margin-left: 6px;
         color: var(--text-muted);
     }
+
+    .link {
+        margin-left: 10px;
+        color: var(--accent);
+        text-decoration: underline;
+        text-underline-offset: 2px;
+    }
 }
 
 .gap {

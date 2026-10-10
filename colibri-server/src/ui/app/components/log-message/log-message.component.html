@@ -31,7 +31,7 @@
           <div><dt>First</dt><dd>{{ log().first | date:'yyyy-MM-dd HH:mm:ss.SSS' }}, {{ log().count + 1 }} times in all</dd></div>
         }
         @if (source().app; as app) {
-          <div><dt>App</dt><dd>{{ app }}</dd></div>
+          <div><dt>App</dt><dd>{{ app }} <a class="link" routerLink="/clients" [queryParams]="{ app, client: clientId() }" (click)="$event.stopPropagation()">Show clients</a></dd></div>
         }
         @if (source().client; as client) {
           <div><dt>Client</dt><dd>{{ client }}@if (clientId(); as id) { <span class="muted">({{ id }})</span>}</dd></div>
