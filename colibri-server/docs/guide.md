@@ -623,7 +623,8 @@ package to upgrade, at most once a minute per address ([Version checking](protoc
 ## Development
 
 - `npm ci`: install the dependencies.
-- `npm run watch`: development server, recompiles and reloads on changes.
+- `npm run watch`: development server, recompiles and reloads on changes. Records no commit: it
+  removes `dist/server/build-info.json`, and the *Server* page shows the commit as unknown.
 - `npm run build`: compile. Records the commit in `dist/server/build-info.json`, from
   `COLIBRI_COMMIT` and `COLIBRI_COMMIT_DIRTY` (`true`) if set, else from git.
 - `npm start`: start the server. Compile first.

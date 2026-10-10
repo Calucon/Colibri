@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { execSync } from 'child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { UNKNOWN_BUILD, collectBuildInfo, describeBuild, readBuildInfo } from '../../src/server/modules/core/build-info.js';
@@ -88,5 +89,31 @@ describe('reading the build info', () => {
         // built without git: the time is still known
         expect(readBuildInfo(file(JSON.stringify({ commit: null, dirty: false, builtAt: '2023-11-14T22:13:20.000Z' }))))
             .toEqual({ commit: null, dirty: false, builtAt: 1_700_000_000_000 });
+    });
+});
+
+describe('npm run watch', () => {
+    // tsc -w does not write dist/server/build-info.json, so one left by an earlier `npm run build`
+    // had the server report that build's commit and time as its own.
+    it('removes the build info of an earlier build before it compiles', () => {
+        const scripts = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).scripts as Record<string, string>;
+        const [ removal, compile, ...rest ] = scripts['server:watch:ts']!.split(' && ');
+        expect(compile).toMatch(/^tsc .* -w$/);
+        expect(rest).toEqual([]);
+
+        const directory = mkdtempSync(join(tmpdir(), 'colibri-watch-'));
+        try {
+            const stale = join(directory, 'dist', 'server', 'build-info.json');
+            mkdirSync(join(directory, 'dist', 'server'), { recursive: true });
+            writeFileSync(stale, JSON.stringify({ commit: COMMIT, dirty: false, builtAt: NOW.toISOString() }));
+
+            // Through the shell, as npm runs it: sh here, cmd.exe on Windows.
+            execSync(removal!, { cwd: directory, stdio: 'ignore' });
+            expect(existsSync(stale)).toBe(false);
+            // Without one, as on a fresh checkout, it goes on to compile.
+            expect(() => execSync(removal!, { cwd: directory, stdio: 'ignore' })).not.toThrow();
+        } finally {
+            rmSync(directory, { recursive: true, force: true });
+        }
     });
 });
