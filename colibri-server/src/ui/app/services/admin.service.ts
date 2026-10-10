@@ -4,6 +4,7 @@ import { SocketIOService } from './socketio.service';
 /** The channel the pages read server data on. See docs/protocol.md, Admin UI channel. */
 export const ADMIN_CHANNEL = 'colibri::admin';
 
+/** The topics a page subscribes to. ClientService asks for 'latency', which is request only, itself. */
 export type AdminTopic = 'server' | 'clients' | 'models' | 'model';
 
 /** What every snapshot carries besides its data. */
@@ -84,6 +85,14 @@ export interface ClientsSnapshot extends Snapshot {
     clients: ClientRow[];
     total: number;
     adminPages: number;
+}
+
+export interface LatencySnapshot extends Snapshot {
+    /** Each client's round trips taken in the 122 s before `at`, not at `at`, oldest first, as [server time, ms]. */
+    clients: { id: string; samples: [number, number][] }[];
+    total: number;
+    /** Each second's median at the mean time of its samples, in place of the samples, for many clients. */
+    medians: boolean;
 }
 
 export interface ModelsQuery {
