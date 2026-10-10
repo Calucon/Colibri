@@ -192,7 +192,9 @@ namespace HCIKonstanz.Colibri.Tests
                 _voice.EnqueueReceived(new VoicePacket { Id = 2, Sequence = sequence, FrameSize = 960, Codec = Codec.PCM });
             }
 
-            LogAssert.Expect(LogType.Error, new Regex(@"^Colibri voice: a listener for voice id 1 threw an exception\..*listener bug", RegexOptions.Singleline));
+            // The first line only: Unity's Test Framework matches a multi-line message by its first
+            // line, so the exception text after it never matched and the test failed in the Editor.
+            LogAssert.Expect(LogType.Error, new Regex(@"^Colibri voice: a listener for voice id 1 threw an exception\. The other listeners and packets were still delivered\."));
             Assert.DoesNotThrow(() => _voice.DeliverReceivedPackets());
 
             Assert.That(first, Is.EqualTo(new short[] { 0, 1, 2 }));
