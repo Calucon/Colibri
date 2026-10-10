@@ -1674,6 +1674,29 @@ namespace HCIKonstanz.Colibri.Networking
         }
 
         /// <summary>
+        /// Whether the device has a route to <paramref name="address"/>. Connecting a UDP socket
+        /// sends nothing: it only looks the route up, and fails at once without one.
+        /// </summary>
+        /// <remarks>Internal for VoiceServerConnection and the EditMode tests.</remarks>
+        internal static bool HasRoute(IPAddress address, int port)
+        {
+            try
+            {
+                using (var probe = new Socket(address.AddressFamily, SocketType.Dgram, ProtocolType.Udp))
+                {
+                    probe.Connect(new IPEndPoint(address, port));
+                    return true;
+                }
+            }
+            catch (Exception)
+            {
+                // NetworkUnreachable, or no sockets of that family on this device or runtime, which
+                // a connection or a voice socket would fail on as well.
+                return false;
+            }
+        }
+
+        /// <summary>
         /// What a lookup found, ready to be tried in order: each address once, the IPv4 addresses
         /// first and then the IPv6 addresses, each family in the order found, and an IPv4-mapped
         /// IPv6 address as the IPv4 address it stands for, which an IPv4 socket reaches on every

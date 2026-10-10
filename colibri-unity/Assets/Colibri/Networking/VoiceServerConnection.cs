@@ -274,7 +274,7 @@ namespace HCIKonstanz.Colibri.Networking
                 }
             }
 
-            var address = SelectServerAddress(candidates, candidate => HasRoute(candidate, port));
+            var address = SelectServerAddress(candidates, candidate => WebServerConnection.HasRoute(candidate, port));
             if (address == null)
             {
                 var found = candidates.Length == 0 ? "no addresses at all" : string.Join<IPAddress>(", ", candidates);
@@ -305,7 +305,7 @@ namespace HCIKonstanz.Colibri.Networking
         /// IPv4 is taken without asking, as before IPv6 was an option: a device still joining
         /// Wi-Fi has no route yet, and starts sending once it has one.
         /// </remarks>
-        /// <param name="hasRoute">Whether the device has a route to an IPv6 address; see <see cref="HasRoute"/>.</param>
+        /// <param name="hasRoute">Whether the device has a route to an IPv6 address; see <see cref="WebServerConnection.HasRoute"/>.</param>
         /// <returns>An IPv4 or IPv6 address, or null when there is none voice can be sent to.</returns>
         internal static IPAddress SelectServerAddress(IPAddress[] candidates, Func<IPAddress, bool> hasRoute)
         {
@@ -335,29 +335,6 @@ namespace HCIKonstanz.Colibri.Networking
 
         private static bool IsSendableIPv6(IPAddress address)
             => address.AddressFamily == AddressFamily.InterNetworkV6 && !(address.IsIPv6LinkLocal && address.ScopeId == 0);
-
-        /// <summary>
-        /// Whether the device has a route to <paramref name="address"/>. Connecting a UDP socket
-        /// sends nothing: it only looks the route up, and fails at once without one.
-        /// </summary>
-        /// <remarks>Internal for the EditMode tests.</remarks>
-        internal static bool HasRoute(IPAddress address, int port)
-        {
-            try
-            {
-                using (var probe = new Socket(address.AddressFamily, SocketType.Dgram, ProtocolType.Udp))
-                {
-                    probe.Connect(new IPEndPoint(address, port));
-                    return true;
-                }
-            }
-            catch (Exception)
-            {
-                // NetworkUnreachable, or no sockets of that family on this device or runtime, which
-                // OpenSocket would fail on as well.
-                return false;
-            }
-        }
 
         /// <summary>
         /// The voice socket for <paramref name="address"/>: of its family, on a port of the
