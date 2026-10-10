@@ -425,6 +425,8 @@ it while no page is open.
   the clipboard, it works over plain HTTP. The filters are in the address, so a reload or a copied
   link keeps them: `/log?levels=error,warn&q=timeout&sync=1&connections=0#MyApp`.
 
+  ![Log page](../img/admin-log.png)
+
 - **Clients:** every connected Unity (TCP) and web client with its app, name, address (behind a
   [trusted proxy](#behind-a-reverse-proxy), the one the proxy names), transport and TLS, protocol
   version, time connected, latency, messages per second in and out over the last second, and whether
@@ -435,6 +437,8 @@ it while no page is open.
   sent, *Out* what they were sent (`/clients?throughput=out`). The throughput chart starts when the
   page opens. The former *Statistics* page, `/statistics`, leads here.
 
+  ![Clients page](../img/admin-clients.png)
+
 - **Models:** the synchronized models of each app and channel, 50 to a page, with their id, number
   of top-level fields, size as compact JSON and time since the last update, filtered by part of the
   id or channel. A size can be up to 10 s old, from 1 MiB up to a minute. Click one for its value as
@@ -442,12 +446,20 @@ it while no page is open.
   the newest ids deleted within `MODEL_TOMBSTONE_SECONDS`. *Refresh* reads the list again; *Live*
   updates the list and the open model every second.
 
+  ![Models page](../img/admin-models.png)
+
 - **Server:** version, protocol version, Node.js version and uptime; the settings in effect, with the
   variables that set them: ports, `BASE_URL`, TLS, `TRUSTED_PROXIES`, `TCP_PROXY_PROTOCOL`, load
   limits, idle timeout, tombstones, voice and recording; the TLS certificate's names, issuer, validity
   and SHA-256 fingerprint, with a warning 30 days before it expires; and counts of clients, apps,
   synchronized models and REST store values. Never certificate or key paths, key material or file
   contents.
+
+  ![Server page](../img/admin-server.png)
+
+On a phone, the log's search, app filter and switches are behind the button at its top right.
+
+<img src="../img/admin-log-phone.png" alt="Log page on a phone" width="300"/>
 
 Keys on the *Log* page, with the focus in the log or its toolbar (where a page just loaded puts it):
 `/` search, `p` and `n` previous and next error or warning, `e` first new error. On the *Models* page,
