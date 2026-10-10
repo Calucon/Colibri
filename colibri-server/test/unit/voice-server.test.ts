@@ -571,17 +571,22 @@ describe('VoiceServer', () => {
             await once(socket, 'listening');
             try {
                 const sent = relays(socket);
+                // A Unity client of lab on the proxy's machine, connected without the proxy.
+                const onProxy = unity.connect('lab', '192.0.2.100');
                 deliver(socket, '192.0.2.100', 6001, voicePacket(1, 0, [], LAB));
                 deliver(socket, '192.0.2.100', 6002, voicePacket(2, 0, [], LAB));
                 deliver(socket, '192.0.2.100', 6001, voicePacket(1, 1, [ 1, 0 ], LAB));
                 // Anyone else still needs a Unity client.
                 deliver(socket, '198.51.100.7', 4000, voicePacket(9, 0, [], LAB));
-                // Nor are the proxy's voice clients dropped when a Unity client of lab leaves its address.
-                unity.disconnect(unity.connect('lab', '192.0.2.100'));
+                // Nor are the proxy's voice clients dropped when that Unity client leaves: they are
+                // not its own, but those of whoever is behind the proxy.
+                unity.disconnect(onProxy);
                 await settled();
 
                 expect(sent).toEqual([ '192.0.2.100:6001', '192.0.2.100:6002' ]);
                 expect(proxied.status.clients).toBe(2);
+                expect(logs.filter(l => l.origin === 'VoiceServer' && /^New voice client connected from 192\.0\.2\.100:/.test(l.message))
+                    .map(l => l.message.endsWith(' (through a trusted proxy, unchecked)'))).toEqual([ true, true ]);
                 expect(logs.filter(l => l.origin === 'VoiceServer' && l.level === LogLevel.Info && /unchecked/.test(l.message)).map(l => l.message)).toEqual([
                     'Relaying voice from 192.0.2.100 unchecked: it is in TRUSTED_PROXIES, and voice through a proxy cannot be matched to a Unity client\'s address. '
                         + 'Logged once per address.',

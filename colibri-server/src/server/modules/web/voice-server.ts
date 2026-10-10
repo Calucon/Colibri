@@ -376,14 +376,16 @@ export class VoiceServer extends Service {
     // whatever address it named. Now a sender has to be at the address of a Unity client of the
     // app, which takes a TCP connection from there.
     private admit(address: string, appId: number, source: string, nowMillis: number): Admission | undefined {
-        if (this.unityClients.has(normalizeAddress(address), appId)) return 'unity';
-
-        // Behind a proxy every voice packet comes from the proxy's address, which matches no Unity
-        // client: nothing can be checked there.
+        // Behind a proxy every voice packet comes from the proxy's address, which says nothing
+        // about who sent it: nothing can be checked there. Asked first, so that a Unity client on
+        // the proxy's machine does not have the voice of everyone behind the proxy taken for its
+        // own, and dropped when it leaves.
         if (this.trustProxy(address, 0)) {
             this.reportUncheckedProxy(address);
             return 'proxy';
         }
+
+        if (this.unityClients.has(normalizeAddress(address), appId)) return 'unity';
 
         this.reportNoUnityClient(source, address, appId, nowMillis);
         return undefined;
