@@ -20,6 +20,9 @@ namespace HCIKonstanz.Colibri.Networking.Protocol
     /// ring by their low bits, so its length is a power of two. A volatile write publishes a
     /// counter only after the samples it covers have been written or read.
     ///
+    /// A clear is a mark at the written count, which the reader skips to once, the first time it
+    /// sees that mark, unless it has read past it already.
+    ///
     /// What does not fit is dropped, the newest samples: the oldest are the reader's to drop.
     /// Fast-forward, on the reader's side, drops the oldest long before the ring is full.
     ///
@@ -39,6 +42,7 @@ namespace HCIKonstanz.Colibri.Networking.Protocol
 
         // Written by the reader only.
         private int read;
+        private int appliedClear;
         private long fastForwarded;
 
         /// <param name="capacity">The samples it holds at least; rounded up to a power of two.</param>
@@ -52,7 +56,7 @@ namespace HCIKonstanz.Colibri.Networking.Protocol
                 length <<= 1;
             ring = new float[length];
             mask = length - 1;
-            written = clearedTo = read = startCount;
+            written = clearedTo = read = appliedClear = startCount;
         }
 
         internal int Capacity => ring.Length;
@@ -62,11 +66,15 @@ namespace HCIKonstanz.Colibri.Networking.Protocol
         {
             get
             {
+                // In this order: the reader publishes a clear as applied after the read count it
+                // moved, so a clear seen applied comes with that count.
+                var applied = Volatile.Read(ref appliedClear);
                 var from = Volatile.Read(ref read);
                 var cleared = Volatile.Read(ref clearedTo);
-                if (unchecked(cleared - from) > 0)
+                var to = Volatile.Read(ref written);
+                if (cleared != applied && unchecked(cleared - from) > 0)
                     from = cleared;
-                return unchecked(Volatile.Read(ref written) - from);
+                return unchecked(to - from);
             }
         }
 
@@ -118,11 +126,16 @@ namespace HCIKonstanz.Colibri.Networking.Protocol
         internal int Read(float[] data, int channels, int fastForwardAbove = int.MaxValue, int keep = 0)
         {
             var readCount = read;
+            // Before the written count, which then covers all the clear drops.
             var cleared = Volatile.Read(ref clearedTo);
-            if (unchecked(cleared - readCount) > 0)
+            var writeCount = Volatile.Read(ref written);
+            // Only a clear not applied yet: the mark stays put while the counters move on, and
+            // 2^31 samples on, 12.4 hours at 48 kHz, it looked ahead of the reader again. Nor one
+            // the reader has passed, having read what was written after it before it saw it.
+            if (cleared != appliedClear && unchecked(cleared - readCount) > 0)
                 readCount = cleared;
 
-            var available = unchecked(Volatile.Read(ref written) - readCount);
+            var available = unchecked(writeCount - readCount);
             if (available > fastForwardAbove)
             {
                 var skip = available - Math.Min(Math.Max(0, keep), available);
@@ -146,6 +159,8 @@ namespace HCIKonstanz.Colibri.Networking.Protocol
             Array.Clear(data, index, data.Length - index);
 
             Volatile.Write(ref read, unchecked(readCount + samples));
+            // After the read count, for Count.
+            Volatile.Write(ref appliedClear, cleared);
             return samples;
         }
     }

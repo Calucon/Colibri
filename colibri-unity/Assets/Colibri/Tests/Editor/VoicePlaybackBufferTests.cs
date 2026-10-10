@@ -294,7 +294,36 @@ namespace HCIKonstanz.Colibri.Tests
             Assert.That(ReadAll(buffer), Is.EqualTo(Numbered(1011, 10)));
         }
 
-        /// <summary>The counters wrap around at 2^32, after some 12 hours at 48 kHz.</summary>
+        /// <summary>
+        /// One clear, as StartPlayback makes, then 2^31 samples, 12.4 hours at 48 kHz. The clear's
+        /// mark stays where it was, and the reader took it for a clear still to come: it jumped
+        /// back to it, played silence, and dropped everything written, for another 2^31 samples.
+        /// </summary>
+        [Test]
+        public void AClearIsSkippedToOnceAndNot2To31SamplesLater()
+        {
+            var buffer = new VoicePlaybackBuffer(1 << 16);
+            buffer.Clear();
+
+            // Past 2^31 and short of 2^32, where the old check was right again. Fast-forward drops
+            // each frame, so this takes under a second, not hours.
+            var frame = new float[buffer.Capacity];
+            var data = new float[2];
+            var accepted = 0L;
+            for (var fed = 0L; fed < (1L << 31) + 4 * frame.Length; fed += frame.Length)
+            {
+                accepted += buffer.Write(frame, frame.Length);
+                buffer.Read(data, 2, 0, 0);
+            }
+            Assert.That(accepted, Is.EqualTo((1L << 31) + 4 * frame.Length));
+            Assert.That(buffer.Count, Is.Zero);
+
+            buffer.Write(Numbered(1, 960), 960);
+            Assert.That(buffer.Count, Is.EqualTo(960));
+            Assert.That(ReadAll(buffer), Is.EqualTo(Numbered(1, 960)));
+        }
+
+        /// <summary>The counters wrap around at 2^32, after some 25 hours at 48 kHz.</summary>
         [Test]
         public void TheCountersWrapAroundWithoutLosingTheirPlace()
         {
