@@ -56,6 +56,8 @@ export interface AdminSources {
     startedAt: number;
     settings: ServerSettings;
     tls?: { readonly info: CertificateInfo };
+    // Whether TCP_TLS_AT_PROXY applies: it is on, and so is TCP_PROXY_PROTOCOL. Off if left out.
+    tcpTlsAtProxy?: boolean;
     voice?: { readonly status: VoiceStatus };
     restStore?: { counts(): { apps: number; keys: number } };
 }
@@ -291,6 +293,7 @@ export class AdminData extends Service {
                     startedAt: sources.startedAt,
                     settings: sources.settings,
                     tls: sources.tls?.info,
+                    tcpTlsAtProxy: sources.tcpTlsAtProxy ?? false,
                     voice: sources.voice?.status,
                     store: sources.store,
                     restStore: sources.restStore?.counts(),

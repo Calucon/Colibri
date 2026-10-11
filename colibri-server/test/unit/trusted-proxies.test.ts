@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
     compileTrustedProxies,
     forwardedClientAddress,
+    forwardedTls,
     parseTrustedProxies,
 } from '../../src/server/modules/networking/trusted-proxies.js';
 
@@ -144,5 +145,52 @@ describe('forwardedClientAddress', () => {
 
     it('reads repeated header lines as one', () => {
         expect(forwardedClientAddress('172.20.0.1', ['6.6.6.6', '198.51.100.1'], trust)).toBe('198.51.100.1');
+    });
+});
+
+describe('forwardedTls', () => {
+    const trust = trusting('loopback, uniquelocal');
+
+    it('takes https from a trusted peer\'s X-Forwarded-Proto', () => {
+        expect(forwardedTls('172.20.0.1', 'https', trust)).toBe(true);
+        expect(forwardedTls('::ffff:127.0.0.1', 'https', trust)).toBe(true);
+        expect(forwardedTls('172.20.0.1', 'http', trust)).toBe(false);
+    });
+
+    it('takes wss, as Traefik sends for a WebSocket', () => {
+        expect(forwardedTls('172.20.0.1', 'wss', trust)).toBe(true);
+        expect(forwardedTls('172.20.0.1', 'ws', trust)).toBe(false);
+    });
+
+    it('reads the scheme in any case and with spaces around it', () => {
+        expect(forwardedTls('172.20.0.1', 'HTTPS', trust)).toBe(true);
+        expect(forwardedTls('172.20.0.1', ' Https ', trust)).toBe(true);
+        expect(forwardedTls('172.20.0.1', 'WSS', trust)).toBe(true);
+    });
+
+    it('ignores X-Forwarded-Proto from a peer that is not trusted', () => {
+        expect(forwardedTls('203.0.113.7', 'https', trust)).toBe(false);
+        expect(forwardedTls('127.0.0.1', 'https', compileTrustedProxies([]))).toBe(false);
+    });
+
+    it('is false without the header, or with anything but a scheme in it', () => {
+        expect(forwardedTls('172.20.0.1', undefined, trust)).toBe(false);
+        expect(forwardedTls('172.20.0.1', '', trust)).toBe(false);
+        expect(forwardedTls('172.20.0.1', 'https:', trust)).toBe(false);
+        expect(forwardedTls('172.20.0.1', 'https,', trust)).toBe(false);
+    });
+
+    // A proxy that appends, as X-Forwarded-For is appended to, puts its own value last. A client's
+    // own value is kept out only by a proxy that appends or replaces the header, not one that passes
+    // it on unchanged.
+    it('takes the right-most entry, the one a proxy that appends added itself', () => {
+        expect(forwardedTls('172.20.0.1', 'https, http', trust)).toBe(false);
+        expect(forwardedTls('172.20.0.1', 'http,https', trust)).toBe(true);
+        expect(forwardedTls('172.20.0.1', 'http, http , HTTPS', trust)).toBe(true);
+    });
+
+    it('reads repeated header lines as one', () => {
+        expect(forwardedTls('172.20.0.1', ['https', 'http'], trust)).toBe(false);
+        expect(forwardedTls('172.20.0.1', ['http', 'https'], trust)).toBe(true);
     });
 });

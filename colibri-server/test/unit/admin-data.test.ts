@@ -41,9 +41,9 @@ class FakeSocketIOServer {
         return { in: 1, out: 2, limit: null, held: 0, ...(history ? { history: [ [ Date.now() - 1000, 1, 2 ] ] } : {}) };
     }
 
-    public connect(id: string, app = 'colibri'): SocketIoClient {
+    public connect(id: string, app = 'colibri', tlsAtProxy = false): SocketIoClient {
         const client: SocketIoClient = {
-            id, app, name: '127.0.0.1', version: '2', metadata: {},
+            id, app, name: '127.0.0.1', version: '2', metadata: {}, tlsAtProxy,
             socket: { handshake: { secure: false, issued: 0 }, conn: { transport: { writable: true } } } as never,
         };
         this.clients.push(client);
@@ -88,11 +88,15 @@ describe('AdminData', () => {
         socketio = new FakeSocketIOServer();
         tcp = new FakeTcpServer();
         tcp.clients = [ {
-            id: 't1', app: 'app', name: 'headset', version: '2', metadata: {}, address: '10.0.0.5', tls: false, connectedAt: 0,
+            id: 't1', app: 'app', name: 'headset', version: '2', metadata: {}, address: '10.0.0.5', tls: false, tlsAtProxy: false, connectedAt: 0,
         } ];
         store = new DataStore();
         store.updateModel('app', 'cubes', { id: 'c1', x: 1 });
-        admin = new AdminData({
+        admin = await start();
+    });
+
+    const start = async function (tcpTlsAtProxy?: boolean): Promise<AdminData> {
+        const started = new AdminData({
             store,
             socketio: socketio as unknown as SocketIOServer,
             tcp: tcp as unknown as TCPServerProxy,
@@ -100,9 +104,11 @@ describe('AdminData', () => {
             build: { commit: '3e2855e0c1d2b3a4f5e6d7c8b9a0f1e2d3c4b5a6', dirty: false, builtAt: 1_699_990_000_000 },
             startedAt: Date.now(),
             settings: { TCP_PORT: 9012 },
+            ...(tcpTlsAtProxy === undefined ? {} : { tcpTlsAtProxy }),
         });
-        await admin.init();
-    });
+        await started.init();
+        return started;
+    };
 
     afterEach(() => {
         admin.stop();
@@ -129,6 +135,34 @@ describe('AdminData', () => {
 
         await vi.advanceTimersByTimeAsync(5 * ADMIN_REFRESH_MILLIS);
         expect(sentTo(page)).toHaveLength(1);
+    });
+
+    it('tells a page that reached a trusted proxy over TLS that web TLS is at the proxy', async () => {
+        const direct = socketio.connect('direct');
+        send(direct, 'request', { topic: 'server' });
+        await settle();
+        expect(sentTo(direct)[0]!.payload).toMatchObject({ tls: null, tlsAtProxy: { web: false } });
+
+        const proxied = socketio.connect('proxied', 'colibri', true);
+        send(proxied, 'request', { topic: 'server' });
+        await settle();
+        expect(sentTo(proxied)[0]!.payload).toMatchObject({ tls: null, tlsAtProxy: { web: true } });
+    });
+
+    it('says that TCP TLS is at the proxy when TCP_TLS_AT_PROXY applies, and not when left out', async () => {
+        const page = socketio.connect('page');
+        send(page, 'request', { topic: 'server' });
+        await settle();
+        expect((sentTo(page)[0]!.payload as { tlsAtProxy: unknown }).tlsAtProxy).toEqual({ web: false, tcp: false });
+
+        // stop() leaves the old one listening
+        admin.stop();
+        socketio = new FakeSocketIOServer();
+        admin = await start(true);
+        const next = socketio.connect('page');
+        send(next, 'request', { topic: 'server' });
+        await settle();
+        expect((sentTo(next)[0]!.payload as { tlsAtProxy: unknown }).tlsAtProxy).toEqual({ web: false, tcp: true });
     });
 
     it('sends a subscribed topic at once and then every second, until unsubscribed', async () => {

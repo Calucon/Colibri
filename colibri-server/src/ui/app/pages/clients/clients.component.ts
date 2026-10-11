@@ -25,7 +25,7 @@ interface Column {
 export const COLUMNS: ReadonlyArray<Column> = [
     { key: 'app', label: 'App', title: 'The app it joined', class: 'c-app' },
     { key: 'name', label: 'Client', title: 'Its name and address', class: 'c-name' },
-    { key: 'transport', label: 'Transport', title: 'TCP for a Unity client, web for a Socket.IO client, and whether the connection is encrypted', class: 'c-transport' },
+    { key: 'transport', label: 'Transport', title: 'TCP for a Unity client, web for a Socket.IO client, and TLS, terminated by this server or by a trusted proxy', class: 'c-transport' },
     { key: 'version', label: 'Protocol', title: 'The protocol version it announced', class: 'c-version' },
     { key: 'connected', label: 'Connected', title: 'How long it has been connected', class: 'c-connected', num: true },
     { key: 'latency', label: 'Latency', title: 'Median round trip over the last second, in ms', class: 'c-latency', num: true },
@@ -38,6 +38,22 @@ export interface Sort {
     key: SortKey;
     descending: boolean;
 }
+
+/** Where a client's TLS is terminated: by this server, or by a trusted reverse proxy in front of it. */
+export type TlsEnd = 'server' | 'proxy';
+
+// TLS terminated by a proxy, by what says so: for a web client the proxy's X-Forwarded-Proto, for a
+// Unity client the operator's TCP_TLS_AT_PROXY, as its PROXY protocol header does not say.
+const TLS_TITLES = {
+    server: 'Encrypted: TLS',
+    tcp: 'TLS terminated by a trusted proxy (TCP_TLS_AT_PROXY)',
+    web: 'TLS terminated by a trusted proxy (X-Forwarded-Proto)'
+} as const;
+
+/** The server's own TLS first: a client connected to it directly uses that. */
+export const tlsEnd = function (row: ClientRow): TlsEnd | null {
+    return row.tls ? 'server' : row.tlsAtProxy ? 'proxy' : null;
+};
 
 const LIMIT_LABELS = { rate: 'Rate limit', backlog: 'Backlog' } as const;
 const LIMIT_TITLES = {
@@ -56,7 +72,8 @@ export interface ClientView {
     /** Its own address, behind a trusted proxy the one the proxy named. */
     address: string;
     transport: 'TCP' | 'Web';
-    tls: boolean;
+    tls: TlsEnd | null;
+    tlsTitle: string;
     version: string;
     connectedAt: number;
     connected: string;
@@ -83,7 +100,8 @@ const sortValue = function (row: ClientRow, key: SortKey): string | number | nul
     switch (key) {
         case 'app': return row.app.toLowerCase();
         case 'name': return row.name.toLowerCase();
-        case 'transport': return `${row.transport}${row.tls ? 1 : 0}`;
+        // unencrypted, then TLS at a proxy, then TLS to this server
+        case 'transport': return `${row.transport}${row.tls ? 2 : row.tlsAtProxy ? 1 : 0}`;
         case 'version': return row.version;
         // the longest connected first, as the largest number
         case 'connected': return -row.connectedAt;
@@ -182,6 +200,7 @@ export class ClientsComponent {
         return sorted.map(client => {
             const byId = client.transport === 'web' && isAddress(client.name);
             const slot = slots.get(client.id);
+            const tls = tlsEnd(client);
             return {
                 id: client.id,
                 app: client.app,
@@ -191,7 +210,8 @@ export class ClientsComponent {
                 byId,
                 address: client.address,
                 transport: client.transport === 'tcp' ? 'TCP' : 'Web',
-                tls: client.tls,
+                tls,
+                tlsTitle: tls === 'proxy' ? TLS_TITLES[client.transport] : tls ? TLS_TITLES[tls] : '',
                 version: client.version,
                 connectedAt: client.connectedAt,
                 connected: duration((snapshot.at - client.connectedAt) / 1000),

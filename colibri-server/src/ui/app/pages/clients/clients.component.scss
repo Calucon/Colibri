@@ -85,6 +85,7 @@ td.c-name {
     margin-left: 4px;
     color: var(--ok);
     font-size: 12px;
+    white-space: nowrap;
 
     .pi {
         font-size: 11px;
@@ -227,6 +228,11 @@ td.c-transport .version {
 
     .c-transport {
         grid-area: trans;
+    }
+
+    // "(proxy)" under the lock: next to it, it ran into the protocol version
+    .tls .by-proxy {
+        display: block;
     }
 
     .c-version {

@@ -338,6 +338,11 @@ export interface ClientRow {
     // Whether its connection to this server is encrypted. Behind a proxy that ends TLS, that is
     // the proxy's connection.
     tls: boolean;
+    // Whether it reached a trusted proxy over TLS: for a web client as the proxy reported in
+    // X-Forwarded-Proto (see forwardedTls), for a TCP client as TCP_TLS_AT_PROXY says of every one
+    // that came through the proxy. nginx's PROXY protocol header, version 1, does not say, and the
+    // TLS details a version 2 header can carry are skipped.
+    tlsAtProxy: boolean;
     // Its own address, behind a trusted proxy the one the proxy named.
     address: string;
     // Date.now() of its connection.
@@ -434,6 +439,7 @@ export const clientsSnapshot = function (sources: ClientSources, history = false
         add(client, {
             transport: 'tcp',
             tls: client.tls,
+            tlsAtProxy: client.tlsAtProxy,
             address: client.address,
             connectedAt: client.connectedAt,
             ...activityRow(sources.tcpActivity.get(client.id) ?? NO_ACTIVITY),
@@ -447,6 +453,7 @@ export const clientsSnapshot = function (sources: ClientSources, history = false
         add(client, {
             transport: 'web',
             tls: client.socket.handshake.secure,
+            tlsAtProxy: client.tlsAtProxy,
             address: client.name,
             connectedAt: client.socket.handshake.issued,
             ...activityRow(sources.webActivity(client)),
@@ -563,6 +570,8 @@ export interface ServerSources {
     settings: ServerSettings;
     // The certificate served now, if TLS is on.
     tls: CertificateInfo | undefined;
+    // Whether TCP_TLS_AT_PROXY applies: it is on, and so is TCP_PROXY_PROTOCOL.
+    tcpTlsAtProxy: boolean;
     voice: VoiceStatus | undefined;
     store: DataStore;
     restStore: { apps: number; keys: number } | undefined;
@@ -584,6 +593,12 @@ export interface ServerSnapshot {
     settings: ServerSettings;
     // The certificate's names (its subject alternative names, or its subject), issuer and validity.
     tls: { names: string; issuer: string; selfSigned: boolean; validFrom: number; validTo: number; fingerprint256: string } | null;
+    // TLS that ends at a trusted proxy in front of this server, which sees only the proxy's own
+    // connections and knows of it only from the proxy or the operator. `web`: a web client or admin
+    // page connected now, the one asking included, reached the proxy over TLS (see
+    // ClientRow.tlsAtProxy). `tcp`: TCP_TLS_AT_PROXY applies, so every Unity client through the
+    // proxy counts as TLS at the proxy, connected now or not.
+    tlsAtProxy: { web: boolean; tcp: boolean };
     voice: VoiceStatus | null;
     counts: {
         tcpClients: number;
@@ -625,7 +640,9 @@ export const serverSnapshot = function (sources: ServerSources): ServerSnapshot 
     const apps = new Set<string>(sources.tcpClients.map(client => client.app));
     let webClients = 0;
     let adminPages = 0;
+    let webTlsAtProxy = false;
     for (const client of sources.webClients) {
+        if (client.tlsAtProxy) webTlsAtProxy = true;
         if (client.app === ADMIN_APP) {
             adminPages += 1;
         } else {
@@ -654,6 +671,7 @@ export const serverSnapshot = function (sources: ServerSources): ServerSnapshot 
                 fingerprint256: tls.fingerprint256,
             }
             : null,
+        tlsAtProxy: { web: webTlsAtProxy, tcp: sources.tcpTlsAtProxy },
         voice: sources.voice ?? null,
         counts: {
             tcpClients: sources.tcpClients.length,

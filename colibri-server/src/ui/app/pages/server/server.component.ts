@@ -36,7 +36,7 @@ const SHOWN = new Set([
     'WEBSERVER_HOST', 'WEBSERVER_PORT', 'BASE_URL', 'TCP_HOST', 'TCP_PORT', 'VOICE_HOST', 'VOICE_PORT',
     'VOICE_SAMPLING_RATE', 'VOICE_RECORDING', 'TCP_IDLE_TIMEOUT_SECONDS', 'TCP_INBOUND_BACKLOG_LIMIT',
     'CLIENT_MESSAGE_RATE_LIMIT', 'CLIENT_MESSAGE_RATE_BURST', 'APP_CLIENT_WARNING_THRESHOLD',
-    'MODEL_TOMBSTONE_SECONDS', 'TRUSTED_PROXIES', 'TCP_PROXY_PROTOCOL'
+    'MODEL_TOMBSTONE_SECONDS', 'TRUSTED_PROXIES', 'TCP_PROXY_PROTOCOL', 'TCP_TLS_AT_PROXY'
 ]);
 
 const text = function (value: SettingValue | undefined): string {
@@ -85,11 +85,56 @@ const onOff = function (label: string, on: boolean, variable?: string, note?: st
     return { label, variable, value: on ? 'On' : 'Off', tone: on ? 'ok' : 'off', note };
 };
 
+/** On hover: why the web port counts as TLS terminated by a proxy. */
+const WEB_TLS_AT_PROXY = 'TLS terminated by a trusted proxy (X-Forwarded-Proto: https from a connected web client or admin page)';
+/** On hover: why the TCP port counts as TLS terminated by a proxy. */
+const TCP_TLS_AT_PROXY = 'Declared by TCP_TLS_AT_PROXY; PROXY protocol v1 carries no TLS information';
+/** On hover: TCP through a trusted proxy, TCP_TLS_AT_PROXY unset. */
+const TCP_TLS_UNDECLARED = 'Set TCP_TLS_AT_PROXY=true if the proxy terminates TLS on this port. '
+    + 'Unity apps tick \'Server supports SSL/TLS?\' whenever the proxy port uses TLS';
+/** On hover: TCP_TLS_AT_PROXY set without TCP_PROXY_PROTOCOL. */
+const TCP_TLS_NO_EFFECT = 'No effect without TCP_PROXY_PROTOCOL: Unity clients through the proxy are not identified';
+
 export const serverSections = function (s: ServerSnapshot, format: (time: number) => string): Section[] {
     const set = s.settings;
     const tls = s.tls;
-    const scheme = tls ? 'HTTPS and WSS' : 'HTTP and WS';
     const proxies = Array.isArray(set['TRUSTED_PROXIES']) ? set['TRUSTED_PROXIES'] : [];
+
+    // TLS terminated by a reverse proxy in front of this server, which then sees only the proxy's
+    // unencrypted connections. Web: by what trusted proxies reported in X-Forwarded-Proto for the web
+    // clients and admin pages connected now, this page included (tlsAtProxy.web). TCP: the PROXY
+    // protocol header does not say, so the operator declares it with TCP_TLS_AT_PROXY
+    // (tlsAtProxy.tcp). With the server's own certificate, that is what a direct connection uses,
+    // and the rows say so instead.
+    const webTlsAtProxy = tls === null && s.tlsAtProxy.web;
+    const tcpTlsAtProxy = tls === null && s.tlsAtProxy.tcp;
+    const scheme = tls ? 'HTTPS and WSS' : webTlsAtProxy ? 'HTTP and WS, TLS terminated by proxy' : 'HTTP and WS';
+    // Unity clients through a trusted proxy without TCP_TLS_AT_PROXY: "unencrypted" alone would read
+    // as "no TLS", which the server cannot know.
+    const tcpUndeclared = tls === null && !tcpTlsAtProxy && set['TCP_PROXY_PROTOCOL'] === true && proxies.length > 0;
+    const tcpNote = tls ? 'TLS'
+        : tcpTlsAtProxy ? 'TLS terminated by proxy'
+        : tcpUndeclared ? 'unencrypted, proxy TLS undeclared'
+        : 'unencrypted';
+    const tcpTitle = tcpTlsAtProxy ? TCP_TLS_AT_PROXY : tcpUndeclared ? TCP_TLS_UNDECLARED : undefined;
+    const terminatedBy = [
+        ...(webTlsAtProxy ? [ { port: 'HTTPS', why: WEB_TLS_AT_PROXY } ] : []),
+        ...(tcpTlsAtProxy ? [ { port: 'TCP', why: TCP_TLS_AT_PROXY } ] : [])
+    ];
+    const tlsFact: Fact = terminatedBy.length > 0
+        ? {
+            ...onOff('TLS', false, 'TLS_CERT, TLS_KEY', `terminated by proxy (${terminatedBy.map(end => end.port).join(', ')})`),
+            title: terminatedBy.map(end => end.why).join('\n')
+        }
+        : onOff('TLS', tls !== null, 'TLS_CERT, TLS_KEY');
+    // Unset is "Not declared", not a bare Off, which would read as "the proxy's TCP port has no TLS".
+    // Set without TCP_PROXY_PROTOCOL, it has no effect, as the server warns at startup.
+    const termination = { label: 'TCP TLS termination', variable: 'TCP_TLS_AT_PROXY' };
+    const tcpTerminationFact: Fact = set['TCP_TLS_AT_PROXY'] !== true
+        ? { ...termination, value: 'Not declared', tone: 'off' }
+        : s.tlsAtProxy.tcp
+            ? { ...termination, value: 'Proxy', tone: 'ok' }
+            : { ...termination, value: 'Proxy', tone: 'warn', note: 'needs TCP_PROXY_PROTOCOL', title: TCP_TLS_NO_EFFECT };
 
     const sections: Section[] = [
         {
@@ -121,16 +166,23 @@ export const serverSections = function (s: ServerSnapshot, format: (time: number
         },
         {
             id: 'network', title: 'Network', facts: [
-                { label: 'Web', variable: 'WEBSERVER_HOST, WEBSERVER_PORT', value: `${text(set['WEBSERVER_HOST'])}:${text(set['WEBSERVER_PORT'])}`, mono: true, note: scheme },
-                { label: 'TCP', variable: 'TCP_HOST, TCP_PORT', value: `${text(set['TCP_HOST'])}:${text(set['TCP_PORT'])}`, mono: true, note: tls ? 'TLS' : 'unencrypted' },
+                {
+                    label: 'Web', variable: 'WEBSERVER_HOST, WEBSERVER_PORT', value: `${text(set['WEBSERVER_HOST'])}:${text(set['WEBSERVER_PORT'])}`, mono: true,
+                    note: scheme, title: webTlsAtProxy ? WEB_TLS_AT_PROXY : undefined
+                },
+                {
+                    label: 'TCP', variable: 'TCP_HOST, TCP_PORT', value: `${text(set['TCP_HOST'])}:${text(set['TCP_PORT'])}`, mono: true,
+                    note: tcpNote, title: tcpTitle
+                },
                 { label: 'Voice', variable: 'VOICE_HOST, VOICE_PORT', value: `${text(set['VOICE_HOST'])}:${text(set['VOICE_PORT'])}`, mono: true, note: 'UDP' },
                 { label: 'Base URL', variable: 'BASE_URL', value: text(set['BASE_URL']) || '/', mono: true },
-                onOff('TLS', tls !== null, 'TLS_CERT, TLS_KEY'),
+                tlsFact,
                 {
                     label: 'Trusted proxies', variable: 'TRUSTED_PROXIES', value: proxies.length > 0 ? proxies.join(', ') : 'None',
                     mono: proxies.length > 0, tone: proxies.length > 0 ? undefined : 'off'
                 },
-                onOff('PROXY protocol on TCP', set['TCP_PROXY_PROTOCOL'] === true, 'TCP_PROXY_PROTOCOL')
+                onOff('PROXY protocol on TCP', set['TCP_PROXY_PROTOCOL'] === true, 'TCP_PROXY_PROTOCOL'),
+                tcpTerminationFact
             ]
         }
     ];

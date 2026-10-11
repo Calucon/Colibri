@@ -111,7 +111,7 @@ only if the server does not use the defaults.
 
 | Setting | Default | Description |
 |---|---|---|
-| Server supports SSL/TLS? | off | Use TLS. Tick when the server has `TLS_CERT` and `TLS_KEY` set ([TLS](#tls)) |
+| Server supports SSL/TLS? | off | Use TLS. Tick when the server has `TLS_CERT` and `TLS_KEY` set, or its reverse proxy's TCP port uses TLS ([TLS](#tls)) |
 | Allow self-signed certificate | off | Accept a certificate the device does not trust. Only with TLS ([Certificates](#certificates)) |
 | Server certificate SHA-256 | empty | Accept only the certificate with this fingerprint. Only with TLS ([Certificates](#certificates)) |
 | Web server Port | `9011` | Server's `WEBSERVER_PORT`, used by the Store |
@@ -131,7 +131,12 @@ Settings → Player → Other Settings → **Allow downloads over HTTP*** to *Al
 Store to `https`.
 
 - The server needs `TLS_CERT` and `TLS_KEY` ([TLS](../../colibri-server/docs/guide.md#tls) in the
-  server guide).
+  server guide), or a reverse proxy in front of it that terminates TLS
+  ([Reverse proxy](../../colibri-server/docs/guide.md#reverse-proxy)). Behind such a proxy, tick it
+  when the proxy's TCP port uses TLS. The server sees only the proxy's unencrypted connection: the
+  admin UI shows these clients as *TLS (proxy)* only with `TCP_TLS_AT_PROXY=true` on the server
+  ([Behind a reverse proxy](../../colibri-server/docs/guide.md#behind-a-reverse-proxy)), and
+  without TLS otherwise.
 - The setting must match the server. Its TCP port accepts either only TLS or no TLS.
 - Frames and protocol version inside TLS are unchanged.
 - The handshake must finish within the 5 s connect timeout.

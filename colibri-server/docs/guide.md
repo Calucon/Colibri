@@ -148,8 +148,9 @@ with its default.
 | `APP_CLIENT_WARNING_THRESHOLD` | `8` | Warn when one app has more clients than this, Unity and web together, admin UI excluded. Common cause: separate projects using the same app name. `0`: never. |
 | `MODEL_TOMBSTONE_SECONDS` | `600` | Seconds a deleted synced object (model) is remembered. Meanwhile updates for it are ignored, so they cannot re-create it, and a re-request after a reconnect is answered with a delete. A client with the object in its scene again ends this early. Cleared with the app's models when its last client leaves. `0`: off. See [Deleted models](protocol.md#deleted-models). |
 | `TLS_CERT`, `TLS_KEY` | empty | PEM files of the certificate with its chain, and of its private key. With both set, the TCP and web ports serve [TLS](#tls) only. |
-| `TRUSTED_PROXIES` | empty | Reverse proxies trusted to report the client's address: IP addresses, CIDR ranges and `loopback`, `linklocal`, `uniquelocal`, separated by commas, as in Express's `trust proxy`. Voice from them is relayed unchecked ([Voice relay](#voice-relay)). Empty: none. See [Behind a reverse proxy](#behind-a-reverse-proxy). |
+| `TRUSTED_PROXIES` | empty | Reverse proxies trusted to report the client's address, and on the web port whether it used HTTPS: IP addresses, CIDR ranges and `loopback`, `linklocal`, `uniquelocal`, separated by commas, as in Express's `trust proxy`. Voice from them is relayed unchecked ([Voice relay](#voice-relay)). Empty: none. See [Behind a reverse proxy](#behind-a-reverse-proxy). |
 | `TCP_PROXY_PROTOCOL` | `false` | `true`: a connection to the TCP port from a `TRUSTED_PROXIES` address must start with a PROXY protocol header, which names the Unity client. Requires `TRUSTED_PROXIES`. |
+| `TCP_TLS_AT_PROXY` | `false` | `true`: the proxy in front of the TCP port terminates TLS, e.g. nginx's `listen 9012 ssl`. Without a certificate, the admin UI then shows TLS terminated by proxy for Unity clients through a trusted proxy. Only the display depends on it. Requires `TCP_PROXY_PROTOCOL`. See [Behind a reverse proxy](#behind-a-reverse-proxy). |
 
 The `*_HOST` settings take an IPv4 address, an IPv6 address without brackets, or a host name. The
 default `0.0.0.0` listens on IPv4 only. `::` listens on IPv6 and IPv4: set `TCP_HOST=::`,
@@ -177,19 +178,21 @@ Invalid values stop the server at startup with `Invalid <NAME>: "<value>" is not
   integer
 - another numeric setting that is not an integer of 0 or more
 - an unknown `CONSOLE_LOG_LEVEL`
-- a `TCP_PROXY_PROTOCOL` other than `true` or `false`
+- a `TCP_PROXY_PROTOCOL` or `TCP_TLS_AT_PROXY` other than `true` or `false`
 - a `TRUSTED_PROXIES` entry that is not an IP address, a CIDR range or one of the named ranges,
   including IPv4 shorthands such as `172.20`. An entry with an invalid prefix length, such as
   `10.0.0.0/33`, gives `Invalid TRUSTED_PROXIES: "10.0.0.0/33" has an invalid prefix length ...`.
 
 `TCP_PROXY_PROTOCOL=true` with an empty `TRUSTED_PROXIES` stops the server too. So do unusable TLS
-files ([Startup errors](#startup-errors)).
+files ([Startup errors](#startup-errors)). `TCP_TLS_AT_PROXY=true` without `TCP_PROXY_PROTOCOL=true`
+has no effect, and the server logs a warning at startup.
 
 ### Behind a reverse proxy
 
 Behind a reverse proxy, every client comes from the proxy's address: in the log, in the admin UI and
-for the per-address warning limits. `TRUSTED_PROXIES` names the proxies trusted to report the
-client's address:
+for the per-address warning limits. A proxy that terminates TLS connects unencrypted. `TRUSTED_PROXIES`
+names the proxies trusted to report the client's address, and on the web port whether the client
+used HTTPS:
 
 - **Web port:** from a trusted peer, the client is the right-most `X-Forwarded-For` entry that is not
   itself a trusted proxy. A client can write anything into the header, and each proxy appends the
@@ -197,9 +200,20 @@ client's address:
   trusted is shown at its own address. Express's `req.ip` follows the same rule. As without a proxy,
   the address is also the client's `name` in `colibri::clients`, which every client of its app
   receives ([Server messages](protocol.md#server-messages)).
+  From a trusted peer, the client used TLS to the proxy if the right-most `X-Forwarded-Proto` entry
+  is `https` or `wss`, in any case. The admin UI then shows TLS terminated by proxy, *TLS (proxy)* on
+  the Clients page ([Admin UI](#admin-ui)).
+  The proxy must set this header, replacing the client's: nginx passes on what the client sent
+  unless `proxy_set_header X-Forwarded-Proto $scheme;` is in each `location`, and a client on plain
+  HTTP can then claim TLS. Only the admin UI's display depends on it.
 - **TCP port:** with `TCP_PROXY_PROTOCOL=true`, a connection from a trusted peer must start with a
   PROXY protocol header, version 1 or 2, which names the Unity client
-  ([PROXY protocol](protocol.md#proxy-protocol)). Other peers connect as before.
+  ([PROXY protocol](protocol.md#proxy-protocol)). Other peers connect as before. nginx's header,
+  version 1, does not say whether the proxy terminated TLS, and the server skips the TLS details a
+  version 2 header can carry. If the proxy terminates TLS, set `TCP_TLS_AT_PROXY=true`: without a
+  certificate, the Clients page then shows these clients as *TLS (proxy)*, and the Server page's
+  TCP row says *TLS terminated by proxy*. Without it, they show without TLS, and the TCP row says
+  *unencrypted, proxy TLS undeclared*. Only the admin UI's display depends on it.
 - **Voice (UDP):** nginx's PROXY protocol covers TCP only, so voice sent through a proxy shows the
   proxy's address, and is relayed without the [voice check](#voice-relay). To keep the check,
   publish the voice port directly, as below, and keep the clients' addresses out of
@@ -227,7 +241,9 @@ address:
 
 A connection from a trusted address that does not come through the proxy can name any client
 address: on the web port with its own `X-Forwarded-For`, on the TCP port with its own PROXY protocol
-header. With a new address on each connection, it also gets past the per-address warning limits.
+header. It can also show as *TLS (proxy)*: on the web port with its own `X-Forwarded-Proto`, on
+the TCP port with `TCP_TLS_AT_PROXY` by its own PROXY protocol header. With a new address on each
+connection, it also gets past the per-address warning limits.
 With the ports above, only processes on the host and containers on the compose network can connect
 directly. `uniquelocal` also covers clients on a private network (`10.0.0.0/8`, `172.16.0.0/12`,
 `192.168.0.0/16`, `fc00::/7`): such a client can do the same on the web port through the proxy, with
@@ -251,6 +267,7 @@ In nginx, add to each `location` that proxies to the web port:
 
 ```nginx
 proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+proxy_set_header X-Forwarded-Proto $scheme;
 ```
 
 and to the `stream` server that proxies to the TCP port:
@@ -258,6 +275,8 @@ and to the `stream` server that proxies to the TCP port:
 ```nginx
 proxy_protocol on;
 ```
+
+If that server terminates TLS (`listen 9012 ssl`), also set `TCP_TLS_AT_PROXY=true`.
 
 Restart the server with `TCP_PROXY_PROTOCOL=true` first, then reload nginx with `proxy_protocol on`.
 Until both are done, every Unity connection through the proxy fails. In this order the log names the
@@ -268,6 +287,8 @@ length, or with TLS on, a client that does not use TLS. At startup the log shows
 Starting Colibri TCP server on 0.0.0.0:9012, PROXY protocol header required from TRUSTED_PROXIES (loopback, uniquelocal)
 ```
 
+With `TCP_TLS_AT_PROXY=true`, the line ends with `, TLS terminated by proxy (TCP_TLS_AT_PROXY)`.
+
 | Message | Cause | Fix |
 | --- | --- | --- |
 | WARN `Refusing a connection from <address>: it is in TRUSTED_PROXIES and TCP_PROXY_PROTOCOL is true, but the connection does not start with a PROXY protocol header ...` | The proxy sends no header, or a client connects directly from a trusted address | `proxy_protocol on;` in the proxy |
@@ -275,6 +296,7 @@ Starting Colibri TCP server on 0.0.0.0:9012, PROXY protocol header required from
 | WARN `Refusing a connection from <address>: its PROXY protocol header is invalid: ...` | A malformed header, a version 1 header over 107 bytes, or a version 2 header over 4 KiB after its fixed 16 bytes | Check the proxy's PROXY protocol settings |
 | WARN `Refusing a connection from <address>: it starts with a PROXY protocol header, but its address is not in TRUSTED_PROXIES ...` | The proxy's address is not trusted, e.g. after the Docker network changed | Add it to `TRUSTED_PROXIES` |
 | ERROR `Invalid frame from client <id>, ...: Invalid frame length: 1481593424`, or with TLS on, WARN `Refusing a connection from <address>: it does not use TLS ...` | The proxy sends a header, but `TCP_PROXY_PROTOCOL` is not set | Set `TCP_PROXY_PROTOCOL=true` |
+| WARN `TCP_TLS_AT_PROXY is true, but ... it has no effect ...` at startup | `TCP_PROXY_PROTOCOL` is off, and maybe `TRUSTED_PROXIES` empty | Turn on the PROXY protocol in the proxy (`proxy_protocol on;`) and set `TCP_PROXY_PROTOCOL=true`, and `TRUSTED_PROXIES` if empty; or set `TCP_TLS_AT_PROXY=false` |
 
 The refusals are logged at most once a minute per address, repeats at debug level.
 
@@ -407,7 +429,9 @@ debug level.
 
 TLS can instead terminate in an existing reverse proxy, with `TLS_CERT` and `TLS_KEY` unset. For the
 TCP port, use nginx's `stream` module with `listen 9012 ssl`, or a Traefik TCP router with TLS.
-Colibri needs no changes. To show each client at its own address rather than the proxy's, see
+Colibri needs no changes. Unity apps tick *Server supports SSL/TLS?* when the proxy's TCP port uses
+TLS. To show each client at its own address rather than the proxy's, and TLS terminated by proxy
+in the admin UI (for Unity clients with `TCP_TLS_AT_PROXY`), see
 [Behind a reverse proxy](#behind-a-reverse-proxy).
 
 ### Performance
@@ -476,14 +500,16 @@ soon as it opens. `npm run demo` fills the pages with synthetic clients ([Develo
   ![Log page](../img/admin-log.png)
 
 - **Clients:** every connected Unity (TCP) and web client with its app, name, address (behind a
-  [trusted proxy](#behind-a-reverse-proxy), the one the proxy names), transport and TLS, protocol
-  version, time connected, latency, messages per second in and out over the last second, and whether
-  a [load limit](#load-limits) holds its updates back: *Rate limit* or *Backlog*, with the number of
-  objects held. Sort by a column, show one app (`/clients?app=MyApp`), and open a client's lines in
-  the log. While the mouse is over the rows, they keep their order. Below, each client's latency over
-  the last 2 minutes, and its messages per second over the same time, stacked: *In* what the clients
-  sent, *Out* what they were sent (`/clients?throughput=out`). Both charts show the whole 2 minutes as
-  soon as the page opens. The former *Statistics* page, `/statistics`, leads here.
+  [trusted proxy](#behind-a-reverse-proxy), the one the proxy names), transport and TLS (*TLS
+  (proxy)* for TLS terminated by a trusted proxy: a web client's by its `X-Forwarded-Proto`, a Unity
+  client's with `TCP_TLS_AT_PROXY`), protocol version, time connected, latency, messages per second
+  in and out over the last second, and whether a [load limit](#load-limits) holds its updates back:
+  *Rate limit* or *Backlog*, with the number of objects held. Sort by a column, show one app
+  (`/clients?app=MyApp`), and open a client's lines in the log. While the mouse is over the rows,
+  they keep their order. Below, each client's latency over the last 2 minutes, and its messages per
+  second over the same time, stacked: *In* what the clients sent, *Out* what they were sent
+  (`/clients?throughput=out`). Both charts show the whole 2 minutes as soon as the page opens. The
+  former *Statistics* page, `/statistics`, leads here.
 
   ![Clients page](../img/admin-clients.png)
 
@@ -499,10 +525,16 @@ soon as it opens. `npm run demo` fills the pages with synthetic clients ([Develo
 - **Server:** version, the commit it was built from (the full hash and build time on hover,
   *uncommitted changes* for a build with changes not committed, *unknown* without git information),
   protocol version, Node.js version and uptime; the settings in effect, with the variables that set
-  them: ports, `BASE_URL`, TLS, `TRUSTED_PROXIES`, `TCP_PROXY_PROTOCOL`, load limits, idle timeout,
-  tombstones, voice and recording; the TLS certificate's names, issuer, validity and SHA-256
-  fingerprint, with a warning 30 days before it expires; and counts of clients, apps, synchronized
-  models and REST store values. Never certificate or key paths, key material or file contents.
+  them: ports, `BASE_URL`, TLS, `TRUSTED_PROXIES`, `TCP_PROXY_PROTOCOL`, `TCP_TLS_AT_PROXY` as *TCP
+  TLS termination* (*Proxy*, *Not declared* when unset, a warning when it has no effect), load
+  limits, idle timeout, tombstones, voice and recording; without a certificate, TLS terminated by
+  proxy: the web port as *HTTP and WS, TLS terminated by proxy* while a web client or admin page is
+  connected through a [trusted proxy](#behind-a-reverse-proxy) that reports HTTPS, the TCP port as
+  *TLS terminated by proxy* with `TCP_TLS_AT_PROXY`, or as *unencrypted, proxy TLS undeclared* with
+  only `TCP_PROXY_PROTOCOL`, and TLS as *Off* with *terminated by proxy (HTTPS, TCP)*, or one of the
+  two; the TLS certificate's names, issuer, validity and SHA-256 fingerprint, with a warning 30 days
+  before it expires; and counts of clients, apps, synchronized models and REST store values. Never
+  certificate or key paths, key material or file contents.
 
   ![Server page](../img/admin-server.png)
 

@@ -3,7 +3,8 @@ import proxyaddr from 'proxy-addr';
 
 // Behind a reverse proxy every client comes from the proxy's address. A proxy in TRUSTED_PROXIES is
 // believed about the client's own: in X-Forwarded-For on the web port, in a PROXY protocol header on
-// the TCP port (see TCP_PROXY_PROTOCOL). Matching is proxy-addr's, the same as Express's
+// the TCP port (see TCP_PROXY_PROTOCOL). On the web port it is also believed about whether the client
+// reached it over TLS, in X-Forwarded-Proto. Matching is proxy-addr's, the same as Express's
 // 'trust proxy': an IPv4-mapped IPv6 address matches as the IPv4 address it maps.
 
 // Whether the peer at `address` is a trusted proxy. `hop` counts the proxies between it and the
@@ -64,4 +65,23 @@ export const forwardedClientAddress = function (
     // Node.js joins repeated X-Forwarded-For lines into one, so an array comes only from elsewhere.
     const header = Array.isArray(forwardedFor) ? forwardedFor.join(', ') : forwardedFor;
     return proxyaddr({ headers: { 'x-forwarded-for': header }, socket: { remoteAddress: peer } }, trust);
+};
+
+// Whether a web request came to a trusted peer over TLS, as the peer reports it in
+// X-Forwarded-Proto: its right-most entry is https, or wss as Traefik sends for a WebSocket, in any
+// case. Never from a peer that is not trusted, as with X-Forwarded-For: a client can send the header
+// itself. What stops a client's own value is the proxy replacing the header (nginx: proxy_set_header
+// X-Forwarded-Proto $scheme). A proxy that passes it on unchanged forwards the client's value as if
+// it were its own, and nothing here can tell. The right-most entry covers a proxy that appends its
+// own value, where Express's req.protocol would take the left-most one, the client's.
+export const forwardedTls = function (
+    peer: string,
+    forwardedProto: string | string[] | undefined,
+    trust: TrustProxy
+): boolean {
+    if (!trust(peer, 0)) return false;
+
+    const header = Array.isArray(forwardedProto) ? forwardedProto.join(',') : forwardedProto ?? '';
+    const proto = header.slice(header.lastIndexOf(',') + 1).trim().toLowerCase();
+    return proto === 'https' || proto === 'wss';
 };

@@ -43,7 +43,7 @@ class FakeSocketIOServer {
 }
 
 const makeClient = function (id: string, app: string): SocketIoClient {
-    return { id, app, name: id, version: '1', metadata: {}, socket: {} as never };
+    return { id, app, name: id, version: '1', metadata: {}, socket: {} as never, tlsAtProxy: false };
 };
 
 const requestLog = function (server: FakeSocketIOServer, origin: SocketIoClient, body: unknown): void {

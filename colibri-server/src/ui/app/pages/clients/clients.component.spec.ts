@@ -15,6 +15,7 @@ const client = (overrides: Partial<ClientRow>): ClientRow => ({
     transport: 'tcp',
     version: '2',
     tls: false,
+    tlsAtProxy: false,
     address: '10.0.0.5',
     connectedAt: 0,
     latency: null,
@@ -103,7 +104,7 @@ describe('ClientsComponent', () => {
         const quest = component.rows().find(row => row.id === 'q1');
         const web = component.rows().find(row => row.id === 'web1');
         expect(quest).toEqual(expect.objectContaining({
-            label: 'Quest', byId: false, address: '10.0.0.5', transport: 'TCP', tls: true, connected: '2 min',
+            label: 'Quest', byId: false, address: '10.0.0.5', transport: 'TCP', tls: 'server', connected: '2 min',
             latency: '12.3 ms', in: '30.0', out: '120.5', limit: 'Rate limit', held: 4, color: null
         }));
         // a web client by the start of its id, in its colour in the latency chart
@@ -112,6 +113,61 @@ describe('ClientsComponent', () => {
         expect(harness.routeNativeElement!.querySelector('tr[data-id="q1"] td.c-limit')?.textContent).toContain('4 held');
         // under the transport too, for tablets, where the protocol column is left out
         expect(harness.routeNativeElement!.querySelector('tr[data-id="q1"] td.c-transport .version')?.textContent).toBe('v2');
+    });
+
+    it('shows TLS terminated by the server and by a proxy with the same lock, told apart by label and title', async () => {
+        const { harness, component, root } = await open('/clients');
+        snapshot([
+            client({ id: 'direct', tls: true }),
+            client({ id: 'proxied', transport: 'web', name: '198.51.100.7', tlsAtProxy: true }),
+            client({ id: 'plain', transport: 'web', name: '198.51.100.8' }),
+            // TLS to the server wins: a direct connection uses it
+            client({ id: 'both', transport: 'web', name: '198.51.100.9', tls: true, tlsAtProxy: true })
+        ]);
+        harness.detectChanges();
+
+        const view = (id: string) => component.rows().find(row => row.id === id);
+        expect(view('direct')).toEqual(expect.objectContaining({ tls: 'server', tlsTitle: 'Encrypted: TLS' }));
+        expect(view('proxied')?.tls).toBe('proxy');
+        expect(view('proxied')?.tlsTitle).toBe('TLS terminated by a trusted proxy (X-Forwarded-Proto)');
+        expect(view('plain')).toEqual(expect.objectContaining({ tls: null, tlsTitle: '' }));
+        expect(view('both')?.tls).toBe('server');
+
+        const lock = (id: string) => root.querySelector(`tr[data-id="${id}"] td.c-transport .tls`);
+        expect(lock('direct')?.textContent?.trim()).toBe('TLS');
+        expect(lock('direct')?.querySelector('.pi-lock')).not.toBeNull();
+        expect(lock('proxied')?.textContent?.trim()).toBe('TLS (proxy)');
+        expect(lock('proxied')?.querySelector('.pi-lock')).not.toBeNull();
+        expect(lock('proxied')?.getAttribute('title')).toBe(view('proxied')?.tlsTitle);
+        expect(lock('plain')).toBeNull();
+        // "(proxy)" in its own element, which a phone puts on the next line
+        expect(lock('proxied')?.querySelector('.by-proxy')?.textContent?.trim()).toBe('(proxy)');
+        expect(lock('direct')?.querySelector('.by-proxy')).toBeNull();
+        expect(lock('both')?.querySelector('.by-proxy')).toBeNull();
+    });
+
+    it('shows a Unity client through a proxy with TCP_TLS_AT_PROXY as TLS (proxy), naming the setting on hover', async () => {
+        const { harness, component, root } = await open('/clients');
+        snapshot([
+            client({ id: 'tcp-proxied', name: 'quest-1', address: '198.51.100.7', tlsAtProxy: true }),
+            client({ id: 'tcp-plain', name: 'quest-2', address: '198.51.100.8' }),
+            client({ id: 'web-proxied', transport: 'web', name: '198.51.100.9', tlsAtProxy: true })
+        ]);
+        harness.detectChanges();
+
+        const view = (id: string) => component.rows().find(row => row.id === id);
+        expect(view('tcp-proxied')).toEqual(expect.objectContaining({ transport: 'TCP', tls: 'proxy' }));
+        expect(view('tcp-proxied')?.tlsTitle).toBe('TLS terminated by a trusted proxy (TCP_TLS_AT_PROXY)');
+        expect(view('tcp-plain')).toEqual(expect.objectContaining({ tls: null, tlsTitle: '' }));
+        // a web client's comes from its proxy's X-Forwarded-Proto
+        expect(view('web-proxied')?.tlsTitle).not.toContain('TCP_TLS_AT_PROXY');
+
+        const lock = (id: string) => root.querySelector(`tr[data-id="${id}"] td.c-transport .tls`);
+        expect(lock('tcp-proxied')?.textContent?.trim()).toBe('TLS (proxy)');
+        expect(lock('tcp-proxied')?.querySelector('.pi-lock')).not.toBeNull();
+        expect(lock('tcp-proxied')?.querySelector('.by-proxy')?.textContent?.trim()).toBe('(proxy)');
+        expect(lock('tcp-proxied')?.getAttribute('title')).toBe(view('tcp-proxied')?.tlsTitle);
+        expect(lock('tcp-plain')).toBeNull();
     });
 
     it('shows the app in the address only, and links each client to its log', async () => {
@@ -206,6 +262,21 @@ describe('sortClients', () => {
         // the longest connected first
         expect(sortClients([ client({ id: 'new', connectedAt: 9 }), client({ id: 'old', connectedAt: 1 }) ], { key: 'connected', descending: true })
             .map(r => r.id)).toEqual([ 'old', 'new' ]);
+    });
+
+    it('sorts by transport: unencrypted, then TLS at a proxy, then TLS, per transport', () => {
+        const rows = [
+            client({ id: 'web-tls', transport: 'web', tls: true }),
+            client({ id: 'web-proxy', transport: 'web', tlsAtProxy: true }),
+            client({ id: 'web-plain', transport: 'web' }),
+            client({ id: 'tcp-tls', tls: true }),
+            client({ id: 'tcp-proxy', tlsAtProxy: true }),
+            client({ id: 'tcp-plain' })
+        ];
+        expect(sortClients(rows, { key: 'transport', descending: false }).map(r => r.id))
+            .toEqual([ 'tcp-plain', 'tcp-proxy', 'tcp-tls', 'web-plain', 'web-proxy', 'web-tls' ]);
+        expect(sortClients(rows, { key: 'transport', descending: true }).map(r => r.id))
+            .toEqual([ 'web-tls', 'web-proxy', 'web-plain', 'tcp-tls', 'tcp-proxy', 'tcp-plain' ]);
     });
 
     it('reads a sort from the address, and nothing it does not know', () => {

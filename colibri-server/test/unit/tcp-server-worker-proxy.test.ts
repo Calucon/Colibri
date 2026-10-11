@@ -170,6 +170,14 @@ describe('TCPServerWorker with TCP_PROXY_PROTOCOL', () => {
             expect(logs(LogLevel.Debug)).toContain('Colibri client 198.51.100.7 disconnected');
         });
 
+        it('does not count its clients as TLS at the proxy without TCP_TLS_AT_PROXY', async () => {
+            const peer = await connect();
+            peer.send(Buffer.concat([v1('198.51.100.7'), handshake()]));
+
+            await eventually(() => peer.count(FrameType.Heartbeat) > 0);
+            expect(connectedClients()).toMatchObject([{ address: '198.51.100.7', tls: false, tlsAtProxy: false }]);
+        });
+
         it('takes it from a version 2 header, IPv4 or IPv6', async () => {
             const ipv4 = await connect();
             ipv4.send(Buffer.concat([v2Proxy4([198, 51, 100, 8]), handshake('quest-4')]));
@@ -271,6 +279,64 @@ describe('TCPServerWorker with TCP_PROXY_PROTOCOL', () => {
 
             await waiting.closed;
             expect(internals.proxyHeaderSockets.size).toBe(0);
+        });
+    });
+
+    describe('with TCP_TLS_AT_PROXY', () => {
+        const tlsAtProxy = () => Object.fromEntries(connectedClients().map(c => [ c.name, c.tlsAtProxy ]));
+
+        it('counts a client through a trusted proxy as TLS at the proxy, whatever address its header names', async () => {
+            await start({ proxyProtocol: true, trustedProxies: ['loopback'], tlsAtProxy: true });
+            expect(logs(LogLevel.Info)).toContain(
+                'Starting Colibri TCP server on 127.0.0.1:0, PROXY protocol header required from TRUSTED_PROXIES (loopback), ' +
+                    'TLS terminated by proxy (TCP_TLS_AT_PROXY)'
+            );
+
+            const named = await connect();
+            named.send(Buffer.concat([v1('198.51.100.7'), handshake('named')]));
+            const unknown = await connect();
+            unknown.send(Buffer.concat([Buffer.from('PROXY UNKNOWN\r\n', 'latin1'), handshake('unknown')]));
+
+            await eventually(() => named.count(FrameType.Heartbeat) > 0 && unknown.count(FrameType.Heartbeat) > 0);
+            expect(tlsAtProxy()).toEqual({ named: true, unknown: true });
+            expect(connectedClients().every(c => c.tls === false)).toBe(true);
+        });
+
+        it('does not count a direct connection from a peer that is not a trusted proxy', async () => {
+            await start({ proxyProtocol: true, trustedProxies: ['10.0.0.1'], tlsAtProxy: true });
+
+            const direct = await connect();
+            direct.send(handshake('direct'));
+
+            await eventually(() => direct.count(FrameType.Heartbeat) > 0);
+            expect(tlsAtProxy()).toEqual({ direct: false });
+        });
+
+        it('counts nobody without TCP_PROXY_PROTOCOL, and does not say so at startup', async () => {
+            await start({ trustedProxies: ['loopback'], tlsAtProxy: true });
+            expect(logs(LogLevel.Info)).toContain('Starting Colibri TCP server on 127.0.0.1:0');
+
+            const peer = await connect();
+            peer.send(handshake('plain'));
+
+            await eventually(() => peer.count(FrameType.Heartbeat) > 0);
+            expect(tlsAtProxy()).toEqual({ plain: false });
+        });
+
+        // A proxy that passes TLS through to the server's own, or ends it and starts it again.
+        it('counts a TLS client through the proxy too, by the TCP connection underneath', async () => {
+            await start({ proxyProtocol: true, trustedProxies: ['loopback'], tlsAtProxy: true, tls: { cert: certificate.cert, key: certificate.key } });
+
+            const tcp = await connect();
+            tcp.send(v1('198.51.100.7'));
+            const socket = tls.connect({ socket: tcp.socket, servername: 'localhost', ca: [ certificate.cert ] });
+            const peer = new Peer(socket);
+            peers.push(peer);
+            await once(socket, 'secureConnect');
+            peer.send(handshake('tls-quest'));
+
+            await eventually(() => peer.count(FrameType.Heartbeat) > 0);
+            expect(connectedClients()).toMatchObject([{ name: 'tls-quest', tls: true, tlsAtProxy: true }]);
         });
     });
 

@@ -52,6 +52,13 @@ export interface ServerSnapshot extends Snapshot {
     /** The settings in effect, by the variables that set them. */
     settings: Record<string, SettingValue>;
     tls: TlsInfo | null;
+    /**
+     * TLS that ends at a trusted proxy in front of the server. `web`: a web client or admin page
+     * connected now, this one included, reached the proxy over TLS, by its X-Forwarded-Proto.
+     * `tcp`: TCP_TLS_AT_PROXY applies, with TCP_PROXY_PROTOCOL, so Unity clients through the proxy
+     * reached it over TLS, as the operator declared.
+     */
+    tlsAtProxy: { web: boolean; tcp: boolean };
     voice: VoiceStatus | null;
     counts: {
         tcpClients: number;
@@ -76,7 +83,10 @@ export interface ClientRow {
     name: string;
     transport: 'tcp' | 'web';
     version: string;
+    /** Whether its connection to the server is encrypted. */
     tls: boolean;
+    /** Whether it reached a trusted proxy over TLS: a web client by the proxy's X-Forwarded-Proto, a TCP client by TCP_TLS_AT_PROXY. */
+    tlsAtProxy: boolean;
     address: string;
     connectedAt: number;
     /** Median round trip over the last second, in ms. */

@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'url';
 import * as colibri from './modules/index.js';
-import { Config } from './configuration.js';
+import { Config, configurationWarnings, tcpTlsAtProxyInEffect } from './configuration.js';
 
 /**
  * Debugging
@@ -102,8 +102,10 @@ const adminData = new colibri.AdminData({
         MODEL_TOMBSTONE_SECONDS: Config.MODEL_TOMBSTONE_SECONDS,
         TRUSTED_PROXIES: Config.TRUSTED_PROXIES,
         TCP_PROXY_PROTOCOL: Config.TCP_PROXY_PROTOCOL,
+        TCP_TLS_AT_PROXY: Config.TCP_TLS_AT_PROXY,
     },
     tls: tlsCertificate,
+    tcpTlsAtProxy: tcpTlsAtProxyInEffect(Config),
     voice: voiceServer,
     restStore: restApi,
 });
@@ -134,6 +136,8 @@ const startup = async () => {
     // After every init(), so the admin UI's WebLog is listening for these too. First, which
     // server this is.
     serverProcess.reportStart(version, build);
+    // Settings that have no effect as set.
+    for (const warning of configurationWarnings(Config)) serverProcess.reportWarning(warning);
     // Not fatal: the server is still useful without persistence, it just has to say so.
     await dataRootCheck.check();
     // Likewise: logs the certificate's fingerprint.
@@ -148,6 +152,7 @@ const startup = async () => {
         idleTimeoutMillis: Config.TCP_IDLE_TIMEOUT_SECONDS * 1000,
         trustedProxies: Config.TRUSTED_PROXIES,
         proxyProtocol: Config.TCP_PROXY_PROTOCOL,
+        tlsAtProxy: Config.TCP_TLS_AT_PROXY,
     }, tlsCertificate);
     voiceServer.start(Config.VOICE_PORT, Config.VOICE_HOST);
 };

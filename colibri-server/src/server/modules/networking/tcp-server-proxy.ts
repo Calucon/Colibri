@@ -33,6 +33,8 @@ export interface TcpNetworkClient extends NetworkClient {
     // Its address, behind a proxy the one its PROXY protocol header named.
     address: string;
     tls: boolean;
+    // Whether it reached a trusted proxy over TLS, as TCP_TLS_AT_PROXY says; see TcpClientConnected.
+    tlsAtProxy: boolean;
     // Date.now() of the connection.
     connectedAt: number;
 }
@@ -115,6 +117,7 @@ export class TCPServerProxy
                         version: connected.version,
                         address: connected.address,
                         tls: connected.tls,
+                        tlsAtProxy: connected.tlsAtProxy,
                         connectedAt: connected.connectedAt,
                         metadata: {},
                     });
