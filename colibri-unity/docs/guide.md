@@ -133,8 +133,10 @@ Store to `https`.
 - The server needs `TLS_CERT` and `TLS_KEY` ([TLS](../../colibri-server/docs/guide.md#tls) in the
   server guide), or a reverse proxy in front of it that ends TLS
   ([Reverse proxy](../../colibri-server/docs/guide.md#reverse-proxy)). Behind such a proxy, tick it
-  when the proxy's TCP port uses TLS. The admin UI cannot tell: the Server page's TCP row and the
-  Clients page show only the proxy's unencrypted connection to the server.
+  when the proxy's TCP port uses TLS. The server sees only the proxy's unencrypted connection: the
+  admin UI shows these clients as *TLS at proxy* only with `TCP_TLS_AT_PROXY=true` on the server
+  ([Behind a reverse proxy](../../colibri-server/docs/guide.md#behind-a-reverse-proxy)), and
+  without TLS otherwise.
 - The setting must match the server. Its TCP port accepts either only TLS or no TLS.
 - Frames and protocol version inside TLS are unchanged.
 - The handshake must finish within the 5 s connect timeout.
