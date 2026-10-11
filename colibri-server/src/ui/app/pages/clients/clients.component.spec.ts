@@ -140,6 +140,10 @@ describe('ClientsComponent', () => {
         expect(lock('proxied')?.querySelector('.pi-lock')).not.toBeNull();
         expect(lock('proxied')?.getAttribute('title')).toBe(view('proxied')?.tlsTitle);
         expect(lock('plain')).toBeNull();
+        // "at proxy" in its own element, which a phone puts on the next line
+        expect(lock('proxied')?.querySelector('.at-proxy')?.textContent?.trim()).toBe('at proxy');
+        expect(lock('direct')?.querySelector('.at-proxy')).toBeNull();
+        expect(lock('both')?.querySelector('.at-proxy')).toBeNull();
     });
 
     it('shows the app in the address only, and links each client to its log', async () => {
