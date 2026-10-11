@@ -492,6 +492,7 @@ describe('admin UI topics', () => {
             startedAt: Date.now() - 90_500,
             settings: { TCP_PORT: 9012, TRUSTED_PROXIES: [ 'loopback' ], TCP_PROXY_PROTOCOL: true },
             tls: undefined,
+            tcpTlsAtProxy: false,
             voice: { listening: true, recording: false, samplingRate: 48000, clients: 2 },
             store: new DataStore(),
             restStore: { apps: 2, keys: 5 },
@@ -516,7 +517,7 @@ describe('admin UI topics', () => {
                 uptime: 91,
                 settings: { TCP_PORT: 9012, TRUSTED_PROXIES: [ 'loopback' ], TCP_PROXY_PROTOCOL: true },
                 tls: null,
-                tlsAtProxy: { web: false },
+                tlsAtProxy: { web: false, tcp: false },
                 voice: { listening: true, recording: false, samplingRate: 48000, clients: 2 },
             });
         });
@@ -525,12 +526,19 @@ describe('admin UI topics', () => {
             const web = (id: string, app: string, tlsAtProxy: boolean) => ({ id, app, tlsAtProxy } as SocketIoClient);
 
             expect(serverSnapshot(sources({ webClients: [ web('w1', 'app1', false), web('a1', 'colibri', false) ] })).tlsAtProxy)
-                .toEqual({ web: false });
+                .toEqual({ web: false, tcp: false });
             expect(serverSnapshot(sources({ webClients: [ web('w1', 'app1', true), web('a1', 'colibri', false) ] })).tlsAtProxy)
-                .toEqual({ web: true });
+                .toEqual({ web: true, tcp: false });
             // the admin page asking, with no other web client
-            expect(serverSnapshot(sources({ webClients: [ web('a1', 'colibri', true) ] })).tlsAtProxy).toEqual({ web: true });
-            expect(serverSnapshot(sources()).tlsAtProxy).toEqual({ web: false });
+            expect(serverSnapshot(sources({ webClients: [ web('a1', 'colibri', true) ] })).tlsAtProxy).toEqual({ web: true, tcp: false });
+            expect(serverSnapshot(sources()).tlsAtProxy).toEqual({ web: false, tcp: false });
+        });
+
+        // Declared by the operator, so it holds with no Unity client connected, and apart from web.
+        it('says whether TCP_TLS_AT_PROXY applies, whoever is connected', () => {
+            expect(serverSnapshot(sources({ tcpTlsAtProxy: true })).tlsAtProxy).toEqual({ web: false, tcp: true });
+            const web = { id: 'w1', app: 'app1', tlsAtProxy: true } as SocketIoClient;
+            expect(serverSnapshot(sources({ tcpTlsAtProxy: true, webClients: [ web ] })).tlsAtProxy).toEqual({ web: true, tcp: true });
         });
 
         it('describes the certificate, and nothing of its key or files', () => {
