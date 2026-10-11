@@ -24,7 +24,7 @@ const snapshot = (overrides: Partial<ServerSnapshot> = {}): ServerSnapshot => ({
         TRUSTED_PROXIES: [], TCP_PROXY_PROTOCOL: false
     },
     tls: null,
-    tlsAtProxy: { web: false },
+    tlsAtProxy: { web: false, tcp: false },
     voice: { listening: true, recording: false, samplingRate: 48000, clients: 0 },
     counts: {
         tcpClients: 3, webClients: 2, adminPages: 1, apps: 2, models: 1234, modelApps: 2, modelChannels: 3,
@@ -102,22 +102,22 @@ describe('serverSections', () => {
             // a direct connection uses the server's own
             [ 'both', certificate, true, { web: 'HTTPS and WSS', tcp: 'TLS', tls: [ 'On', undefined, 'ok' ] } ]
         ])('with %s, says so in the Web, TCP and TLS rows', (_case, tls, web, expected) => {
-            expect(rows(snapshot({ tls, tlsAtProxy: { web } }))).toEqual(expected);
+            expect(rows(snapshot({ tls, tlsAtProxy: { web, tcp: false } }))).toEqual(expected);
         });
 
         it('says on hover why HTTPS is at the proxy, and only then', () => {
-            const proxied = snapshot({ tlsAtProxy: { web: true } });
+            const proxied = snapshot({ tlsAtProxy: { web: true, tcp: false } });
             expect(fact(proxied, 'network', 'Web')?.title).toContain('X-Forwarded-Proto');
             expect(fact(proxied, 'network', 'TLS')?.title).toBe(fact(proxied, 'network', 'Web')?.title);
             expect(fact(proxied, 'network', 'TLS')?.variable).toBe('TLS_CERT, TLS_KEY');
 
             expect(fact(snapshot(), 'network', 'Web')?.title).toBeUndefined();
-            expect(fact(snapshot({ tls: certificate, tlsAtProxy: { web: true } }), 'network', 'Web')?.title).toBeUndefined();
+            expect(fact(snapshot({ tls: certificate, tlsAtProxy: { web: true, tcp: false } }), 'network', 'Web')?.title).toBeUndefined();
         });
 
         it('with Unity clients through a proxy, says the TCP port is unencrypted only here', () => {
             const throughProxy = (tls: ServerSnapshot['tls'], web: boolean) => snapshot({
-                tls, tlsAtProxy: { web }, settings: { ...snapshot().settings, TRUSTED_PROXIES: [ 'loopback' ], TCP_PROXY_PROTOCOL: true }
+                tls, tlsAtProxy: { web, tcp: false }, settings: { ...snapshot().settings, TRUSTED_PROXIES: [ 'loopback' ], TCP_PROXY_PROTOCOL: true }
             });
 
             expect(rows(throughProxy(null, true))).toEqual({
@@ -127,10 +127,53 @@ describe('serverSections', () => {
             });
             expect(rows(throughProxy(null, false)).tcp).toBe('unencrypted here, proxy TLS not reported');
             expect(fact(throughProxy(null, false), 'network', 'TCP')?.title).toContain('Server supports SSL/TLS?');
+            // how to show it here
+            expect(fact(throughProxy(null, false), 'network', 'TCP')?.title).toContain('set TCP_TLS_AT_PROXY=true');
             // a direct connection uses the server's own
             expect(rows(throughProxy(certificate, false)).tcp).toBe('TLS');
             expect(fact(throughProxy(certificate, false), 'network', 'TCP')?.title).toBeUndefined();
             expect(fact(snapshot(), 'network', 'TCP')?.title).toBeUndefined();
+        });
+
+        describe('with TCP_TLS_AT_PROXY', () => {
+            const declared = (tls: ServerSnapshot['tls'], web: boolean) => snapshot({
+                tls, tlsAtProxy: { web, tcp: true },
+                settings: { ...snapshot().settings, TRUSTED_PROXIES: [ 'loopback' ], TCP_PROXY_PROTOCOL: true, TCP_TLS_AT_PROXY: true }
+            });
+
+            it.each([
+                [ 'TCP only', false, { web: 'HTTP and WS', tcp: 'unencrypted here, TLS at the proxy', tls: [ 'Not on this server', 'TCP TLS at the proxy', undefined ] } ],
+                [ 'web too', true, { web: 'HTTP here, HTTPS at the proxy', tcp: 'unencrypted here, TLS at the proxy', tls: [ 'Not on this server', 'HTTPS and TCP TLS at the proxy', undefined ] } ]
+            ])('says TLS is at the proxy in the TCP and TLS rows, %s', (_case, web, expected) => {
+                expect(rows(declared(null, web))).toEqual(expected);
+            });
+
+            it('names the setting on hover, next to the web rule', () => {
+                expect(fact(declared(null, false), 'network', 'TCP')?.title).toContain('TCP_TLS_AT_PROXY says the trusted proxy ends TLS');
+                expect(fact(declared(null, false), 'network', 'TLS')?.title).toBe(fact(declared(null, false), 'network', 'TCP')?.title);
+                const both = fact(declared(null, true), 'network', 'TLS')?.title?.split('\n');
+                expect(both).toEqual([ fact(declared(null, true), 'network', 'Web')?.title, fact(declared(null, true), 'network', 'TCP')?.title ]);
+            });
+
+            // a direct connection uses the server's own
+            it('shows the server\'s own TLS instead when it has a certificate', () => {
+                expect(rows(declared(certificate, false))).toEqual({ web: 'HTTPS and WSS', tcp: 'TLS', tls: [ 'On', undefined, 'ok' ] });
+                expect(fact(declared(certificate, false), 'network', 'TCP')?.title).toBeUndefined();
+            });
+        });
+
+        it('shows TCP_TLS_AT_PROXY next to TCP_PROXY_PROTOCOL, and when it has no effect', () => {
+            const setting = (on: boolean, applies: boolean) => fact(snapshot({
+                tlsAtProxy: { web: false, tcp: applies }, settings: { ...snapshot().settings, TCP_TLS_AT_PROXY: on }
+            }), 'network', 'TLS at the TCP proxy');
+            const labels = serverSections(snapshot(), String).find(x => x.id === 'network')?.facts.map(f => f.label);
+
+            expect(labels?.slice(-2)).toEqual([ 'PROXY protocol on TCP', 'TLS at the TCP proxy' ]);
+            expect(setting(false, false)).toEqual(expect.objectContaining({ value: 'Off', tone: 'off', variable: 'TCP_TLS_AT_PROXY', note: undefined }));
+            expect(setting(true, true)).toEqual(expect.objectContaining({ value: 'On', tone: 'ok', variable: 'TCP_TLS_AT_PROXY', note: undefined }));
+            expect(setting(true, false)).toEqual(expect.objectContaining({ value: 'On', tone: 'warn', note: 'no effect without TCP_PROXY_PROTOCOL' }));
+            // and not again under Other settings
+            expect(serverSections(snapshot({ settings: { ...snapshot().settings, TCP_TLS_AT_PROXY: true } }), String).some(x => x.id === 'other')).toBe(false);
         });
     });
 
@@ -173,7 +216,10 @@ describe('ServerComponent', () => {
         channel.next({ command: 'server', payload: snapshot({ request, ...overrides }) });
         fixture.detectChanges();
         const shownFact = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll('.fact')).find(f => f.querySelector('dt')?.textContent === label)!;
-        return { value: shownFact.querySelector('.value')!, note: shownFact.querySelector('.note')?.textContent ?? null };
+        return {
+            value: shownFact.querySelector('.value')!, note: shownFact.querySelector('.note')?.textContent ?? null,
+            variable: shownFact.querySelector('code')?.textContent ?? null
+        };
     };
 
     const shown = (build: ServerSnapshot['build']) => row({ build }, 'Commit');
@@ -187,7 +233,7 @@ describe('ServerComponent', () => {
     });
 
     it('shows TLS at the proxy as not on this server, not muted, rather than Off', () => {
-        const { value, note } = row({ tlsAtProxy: { web: true } }, 'TLS');
+        const { value, note } = row({ tlsAtProxy: { web: true, tcp: false } }, 'TLS');
         expect(value.textContent?.trim()).toBe('Not on this server');
         expect(value.classList.contains('off')).toBe(false);
         expect(value.getAttribute('title')).toContain('X-Forwarded-Proto');
@@ -198,6 +244,41 @@ describe('ServerComponent', () => {
         const { value, note } = row({ settings: { ...snapshot().settings, TRUSTED_PROXIES: [ 'loopback' ], TCP_PROXY_PROTOCOL: true } }, 'TCP');
         expect(note).toBe('unencrypted here, proxy TLS not reported');
         expect(value.getAttribute('title')).toContain('PROXY protocol header');
+        expect(value.getAttribute('title')).toContain('TCP_TLS_AT_PROXY');
+    });
+
+    describe('with TCP_TLS_AT_PROXY', () => {
+        const declared: Partial<ServerSnapshot> = {
+            tlsAtProxy: { web: false, tcp: true },
+            settings: { ...snapshot().settings, TRUSTED_PROXIES: [ 'loopback' ], TCP_PROXY_PROTOCOL: true, TCP_TLS_AT_PROXY: true }
+        };
+
+        it('shows the TCP port as TLS at the proxy, naming the setting on hover', () => {
+            const { value, note } = row(declared, 'TCP');
+            expect(note).toBe('unencrypted here, TLS at the proxy');
+            expect(value.getAttribute('title')).toContain('TCP_TLS_AT_PROXY');
+        });
+
+        it('shows TLS as not on this server, with TCP TLS at the proxy', () => {
+            const { value, note } = row(declared, 'TLS');
+            expect(value.textContent?.trim()).toBe('Not on this server');
+            expect(value.classList.contains('off')).toBe(false);
+            expect(note).toBe('TCP TLS at the proxy');
+        });
+
+        it('shows the setting on, with its variable', () => {
+            const { value, note, variable } = row(declared, 'TLS at the TCP proxy');
+            expect(value.textContent?.trim()).toBe('On');
+            expect(value.classList.contains('ok')).toBe(true);
+            expect(note).toBeNull();
+            expect(variable).toBe('TCP_TLS_AT_PROXY');
+        });
+
+        it('says when the setting has no effect', () => {
+            const { value, note } = row({ settings: { ...snapshot().settings, TRUSTED_PROXIES: [ 'loopback' ], TCP_TLS_AT_PROXY: true } }, 'TLS at the TCP proxy');
+            expect(value.classList.contains('warn')).toBe(true);
+            expect(note).toBe('no effect without TCP_PROXY_PROTOCOL');
+        });
     });
 
     it('shows an unknown commit muted, saying why on hover', () => {
