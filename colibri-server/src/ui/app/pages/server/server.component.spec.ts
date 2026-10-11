@@ -170,7 +170,7 @@ describe('serverSections', () => {
 
             expect(labels?.slice(-2)).toEqual([ 'PROXY protocol on TCP', 'TLS at the TCP proxy' ]);
             expect(setting(true, true)).toEqual(expect.objectContaining({ value: 'On', tone: 'ok', variable: 'TCP_TLS_AT_PROXY', note: undefined }));
-            expect(setting(true, false)).toEqual(expect.objectContaining({ value: 'On', tone: 'warn', note: 'no effect without TCP_PROXY_PROTOCOL' }));
+            expect(setting(true, false)).toEqual(expect.objectContaining({ value: 'On', tone: 'warn', note: 'needs TCP_PROXY_PROTOCOL' }));
             // and not again under Other settings
             expect(serverSections(snapshot({ settings: { ...snapshot().settings, TCP_TLS_AT_PROXY: true } }), String).some(x => x.id === 'other')).toBe(false);
         });
@@ -297,7 +297,8 @@ describe('ServerComponent', () => {
         it('says when the setting has no effect', () => {
             const { value, note } = row({ settings: { ...snapshot().settings, TRUSTED_PROXIES: [ 'loopback' ], TCP_TLS_AT_PROXY: true } }, 'TLS at the TCP proxy');
             expect(value.classList.contains('warn')).toBe(true);
-            expect(note).toBe('no effect without TCP_PROXY_PROTOCOL');
+            expect(note).toBe('needs TCP_PROXY_PROTOCOL');
+            expect(value.getAttribute('title')).toContain('No effect');
         });
     });
 

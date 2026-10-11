@@ -142,7 +142,10 @@ export const serverSections = function (s: ServerSnapshot, format: (time: number
         }
         : s.tlsAtProxy.tcp
             ? onOff(tcpTlsAtProxyLabel, true, 'TCP_TLS_AT_PROXY')
-            : { label: tcpTlsAtProxyLabel, variable: 'TCP_TLS_AT_PROXY', value: 'On', tone: 'warn', note: 'no effect without TCP_PROXY_PROTOCOL' };
+            : {
+                label: tcpTlsAtProxyLabel, variable: 'TCP_TLS_AT_PROXY', value: 'On', tone: 'warn', note: 'needs TCP_PROXY_PROTOCOL',
+                title: 'No effect: without TCP_PROXY_PROTOCOL, the server cannot tell which Unity clients come through the proxy'
+            };
 
     const sections: Section[] = [
         {
