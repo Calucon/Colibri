@@ -115,7 +115,7 @@ describe('ClientsComponent', () => {
         expect(harness.routeNativeElement!.querySelector('tr[data-id="q1"] td.c-transport .version')?.textContent).toBe('v2');
     });
 
-    it('shows TLS to the server and TLS at a proxy with the same lock, told apart by label and title', async () => {
+    it('shows TLS terminated by the server and by a proxy with the same lock, told apart by label and title', async () => {
         const { harness, component, root } = await open('/clients');
         snapshot([
             client({ id: 'direct', tls: true }),
@@ -129,24 +129,24 @@ describe('ClientsComponent', () => {
         const view = (id: string) => component.rows().find(row => row.id === id);
         expect(view('direct')).toEqual(expect.objectContaining({ tls: 'server', tlsTitle: 'Encrypted: TLS' }));
         expect(view('proxied')?.tls).toBe('proxy');
-        expect(view('proxied')?.tlsTitle).toContain('reverse proxy');
+        expect(view('proxied')?.tlsTitle).toBe('TLS terminated by a trusted proxy (X-Forwarded-Proto)');
         expect(view('plain')).toEqual(expect.objectContaining({ tls: null, tlsTitle: '' }));
         expect(view('both')?.tls).toBe('server');
 
         const lock = (id: string) => root.querySelector(`tr[data-id="${id}"] td.c-transport .tls`);
         expect(lock('direct')?.textContent?.trim()).toBe('TLS');
         expect(lock('direct')?.querySelector('.pi-lock')).not.toBeNull();
-        expect(lock('proxied')?.textContent?.trim()).toBe('TLS at proxy');
+        expect(lock('proxied')?.textContent?.trim()).toBe('TLS (proxy)');
         expect(lock('proxied')?.querySelector('.pi-lock')).not.toBeNull();
         expect(lock('proxied')?.getAttribute('title')).toBe(view('proxied')?.tlsTitle);
         expect(lock('plain')).toBeNull();
-        // "at proxy" in its own element, which a phone puts on the next line
-        expect(lock('proxied')?.querySelector('.at-proxy')?.textContent?.trim()).toBe('at proxy');
-        expect(lock('direct')?.querySelector('.at-proxy')).toBeNull();
-        expect(lock('both')?.querySelector('.at-proxy')).toBeNull();
+        // "(proxy)" in its own element, which a phone puts on the next line
+        expect(lock('proxied')?.querySelector('.by-proxy')?.textContent?.trim()).toBe('(proxy)');
+        expect(lock('direct')?.querySelector('.by-proxy')).toBeNull();
+        expect(lock('both')?.querySelector('.by-proxy')).toBeNull();
     });
 
-    it('shows a Unity client through a proxy with TCP_TLS_AT_PROXY as TLS at proxy, naming the setting on hover', async () => {
+    it('shows a Unity client through a proxy with TCP_TLS_AT_PROXY as TLS (proxy), naming the setting on hover', async () => {
         const { harness, component, root } = await open('/clients');
         snapshot([
             client({ id: 'tcp-proxied', name: 'quest-1', address: '198.51.100.7', tlsAtProxy: true }),
@@ -157,15 +157,15 @@ describe('ClientsComponent', () => {
 
         const view = (id: string) => component.rows().find(row => row.id === id);
         expect(view('tcp-proxied')).toEqual(expect.objectContaining({ transport: 'TCP', tls: 'proxy' }));
-        expect(view('tcp-proxied')?.tlsTitle).toBe('Encrypted to the reverse proxy, which forwards it to this server unencrypted (TCP_TLS_AT_PROXY)');
+        expect(view('tcp-proxied')?.tlsTitle).toBe('TLS terminated by a trusted proxy (TCP_TLS_AT_PROXY)');
         expect(view('tcp-plain')).toEqual(expect.objectContaining({ tls: null, tlsTitle: '' }));
         // a web client's comes from its proxy's X-Forwarded-Proto
         expect(view('web-proxied')?.tlsTitle).not.toContain('TCP_TLS_AT_PROXY');
 
         const lock = (id: string) => root.querySelector(`tr[data-id="${id}"] td.c-transport .tls`);
-        expect(lock('tcp-proxied')?.textContent?.trim()).toBe('TLS at proxy');
+        expect(lock('tcp-proxied')?.textContent?.trim()).toBe('TLS (proxy)');
         expect(lock('tcp-proxied')?.querySelector('.pi-lock')).not.toBeNull();
-        expect(lock('tcp-proxied')?.querySelector('.at-proxy')?.textContent?.trim()).toBe('at proxy');
+        expect(lock('tcp-proxied')?.querySelector('.by-proxy')?.textContent?.trim()).toBe('(proxy)');
         expect(lock('tcp-proxied')?.getAttribute('title')).toBe(view('tcp-proxied')?.tlsTitle);
         expect(lock('tcp-plain')).toBeNull();
     });

@@ -230,8 +230,8 @@ td.c-transport .version {
         grid-area: trans;
     }
 
-    // "at proxy" under the lock: next to it, it ran into the protocol version
-    .tls .at-proxy {
+    // "(proxy)" under the lock: next to it, it ran into the protocol version
+    .tls .by-proxy {
         display: block;
     }
 

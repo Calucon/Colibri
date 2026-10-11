@@ -25,7 +25,7 @@ interface Column {
 export const COLUMNS: ReadonlyArray<Column> = [
     { key: 'app', label: 'App', title: 'The app it joined', class: 'c-app' },
     { key: 'name', label: 'Client', title: 'Its name and address', class: 'c-name' },
-    { key: 'transport', label: 'Transport', title: 'TCP for a Unity client, web for a Socket.IO client, and whether the connection is encrypted, to this server or to a reverse proxy', class: 'c-transport' },
+    { key: 'transport', label: 'Transport', title: 'TCP for a Unity client, web for a Socket.IO client, and TLS, terminated by this server or by a trusted proxy', class: 'c-transport' },
     { key: 'version', label: 'Protocol', title: 'The protocol version it announced', class: 'c-version' },
     { key: 'connected', label: 'Connected', title: 'How long it has been connected', class: 'c-connected', num: true },
     { key: 'latency', label: 'Latency', title: 'Median round trip over the last second, in ms', class: 'c-latency', num: true },
@@ -39,15 +39,16 @@ export interface Sort {
     descending: boolean;
 }
 
-/** Where a client's TLS ends: at this server, or at a trusted reverse proxy in front of it. */
+/** Where a client's TLS is terminated: by this server, or by a trusted reverse proxy in front of it. */
 export type TlsEnd = 'server' | 'proxy';
 
+// TLS terminated by a proxy, by what says so: for a web client the proxy's X-Forwarded-Proto, for a
+// Unity client the operator's TCP_TLS_AT_PROXY, as its PROXY protocol header does not say.
 const TLS_TITLES = {
     server: 'Encrypted: TLS',
-    proxy: 'Encrypted to the reverse proxy, which forwards it to this server unencrypted'
+    tcp: 'TLS terminated by a trusted proxy (TCP_TLS_AT_PROXY)',
+    web: 'TLS terminated by a trusted proxy (X-Forwarded-Proto)'
 } as const;
-// A Unity client's PROXY protocol header does not say, so the operator does, with this setting.
-const TCP_TLS_AT_PROXY_TITLE = `${TLS_TITLES.proxy} (TCP_TLS_AT_PROXY)`;
 
 /** The server's own TLS first: a client connected to it directly uses that. */
 export const tlsEnd = function (row: ClientRow): TlsEnd | null {
@@ -210,7 +211,7 @@ export class ClientsComponent {
                 address: client.address,
                 transport: client.transport === 'tcp' ? 'TCP' : 'Web',
                 tls,
-                tlsTitle: tls === 'proxy' && client.transport === 'tcp' ? TCP_TLS_AT_PROXY_TITLE : tls ? TLS_TITLES[tls] : '',
+                tlsTitle: tls === 'proxy' ? TLS_TITLES[client.transport] : tls ? TLS_TITLES[tls] : '',
                 version: client.version,
                 connectedAt: client.connectedAt,
                 connected: duration((snapshot.at - client.connectedAt) / 1000),
