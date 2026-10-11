@@ -182,7 +182,7 @@ colibri-web's `RemoteLogger`.
 | `MODEL_TOMBSTONE_SECONDS` | `600` | How long the server remembers a deleted model. `0`: not at all. |
 | `TRUSTED_PROXIES` | empty | Reverse proxies trusted to report the client's address, from `X-Forwarded-For` or a PROXY protocol header, and whether a web client used HTTPS, from `X-Forwarded-Proto`. Voice from them is relayed without the address check. |
 | `TCP_PROXY_PROTOCOL` | `false` | `true`: a TCP connection from a trusted proxy must start with a PROXY protocol header. |
-| `TCP_TLS_AT_PROXY` | `false` | `true`: the proxy's TCP port ends TLS, so the admin UI shows Unity clients through it with TLS at the proxy. Needs `TCP_PROXY_PROTOCOL`. |
+| `TCP_TLS_AT_PROXY` | `false` | `true`: the proxy's TCP port ends TLS, so without a certificate the admin UI shows Unity clients through it with TLS at the proxy. Needs `TCP_PROXY_PROTOCOL`. |
 | `TLS_CERT`, `TLS_KEY` | empty | Certificate and key for [TLS](#tls) on the TCP and web ports. |
 
 - A headset that leaves the Wi-Fi or goes to sleep does not close its connection. In 1.x, without
