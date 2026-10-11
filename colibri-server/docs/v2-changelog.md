@@ -125,20 +125,22 @@ this is the server's full detail.
   `X-Forwarded-For` entry that is not itself a trusted proxy, so a client cannot choose it by
   sending the header itself. It names the client in the log and the admin UI, and is its `name` in
   `colibri::clients`, which every client of the app receives. Express's `req.ip` agrees.
-- **TLS at the proxy:** a proxy that ends TLS connects unencrypted, so the admin UI showed no TLS
-  anywhere and TLS as *Off*. From a trusted peer, a Socket.IO client now counts as TLS at the proxy
-  when the right-most `X-Forwarded-Proto` entry is `https` or `wss`, in any case. The proxy must
-  set the header, replacing the client's. The Clients page shows it as *TLS at proxy*. Without a certificate, and while such a client or admin page is
-  connected, the Server page shows the web port as *HTTP here, HTTPS at the proxy* and TLS as *Not
-  on this server*. The admin topics carry it as `tlsAtProxy`
-  ([Admin UI channel](./protocol.md#admin-ui-channel)). nginx's PROXY protocol header, version 1,
-  does not say whether the proxy ended TLS, and the server skips the TLS details a version 2
-  header can carry, so new `TCP_TLS_AT_PROXY=true` says the proxy's TCP port ends TLS. With it and
-  `TCP_PROXY_PROTOCOL`, and without a certificate, a Unity client through a trusted proxy shows as
-  *TLS at proxy* too, and the Server page shows the TCP port as *unencrypted here, TLS at the proxy*
-  and TLS as *Not on this server*. Without it, Unity clients through a proxy show without TLS, and
-  the TCP row says *unencrypted here, proxy TLS not reported*. Set without `TCP_PROXY_PROTOCOL`, it
-  has no effect, and the server warns at startup. It takes only `true` or `false`.
+- **TLS terminated by proxy:** a proxy that terminates TLS connects unencrypted, so the admin UI
+  showed no TLS anywhere and TLS as *Off*. From a trusted peer, a Socket.IO client now counts as TLS
+  terminated by proxy when the right-most `X-Forwarded-Proto` entry is `https` or `wss`, in any
+  case. The proxy must set the header, replacing the client's. The Clients page shows it as *TLS
+  (proxy)*. Without a certificate, and while such a client or admin page is connected, the Server
+  page shows the web port as *HTTP and WS, TLS terminated by proxy* and TLS as *Off* with
+  *terminated by proxy (HTTPS)*. The admin topics carry it as `tlsAtProxy` ([Admin UI
+  channel](./protocol.md#admin-ui-channel)). nginx's PROXY protocol header, version 1, does not say
+  whether the proxy terminated TLS, and the server skips the TLS details a version 2 header can
+  carry, so new `TCP_TLS_AT_PROXY=true` declares that the proxy's TCP port terminates TLS. With it
+  and `TCP_PROXY_PROTOCOL`, and without a certificate, a Unity client through a trusted proxy shows
+  as *TLS (proxy)* too, and the Server page shows the TCP port as *TLS terminated by proxy*, TLS
+  with *terminated by proxy (TCP)*, and the setting as *TCP TLS termination: Proxy*. Without it,
+  Unity clients through a proxy show without TLS, the TCP row says *unencrypted, proxy TLS
+  undeclared*, and the setting *Not declared*. Set without `TCP_PROXY_PROTOCOL`, it has no effect,
+  and the server warns at startup. It takes only `true` or `false`.
 - **TCP port:** with new `TCP_PROXY_PROTOCOL=true`, a connection from a trusted peer must start
   with a PROXY protocol header, version 1 (nginx's `proxy_protocol on`) or 2. It is read ahead of a
   TLS handshake, also when it arrives in pieces. The client it names is the one in every log line

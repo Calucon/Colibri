@@ -348,7 +348,7 @@ by the proxy, never by a Unity client: version 1, a line of text of at most 107 
 or version 2, binary, with at most 4 KiB after its fixed 16 bytes. Its source address replaces the
 connection's address as the client's. Version 1 `UNKNOWN`, version 2 `LOCAL`, and anything but TCP
 over IPv4 or IPv6 keep the connection's address. A version 2 header's TLVs, such as the TLS details
-of HAProxy's `send-proxy-v2-ssl`, are skipped. Whether the proxy ended TLS comes from
+of HAProxy's `send-proxy-v2-ssl`, are skipped. Whether the proxy terminated TLS comes from
 `TCP_TLS_AT_PROXY` instead, and only the admin UI uses it. The connection goes on after the header as without
 one: the TLS handshake on a TLS port, then the handshake frame. A connection without a header is told
 apart by its 4th byte at the latest: read as a v3 length field, the first 4 bytes of either header
@@ -532,8 +532,8 @@ sending the previous one; the next replaces it.
   never paths, key material or file contents. `tlsAtProxy` is `{ web, tcp }`: `web` is `true` while a
   web client or admin page connected now, the asking page included, reached a trusted proxy over
   TLS, as `tlsAtProxy` in `clients`; `tcp` is `true` when `TCP_TLS_AT_PROXY` and `TCP_PROXY_PROTOCOL`
-  are on, so every `tcp` client through a trusted proxy counts as TLS at the proxy, whether or not
-  one is connected. `voice` is `{ listening, recording, samplingRate, clients }`.
+  are on, so the proxy terminates TLS for every `tcp` client through it, whether or not one is
+  connected. `voice` is `{ listening, recording, samplingRate, clients }`.
   `counts` is `{ tcpClients, webClients, adminPages, apps, models, modelApps, modelChannels,
   deletedModels, storeApps, storeKeys }`. `uptime` is in seconds. `build` is `{ commit, dirty, builtAt }`:
   the full hash of the git commit the server was built from, whether `colibri-server` had uncommitted
@@ -543,7 +543,7 @@ sending the previous one; the next replaces it.
   `{ id, app, name, transport, version, tls, tlsAtProxy, address, connectedAt, latency, in, out, limit, held }`:
   `transport` is `tcp` or `web`, `address` the client's own address (from the PROXY protocol header or
   `X-Forwarded-For` behind a trusted proxy), `tls` whether its connection to this server is encrypted,
-  `tlsAtProxy` whether it reached a trusted proxy over TLS: for `web`, the proxy's right-most
+  `tlsAtProxy` whether a trusted proxy terminated its TLS: for `web`, the proxy's right-most
   `X-Forwarded-Proto` entry is `https` or `wss`, in any case; for `tcp`, its connection started with
   a PROXY protocol header from a trusted proxy and `TCP_TLS_AT_PROXY` is on (nginx's PROXY protocol
   header, version 1, does not say, and the server skips the TLS details a version 2 header can carry),
