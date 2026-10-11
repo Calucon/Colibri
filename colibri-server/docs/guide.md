@@ -150,7 +150,7 @@ with its default.
 | `TLS_CERT`, `TLS_KEY` | empty | PEM files of the certificate with its chain, and of its private key. With both set, the TCP and web ports serve [TLS](#tls) only. |
 | `TRUSTED_PROXIES` | empty | Reverse proxies trusted to report the client's address, and on the web port whether it used HTTPS: IP addresses, CIDR ranges and `loopback`, `linklocal`, `uniquelocal`, separated by commas, as in Express's `trust proxy`. Voice from them is relayed unchecked ([Voice relay](#voice-relay)). Empty: none. See [Behind a reverse proxy](#behind-a-reverse-proxy). |
 | `TCP_PROXY_PROTOCOL` | `false` | `true`: a connection to the TCP port from a `TRUSTED_PROXIES` address must start with a PROXY protocol header, which names the Unity client. Requires `TRUSTED_PROXIES`. |
-| `TCP_TLS_AT_PROXY` | `false` | `true`: the proxy in front of the TCP port ends TLS, e.g. nginx's `listen 9012 ssl`. The admin UI then shows Unity clients through a trusted proxy as *TLS at proxy*. Only the display depends on it. Requires `TCP_PROXY_PROTOCOL`. See [Behind a reverse proxy](#behind-a-reverse-proxy). |
+| `TCP_TLS_AT_PROXY` | `false` | `true`: the proxy in front of the TCP port ends TLS, e.g. nginx's `listen 9012 ssl`. Without a certificate, the admin UI then shows Unity clients through a trusted proxy as *TLS at proxy*. Only the display depends on it. Requires `TCP_PROXY_PROTOCOL`. See [Behind a reverse proxy](#behind-a-reverse-proxy). |
 
 The `*_HOST` settings take an IPv4 address, an IPv6 address without brackets, or a host name. The
 default `0.0.0.0` listens on IPv4 only. `::` listens on IPv6 and IPv4: set `TCP_HOST=::`,
@@ -209,10 +209,10 @@ used HTTPS:
   PROXY protocol header, version 1 or 2, which names the Unity client
   ([PROXY protocol](protocol.md#proxy-protocol)). Other peers connect as before. nginx's header,
   version 1, does not say whether the proxy ended TLS, and the server skips the TLS details a
-  version 2 header can carry. If the proxy ends TLS, set `TCP_TLS_AT_PROXY=true`: the Clients page
-  then shows these clients as *TLS at proxy*, and without a certificate the Server page's TCP row
-  says *unencrypted here, TLS at the proxy*. Without it, they show without TLS, and the TCP row
-  says *unencrypted here, proxy TLS not reported*. Only the admin UI's display depends on it.
+  version 2 header can carry. If the proxy ends TLS, set `TCP_TLS_AT_PROXY=true`: without a
+  certificate, the Clients page then shows these clients as *TLS at proxy*, and the Server page's
+  TCP row says *unencrypted here, TLS at the proxy*. Without it, they show without TLS, and the TCP
+  row says *unencrypted here, proxy TLS not reported*. Only the admin UI's display depends on it.
 - **Voice (UDP):** nginx's PROXY protocol covers TCP only, so voice sent through a proxy shows the
   proxy's address, and is relayed without the [voice check](#voice-relay). To keep the check,
   publish the voice port directly, as below, and keep the clients' addresses out of
@@ -240,8 +240,9 @@ address:
 
 A connection from a trusted address that does not come through the proxy can name any client
 address: on the web port with its own `X-Forwarded-For`, on the TCP port with its own PROXY protocol
-header. On the web port, its own `X-Forwarded-Proto` also shows it as *TLS at proxy*. With a new
-address on each connection, it also gets past the per-address warning limits.
+header. It can also show as *TLS at proxy*: on the web port with its own `X-Forwarded-Proto`, on
+the TCP port with `TCP_TLS_AT_PROXY` by its own PROXY protocol header. With a new address on each
+connection, it also gets past the per-address warning limits.
 With the ports above, only processes on the host and containers on the compose network can connect
 directly. `uniquelocal` also covers clients on a private network (`10.0.0.0/8`, `172.16.0.0/12`,
 `192.168.0.0/16`, `fc00::/7`): such a client can do the same on the web port through the proxy, with
@@ -523,16 +524,16 @@ soon as it opens. `npm run demo` fills the pages with synthetic clients ([Develo
 - **Server:** version, the commit it was built from (the full hash and build time on hover,
   *uncommitted changes* for a build with changes not committed, *unknown* without git information),
   protocol version, Node.js version and uptime; the settings in effect, with the variables that set
-  them: ports, `BASE_URL`, TLS, `TRUSTED_PROXIES`, `TCP_PROXY_PROTOCOL`, `TCP_TLS_AT_PROXY` (with a
-  warning when it has no effect), load limits, idle timeout, tombstones, voice and recording;
-  without a certificate, and while a web client or admin page is connected through a
-  [trusted proxy](#behind-a-reverse-proxy) that reports HTTPS, the web port as *HTTP here, HTTPS at
-  the proxy* and TLS as *Not on this server*; without a certificate and with `TCP_PROXY_PROTOCOL`
-  on, the TCP port as *unencrypted here, TLS at the proxy* with `TCP_TLS_AT_PROXY` (TLS then *Not
-  on this server* too), otherwise as *unencrypted here, proxy TLS not reported*; the TLS
-  certificate's names, issuer, validity and SHA-256 fingerprint, with a warning 30 days before it
-  expires; and counts of clients, apps, synchronized models and REST store values. Never
-  certificate or key paths, key material or file contents.
+  them: ports, `BASE_URL`, TLS, `TRUSTED_PROXIES`, `TCP_PROXY_PROTOCOL`, `TCP_TLS_AT_PROXY` (*Not
+  declared* when unset, with a warning when it has no effect), load limits, idle timeout,
+  tombstones, voice and recording; without a certificate, and while a web client or admin page is
+  connected through a [trusted proxy](#behind-a-reverse-proxy) that reports HTTPS, the web port as
+  *HTTP here, HTTPS at the proxy* and TLS as *Not on this server*; without a certificate and with
+  `TCP_PROXY_PROTOCOL` on, the TCP port as *unencrypted here, TLS at the proxy* with
+  `TCP_TLS_AT_PROXY` (TLS then *Not on this server* too), otherwise as *unencrypted here, proxy TLS
+  not reported*; the TLS certificate's names, issuer, validity and SHA-256 fingerprint, with a
+  warning 30 days before it expires; and counts of clients, apps, synchronized models and REST store
+  values. Never certificate or key paths, key material or file contents.
 
   ![Server page](../img/admin-server.png)
 
