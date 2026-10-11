@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'url';
 import * as colibri from './modules/index.js';
-import { Config } from './configuration.js';
+import { Config, configurationWarnings } from './configuration.js';
 
 /**
  * Debugging
@@ -134,6 +134,8 @@ const startup = async () => {
     // After every init(), so the admin UI's WebLog is listening for these too. First, which
     // server this is.
     serverProcess.reportStart(version, build);
+    // Settings that have no effect as set.
+    for (const warning of configurationWarnings(Config)) serverProcess.reportWarning(warning);
     // Not fatal: the server is still useful without persistence, it just has to say so.
     await dataRootCheck.check();
     // Likewise: logs the certificate's fingerprint.

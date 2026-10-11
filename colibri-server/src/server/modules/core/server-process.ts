@@ -44,6 +44,11 @@ export class ServerProcess extends Service {
         this.logInfo(`Colibri ${version}, ${describeBuild(build)}`);
     }
 
+    /** Logs a warning about the process, such as a setting that has no effect. */
+    public reportWarning(text: string): void {
+        this.logWarning(text);
+    }
+
     /** Logs `err` (with its stack, if it has one) as an error, after `what: `. */
     public reportError(what: string, err: unknown): void {
         this.logError(format('%s:', what, err), false);

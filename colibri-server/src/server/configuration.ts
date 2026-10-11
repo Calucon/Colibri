@@ -83,6 +83,10 @@ if (tcpProxyProtocol && trustedProxies.length === 0) {
             'Set TRUSTED_PROXIES to the address of the proxy, e.g. loopback; or TCP_PROXY_PROTOCOL to false.'
     );
 }
+// Whether the proxy in front of the TCP port ends TLS. nginx's PROXY protocol header, version 1,
+// does not say, so the operator does. Without TCP_PROXY_PROTOCOL it has no effect; see
+// configurationWarnings.
+const tcpTlsAtProxy = parseBoolean('TCP_TLS_AT_PROXY', process.env.TCP_TLS_AT_PROXY, false);
 
 export const Config = {
     TCP_HOST: process.env.TCP_HOST || '0.0.0.0',
@@ -149,4 +153,28 @@ export const Config = {
     // Whether a connection to the TCP port from one of them has to start with a PROXY protocol
     // header, which names the Unity client (see TCPServerWorker.handleProxyProtocolConnection).
     TCP_PROXY_PROTOCOL: tcpProxyProtocol,
+    // Whether a Unity client whose connection starts with such a header reached the proxy over TLS,
+    // as the admin UI shows it. The header does not say.
+    TCP_TLS_AT_PROXY: tcpTlsAtProxy,
+};
+
+// Settings that are valid but have no effect as set, as warnings. Not refused like the errors above:
+// the server works the same without them. Returned rather than logged, since nothing listens to the
+// log yet while this module loads; main.ts logs them at startup.
+export const configurationWarnings = function (
+    config: Pick<typeof Config, 'TRUSTED_PROXIES' | 'TCP_PROXY_PROTOCOL' | 'TCP_TLS_AT_PROXY'>
+): string[] {
+    if (!config.TCP_TLS_AT_PROXY || config.TCP_PROXY_PROTOCOL) return [];
+
+    // TCP_PROXY_PROTOCOL without TRUSTED_PROXIES has stopped the server already.
+    const [missing, fix] = config.TRUSTED_PROXIES.length === 0
+        ? [
+            'TRUSTED_PROXIES is empty and TCP_PROXY_PROTOCOL is false',
+            'Set TRUSTED_PROXIES to the address of the proxy, e.g. loopback, and TCP_PROXY_PROTOCOL to true',
+        ]
+        : [ 'TCP_PROXY_PROTOCOL is false', 'Set TCP_PROXY_PROTOCOL to true' ];
+    return [
+        `TCP_TLS_AT_PROXY is true, but ${missing}, so the server cannot tell which Unity clients come through the ` +
+            `proxy, and it has no effect. ${fix}; or TCP_TLS_AT_PROXY to false.`,
+    ];
 };
