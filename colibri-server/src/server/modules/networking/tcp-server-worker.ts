@@ -543,7 +543,7 @@ export class TCPServerWorker extends WorkerService {
 
         const proxyProtocol = this.proxyProtocol
             ? `, PROXY protocol header required from TRUSTED_PROXIES (${this.trustedProxies.join(', ')})` +
-                (this.tlsAtProxy ? ', TLS at the proxy (TCP_TLS_AT_PROXY)' : '')
+                (this.tlsAtProxy ? ', TLS terminated by proxy (TCP_TLS_AT_PROXY)' : '')
             : '';
         this.logInfo(`Starting Colibri TCP server on ${host}:${port}${credentials ? ', TLS only' : ''}${proxyProtocol}`);
         this.heartbeatInterval = setInterval(() => this.tick(), 100);

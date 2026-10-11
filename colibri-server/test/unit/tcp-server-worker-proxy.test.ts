@@ -289,7 +289,7 @@ describe('TCPServerWorker with TCP_PROXY_PROTOCOL', () => {
             await start({ proxyProtocol: true, trustedProxies: ['loopback'], tlsAtProxy: true });
             expect(logs(LogLevel.Info)).toContain(
                 'Starting Colibri TCP server on 127.0.0.1:0, PROXY protocol header required from TRUSTED_PROXIES (loopback), ' +
-                    'TLS at the proxy (TCP_TLS_AT_PROXY)'
+                    'TLS terminated by proxy (TCP_TLS_AT_PROXY)'
             );
 
             const named = await connect();
