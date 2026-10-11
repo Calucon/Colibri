@@ -179,16 +179,19 @@ describe('Config', () => {
             expect(await startupWarnings({ TCP_TLS_AT_PROXY: undefined, TRUSTED_PROXIES: 'loopback', TCP_PROXY_PROTOCOL: 'false' })).toEqual([]);
         });
 
-        // It goes by the PROXY protocol header, which only a trusted proxy may send.
-        it('warns once that it has no effect without TCP_PROXY_PROTOCOL, naming what is missing', async () => {
+        // It goes by the PROXY protocol header, which only a trusted proxy may send. The proxy's side
+        // comes first: TCP_PROXY_PROTOCOL alone refuses every connection through a proxy without it.
+        it('warns once that it has no effect without TCP_PROXY_PROTOCOL, naming what is missing on both sides', async () => {
             expect(await startupWarnings({ TCP_TLS_AT_PROXY: 'true', TRUSTED_PROXIES: 'loopback', TCP_PROXY_PROTOCOL: 'false' })).toEqual([
                 'TCP_TLS_AT_PROXY is true, but TCP_PROXY_PROTOCOL is false, so the server cannot tell which Unity clients ' +
-                    'come through the proxy, and it has no effect. Set TCP_PROXY_PROTOCOL to true; or TCP_TLS_AT_PROXY to false.',
+                    'come through the proxy, and it has no effect. Turn on the PROXY protocol in the proxy (nginx: ' +
+                    'proxy_protocol on;) and set TCP_PROXY_PROTOCOL to true; or set TCP_TLS_AT_PROXY to false.',
             ]);
             expect(await startupWarnings({ TCP_TLS_AT_PROXY: 'true', TRUSTED_PROXIES: '', TCP_PROXY_PROTOCOL: undefined })).toEqual([
                 'TCP_TLS_AT_PROXY is true, but TRUSTED_PROXIES is empty and TCP_PROXY_PROTOCOL is false, so the server cannot ' +
-                    'tell which Unity clients come through the proxy, and it has no effect. Set TRUSTED_PROXIES to the address ' +
-                    'of the proxy, e.g. loopback, and TCP_PROXY_PROTOCOL to true; or TCP_TLS_AT_PROXY to false.',
+                    'tell which Unity clients come through the proxy, and it has no effect. Turn on the PROXY protocol in the ' +
+                    'proxy (nginx: proxy_protocol on;), set TRUSTED_PROXIES to its address, e.g. loopback, and ' +
+                    'TCP_PROXY_PROTOCOL to true; or set TCP_TLS_AT_PROXY to false.',
             ]);
         });
     });

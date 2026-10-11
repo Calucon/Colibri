@@ -166,15 +166,18 @@ export const configurationWarnings = function (
 ): string[] {
     if (!config.TCP_TLS_AT_PROXY || config.TCP_PROXY_PROTOCOL) return [];
 
-    // TCP_PROXY_PROTOCOL without TRUSTED_PROXIES has stopped the server already.
+    // TCP_PROXY_PROTOCOL without TRUSTED_PROXIES has stopped the server already. The fix names the
+    // proxy's side first: TCP_PROXY_PROTOCOL alone refuses every Unity connection through a proxy
+    // that sends no header.
+    const proxySide = 'Turn on the PROXY protocol in the proxy (nginx: proxy_protocol on;)';
     const [missing, fix] = config.TRUSTED_PROXIES.length === 0
         ? [
             'TRUSTED_PROXIES is empty and TCP_PROXY_PROTOCOL is false',
-            'Set TRUSTED_PROXIES to the address of the proxy, e.g. loopback, and TCP_PROXY_PROTOCOL to true',
+            `${proxySide}, set TRUSTED_PROXIES to its address, e.g. loopback, and TCP_PROXY_PROTOCOL to true`,
         ]
-        : [ 'TCP_PROXY_PROTOCOL is false', 'Set TCP_PROXY_PROTOCOL to true' ];
+        : [ 'TCP_PROXY_PROTOCOL is false', `${proxySide} and set TCP_PROXY_PROTOCOL to true` ];
     return [
         `TCP_TLS_AT_PROXY is true, but ${missing}, so the server cannot tell which Unity clients come through the ` +
-            `proxy, and it has no effect. ${fix}; or TCP_TLS_AT_PROXY to false.`,
+            `proxy, and it has no effect. ${fix}; or set TCP_TLS_AT_PROXY to false.`,
     ];
 };
