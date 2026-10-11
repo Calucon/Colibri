@@ -307,7 +307,7 @@ describe('admin UI topics', () => {
     describe('the client list', () => {
         const tcpClient = (id: string, app: string): TcpNetworkClient => ({
             id, app, name: `headset-${id}`, version: PROTOCOL_VERSION, metadata: {},
-            address: '10.0.0.5', tls: true, connectedAt: 1_699_999_990_000,
+            address: '10.0.0.5', tls: true, tlsAtProxy: false, connectedAt: 1_699_999_990_000,
         });
         const webClient = (id: string, app: string, secure = false, tlsAtProxy = false): SocketIoClient => ({
             id, app, name: '192.168.1.20', version: PROTOCOL_VERSION, metadata: {}, tlsAtProxy,
@@ -340,9 +340,10 @@ describe('admin UI topics', () => {
             });
         });
 
-        it('says which web clients reached a trusted proxy over TLS, apart from TLS to this server', () => {
+        it('says which clients reached a trusted proxy over TLS, apart from TLS to this server', () => {
             const snapshot = clientsSnapshot({
-                tcpClients: [ { ...tcpClient('t1', 'app'), tls: false } ],
+                // the second through a proxy that TCP_TLS_AT_PROXY says ends TLS
+                tcpClients: [ { ...tcpClient('t1', 'app'), tls: false }, { ...tcpClient('t2', 'app'), tls: false, tlsAtProxy: true } ],
                 tcpActivity: new Map(),
                 webClients: [ webClient('plain', 'app'), webClient('proxied', 'app', false, true), webClient('direct', 'app', true) ],
                 webActivity: () => activity,
@@ -350,6 +351,7 @@ describe('admin UI topics', () => {
 
             expect(snapshot.clients.map(row => [ row.id, row.tls, row.tlsAtProxy ])).toEqual([
                 [ 't1', false, false ],
+                [ 't2', false, true ],
                 [ 'plain', false, false ],
                 [ 'proxied', false, true ],
                 [ 'direct', true, false ],

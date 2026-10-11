@@ -88,7 +88,7 @@ describe('AdminData', () => {
         socketio = new FakeSocketIOServer();
         tcp = new FakeTcpServer();
         tcp.clients = [ {
-            id: 't1', app: 'app', name: 'headset', version: '2', metadata: {}, address: '10.0.0.5', tls: false, connectedAt: 0,
+            id: 't1', app: 'app', name: 'headset', version: '2', metadata: {}, address: '10.0.0.5', tls: false, tlsAtProxy: false, connectedAt: 0,
         } ];
         store = new DataStore();
         store.updateModel('app', 'cubes', { id: 'c1', x: 1 });

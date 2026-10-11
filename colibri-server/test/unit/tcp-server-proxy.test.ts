@@ -415,10 +415,12 @@ describe('TCPServerProxy', () => {
         const asked = () => sent.filter(m => m.channel === 'm:clientActivity').map(m => m.content?.request as number);
 
         it('knows each client\'s address, TLS and connection time from its handshake', () => {
-            fromWorker('clientConnected$', { id: 'c1', app: 'appA', name: 'quest', version: '2', address: '10.0.0.7', tls: true, connectedAt: 123 });
+            fromWorker('clientConnected$', { id: 'c1', app: 'appA', name: 'quest', version: '2', address: '10.0.0.7', tls: true, tlsAtProxy: false, connectedAt: 123 });
+            fromWorker('clientConnected$', { id: 'c2', app: 'appA', name: 'quest-2', version: '2', address: '10.0.0.8', tls: false, tlsAtProxy: true, connectedAt: 124 });
 
             expect(proxy.currentClients).toEqual([
-                { id: 'c1', app: 'appA', name: 'quest', version: '2', address: '10.0.0.7', tls: true, connectedAt: 123, metadata: {} },
+                { id: 'c1', app: 'appA', name: 'quest', version: '2', address: '10.0.0.7', tls: true, tlsAtProxy: false, connectedAt: 123, metadata: {} },
+                { id: 'c2', app: 'appA', name: 'quest-2', version: '2', address: '10.0.0.8', tls: false, tlsAtProxy: true, connectedAt: 124, metadata: {} },
             ]);
         });
 
