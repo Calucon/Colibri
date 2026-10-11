@@ -10,13 +10,20 @@ import { TestCertificate, createTestCertificate, encryptTestKey } from '../tls-t
 const CONFIG_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../src/server');
 
 // Config is computed when the module is first evaluated, so each case evaluates it afresh.
-const loadConfig = async (env: Record<string, string | undefined>) => {
+const loadConfiguration = async (env: Record<string, string | undefined>) => {
     for (const [name, value] of Object.entries(env)) {
         vi.stubEnv(name, value);
     }
     vi.resetModules();
-    const { Config } = await import('../../src/server/configuration.js');
-    return Config;
+    return import('../../src/server/configuration.js');
+};
+
+const loadConfig = async (env: Record<string, string | undefined>) => (await loadConfiguration(env)).Config;
+
+// What main.ts logs at startup for these settings.
+const startupWarnings = async (env: Record<string, string | undefined>) => {
+    const { Config, configurationWarnings } = await loadConfiguration(env);
+    return configurationWarnings(Config);
 };
 
 describe('Config', () => {
@@ -148,6 +155,41 @@ describe('Config', () => {
         it('refuses to start without TRUSTED_PROXIES', async () => {
             await expect(loadConfig({ TCP_PROXY_PROTOCOL: 'true', TRUSTED_PROXIES: '' }))
                 .rejects.toThrow('TCP_PROXY_PROTOCOL is true, but TRUSTED_PROXIES is empty');
+        });
+    });
+
+    describe('TCP_TLS_AT_PROXY', () => {
+        const throughProxy = { TRUSTED_PROXIES: 'loopback', TCP_PROXY_PROTOCOL: 'true' };
+
+        it('is off unless set to true', async () => {
+            expect((await loadConfig({ TCP_TLS_AT_PROXY: undefined })).TCP_TLS_AT_PROXY).toBe(false);
+            expect((await loadConfig({ TCP_TLS_AT_PROXY: '' })).TCP_TLS_AT_PROXY).toBe(false);
+            expect((await loadConfig({ TCP_TLS_AT_PROXY: 'false', ...throughProxy })).TCP_TLS_AT_PROXY).toBe(false);
+            expect((await loadConfig({ TCP_TLS_AT_PROXY: 'TRUE', ...throughProxy })).TCP_TLS_AT_PROXY).toBe(true);
+        });
+
+        it.each(['yes', '1', 'on'])('refuses to start with "%s"', async (raw) => {
+            await expect(loadConfig({ TCP_TLS_AT_PROXY: raw, ...throughProxy }))
+                .rejects.toThrow(`Invalid TCP_TLS_AT_PROXY: "${raw}" is not true or false`);
+        });
+
+        it('warns of nothing with TRUSTED_PROXIES and TCP_PROXY_PROTOCOL, or when off', async () => {
+            expect(await startupWarnings({ TCP_TLS_AT_PROXY: 'true', ...throughProxy })).toEqual([]);
+            expect(await startupWarnings({ TCP_TLS_AT_PROXY: 'false', TRUSTED_PROXIES: '', TCP_PROXY_PROTOCOL: 'false' })).toEqual([]);
+            expect(await startupWarnings({ TCP_TLS_AT_PROXY: undefined, TRUSTED_PROXIES: 'loopback', TCP_PROXY_PROTOCOL: 'false' })).toEqual([]);
+        });
+
+        // It goes by the PROXY protocol header, which only a trusted proxy may send.
+        it('warns once that it has no effect without TCP_PROXY_PROTOCOL, naming what is missing', async () => {
+            expect(await startupWarnings({ TCP_TLS_AT_PROXY: 'true', TRUSTED_PROXIES: 'loopback', TCP_PROXY_PROTOCOL: 'false' })).toEqual([
+                'TCP_TLS_AT_PROXY is true, but TCP_PROXY_PROTOCOL is false, so the server cannot tell which Unity clients ' +
+                    'come through the proxy, and it has no effect. Set TCP_PROXY_PROTOCOL to true; or TCP_TLS_AT_PROXY to false.',
+            ]);
+            expect(await startupWarnings({ TCP_TLS_AT_PROXY: 'true', TRUSTED_PROXIES: '', TCP_PROXY_PROTOCOL: undefined })).toEqual([
+                'TCP_TLS_AT_PROXY is true, but TRUSTED_PROXIES is empty and TCP_PROXY_PROTOCOL is false, so the server cannot ' +
+                    'tell which Unity clients come through the proxy, and it has no effect. Set TRUSTED_PROXIES to the address ' +
+                    'of the proxy, e.g. loopback, and TCP_PROXY_PROTOCOL to true; or TCP_TLS_AT_PROXY to false.',
+            ]);
         });
     });
 

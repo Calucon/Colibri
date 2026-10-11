@@ -50,6 +50,15 @@ describe('ServerProcess', () => {
         ]);
     });
 
+    it('warns about a setting that has no effect, in the console log format', () => {
+        create([]).reportWarning('TCP_TLS_AT_PROXY is true, but TCP_PROXY_PROTOCOL is false');
+
+        expect(serverLines().map(({ stream, line }) => [ stream, line.replace(/^\S+ /, '') ])).toEqual([
+            [ 'err', 'WARN  [core/Server] TCP_TLS_AT_PROXY is true, but TCP_PROXY_PROTOCOL is false' ],
+        ]);
+        expect(logs.map(l => [ l.level, l.group ])).toEqual([ [ LogLevel.Warn, 'core' ] ]);
+    });
+
     // main.ts printed this line with console.log: the one line in `docker logs` without a
     // timestamp, level or source, and missing from the admin UI's log.
     it('says it is shutting down in the console log format', async () => {
