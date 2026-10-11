@@ -87,7 +87,7 @@ describe('serverSections', () => {
         expect(fact(s, 'network', 'Web')?.note).toBe('HTTPS and WSS');
     });
 
-    describe('TLS on this server and at a proxy', () => {
+    describe('TLS terminated by this server or by a proxy', () => {
         const certificate = { names: 'colibri.example.org', issuer: 'Example CA', selfSigned: false, validFrom: 0, validTo: 200 * DAY, fingerprint256: 'AB:CD' };
         const rows = (s: ServerSnapshot) => ({
             web: fact(s, 'network', 'Web')?.note,
@@ -98,16 +98,16 @@ describe('serverSections', () => {
         it.each([
             [ 'no TLS', null, false, { web: 'HTTP and WS', tcp: 'unencrypted', tls: [ 'Off', undefined, 'off' ] } ],
             [ 'TLS on this server', certificate, false, { web: 'HTTPS and WSS', tcp: 'TLS', tls: [ 'On', undefined, 'ok' ] } ],
-            [ 'web TLS at the proxy', null, true, { web: 'HTTP here, HTTPS at the proxy', tcp: 'unencrypted', tls: [ 'Not on this server', 'HTTPS at the proxy', undefined ] } ],
+            [ 'web TLS terminated by a proxy', null, true, { web: 'HTTP and WS, TLS terminated by proxy', tcp: 'unencrypted', tls: [ 'Off', 'terminated by proxy (HTTPS)', 'off' ] } ],
             // a direct connection uses the server's own
             [ 'both', certificate, true, { web: 'HTTPS and WSS', tcp: 'TLS', tls: [ 'On', undefined, 'ok' ] } ]
         ])('with %s, says so in the Web, TCP and TLS rows', (_case, tls, web, expected) => {
             expect(rows(snapshot({ tls, tlsAtProxy: { web, tcp: false } }))).toEqual(expected);
         });
 
-        it('says on hover why HTTPS is at the proxy, and only then', () => {
+        it('names X-Forwarded-Proto on hover for web TLS terminated by a proxy, and only then', () => {
             const proxied = snapshot({ tlsAtProxy: { web: true, tcp: false } });
-            expect(fact(proxied, 'network', 'Web')?.title).toContain('X-Forwarded-Proto');
+            expect(fact(proxied, 'network', 'Web')?.title).toBe('TLS terminated by a trusted proxy (X-Forwarded-Proto: https from a connected web client or admin page)');
             expect(fact(proxied, 'network', 'TLS')?.title).toBe(fact(proxied, 'network', 'Web')?.title);
             expect(fact(proxied, 'network', 'TLS')?.variable).toBe('TLS_CERT, TLS_KEY');
 
@@ -115,20 +115,20 @@ describe('serverSections', () => {
             expect(fact(snapshot({ tls: certificate, tlsAtProxy: { web: true, tcp: false } }), 'network', 'Web')?.title).toBeUndefined();
         });
 
-        it('with Unity clients through a proxy, says the TCP port is unencrypted only here', () => {
+        it('with Unity clients through a proxy and TCP_TLS_AT_PROXY unset, says proxy TLS is undeclared', () => {
             const throughProxy = (tls: ServerSnapshot['tls'], web: boolean) => snapshot({
                 tls, tlsAtProxy: { web, tcp: false }, settings: { ...snapshot().settings, TRUSTED_PROXIES: [ 'loopback' ], TCP_PROXY_PROTOCOL: true }
             });
 
             expect(rows(throughProxy(null, true))).toEqual({
-                web: 'HTTP here, HTTPS at the proxy',
-                tcp: 'unencrypted here, proxy TLS not reported',
-                tls: [ 'Not on this server', 'HTTPS at the proxy', undefined ]
+                web: 'HTTP and WS, TLS terminated by proxy',
+                tcp: 'unencrypted, proxy TLS undeclared',
+                tls: [ 'Off', 'terminated by proxy (HTTPS)', 'off' ]
             });
-            expect(rows(throughProxy(null, false)).tcp).toBe('unencrypted here, proxy TLS not reported');
-            expect(fact(throughProxy(null, false), 'network', 'TCP')?.title).toContain('Server supports SSL/TLS?');
-            // how to show it here
-            expect(fact(throughProxy(null, false), 'network', 'TCP')?.title).toContain('set TCP_TLS_AT_PROXY=true');
+            expect(rows(throughProxy(null, false)).tcp).toBe('unencrypted, proxy TLS undeclared');
+            expect(fact(throughProxy(null, false), 'network', 'TCP')?.title).toBe(
+                'Set TCP_TLS_AT_PROXY=true if the proxy terminates TLS on this port. Unity apps tick \'Server supports SSL/TLS?\' whenever the proxy port uses TLS'
+            );
             // a direct connection uses the server's own
             expect(rows(throughProxy(certificate, false)).tcp).toBe('TLS');
             expect(fact(throughProxy(certificate, false), 'network', 'TCP')?.title).toBeUndefined();
@@ -142,14 +142,14 @@ describe('serverSections', () => {
             });
 
             it.each([
-                [ 'TCP only', false, { web: 'HTTP and WS', tcp: 'unencrypted here, TLS at the proxy', tls: [ 'Not on this server', 'TCP TLS at the proxy', undefined ] } ],
-                [ 'web too', true, { web: 'HTTP here, HTTPS at the proxy', tcp: 'unencrypted here, TLS at the proxy', tls: [ 'Not on this server', 'HTTPS and TCP TLS at the proxy', undefined ] } ]
-            ])('says TLS is at the proxy in the TCP and TLS rows, %s', (_case, web, expected) => {
+                [ 'TCP only', false, { web: 'HTTP and WS', tcp: 'TLS terminated by proxy', tls: [ 'Off', 'terminated by proxy (TCP)', 'off' ] } ],
+                [ 'web too', true, { web: 'HTTP and WS, TLS terminated by proxy', tcp: 'TLS terminated by proxy', tls: [ 'Off', 'terminated by proxy (HTTPS, TCP)', 'off' ] } ]
+            ])('says TLS is terminated by proxy in the TCP and TLS rows, %s', (_case, web, expected) => {
                 expect(rows(declared(null, web))).toEqual(expected);
             });
 
             it('names the setting on hover, next to the web rule', () => {
-                expect(fact(declared(null, false), 'network', 'TCP')?.title).toContain('TCP_TLS_AT_PROXY says the trusted proxy ends TLS');
+                expect(fact(declared(null, false), 'network', 'TCP')?.title).toBe('Declared by TCP_TLS_AT_PROXY; PROXY protocol v1 carries no TLS information');
                 expect(fact(declared(null, false), 'network', 'TLS')?.title).toBe(fact(declared(null, false), 'network', 'TCP')?.title);
                 const both = fact(declared(null, true), 'network', 'TLS')?.title?.split('\n');
                 expect(both).toEqual([ fact(declared(null, true), 'network', 'Web')?.title, fact(declared(null, true), 'network', 'TCP')?.title ]);
@@ -162,30 +162,32 @@ describe('serverSections', () => {
             });
         });
 
-        it('shows TCP_TLS_AT_PROXY next to TCP_PROXY_PROTOCOL, and when it has no effect', () => {
+        it('shows TCP_TLS_AT_PROXY as TCP TLS termination after TCP_PROXY_PROTOCOL, and when it has no effect', () => {
             const setting = (on: boolean, applies: boolean) => fact(snapshot({
                 tlsAtProxy: { web: false, tcp: applies }, settings: { ...snapshot().settings, TCP_TLS_AT_PROXY: on }
-            }), 'network', 'TLS at the TCP proxy');
+            }), 'network', 'TCP TLS termination');
             const labels = serverSections(snapshot(), String).find(x => x.id === 'network')?.facts.map(f => f.label);
 
-            expect(labels?.slice(-2)).toEqual([ 'PROXY protocol on TCP', 'TLS at the TCP proxy' ]);
-            expect(setting(true, true)).toEqual(expect.objectContaining({ value: 'On', tone: 'ok', variable: 'TCP_TLS_AT_PROXY', note: undefined }));
-            expect(setting(true, false)).toEqual(expect.objectContaining({ value: 'On', tone: 'warn', note: 'needs TCP_PROXY_PROTOCOL' }));
+            expect(labels?.slice(-2)).toEqual([ 'PROXY protocol on TCP', 'TCP TLS termination' ]);
+            expect(setting(true, true)).toEqual(expect.objectContaining({ value: 'Proxy', tone: 'ok', variable: 'TCP_TLS_AT_PROXY' }));
+            expect(setting(true, true)?.note).toBeUndefined();
+            expect(setting(true, false)).toEqual(expect.objectContaining({ value: 'Proxy', tone: 'warn', note: 'needs TCP_PROXY_PROTOCOL' }));
+            expect(setting(true, false)?.title).toContain('No effect without TCP_PROXY_PROTOCOL');
             // and not again under Other settings
             expect(serverSections(snapshot({ settings: { ...snapshot().settings, TCP_TLS_AT_PROXY: true } }), String).some(x => x.id === 'other')).toBe(false);
         });
 
         // Not Off, which reads as "the proxy's TCP port has no TLS", so untick it in the Unity apps.
-        it('shows TCP_TLS_AT_PROXY unset as not declared, saying what that means on hover', () => {
+        it('shows TCP_TLS_AT_PROXY unset as not declared, muted, without a note', () => {
             const unset = (proxyProtocol: boolean) => fact(snapshot({
                 settings: { ...snapshot().settings, TRUSTED_PROXIES: [ 'loopback' ], TCP_PROXY_PROTOCOL: proxyProtocol, TCP_TLS_AT_PROXY: false }
-            }), 'network', 'TLS at the TCP proxy');
+            }), 'network', 'TCP TLS termination');
 
-            expect(unset(false)).toEqual(expect.objectContaining({ value: 'Not declared', tone: 'off', variable: 'TCP_TLS_AT_PROXY', note: undefined }));
-            expect(unset(true)).toEqual(expect.objectContaining({ value: 'Not declared', tone: 'off', note: 'proxy TLS not reported' }));
-            expect(unset(true)?.title).toContain('Set TCP_TLS_AT_PROXY=true if it does');
+            for (const proxyProtocol of [ false, true ]) {
+                expect(unset(proxyProtocol)).toEqual({ label: 'TCP TLS termination', variable: 'TCP_TLS_AT_PROXY', value: 'Not declared', tone: 'off' });
+            }
             // a server from before the setting
-            expect(fact(snapshot(), 'network', 'TLS at the TCP proxy')?.value).toBe('Not declared');
+            expect(fact(snapshot(), 'network', 'TCP TLS termination')?.value).toBe('Not declared');
         });
     });
 
@@ -244,19 +246,19 @@ describe('ServerComponent', () => {
         expect(note).toBe('uncommitted changes');
     });
 
-    it('shows TLS at the proxy as not on this server, not muted, rather than Off', () => {
+    it('shows TLS terminated by proxy as Off with a note, X-Forwarded-Proto on hover', () => {
         const { value, note } = row({ tlsAtProxy: { web: true, tcp: false } }, 'TLS');
-        expect(value.textContent?.trim()).toBe('Not on this server');
-        expect(value.classList.contains('off')).toBe(false);
+        expect(value.textContent?.trim()).toBe('Off');
+        expect(value.classList.contains('off')).toBe(true);
         expect(value.getAttribute('title')).toContain('X-Forwarded-Proto');
-        expect(note).toBe('HTTPS at the proxy');
+        expect(note).toBe('terminated by proxy (HTTPS)');
     });
 
-    it('shows the TCP port behind a proxy as unencrypted here, saying why on hover', () => {
+    it('shows the TCP port behind a proxy as unencrypted with proxy TLS undeclared, naming the setting on hover', () => {
         const { value, note } = row({ settings: { ...snapshot().settings, TRUSTED_PROXIES: [ 'loopback' ], TCP_PROXY_PROTOCOL: true } }, 'TCP');
-        expect(note).toBe('unencrypted here, proxy TLS not reported');
-        expect(value.getAttribute('title')).toContain('PROXY protocol header');
-        expect(value.getAttribute('title')).toContain('TCP_TLS_AT_PROXY');
+        expect(note).toBe('unencrypted, proxy TLS undeclared');
+        expect(value.getAttribute('title')).toContain('Set TCP_TLS_AT_PROXY=true');
+        expect(value.getAttribute('title')).toContain('Server supports SSL/TLS?');
     });
 
     describe('with TCP_TLS_AT_PROXY', () => {
@@ -265,37 +267,36 @@ describe('ServerComponent', () => {
             settings: { ...snapshot().settings, TRUSTED_PROXIES: [ 'loopback' ], TCP_PROXY_PROTOCOL: true, TCP_TLS_AT_PROXY: true }
         };
 
-        it('shows the TCP port as TLS at the proxy, naming the setting on hover', () => {
+        it('shows the TCP port as TLS terminated by proxy, naming the setting on hover', () => {
             const { value, note } = row(declared, 'TCP');
-            expect(note).toBe('unencrypted here, TLS at the proxy');
+            expect(note).toBe('TLS terminated by proxy');
             expect(value.getAttribute('title')).toContain('TCP_TLS_AT_PROXY');
         });
 
-        it('shows TLS as not on this server, with TCP TLS at the proxy', () => {
+        it('shows TLS as Off, terminated by proxy for TCP', () => {
             const { value, note } = row(declared, 'TLS');
-            expect(value.textContent?.trim()).toBe('Not on this server');
-            expect(value.classList.contains('off')).toBe(false);
-            expect(note).toBe('TCP TLS at the proxy');
+            expect(value.textContent?.trim()).toBe('Off');
+            expect(note).toBe('terminated by proxy (TCP)');
         });
 
-        it('shows the setting on, with its variable', () => {
-            const { value, note, variable } = row(declared, 'TLS at the TCP proxy');
-            expect(value.textContent?.trim()).toBe('On');
+        it('shows TCP TLS termination by the proxy, with its variable', () => {
+            const { value, note, variable } = row(declared, 'TCP TLS termination');
+            expect(value.textContent?.trim()).toBe('Proxy');
             expect(value.classList.contains('ok')).toBe(true);
             expect(note).toBeNull();
             expect(variable).toBe('TCP_TLS_AT_PROXY');
         });
 
-        it('shows the setting unset as not declared, not as Off', () => {
-            const { value, note } = row({ settings: { ...snapshot().settings, TRUSTED_PROXIES: [ 'loopback' ], TCP_PROXY_PROTOCOL: true } }, 'TLS at the TCP proxy');
+        it('shows the setting unset as not declared, muted, without a note', () => {
+            const { value, note } = row({ settings: { ...snapshot().settings, TRUSTED_PROXIES: [ 'loopback' ], TCP_PROXY_PROTOCOL: true } }, 'TCP TLS termination');
             expect(value.textContent?.trim()).toBe('Not declared');
             expect(value.classList.contains('off')).toBe(true);
-            expect(value.getAttribute('title')).toContain('not declared');
-            expect(note).toBe('proxy TLS not reported');
+            expect(note).toBeNull();
         });
 
         it('says when the setting has no effect', () => {
-            const { value, note } = row({ settings: { ...snapshot().settings, TRUSTED_PROXIES: [ 'loopback' ], TCP_TLS_AT_PROXY: true } }, 'TLS at the TCP proxy');
+            const { value, note } = row({ settings: { ...snapshot().settings, TRUSTED_PROXIES: [ 'loopback' ], TCP_TLS_AT_PROXY: true } }, 'TCP TLS termination');
+            expect(value.textContent?.trim()).toBe('Proxy');
             expect(value.classList.contains('warn')).toBe(true);
             expect(note).toBe('needs TCP_PROXY_PROTOCOL');
             expect(value.getAttribute('title')).toContain('No effect');

@@ -85,67 +85,56 @@ const onOff = function (label: string, on: boolean, variable?: string, note?: st
     return { label, variable, value: on ? 'On' : 'Off', tone: on ? 'ok' : 'off', note };
 };
 
-/** Why the web port counts as HTTPS at a proxy, on hover. */
-const WEB_TLS_AT_PROXY = 'A trusted proxy reported HTTPS in X-Forwarded-Proto for a web client or admin page connected now';
-/** Why the TCP port counts as TLS at a proxy, on hover. */
-const TCP_TLS_AT_PROXY = 'TCP_TLS_AT_PROXY says the trusted proxy ends TLS for the Unity clients that come through it '
-    + '(TCP_PROXY_PROTOCOL). Its PROXY protocol header does not say';
-/** What an unset TCP_TLS_AT_PROXY means, on hover. */
-const TCP_TLS_NOT_DECLARED = 'Whether the proxy in front of the TCP port ends TLS is not declared, which does not mean it does not. '
-    + 'Set TCP_TLS_AT_PROXY=true if it does';
-/** Why the TCP port is only unencrypted here, on hover. */
-const TCP_THROUGH_PROXY = 'Unity clients come through a trusted proxy (TCP_PROXY_PROTOCOL), which may end TLS without saying so '
-    + 'in its PROXY protocol header. If the proxy\'s TCP port uses TLS, set TCP_TLS_AT_PROXY=true to show it here, '
-    + 'and tick "Server supports SSL/TLS?" in the Unity apps';
+/** On hover: why the web port counts as TLS terminated by a proxy. */
+const WEB_TLS_AT_PROXY = 'TLS terminated by a trusted proxy (X-Forwarded-Proto: https from a connected web client or admin page)';
+/** On hover: why the TCP port counts as TLS terminated by a proxy. */
+const TCP_TLS_AT_PROXY = 'Declared by TCP_TLS_AT_PROXY; PROXY protocol v1 carries no TLS information';
+/** On hover: TCP through a trusted proxy, TCP_TLS_AT_PROXY unset. */
+const TCP_TLS_UNDECLARED = 'Set TCP_TLS_AT_PROXY=true if the proxy terminates TLS on this port. '
+    + 'Unity apps tick \'Server supports SSL/TLS?\' whenever the proxy port uses TLS';
+/** On hover: TCP_TLS_AT_PROXY set without TCP_PROXY_PROTOCOL. */
+const TCP_TLS_NO_EFFECT = 'No effect without TCP_PROXY_PROTOCOL: Unity clients through the proxy are not identified';
 
 export const serverSections = function (s: ServerSnapshot, format: (time: number) => string): Section[] {
     const set = s.settings;
     const tls = s.tls;
     const proxies = Array.isArray(set['TRUSTED_PROXIES']) ? set['TRUSTED_PROXIES'] : [];
 
-    // TLS that ends at a reverse proxy in front of this server. The server then sees only the
-    // proxy's plain connections, so the rule goes by what the proxy reported for the web clients and
-    // admin pages connected now, this page included: HTTPS at the proxy if any of them came through
-    // a TRUSTED_PROXIES address whose X-Forwarded-Proto said https (tlsAtProxy.web). With the
-    // server's own TLS on, that is what a direct connection uses, and the rows say so instead.
+    // TLS terminated by a reverse proxy in front of this server, which then sees only the proxy's
+    // unencrypted connections. Web: by what trusted proxies reported in X-Forwarded-Proto for the web
+    // clients and admin pages connected now, this page included (tlsAtProxy.web). TCP: the PROXY
+    // protocol header does not say, so the operator declares it with TCP_TLS_AT_PROXY
+    // (tlsAtProxy.tcp). With the server's own certificate, that is what a direct connection uses,
+    // and the rows say so instead.
     const webTlsAtProxy = tls === null && s.tlsAtProxy.web;
-    const scheme = tls ? 'HTTPS and WSS' : webTlsAtProxy ? 'HTTP here, HTTPS at the proxy' : 'HTTP and WS';
-    // Unity clients through a proxy: its PROXY protocol header does not say whether it ended TLS, so
-    // the operator does, with TCP_TLS_AT_PROXY (tlsAtProxy.tcp). Without that, the TCP row says only
-    // that the connection here is unencrypted, not that the clients use no TLS.
     const tcpTlsAtProxy = tls === null && s.tlsAtProxy.tcp;
-    const tcpThroughProxy = tls === null && set['TCP_PROXY_PROTOCOL'] === true && proxies.length > 0;
+    const scheme = tls ? 'HTTPS and WSS' : webTlsAtProxy ? 'HTTP and WS, TLS terminated by proxy' : 'HTTP and WS';
+    // Unity clients through a trusted proxy without TCP_TLS_AT_PROXY: "unencrypted" alone would read
+    // as "no TLS", which the server cannot know.
+    const tcpUndeclared = tls === null && !tcpTlsAtProxy && set['TCP_PROXY_PROTOCOL'] === true && proxies.length > 0;
     const tcpNote = tls ? 'TLS'
-        : tcpTlsAtProxy ? 'unencrypted here, TLS at the proxy'
-        : tcpThroughProxy ? 'unencrypted here, proxy TLS not reported'
+        : tcpTlsAtProxy ? 'TLS terminated by proxy'
+        : tcpUndeclared ? 'unencrypted, proxy TLS undeclared'
         : 'unencrypted';
-    const tcpTitle = tcpTlsAtProxy ? TCP_TLS_AT_PROXY : tcpThroughProxy ? TCP_THROUGH_PROXY : undefined;
-    // Not a bare Off, which reads as "turn TLS off in the clients".
-    const atProxy = [
-        ...(webTlsAtProxy ? [ { what: 'HTTPS', why: WEB_TLS_AT_PROXY } ] : []),
-        ...(tcpTlsAtProxy ? [ { what: 'TCP TLS', why: TCP_TLS_AT_PROXY } ] : [])
+    const tcpTitle = tcpTlsAtProxy ? TCP_TLS_AT_PROXY : tcpUndeclared ? TCP_TLS_UNDECLARED : undefined;
+    const terminatedBy = [
+        ...(webTlsAtProxy ? [ { port: 'HTTPS', why: WEB_TLS_AT_PROXY } ] : []),
+        ...(tcpTlsAtProxy ? [ { port: 'TCP', why: TCP_TLS_AT_PROXY } ] : [])
     ];
-    const tlsFact: Fact = atProxy.length > 0
+    const tlsFact: Fact = terminatedBy.length > 0
         ? {
-            label: 'TLS', variable: 'TLS_CERT, TLS_KEY', value: 'Not on this server',
-            note: `${atProxy.map(end => end.what).join(' and ')} at the proxy`, title: atProxy.map(end => end.why).join('\n')
+            ...onOff('TLS', false, 'TLS_CERT, TLS_KEY', `terminated by proxy (${terminatedBy.map(end => end.port).join(', ')})`),
+            title: terminatedBy.map(end => end.why).join('\n')
         }
         : onOff('TLS', tls !== null, 'TLS_CERT, TLS_KEY');
-    // Unset, it is not a bare Off either, which reads as "the proxy's TCP port has no TLS": the
-    // server just does not know. Set without TCP_PROXY_PROTOCOL, it does nothing, as the server
-    // warns at startup.
-    const tcpTlsAtProxyLabel = 'TLS at the TCP proxy';
-    const tcpTlsAtProxyFact: Fact = set['TCP_TLS_AT_PROXY'] !== true
-        ? {
-            label: tcpTlsAtProxyLabel, variable: 'TCP_TLS_AT_PROXY', value: 'Not declared', tone: 'off',
-            note: set['TCP_PROXY_PROTOCOL'] === true ? 'proxy TLS not reported' : undefined, title: TCP_TLS_NOT_DECLARED
-        }
+    // Unset is "Not declared", not a bare Off, which would read as "the proxy's TCP port has no TLS".
+    // Set without TCP_PROXY_PROTOCOL, it has no effect, as the server warns at startup.
+    const termination = { label: 'TCP TLS termination', variable: 'TCP_TLS_AT_PROXY' };
+    const tcpTerminationFact: Fact = set['TCP_TLS_AT_PROXY'] !== true
+        ? { ...termination, value: 'Not declared', tone: 'off' }
         : s.tlsAtProxy.tcp
-            ? onOff(tcpTlsAtProxyLabel, true, 'TCP_TLS_AT_PROXY')
-            : {
-                label: tcpTlsAtProxyLabel, variable: 'TCP_TLS_AT_PROXY', value: 'On', tone: 'warn', note: 'needs TCP_PROXY_PROTOCOL',
-                title: 'No effect: without TCP_PROXY_PROTOCOL, the server cannot tell which Unity clients come through the proxy'
-            };
+            ? { ...termination, value: 'Proxy', tone: 'ok' }
+            : { ...termination, value: 'Proxy', tone: 'warn', note: 'needs TCP_PROXY_PROTOCOL', title: TCP_TLS_NO_EFFECT };
 
     const sections: Section[] = [
         {
@@ -193,7 +182,7 @@ export const serverSections = function (s: ServerSnapshot, format: (time: number
                     mono: proxies.length > 0, tone: proxies.length > 0 ? undefined : 'off'
                 },
                 onOff('PROXY protocol on TCP', set['TCP_PROXY_PROTOCOL'] === true, 'TCP_PROXY_PROTOCOL'),
-                tcpTlsAtProxyFact
+                tcpTerminationFact
             ]
         }
     ];
