@@ -90,6 +90,9 @@ const WEB_TLS_AT_PROXY = 'A trusted proxy reported HTTPS in X-Forwarded-Proto fo
 /** Why the TCP port counts as TLS at a proxy, on hover. */
 const TCP_TLS_AT_PROXY = 'TCP_TLS_AT_PROXY says the trusted proxy ends TLS for the Unity clients that come through it '
     + '(TCP_PROXY_PROTOCOL). Its PROXY protocol header does not say';
+/** What an unset TCP_TLS_AT_PROXY means, on hover. */
+const TCP_TLS_NOT_DECLARED = 'Whether the proxy in front of the TCP port ends TLS is not declared, which does not mean it does not. '
+    + 'Set TCP_TLS_AT_PROXY=true if it does';
 /** Why the TCP port is only unencrypted here, on hover. */
 const TCP_THROUGH_PROXY = 'Unity clients come through a trusted proxy (TCP_PROXY_PROTOCOL), which may end TLS without saying so '
     + 'in its PROXY protocol header. If the proxy\'s TCP port uses TLS, set TCP_TLS_AT_PROXY=true to show it here, '
@@ -128,11 +131,18 @@ export const serverSections = function (s: ServerSnapshot, format: (time: number
             note: `${atProxy.map(end => end.what).join(' and ')} at the proxy`, title: atProxy.map(end => end.why).join('\n')
         }
         : onOff('TLS', tls !== null, 'TLS_CERT, TLS_KEY');
-    // Set without TCP_PROXY_PROTOCOL, it does nothing, as the server warns at startup.
-    const tcpTlsAtProxySet = set['TCP_TLS_AT_PROXY'] === true;
-    const tcpTlsAtProxyFact: Fact = tcpTlsAtProxySet && !s.tlsAtProxy.tcp
-        ? { label: 'TLS at the TCP proxy', variable: 'TCP_TLS_AT_PROXY', value: 'On', tone: 'warn', note: 'no effect without TCP_PROXY_PROTOCOL' }
-        : onOff('TLS at the TCP proxy', tcpTlsAtProxySet, 'TCP_TLS_AT_PROXY');
+    // Unset, it is not a bare Off either, which reads as "the proxy's TCP port has no TLS": the
+    // server just does not know. Set without TCP_PROXY_PROTOCOL, it does nothing, as the server
+    // warns at startup.
+    const tcpTlsAtProxyLabel = 'TLS at the TCP proxy';
+    const tcpTlsAtProxyFact: Fact = set['TCP_TLS_AT_PROXY'] !== true
+        ? {
+            label: tcpTlsAtProxyLabel, variable: 'TCP_TLS_AT_PROXY', value: 'Not declared', tone: 'off',
+            note: set['TCP_PROXY_PROTOCOL'] === true ? 'proxy TLS not reported' : undefined, title: TCP_TLS_NOT_DECLARED
+        }
+        : s.tlsAtProxy.tcp
+            ? onOff(tcpTlsAtProxyLabel, true, 'TCP_TLS_AT_PROXY')
+            : { label: tcpTlsAtProxyLabel, variable: 'TCP_TLS_AT_PROXY', value: 'On', tone: 'warn', note: 'no effect without TCP_PROXY_PROTOCOL' };
 
     const sections: Section[] = [
         {

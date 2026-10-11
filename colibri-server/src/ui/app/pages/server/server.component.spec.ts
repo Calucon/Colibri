@@ -169,11 +169,23 @@ describe('serverSections', () => {
             const labels = serverSections(snapshot(), String).find(x => x.id === 'network')?.facts.map(f => f.label);
 
             expect(labels?.slice(-2)).toEqual([ 'PROXY protocol on TCP', 'TLS at the TCP proxy' ]);
-            expect(setting(false, false)).toEqual(expect.objectContaining({ value: 'Off', tone: 'off', variable: 'TCP_TLS_AT_PROXY', note: undefined }));
             expect(setting(true, true)).toEqual(expect.objectContaining({ value: 'On', tone: 'ok', variable: 'TCP_TLS_AT_PROXY', note: undefined }));
             expect(setting(true, false)).toEqual(expect.objectContaining({ value: 'On', tone: 'warn', note: 'no effect without TCP_PROXY_PROTOCOL' }));
             // and not again under Other settings
             expect(serverSections(snapshot({ settings: { ...snapshot().settings, TCP_TLS_AT_PROXY: true } }), String).some(x => x.id === 'other')).toBe(false);
+        });
+
+        // Not Off, which reads as "the proxy's TCP port has no TLS", so untick it in the Unity apps.
+        it('shows TCP_TLS_AT_PROXY unset as not declared, saying what that means on hover', () => {
+            const unset = (proxyProtocol: boolean) => fact(snapshot({
+                settings: { ...snapshot().settings, TRUSTED_PROXIES: [ 'loopback' ], TCP_PROXY_PROTOCOL: proxyProtocol, TCP_TLS_AT_PROXY: false }
+            }), 'network', 'TLS at the TCP proxy');
+
+            expect(unset(false)).toEqual(expect.objectContaining({ value: 'Not declared', tone: 'off', variable: 'TCP_TLS_AT_PROXY', note: undefined }));
+            expect(unset(true)).toEqual(expect.objectContaining({ value: 'Not declared', tone: 'off', note: 'proxy TLS not reported' }));
+            expect(unset(true)?.title).toContain('Set TCP_TLS_AT_PROXY=true if it does');
+            // a server from before the setting
+            expect(fact(snapshot(), 'network', 'TLS at the TCP proxy')?.value).toBe('Not declared');
         });
     });
 
@@ -272,6 +284,14 @@ describe('ServerComponent', () => {
             expect(value.classList.contains('ok')).toBe(true);
             expect(note).toBeNull();
             expect(variable).toBe('TCP_TLS_AT_PROXY');
+        });
+
+        it('shows the setting unset as not declared, not as Off', () => {
+            const { value, note } = row({ settings: { ...snapshot().settings, TRUSTED_PROXIES: [ 'loopback' ], TCP_PROXY_PROTOCOL: true } }, 'TLS at the TCP proxy');
+            expect(value.textContent?.trim()).toBe('Not declared');
+            expect(value.classList.contains('off')).toBe(true);
+            expect(value.getAttribute('title')).toContain('not declared');
+            expect(note).toBe('proxy TLS not reported');
         });
 
         it('says when the setting has no effect', () => {
