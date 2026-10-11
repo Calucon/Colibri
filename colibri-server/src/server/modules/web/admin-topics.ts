@@ -570,6 +570,8 @@ export interface ServerSources {
     settings: ServerSettings;
     // The certificate served now, if TLS is on.
     tls: CertificateInfo | undefined;
+    // Whether TCP_TLS_AT_PROXY applies: it is on, and so is TCP_PROXY_PROTOCOL.
+    tcpTlsAtProxy: boolean;
     voice: VoiceStatus | undefined;
     store: DataStore;
     restStore: { apps: number; keys: number } | undefined;
@@ -592,9 +594,11 @@ export interface ServerSnapshot {
     // The certificate's names (its subject alternative names, or its subject), issuer and validity.
     tls: { names: string; issuer: string; selfSigned: boolean; validFrom: number; validTo: number; fingerprint256: string } | null;
     // TLS that ends at a trusted proxy in front of this server, which sees only the proxy's own
-    // connections and knows of it only from the proxy. `web`: a web client or admin page connected
-    // now, the one asking included, reached the proxy over TLS (see ClientRow.tlsAtProxy).
-    tlsAtProxy: { web: boolean };
+    // connections and knows of it only from the proxy or the operator. `web`: a web client or admin
+    // page connected now, the one asking included, reached the proxy over TLS (see
+    // ClientRow.tlsAtProxy). `tcp`: TCP_TLS_AT_PROXY applies, so every Unity client through the
+    // proxy counts as TLS at the proxy, connected now or not.
+    tlsAtProxy: { web: boolean; tcp: boolean };
     voice: VoiceStatus | null;
     counts: {
         tcpClients: number;
@@ -667,7 +671,7 @@ export const serverSnapshot = function (sources: ServerSources): ServerSnapshot 
                 fingerprint256: tls.fingerprint256,
             }
             : null,
-        tlsAtProxy: { web: webTlsAtProxy },
+        tlsAtProxy: { web: webTlsAtProxy, tcp: sources.tcpTlsAtProxy },
         voice: sources.voice ?? null,
         counts: {
             tcpClients: sources.tcpClients.length,

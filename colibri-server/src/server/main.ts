@@ -102,8 +102,11 @@ const adminData = new colibri.AdminData({
         MODEL_TOMBSTONE_SECONDS: Config.MODEL_TOMBSTONE_SECONDS,
         TRUSTED_PROXIES: Config.TRUSTED_PROXIES,
         TCP_PROXY_PROTOCOL: Config.TCP_PROXY_PROTOCOL,
+        TCP_TLS_AT_PROXY: Config.TCP_TLS_AT_PROXY,
     },
     tls: tlsCertificate,
+    // Without TCP_PROXY_PROTOCOL, no Unity client counts as coming through the proxy.
+    tcpTlsAtProxy: Config.TCP_TLS_AT_PROXY && Config.TCP_PROXY_PROTOCOL,
     voice: voiceServer,
     restStore: restApi,
 });
