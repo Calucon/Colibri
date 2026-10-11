@@ -294,7 +294,7 @@ With `TCP_TLS_AT_PROXY=true`, the line ends with `, TLS at the proxy (TCP_TLS_AT
 | WARN `Refusing a connection from <address>: its PROXY protocol header is invalid: ...` | A malformed header, a version 1 header over 107 bytes, or a version 2 header over 4 KiB after its fixed 16 bytes | Check the proxy's PROXY protocol settings |
 | WARN `Refusing a connection from <address>: it starts with a PROXY protocol header, but its address is not in TRUSTED_PROXIES ...` | The proxy's address is not trusted, e.g. after the Docker network changed | Add it to `TRUSTED_PROXIES` |
 | ERROR `Invalid frame from client <id>, ...: Invalid frame length: 1481593424`, or with TLS on, WARN `Refusing a connection from <address>: it does not use TLS ...` | The proxy sends a header, but `TCP_PROXY_PROTOCOL` is not set | Set `TCP_PROXY_PROTOCOL=true` |
-| WARN `TCP_TLS_AT_PROXY is true, but ... it has no effect ...` at startup | `TCP_PROXY_PROTOCOL` is off, and maybe `TRUSTED_PROXIES` empty | Set what the message names, or `TCP_TLS_AT_PROXY=false` |
+| WARN `TCP_TLS_AT_PROXY is true, but ... it has no effect ...` at startup | `TCP_PROXY_PROTOCOL` is off, and maybe `TRUSTED_PROXIES` empty | Turn on the PROXY protocol in the proxy (`proxy_protocol on;`) and set `TCP_PROXY_PROTOCOL=true`, and `TRUSTED_PROXIES` if empty; or set `TCP_TLS_AT_PROXY=false` |
 
 The refusals are logged at most once a minute per address, repeats at debug level.
 
