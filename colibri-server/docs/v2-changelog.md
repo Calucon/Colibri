@@ -133,9 +133,12 @@ this is the server's full detail.
   on this server*. The admin topics carry it as `tlsAtProxy`
   ([Admin UI channel](./protocol.md#admin-ui-channel)). nginx's PROXY protocol header, version 1,
   does not say whether the proxy ended TLS, and the server skips the TLS details a version 2
-  header can carry, so Unity clients through a proxy still show without TLS. With
-  `TCP_PROXY_PROTOCOL` on, the Server page's TCP row says *unencrypted here, proxy TLS not
-  reported* instead of *unencrypted*.
+  header can carry, so new `TCP_TLS_AT_PROXY=true` says the proxy's TCP port ends TLS. With it and
+  `TCP_PROXY_PROTOCOL`, a Unity client through a trusted proxy shows as *TLS at proxy* too, and
+  without a certificate the Server page shows the TCP port as *unencrypted here, TLS at the proxy*
+  and TLS as *Not on this server*. Without it, Unity clients through a proxy show without TLS, and
+  the TCP row says *unencrypted here, proxy TLS not reported*. Set without `TCP_PROXY_PROTOCOL`, it
+  has no effect, and the server warns at startup. It takes only `true` or `false`.
 - **TCP port:** with new `TCP_PROXY_PROTOCOL=true`, a connection from a trusted peer must start
   with a PROXY protocol header, version 1 (nginx's `proxy_protocol on`) or 2. It is read ahead of a
   TLS handshake, also when it arrives in pieces. The client it names is the one in every log line
