@@ -158,13 +158,20 @@ export const Config = {
     TCP_TLS_AT_PROXY: tcpTlsAtProxy,
 };
 
+type TcpTlsAtProxySettings = Pick<typeof Config, 'TRUSTED_PROXIES' | 'TCP_PROXY_PROTOCOL' | 'TCP_TLS_AT_PROXY'>;
+
+// Whether TCP_TLS_AT_PROXY applies: only a connection that starts with a PROXY protocol header from
+// a trusted proxy counts as TLS at the proxy, and only with TCP_PROXY_PROTOCOL is one read. The
+// server topic's tlsAtProxy.tcp.
+export const tcpTlsAtProxyInEffect = function (config: TcpTlsAtProxySettings): boolean {
+    return config.TCP_TLS_AT_PROXY && config.TCP_PROXY_PROTOCOL && config.TRUSTED_PROXIES.length > 0;
+};
+
 // Settings that are valid but have no effect as set, as warnings. Not refused like the errors above:
 // the server works the same without them. Returned rather than logged, since nothing listens to the
 // log yet while this module loads; main.ts logs them at startup.
-export const configurationWarnings = function (
-    config: Pick<typeof Config, 'TRUSTED_PROXIES' | 'TCP_PROXY_PROTOCOL' | 'TCP_TLS_AT_PROXY'>
-): string[] {
-    if (!config.TCP_TLS_AT_PROXY || config.TCP_PROXY_PROTOCOL) return [];
+export const configurationWarnings = function (config: TcpTlsAtProxySettings): string[] {
+    if (!config.TCP_TLS_AT_PROXY || tcpTlsAtProxyInEffect(config)) return [];
 
     // TCP_PROXY_PROTOCOL without TRUSTED_PROXIES has stopped the server already. The fix names the
     // proxy's side first: TCP_PROXY_PROTOCOL alone refuses every Unity connection through a proxy

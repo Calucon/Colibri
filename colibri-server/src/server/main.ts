@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'url';
 import * as colibri from './modules/index.js';
-import { Config, configurationWarnings } from './configuration.js';
+import { Config, configurationWarnings, tcpTlsAtProxyInEffect } from './configuration.js';
 
 /**
  * Debugging
@@ -105,8 +105,7 @@ const adminData = new colibri.AdminData({
         TCP_TLS_AT_PROXY: Config.TCP_TLS_AT_PROXY,
     },
     tls: tlsCertificate,
-    // Without TCP_PROXY_PROTOCOL, no Unity client counts as coming through the proxy.
-    tcpTlsAtProxy: Config.TCP_TLS_AT_PROXY && Config.TCP_PROXY_PROTOCOL,
+    tcpTlsAtProxy: tcpTlsAtProxyInEffect(Config),
     voice: voiceServer,
     restStore: restApi,
 });
