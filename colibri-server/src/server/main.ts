@@ -150,6 +150,7 @@ const startup = async () => {
         idleTimeoutMillis: Config.TCP_IDLE_TIMEOUT_SECONDS * 1000,
         trustedProxies: Config.TRUSTED_PROXIES,
         proxyProtocol: Config.TCP_PROXY_PROTOCOL,
+        tlsAtProxy: Config.TCP_TLS_AT_PROXY,
     }, tlsCertificate);
     voiceServer.start(Config.VOICE_PORT, Config.VOICE_HOST);
 };

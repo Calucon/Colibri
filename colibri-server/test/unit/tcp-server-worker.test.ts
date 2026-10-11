@@ -1989,7 +1989,7 @@ describe('TCPServerWorker', () => {
 
             const connected = posted.find(p => p.channel === 'clientConnected$');
             expect(connected?.content).toEqual({
-                id, app: 'appA', name: 'quest', version: PROTOCOL_VERSION, address: '10.0.0.7', tls: false, connectedAt: 1_700_000_000_000,
+                id, app: 'appA', name: 'quest', version: PROTOCOL_VERSION, address: '10.0.0.7', tls: false, tlsAtProxy: false, connectedAt: 1_700_000_000_000,
             });
         });
 

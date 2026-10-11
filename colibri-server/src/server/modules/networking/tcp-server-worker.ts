@@ -96,7 +96,11 @@ export interface TcpClientConnected {
     version: string;
     // Its address: the one its PROXY protocol header named, if it had one; see clientAddress.
     address: string;
+    // Whether its connection to this server is encrypted.
     tls: boolean;
+    // Whether it reached the proxy over TLS: it came through a trusted proxy, and TCP_TLS_AT_PROXY
+    // says that proxy ends TLS. See TcpServerOptions.tlsAtProxy.
+    tlsAtProxy: boolean;
     // Date.now() of the connection, before its handshake.
     connectedAt: number;
 }
@@ -267,6 +271,10 @@ export interface TcpServerOptions {
     trustedProxies?: string[];
     // TCP_PROXY_PROTOCOL; see handleProxyProtocolConnection.
     proxyProtocol?: boolean;
+    // TCP_TLS_AT_PROXY: a client whose connection started with a PROXY protocol header from a trusted
+    // proxy reached that proxy over TLS. The header does not say so itself. Only with proxyProtocol,
+    // so a connection that does not come through the proxy never counts.
+    tlsAtProxy?: boolean;
 }
 
 // The worker thread only ever deals in raw payload bytes (straight off the wire, or
@@ -362,11 +370,15 @@ export class TCPServerWorker extends WorkerService {
     private readonly tlsPortSockets = new Set<net.Socket>();
 
     private proxyProtocol = false;
+    private tlsAtProxy = false;
     private trustedProxies: string[] = [];
     private trustProxy: TrustProxy = trustNoProxy;
     private proxyHeaderTimeoutMillis = PROXY_HEADER_TIMEOUT_MILLIS;
     // The client addresses PROXY protocol headers named, by the TCP socket each came in on.
     private readonly proxiedAddresses = new WeakMap<net.Socket, string>();
+    // The TCP sockets that started with a PROXY protocol header from a trusted proxy, whatever
+    // address it named.
+    private readonly throughProxy = new WeakSet<net.Socket>();
     // Connections yet to show whether they start with a PROXY protocol header, for stop().
     private readonly proxyHeaderSockets = new Set<net.Socket>();
 
@@ -481,6 +493,7 @@ export class TCPServerWorker extends WorkerService {
         this.idleTimeoutMillis = options.idleTimeoutMillis ?? DEFAULT_IDLE_TIMEOUT_MILLIS;
         this.tlsCredentials = options.tls;
         this.proxyProtocol = options.proxyProtocol ?? false;
+        this.tlsAtProxy = options.tlsAtProxy ?? false;
         this.trustedProxies = options.trustedProxies ?? [];
         this.trustProxy = compileTrustedProxies(this.trustedProxies);
     }
@@ -529,7 +542,8 @@ export class TCPServerWorker extends WorkerService {
         this.server.listen(port, host);
 
         const proxyProtocol = this.proxyProtocol
-            ? `, PROXY protocol header required from TRUSTED_PROXIES (${this.trustedProxies.join(', ')})`
+            ? `, PROXY protocol header required from TRUSTED_PROXIES (${this.trustedProxies.join(', ')})` +
+                (this.tlsAtProxy ? ', TLS at the proxy (TCP_TLS_AT_PROXY)' : '')
             : '';
         this.logInfo(`Starting Colibri TCP server on ${host}:${port}${credentials ? ', TLS only' : ''}${proxyProtocol}`);
         this.heartbeatInterval = setInterval(() => this.tick(), 100);
@@ -599,6 +613,7 @@ export class TCPServerWorker extends WorkerService {
                 handle(socket, received);
                 return;
             }
+            this.throughProxy.add(socket);
             if (header.sourceAddress) this.proxiedAddresses.set(socket, header.sourceAddress);
             handle(socket, received.subarray(header.length));
         };
@@ -1252,6 +1267,7 @@ export class TCPServerWorker extends WorkerService {
             version,
             address: client.address,
             tls: (client.socket as tls.TLSSocket).encrypted === true,
+            tlsAtProxy: this.tlsAtProxy && this.throughProxy.has(tcpSocketOf(client.socket)),
             connectedAt: client.connectedAt,
         };
         this.postMessage('clientConnected$', connected as unknown as { [key: string]: unknown });
