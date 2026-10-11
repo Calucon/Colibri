@@ -55,8 +55,10 @@ export interface ServerSnapshot extends Snapshot {
     /**
      * TLS that ends at a trusted proxy in front of the server. `web`: a web client or admin page
      * connected now, this one included, reached the proxy over TLS, by its X-Forwarded-Proto.
+     * `tcp`: TCP_TLS_AT_PROXY applies, with TCP_PROXY_PROTOCOL, so Unity clients through the proxy
+     * reached it over TLS, as the operator declared.
      */
-    tlsAtProxy: { web: boolean };
+    tlsAtProxy: { web: boolean; tcp: boolean };
     voice: VoiceStatus | null;
     counts: {
         tcpClients: number;
