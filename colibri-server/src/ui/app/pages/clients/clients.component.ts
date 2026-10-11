@@ -46,6 +46,8 @@ const TLS_TITLES = {
     server: 'Encrypted: TLS',
     proxy: 'Encrypted to the reverse proxy, which forwards it to this server unencrypted'
 } as const;
+// A Unity client's PROXY protocol header does not say, so the operator does, with this setting.
+const TCP_TLS_AT_PROXY_TITLE = `${TLS_TITLES.proxy} (TCP_TLS_AT_PROXY)`;
 
 /** The server's own TLS first: a client connected to it directly uses that. */
 export const tlsEnd = function (row: ClientRow): TlsEnd | null {
@@ -208,7 +210,7 @@ export class ClientsComponent {
                 address: client.address,
                 transport: client.transport === 'tcp' ? 'TCP' : 'Web',
                 tls,
-                tlsTitle: tls ? TLS_TITLES[tls] : '',
+                tlsTitle: tls === 'proxy' && client.transport === 'tcp' ? TCP_TLS_AT_PROXY_TITLE : tls ? TLS_TITLES[tls] : '',
                 version: client.version,
                 connectedAt: client.connectedAt,
                 connected: duration((snapshot.at - client.connectedAt) / 1000),

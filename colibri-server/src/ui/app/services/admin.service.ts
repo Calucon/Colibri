@@ -85,7 +85,7 @@ export interface ClientRow {
     version: string;
     /** Whether its connection to the server is encrypted. */
     tls: boolean;
-    /** Whether it reached a trusted proxy over TLS, by the proxy's X-Forwarded-Proto. Web clients only. */
+    /** Whether it reached a trusted proxy over TLS: a web client by the proxy's X-Forwarded-Proto, a TCP client by TCP_TLS_AT_PROXY. */
     tlsAtProxy: boolean;
     address: string;
     connectedAt: number;
