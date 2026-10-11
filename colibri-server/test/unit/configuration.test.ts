@@ -26,6 +26,12 @@ const startupWarnings = async (env: Record<string, string | undefined>) => {
     return configurationWarnings(Config);
 };
 
+// What main.ts passes on as the server topic's tlsAtProxy.tcp.
+const tcpTlsAtProxy = async (env: Record<string, string | undefined>) => {
+    const { Config, tcpTlsAtProxyInEffect } = await loadConfiguration(env);
+    return tcpTlsAtProxyInEffect(Config);
+};
+
 describe('Config', () => {
     afterEach(() => {
         vi.unstubAllEnvs();
@@ -171,6 +177,14 @@ describe('Config', () => {
         it.each(['yes', '1', 'on'])('refuses to start with "%s"', async (raw) => {
             await expect(loadConfig({ TCP_TLS_AT_PROXY: raw, ...throughProxy }))
                 .rejects.toThrow(`Invalid TCP_TLS_AT_PROXY: "${raw}" is not true or false`);
+        });
+
+        it('applies only with TCP_PROXY_PROTOCOL, and so TRUSTED_PROXIES', async () => {
+            expect(await tcpTlsAtProxy({ TCP_TLS_AT_PROXY: 'true', ...throughProxy })).toBe(true);
+            expect(await tcpTlsAtProxy({ TCP_TLS_AT_PROXY: 'false', ...throughProxy })).toBe(false);
+            expect(await tcpTlsAtProxy({ TCP_TLS_AT_PROXY: undefined, ...throughProxy })).toBe(false);
+            expect(await tcpTlsAtProxy({ TCP_TLS_AT_PROXY: 'true', TRUSTED_PROXIES: 'loopback', TCP_PROXY_PROTOCOL: 'false' })).toBe(false);
+            expect(await tcpTlsAtProxy({ TCP_TLS_AT_PROXY: 'true', TRUSTED_PROXIES: '', TCP_PROXY_PROTOCOL: undefined })).toBe(false);
         });
 
         it('warns of nothing with TRUSTED_PROXIES and TCP_PROXY_PROTOCOL, or when off', async () => {
