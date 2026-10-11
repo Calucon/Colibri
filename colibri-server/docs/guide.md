@@ -150,6 +150,7 @@ with its default.
 | `TLS_CERT`, `TLS_KEY` | empty | PEM files of the certificate with its chain, and of its private key. With both set, the TCP and web ports serve [TLS](#tls) only. |
 | `TRUSTED_PROXIES` | empty | Reverse proxies trusted to report the client's address, and on the web port whether it used HTTPS: IP addresses, CIDR ranges and `loopback`, `linklocal`, `uniquelocal`, separated by commas, as in Express's `trust proxy`. Voice from them is relayed unchecked ([Voice relay](#voice-relay)). Empty: none. See [Behind a reverse proxy](#behind-a-reverse-proxy). |
 | `TCP_PROXY_PROTOCOL` | `false` | `true`: a connection to the TCP port from a `TRUSTED_PROXIES` address must start with a PROXY protocol header, which names the Unity client. Requires `TRUSTED_PROXIES`. |
+| `TCP_TLS_AT_PROXY` | `false` | `true`: the proxy in front of the TCP port ends TLS, e.g. nginx's `listen 9012 ssl`. The admin UI then shows Unity clients through a trusted proxy as *TLS at proxy*. Only the display depends on it. Requires `TCP_PROXY_PROTOCOL`. See [Behind a reverse proxy](#behind-a-reverse-proxy). |
 
 The `*_HOST` settings take an IPv4 address, an IPv6 address without brackets, or a host name. The
 default `0.0.0.0` listens on IPv4 only. `::` listens on IPv6 and IPv4: set `TCP_HOST=::`,
@@ -177,13 +178,14 @@ Invalid values stop the server at startup with `Invalid <NAME>: "<value>" is not
   integer
 - another numeric setting that is not an integer of 0 or more
 - an unknown `CONSOLE_LOG_LEVEL`
-- a `TCP_PROXY_PROTOCOL` other than `true` or `false`
+- a `TCP_PROXY_PROTOCOL` or `TCP_TLS_AT_PROXY` other than `true` or `false`
 - a `TRUSTED_PROXIES` entry that is not an IP address, a CIDR range or one of the named ranges,
   including IPv4 shorthands such as `172.20`. An entry with an invalid prefix length, such as
   `10.0.0.0/33`, gives `Invalid TRUSTED_PROXIES: "10.0.0.0/33" has an invalid prefix length ...`.
 
 `TCP_PROXY_PROTOCOL=true` with an empty `TRUSTED_PROXIES` stops the server too. So do unusable TLS
-files ([Startup errors](#startup-errors)).
+files ([Startup errors](#startup-errors)). `TCP_TLS_AT_PROXY=true` without `TCP_PROXY_PROTOCOL=true`
+has no effect, and the server logs a warning at startup.
 
 ### Behind a reverse proxy
 
@@ -207,9 +209,10 @@ used HTTPS:
   PROXY protocol header, version 1 or 2, which names the Unity client
   ([PROXY protocol](protocol.md#proxy-protocol)). Other peers connect as before. nginx's header,
   version 1, does not say whether the proxy ended TLS, and the server skips the TLS details a
-  version 2 header can carry. Without a certificate, the Clients page shows these connections
-  without TLS either way, and the Server page's TCP row says *unencrypted here, proxy TLS not
-  reported*.
+  version 2 header can carry. If the proxy ends TLS, set `TCP_TLS_AT_PROXY=true`: the Clients page
+  then shows these clients as *TLS at proxy*, and without a certificate the Server page's TCP row
+  says *unencrypted here, TLS at the proxy*. Without it, they show without TLS, and the TCP row
+  says *unencrypted here, proxy TLS not reported*. Only the admin UI's display depends on it.
 - **Voice (UDP):** nginx's PROXY protocol covers TCP only, so voice sent through a proxy shows the
   proxy's address, and is relayed without the [voice check](#voice-relay). To keep the check,
   publish the voice port directly, as below, and keep the clients' addresses out of
@@ -271,6 +274,8 @@ and to the `stream` server that proxies to the TCP port:
 proxy_protocol on;
 ```
 
+If that server ends TLS (`listen 9012 ssl`), also set `TCP_TLS_AT_PROXY=true`.
+
 Restart the server with `TCP_PROXY_PROTOCOL=true` first, then reload nginx with `proxy_protocol on`.
 Until both are done, every Unity connection through the proxy fails. In this order the log names the
 missing header. In the other order, the server reads the header as a frame and logs an invalid frame
@@ -280,6 +285,8 @@ length, or with TLS on, a client that does not use TLS. At startup the log shows
 Starting Colibri TCP server on 0.0.0.0:9012, PROXY protocol header required from TRUSTED_PROXIES (loopback, uniquelocal)
 ```
 
+With `TCP_TLS_AT_PROXY=true`, the line ends with `, TLS at the proxy (TCP_TLS_AT_PROXY)`.
+
 | Message | Cause | Fix |
 | --- | --- | --- |
 | WARN `Refusing a connection from <address>: it is in TRUSTED_PROXIES and TCP_PROXY_PROTOCOL is true, but the connection does not start with a PROXY protocol header ...` | The proxy sends no header, or a client connects directly from a trusted address | `proxy_protocol on;` in the proxy |
@@ -287,6 +294,7 @@ Starting Colibri TCP server on 0.0.0.0:9012, PROXY protocol header required from
 | WARN `Refusing a connection from <address>: its PROXY protocol header is invalid: ...` | A malformed header, a version 1 header over 107 bytes, or a version 2 header over 4 KiB after its fixed 16 bytes | Check the proxy's PROXY protocol settings |
 | WARN `Refusing a connection from <address>: it starts with a PROXY protocol header, but its address is not in TRUSTED_PROXIES ...` | The proxy's address is not trusted, e.g. after the Docker network changed | Add it to `TRUSTED_PROXIES` |
 | ERROR `Invalid frame from client <id>, ...: Invalid frame length: 1481593424`, or with TLS on, WARN `Refusing a connection from <address>: it does not use TLS ...` | The proxy sends a header, but `TCP_PROXY_PROTOCOL` is not set | Set `TCP_PROXY_PROTOCOL=true` |
+| WARN `TCP_TLS_AT_PROXY is true, but ... it has no effect ...` at startup | `TCP_PROXY_PROTOCOL` is off, and maybe `TRUSTED_PROXIES` empty | Set what the message names, or `TCP_TLS_AT_PROXY=false` |
 
 The refusals are logged at most once a minute per address, repeats at debug level.
 
@@ -420,8 +428,9 @@ debug level.
 TLS can instead terminate in an existing reverse proxy, with `TLS_CERT` and `TLS_KEY` unset. For the
 TCP port, use nginx's `stream` module with `listen 9012 ssl`, or a Traefik TCP router with TLS.
 Colibri needs no changes. Unity apps tick *Server supports SSL/TLS?* when the proxy's TCP port uses
-TLS. To show each client at its own address rather than the proxy's, and web clients with TLS at the
-proxy in the admin UI, see [Behind a reverse proxy](#behind-a-reverse-proxy).
+TLS. To show each client at its own address rather than the proxy's, and clients with TLS at the
+proxy in the admin UI (for Unity clients with `TCP_TLS_AT_PROXY`), see
+[Behind a reverse proxy](#behind-a-reverse-proxy).
 
 ### Performance
 
@@ -490,14 +499,15 @@ soon as it opens. `npm run demo` fills the pages with synthetic clients ([Develo
 
 - **Clients:** every connected Unity (TCP) and web client with its app, name, address (behind a
   [trusted proxy](#behind-a-reverse-proxy), the one the proxy names), transport and TLS (*TLS at
-  proxy* for a web client that reached a trusted proxy over HTTPS), protocol version, time
-  connected, latency, messages per second in and out over the last second, and whether a
-  [load limit](#load-limits) holds its updates back: *Rate limit* or *Backlog*, with the number of
-  objects held. Sort by a column, show one app (`/clients?app=MyApp`), and open a client's lines in
-  the log. While the mouse is over the rows, they keep their order. Below, each client's latency over
-  the last 2 minutes, and its messages per second over the same time, stacked: *In* what the clients
-  sent, *Out* what they were sent (`/clients?throughput=out`). Both charts show the whole 2 minutes as
-  soon as the page opens. The former *Statistics* page, `/statistics`, leads here.
+  proxy* for a web client that reached a trusted proxy over HTTPS, and with `TCP_TLS_AT_PROXY` for a
+  Unity client through one), protocol version, time connected, latency, messages per second in and
+  out over the last second, and whether a [load limit](#load-limits) holds its updates back: *Rate
+  limit* or *Backlog*, with the number of objects held. Sort by a column, show one app
+  (`/clients?app=MyApp`), and open a client's lines in the log. While the mouse is over the rows,
+  they keep their order. Below, each client's latency over the last 2 minutes, and its messages per
+  second over the same time, stacked: *In* what the clients sent, *Out* what they were sent
+  (`/clients?throughput=out`). Both charts show the whole 2 minutes as soon as the page opens. The
+  former *Statistics* page, `/statistics`, leads here.
 
   ![Clients page](../img/admin-clients.png)
 
@@ -513,11 +523,13 @@ soon as it opens. `npm run demo` fills the pages with synthetic clients ([Develo
 - **Server:** version, the commit it was built from (the full hash and build time on hover,
   *uncommitted changes* for a build with changes not committed, *unknown* without git information),
   protocol version, Node.js version and uptime; the settings in effect, with the variables that set
-  them: ports, `BASE_URL`, TLS, `TRUSTED_PROXIES`, `TCP_PROXY_PROTOCOL`, load limits, idle timeout,
-  tombstones, voice and recording; without a certificate, and while a web client or admin page is
-  connected through a [trusted proxy](#behind-a-reverse-proxy) that reports HTTPS, the web port as
-  *HTTP here, HTTPS at the proxy* and TLS as *Not on this server*; without a certificate and with
-  `TCP_PROXY_PROTOCOL` on, the TCP port as *unencrypted here, proxy TLS not reported*; the TLS
+  them: ports, `BASE_URL`, TLS, `TRUSTED_PROXIES`, `TCP_PROXY_PROTOCOL`, `TCP_TLS_AT_PROXY` (with a
+  warning when it has no effect), load limits, idle timeout, tombstones, voice and recording;
+  without a certificate, and while a web client or admin page is connected through a
+  [trusted proxy](#behind-a-reverse-proxy) that reports HTTPS, the web port as *HTTP here, HTTPS at
+  the proxy* and TLS as *Not on this server*; without a certificate and with `TCP_PROXY_PROTOCOL`
+  on, the TCP port as *unencrypted here, TLS at the proxy* with `TCP_TLS_AT_PROXY` (TLS then *Not
+  on this server* too), otherwise as *unencrypted here, proxy TLS not reported*; the TLS
   certificate's names, issuer, validity and SHA-256 fingerprint, with a warning 30 days before it
   expires; and counts of clients, apps, synchronized models and REST store values. Never
   certificate or key paths, key material or file contents.
