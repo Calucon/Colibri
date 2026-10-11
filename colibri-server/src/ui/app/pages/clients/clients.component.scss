@@ -230,6 +230,11 @@ td.c-transport .version {
         grid-area: trans;
     }
 
+    // "at proxy" under the lock: next to it, it ran into the protocol version
+    .tls .at-proxy {
+        display: block;
+    }
+
     .c-version {
         display: block;
         grid-area: ver;

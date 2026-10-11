@@ -104,7 +104,7 @@ describe('ClientsComponent', () => {
         const quest = component.rows().find(row => row.id === 'q1');
         const web = component.rows().find(row => row.id === 'web1');
         expect(quest).toEqual(expect.objectContaining({
-            label: 'Quest', byId: false, address: '10.0.0.5', transport: 'TCP', tls: 'server', tlsLabel: 'TLS', connected: '2 min',
+            label: 'Quest', byId: false, address: '10.0.0.5', transport: 'TCP', tls: 'server', connected: '2 min',
             latency: '12.3 ms', in: '30.0', out: '120.5', limit: 'Rate limit', held: 4, color: null
         }));
         // a web client by the start of its id, in its colour in the latency chart
@@ -127,10 +127,10 @@ describe('ClientsComponent', () => {
         harness.detectChanges();
 
         const view = (id: string) => component.rows().find(row => row.id === id);
-        expect(view('direct')).toEqual(expect.objectContaining({ tls: 'server', tlsLabel: 'TLS', tlsTitle: 'Encrypted: TLS' }));
-        expect(view('proxied')).toEqual(expect.objectContaining({ tls: 'proxy', tlsLabel: 'TLS at proxy' }));
+        expect(view('direct')).toEqual(expect.objectContaining({ tls: 'server', tlsTitle: 'Encrypted: TLS' }));
+        expect(view('proxied')?.tls).toBe('proxy');
         expect(view('proxied')?.tlsTitle).toContain('reverse proxy');
-        expect(view('plain')).toEqual(expect.objectContaining({ tls: null, tlsLabel: '' }));
+        expect(view('plain')).toEqual(expect.objectContaining({ tls: null, tlsTitle: '' }));
         expect(view('both')?.tls).toBe('server');
 
         const lock = (id: string) => root.querySelector(`tr[data-id="${id}"] td.c-transport .tls`);

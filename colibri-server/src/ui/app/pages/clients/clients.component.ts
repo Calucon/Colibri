@@ -42,7 +42,6 @@ export interface Sort {
 /** Where a client's TLS ends: at this server, or at a trusted reverse proxy in front of it. */
 export type TlsEnd = 'server' | 'proxy';
 
-const TLS_LABELS = { server: 'TLS', proxy: 'TLS at proxy' } as const;
 const TLS_TITLES = {
     server: 'Encrypted: TLS',
     proxy: 'Encrypted to the reverse proxy, which forwards it to this server unencrypted'
@@ -71,7 +70,6 @@ export interface ClientView {
     address: string;
     transport: 'TCP' | 'Web';
     tls: TlsEnd | null;
-    tlsLabel: string;
     tlsTitle: string;
     version: string;
     connectedAt: number;
@@ -210,7 +208,6 @@ export class ClientsComponent {
                 address: client.address,
                 transport: client.transport === 'tcp' ? 'TCP' : 'Web',
                 tls,
-                tlsLabel: tls ? TLS_LABELS[tls] : '',
                 tlsTitle: tls ? TLS_TITLES[tls] : '',
                 version: client.version,
                 connectedAt: client.connectedAt,
